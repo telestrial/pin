@@ -1,13 +1,11 @@
 import type { AtpAgent } from '@atproto/api'
 import type { Sdk } from '@siafoundation/sia-storage'
-import {
-  getChannelRecord,
-  putChannelRecord,
-} from './atproto'
+import { getChannelRecord, putChannelRecord } from './atproto'
 import {
   channelKeyFromBase64,
   channelKeyToBase64,
   decryptForChannel,
+  deriveChannelID,
   encryptForChannel,
   generateChannelKey,
 } from './crypto'
@@ -20,7 +18,7 @@ import {
 } from './types'
 
 export type CreatedChannel = {
-  channelHandle: string
+  channelID: string
   channelKey: string             // base64
   manifest: ChannelManifest
   subscribeURL: string
@@ -38,13 +36,14 @@ export type ItemPayload = {
 export async function createChannel(
   sdk: Sdk,
   agent: AtpAgent,
-  args: { name: string; description: string; channelHandle: string },
+  args: { name: string; description: string },
 ): Promise<CreatedChannel> {
   const session = agent.session
   if (!session) throw new Error('ATProto agent has no session')
 
   const keyBytes = await generateChannelKey()
   const channelKey = channelKeyToBase64(keyBytes)
+  const channelID = await deriveChannelID(keyBytes)
 
   const manifest: ChannelManifest = {
     version: CHANNEL_MANIFEST_VERSION,
@@ -52,28 +51,27 @@ export async function createChannel(
     description: args.description,
     authorPubkey: sdk.appKey().publicKey(),
     authorATProtoDID: session.did,
-    channelHandle: args.channelHandle,
     publishedAt: new Date().toISOString(),
     items: [],
   }
 
   const ciphertext = await encryptForChannel(keyBytes, JSON.stringify(manifest))
-  await putChannelRecord(agent, args.channelHandle, ciphertext)
+  await putChannelRecord(agent, channelID, ciphertext)
 
   return {
-    channelHandle: args.channelHandle,
+    channelID,
     channelKey,
     manifest,
-    subscribeURL: buildSubscribeURL(session.handle, args.channelHandle, channelKey),
+    subscribeURL: buildSubscribeURL(session.handle, channelKey),
   }
 }
 
 export async function fetchChannel(
   authorHandleOrDID: string,
-  channelHandle: string,
+  channelID: string,
   channelKey: string,
 ): Promise<ChannelManifest> {
-  const record = await getChannelRecord(authorHandleOrDID, channelHandle)
+  const record = await getChannelRecord(authorHandleOrDID, channelID)
   const keyBytes = channelKeyFromBase64(channelKey)
   const plaintext = await decryptForChannel(keyBytes, record.encryptedManifest)
   const parsed = JSON.parse(plaintext)
@@ -88,7 +86,7 @@ export async function fetchChannel(
 export async function publishItem(
   sdk: Sdk,
   agent: AtpAgent,
-  channel: { channelHandle: string; channelKey: string },
+  channel: { channelID: string; channelKey: string },
   payload: ItemPayload,
 ): Promise<{ manifest: ChannelManifest; itemRef: ItemRef }> {
   const uploaded = await uploadItem(sdk, payload.bytes)
@@ -111,7 +109,7 @@ export async function publishItem(
   // Re-fetch the latest manifest (publisher's own — guaranteed decrypt-able).
   const current = await fetchChannel(
     session.did,
-    channel.channelHandle,
+    channel.channelID,
     channel.channelKey,
   )
 
@@ -123,7 +121,7 @@ export async function publishItem(
 
   const keyBytes = channelKeyFromBase64(channel.channelKey)
   const ciphertext = await encryptForChannel(keyBytes, JSON.stringify(updated))
-  await putChannelRecord(agent, channel.channelHandle, ciphertext)
+  await putChannelRecord(agent, channel.channelID, ciphertext)
 
   return { manifest: updated, itemRef }
 }
@@ -137,23 +135,24 @@ export async function downloadItemBytes(
 
 export function buildSubscribeURL(
   authorHandle: string,
-  channelHandle: string,
   channelKey: string,
 ): string {
-  return `dispatch://${authorHandle}/${channelHandle}#k=${channelKey}`
+  return `dispatch://${authorHandle}#k=${channelKey}`
 }
 
-export function parseSubscribeURL(url: string): {
+export async function parseSubscribeURL(url: string): Promise<{
   authorHandle: string
-  channelHandle: string
+  channelID: string
   channelKey: string
-} {
-  const m = url
-    .trim()
-    .match(/^dispatch:\/\/([^/]+)\/([^#]+)#k=(.+)$/)
+}> {
+  const m = url.trim().match(/^dispatch:\/\/([^#/]+)#k=(.+)$/)
   if (!m) {
-    throw new Error('Invalid subscribe URL (expected dispatch://<handle>/<channel>#k=<key>)')
+    throw new Error(
+      'Invalid subscribe URL (expected dispatch://<handle>#k=<key>)',
+    )
   }
-  const [, authorHandle, channelHandle, channelKey] = m
-  return { authorHandle, channelHandle, channelKey }
+  const [, authorHandle, channelKey] = m
+  const keyBytes = channelKeyFromBase64(channelKey)
+  const channelID = await deriveChannelID(keyBytes)
+  return { authorHandle, channelID, channelKey }
 }

@@ -42,10 +42,10 @@ export function HomeFeed() {
           <ul className="space-y-0.5">
             {errors.map((e) => (
               <li
-                key={`${e.authorHandle}/${e.channelHandle}`}
+                key={`${e.authorHandle}/${e.channelID}`}
                 className="wrap-break-word"
               >
-                {e.label || `${e.authorHandle}/${e.channelHandle}`}: {e.error}
+                {e.label || `${e.authorHandle}/${e.channelID}`}: {e.error}
               </li>
             ))}
           </ul>

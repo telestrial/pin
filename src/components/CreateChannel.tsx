@@ -2,15 +2,6 @@ import { useState } from 'react'
 import { createChannel } from '../core/channels'
 import { useAuthStore } from '../stores/auth'
 
-function slugify(s: string): string {
-  return s
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 60)
-}
-
 export function CreateChannel({
   onCancel,
   onCreated,
@@ -24,32 +15,28 @@ export function CreateChannel({
   const addSubscription = useAuthStore((s) => s.addSubscription)
 
   const [name, setName] = useState('')
-  const [handle, setHandle] = useState('')
   const [description, setDescription] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const effectiveHandle = handle.trim() || slugify(name)
-
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     if (!sdk) return
-    if (!agent || !agent.session) {
+    if (!agent?.session) {
       setError('Bluesky session not active. Cancel and try again to sign in.')
       return
     }
     const trimmedName = name.trim()
-    if (!trimmedName || !effectiveHandle) return
+    if (!trimmedName) return
     setSubmitting(true)
     setError(null)
     try {
       const result = await createChannel(sdk, agent, {
         name: trimmedName,
         description: description.trim(),
-        channelHandle: effectiveHandle,
       })
       addMyChannel({
-        channelHandle: result.channelHandle,
+        channelID: result.channelID,
         channelKey: result.channelKey,
         name: result.manifest.name,
         createdAt: result.manifest.publishedAt,
@@ -57,7 +44,7 @@ export function CreateChannel({
       addSubscription({
         authorHandle: agent.session.handle,
         authorDID: agent.session.did,
-        channelHandle: result.channelHandle,
+        channelID: result.channelID,
         channelKey: result.channelKey,
         cachedName: result.manifest.name,
         addedAt: new Date().toISOString(),
@@ -103,21 +90,6 @@ export function CreateChannel({
 
         <label className="block space-y-1">
           <span className="text-xs font-medium text-neutral-700 uppercase tracking-wider">
-            Handle <span className="text-neutral-400">(optional — defaults to slug of name)</span>
-          </span>
-          <input
-            type="text"
-            value={handle}
-            onChange={(e) => setHandle(e.target.value)}
-            disabled={submitting}
-            placeholder={slugify(name) || 'channel-handle'}
-            pattern="[a-z0-9][a-z0-9-]*"
-            className="w-full px-3 py-2 bg-white border border-neutral-300 rounded-lg text-sm text-neutral-900 placeholder-neutral-400 focus:outline-none focus:border-green-600 disabled:bg-neutral-50 disabled:text-neutral-500"
-          />
-        </label>
-
-        <label className="block space-y-1">
-          <span className="text-xs font-medium text-neutral-700 uppercase tracking-wider">
             Description <span className="text-neutral-400">(optional)</span>
           </span>
           <textarea
@@ -131,9 +103,7 @@ export function CreateChannel({
         </label>
       </div>
 
-      {error && (
-        <p className="text-red-600 text-sm wrap-break-word">{error}</p>
-      )}
+      {error && <p className="text-red-600 text-sm wrap-break-word">{error}</p>}
 
       {submitting && (
         <p className="text-neutral-500 text-xs">
@@ -144,7 +114,7 @@ export function CreateChannel({
       <div className="flex gap-2">
         <button
           type="submit"
-          disabled={submitting || !name.trim() || !effectiveHandle}
+          disabled={submitting || !name.trim()}
           className="flex-1 px-4 py-2.5 bg-green-600 hover:bg-green-700 disabled:bg-neutral-200 disabled:text-neutral-400 text-white text-sm font-medium rounded-lg transition-colors"
         >
           {submitting ? 'Creating…' : 'Create channel'}

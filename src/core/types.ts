@@ -21,7 +21,6 @@ export type ChannelManifest = {
   description: string
   authorPubkey: string
   authorATProtoDID: string
-  channelHandle: string
   publishedAt: string
   coverArtItemURL?: string
   language?: string
@@ -31,7 +30,7 @@ export type ChannelManifest = {
 export type SubscriptionRef = {
   authorHandle: string
   authorDID: string
-  channelHandle: string
+  channelID: string         // base32(sha256(K)).slice(0,16); ATProto rkey
   channelKey: string
   label?: string
   cachedName?: string

@@ -35,7 +35,7 @@ export function ComposeText({
       const result = await publishItem(
         sdk,
         agent,
-        { channelHandle: channel.channelHandle, channelKey: channel.channelKey },
+        { channelID: channel.channelID, channelKey: channel.channelKey },
         {
           type: 'text',
           title: trimmedTitle,

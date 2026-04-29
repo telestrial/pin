@@ -15,7 +15,7 @@ export type AuthStep =
   | 'connected'
 
 export type OwnedChannel = {
-  channelHandle: string
+  channelID: string
   channelKey: string
   name: string
   createdAt: string
@@ -70,7 +70,7 @@ export const useAuthStore = create<AuthState>()(
           s.subscriptions.some(
             (x) =>
               x.authorHandle === sub.authorHandle &&
-              x.channelHandle === sub.channelHandle,
+              x.channelID === sub.channelID,
           )
             ? s
             : { subscriptions: [...s.subscriptions, sub] },

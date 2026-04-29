@@ -21,37 +21,30 @@ export function SubscribeToChannel({
     const trimmed = url.trim()
     if (!trimmed) return
 
-    let parsed: ReturnType<typeof parseSubscribeURL>
-    try {
-      parsed = parseSubscribeURL(trimmed)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Invalid subscribe URL')
-      return
-    }
-
-    if (
-      subscriptions.some(
-        (s) =>
-          s.authorHandle === parsed.authorHandle &&
-          s.channelHandle === parsed.channelHandle,
-      )
-    ) {
-      setError("You're already subscribed to this channel.")
-      return
-    }
-
     setSubmitting(true)
     setError(null)
     try {
+      const parsed = await parseSubscribeURL(trimmed)
+      if (
+        subscriptions.some(
+          (s) =>
+            s.authorHandle === parsed.authorHandle &&
+            s.channelID === parsed.channelID,
+        )
+      ) {
+        setError("You're already subscribed to this channel.")
+        setSubmitting(false)
+        return
+      }
       const manifest = await fetchChannel(
         parsed.authorHandle,
-        parsed.channelHandle,
+        parsed.channelID,
         parsed.channelKey,
       )
       addSubscription({
         authorHandle: parsed.authorHandle,
         authorDID: manifest.authorATProtoDID,
-        channelHandle: parsed.channelHandle,
+        channelID: parsed.channelID,
         channelKey: parsed.channelKey,
         cachedName: manifest.name,
         label: manifest.name,
@@ -89,7 +82,7 @@ export function SubscribeToChannel({
           disabled={submitting}
           required
           rows={3}
-          placeholder="dispatch://author.bsky.social/channel-handle#k=..."
+          placeholder="dispatch://author.bsky.social#k=..."
           className="w-full px-3 py-2 bg-white border border-neutral-300 rounded-lg text-[11px] font-mono text-neutral-900 placeholder-neutral-400 focus:outline-none focus:border-green-600 disabled:bg-neutral-50 disabled:text-neutral-500"
         />
       </label>

@@ -30,23 +30,19 @@ export function ChannelsView({
           <ul className="divide-y divide-neutral-200/80">
             {myChannels.map((c) => (
               <li
-                key={c.channelHandle}
+                key={c.channelID}
                 className="py-3 flex items-center justify-between gap-4"
               >
                 <div className="min-w-0">
                   <p className="text-sm text-neutral-900 truncate">{c.name}</p>
                   <p className="text-[11px] font-mono text-neutral-400 truncate">
-                    {c.channelHandle}
+                    {c.channelID}
                   </p>
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
                   {session && (
                     <CopyButton
-                      value={buildSubscribeURL(
-                        session.handle,
-                        c.channelHandle,
-                        c.channelKey,
-                      )}
+                      value={buildSubscribeURL(session.handle, c.channelKey)}
                       label="Subscribe URL copied"
                     />
                   )}
