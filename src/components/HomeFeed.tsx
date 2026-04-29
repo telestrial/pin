@@ -14,7 +14,6 @@ function formatRelative(iso: string): string {
 }
 
 export function HomeFeed() {
-  const sdk = useAuthStore((s) => s.sdk)
   const subscriptions = useAuthStore((s) => s.subscriptions)
   const entries = useFeedStore((s) => s.entries)
   const errors = useFeedStore((s) => s.errors)
@@ -23,12 +22,10 @@ export function HomeFeed() {
   const refresh = useFeedStore((s) => s.refresh)
 
   useEffect(() => {
-    if (sdk && lastRefreshedAt === null) {
-      refresh(sdk, subscriptions)
+    if (lastRefreshedAt === null) {
+      refresh(subscriptions)
     }
-  }, [sdk, lastRefreshedAt, refresh, subscriptions])
-
-  if (!sdk) return null
+  }, [lastRefreshedAt, refresh, subscriptions])
 
   if (loading && entries.length === 0 && errors.length === 0) {
     return <p className="text-neutral-500 text-sm">Loading feed…</p>
@@ -44,8 +41,11 @@ export function HomeFeed() {
           </p>
           <ul className="space-y-0.5">
             {errors.map((e) => (
-              <li key={e.channelURL} className="wrap-break-word">
-                {e.label || e.channelURL}: {e.error}
+              <li
+                key={`${e.authorHandle}/${e.channelHandle}`}
+                className="wrap-break-word"
+              >
+                {e.label || `${e.authorHandle}/${e.channelHandle}`}: {e.error}
               </li>
             ))}
           </ul>
@@ -76,7 +76,7 @@ export function HomeFeed() {
       <div className="flex items-center gap-3 text-xs text-neutral-500">
         <button
           type="button"
-          onClick={() => refresh(sdk, subscriptions)}
+          onClick={() => refresh(subscriptions)}
           disabled={loading}
           className="text-neutral-500 hover:text-neutral-900 transition-colors underline underline-offset-2 disabled:opacity-50"
         >

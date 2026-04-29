@@ -1,4 +1,3 @@
-import type { Sdk } from '@siafoundation/sia-storage'
 import { create } from 'zustand'
 import {
   buildHomeFeed,
@@ -12,7 +11,7 @@ type FeedState = {
   errors: FeedFetchError[]
   loading: boolean
   lastRefreshedAt: string | null
-  refresh: (sdk: Sdk, subscriptions: SubscriptionRef[]) => Promise<void>
+  refresh: (subscriptions: SubscriptionRef[]) => Promise<void>
   reset: () => void
 }
 
@@ -21,9 +20,9 @@ export const useFeedStore = create<FeedState>()((set) => ({
   errors: [],
   loading: false,
   lastRefreshedAt: null,
-  refresh: async (sdk, subscriptions) => {
+  refresh: async (subscriptions) => {
     set({ loading: true })
-    const result = await buildHomeFeed(sdk, subscriptions)
+    const result = await buildHomeFeed(subscriptions)
     set({
       entries: result.entries,
       errors: result.errors,

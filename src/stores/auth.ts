@@ -1,6 +1,8 @@
+import type { AtpAgent } from '@atproto/api'
 import type { Sdk } from '@siafoundation/sia-storage'
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+import type { ATProtoSession } from '../core/atproto'
 import type { SubscriptionRef } from '../core/types'
 import { APP_KEY } from '../lib/constants'
 import { useFeedStore } from './feed'
@@ -13,8 +15,8 @@ export type AuthStep =
   | 'connected'
 
 export type OwnedChannel = {
-  channelID: string
-  channelURL: string
+  channelHandle: string
+  channelKey: string
   name: string
   createdAt: string
 }
@@ -28,6 +30,8 @@ type AuthState = {
   approvalURL: string | null
   myChannels: OwnedChannel[]
   subscriptions: SubscriptionRef[]
+  atprotoSession: ATProtoSession | null
+  atprotoAgent: AtpAgent | null
   setSdk: (sdk: Sdk) => void
   setStep: (step: AuthStep) => void
   setError: (error: string | null) => void
@@ -36,6 +40,7 @@ type AuthState = {
   setApprovalURL: (url: string | null) => void
   addMyChannel: (channel: OwnedChannel) => void
   addSubscription: (sub: SubscriptionRef) => void
+  setATProtoSession: (session: ATProtoSession | null, agent: AtpAgent | null) => void
   reset: () => void
 }
 
@@ -50,6 +55,8 @@ export const useAuthStore = create<AuthState>()(
       approvalURL: null,
       myChannels: [],
       subscriptions: [],
+      atprotoSession: null,
+      atprotoAgent: null,
       setSdk: (sdk) => set({ sdk, step: 'connected', error: null }),
       setStep: (step) => set({ step, error: null }),
       setError: (error) => set({ error }),
@@ -60,10 +67,16 @@ export const useAuthStore = create<AuthState>()(
         set((s) => ({ myChannels: [...s.myChannels, channel] })),
       addSubscription: (sub) =>
         set((s) =>
-          s.subscriptions.some((x) => x.channelURL === sub.channelURL)
+          s.subscriptions.some(
+            (x) =>
+              x.authorHandle === sub.authorHandle &&
+              x.channelHandle === sub.channelHandle,
+          )
             ? s
             : { subscriptions: [...s.subscriptions, sub] },
         ),
+      setATProtoSession: (atprotoSession, atprotoAgent) =>
+        set({ atprotoSession, atprotoAgent }),
       reset: () => {
         useFeedStore.getState().reset()
         set({
@@ -74,6 +87,8 @@ export const useAuthStore = create<AuthState>()(
           approvalURL: null,
           myChannels: [],
           subscriptions: [],
+          atprotoSession: null,
+          atprotoAgent: null,
         })
       },
     }),
@@ -84,6 +99,7 @@ export const useAuthStore = create<AuthState>()(
         indexerURL: state.indexerURL,
         myChannels: state.myChannels,
         subscriptions: state.subscriptions,
+        atprotoSession: state.atprotoSession,
       }),
     },
   ),

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { fetchChannel } from '../core/sia'
+import { fetchChannel, parseSubscribeURL } from '../core/channels'
 import { useAuthStore } from '../stores/auth'
 
 export function SubscribeToChannel({
@@ -9,7 +9,6 @@ export function SubscribeToChannel({
   onCancel: () => void
   onSubscribed: (channelName: string) => void
 }) {
-  const sdk = useAuthStore((s) => s.sdk)
   const subscriptions = useAuthStore((s) => s.subscriptions)
   const addSubscription = useAuthStore((s) => s.addSubscription)
 
@@ -19,23 +18,46 @@ export function SubscribeToChannel({
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    if (!sdk) return
     const trimmed = url.trim()
     if (!trimmed) return
-    if (subscriptions.some((s) => s.channelURL === trimmed)) {
+
+    let parsed: ReturnType<typeof parseSubscribeURL>
+    try {
+      parsed = parseSubscribeURL(trimmed)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Invalid subscribe URL')
+      return
+    }
+
+    if (
+      subscriptions.some(
+        (s) =>
+          s.authorHandle === parsed.authorHandle &&
+          s.channelHandle === parsed.channelHandle,
+      )
+    ) {
       setError("You're already subscribed to this channel.")
       return
     }
+
     setSubmitting(true)
     setError(null)
     try {
-      const channel = await fetchChannel(sdk, trimmed)
+      const manifest = await fetchChannel(
+        parsed.authorHandle,
+        parsed.channelHandle,
+        parsed.channelKey,
+      )
       addSubscription({
-        channelURL: trimmed,
+        authorHandle: parsed.authorHandle,
+        authorDID: manifest.authorATProtoDID,
+        channelHandle: parsed.channelHandle,
+        channelKey: parsed.channelKey,
+        cachedName: manifest.name,
+        label: manifest.name,
         addedAt: new Date().toISOString(),
-        label: channel.name,
       })
-      onSubscribed(channel.name)
+      onSubscribed(manifest.name)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to fetch channel')
       setSubmitting(false)
@@ -52,14 +74,14 @@ export function SubscribeToChannel({
           Subscribe to a channel
         </h1>
         <p className="text-neutral-500 text-sm">
-          Paste a channel's share URL. We'll fetch its metadata and add it to
-          your feed.
+          Paste a Dispatch subscribe URL. The URL contains the author's handle,
+          the channel handle, and the decryption key.
         </p>
       </div>
 
       <label className="block space-y-1">
         <span className="text-xs font-medium text-neutral-700 uppercase tracking-wider">
-          Share URL
+          Subscribe URL
         </span>
         <textarea
           value={url}
@@ -67,7 +89,7 @@ export function SubscribeToChannel({
           disabled={submitting}
           required
           rows={3}
-          placeholder="sia://..."
+          placeholder="dispatch://author.bsky.social/channel-handle#k=..."
           className="w-full px-3 py-2 bg-white border border-neutral-300 rounded-lg text-[11px] font-mono text-neutral-900 placeholder-neutral-400 focus:outline-none focus:border-green-600 disabled:bg-neutral-50 disabled:text-neutral-500"
         />
       </label>

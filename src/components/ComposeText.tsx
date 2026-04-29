@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { publishTextItem } from '../core/publish'
+import { publishItem } from '../core/channels'
 import { useAuthStore, type OwnedChannel } from '../stores/auth'
 
 export function ComposeText({
@@ -12,6 +12,7 @@ export function ComposeText({
   onPublished: (itemURL: string, title: string) => void
 }) {
   const sdk = useAuthStore((s) => s.sdk)
+  const agent = useAuthStore((s) => s.atprotoAgent)
 
   const [title, setTitle] = useState('')
   const [body, setBody] = useState('')
@@ -21,20 +22,28 @@ export function ComposeText({
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     if (!sdk) return
+    if (!agent || !agent.session) {
+      setError('Bluesky/ATProto sign-in required to publish (coming soon).')
+      return
+    }
     const trimmedTitle = title.trim()
     const trimmedBody = body.trim()
     if (!trimmedTitle || !trimmedBody) return
     setSubmitting(true)
     setError(null)
     try {
-      const updated = await publishTextItem(
+      const result = await publishItem(
         sdk,
-        channel.channelID,
-        trimmedTitle,
-        trimmedBody,
+        agent,
+        { channelHandle: channel.channelHandle, channelKey: channel.channelKey },
+        {
+          type: 'text',
+          title: trimmedTitle,
+          mimeType: 'text/markdown',
+          bytes: new TextEncoder().encode(trimmedBody),
+        },
       )
-      const newItem = updated.items[0]
-      onPublished(newItem.itemURL, newItem.title)
+      onPublished(result.itemRef.itemURL, result.itemRef.title)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to publish')
       setSubmitting(false)

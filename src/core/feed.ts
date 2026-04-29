@@ -1,14 +1,14 @@
-import type { Sdk } from '@siafoundation/sia-storage'
-import { fetchChannel } from './sia'
+import { fetchChannel } from './channels'
 import type { ItemRef, SubscriptionRef } from './types'
 
 export type FeedEntry = {
   item: ItemRef
-  channel: { url: string; name: string }
+  channel: { authorHandle: string; channelHandle: string; name: string }
 }
 
 export type FeedFetchError = {
-  channelURL: string
+  authorHandle: string
+  channelHandle: string
   label?: string
   error: string
 }
@@ -19,11 +19,12 @@ export type FeedFetchResult = {
 }
 
 export async function buildHomeFeed(
-  sdk: Sdk,
   subscriptions: SubscriptionRef[],
 ): Promise<FeedFetchResult> {
   const settled = await Promise.allSettled(
-    subscriptions.map((sub) => fetchChannel(sdk, sub.channelURL)),
+    subscriptions.map((sub) =>
+      fetchChannel(sub.authorDID || sub.authorHandle, sub.channelHandle, sub.channelKey),
+    ),
   )
 
   const entries: FeedEntry[] = []
@@ -33,16 +34,21 @@ export async function buildHomeFeed(
     const result = settled[i]
     const sub = subscriptions[i]
     if (result.status === 'fulfilled') {
-      const channel = result.value
-      for (const item of channel.items) {
+      const manifest = result.value
+      for (const item of manifest.items) {
         entries.push({
           item,
-          channel: { url: sub.channelURL, name: channel.name },
+          channel: {
+            authorHandle: sub.authorHandle,
+            channelHandle: sub.channelHandle,
+            name: manifest.name,
+          },
         })
       }
     } else {
       errors.push({
-        channelURL: sub.channelURL,
+        authorHandle: sub.authorHandle,
+        channelHandle: sub.channelHandle,
         label: sub.label,
         error:
           result.reason instanceof Error

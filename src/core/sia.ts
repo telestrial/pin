@@ -1,56 +1,49 @@
 import { PinnedObject, type Sdk } from '@siafoundation/sia-storage'
-import { CHANNEL_METADATA_VERSION, type ChannelMetadata } from './types'
 
-// 1-byte sentinel: keeps the channel's object ID (and share URL) stable forever; all mutable state lives in metadata.
-const CHANNEL_MARKER = new Uint8Array([0x01])
-// Year-9999 makes channel and item share URLs effectively permanent (verified by Day-0 probe 2).
+// Year-9999 makes item share URLs effectively permanent (verified by Day-0 probe 2).
 export const FAR_FUTURE = new Date('9999-12-31T00:00:00Z')
 
-export type CreatedChannel = {
-  channel: ChannelMetadata
-  channelID: string
-  channelURL: string
+export type UploadedItem = {
+  id: string
+  itemURL: string
+  byteSize: number
 }
 
-export async function createChannel(
+export async function uploadItem(
   sdk: Sdk,
-  name: string,
-  description: string,
-): Promise<CreatedChannel> {
-  const channel: ChannelMetadata = {
-    version: CHANNEL_METADATA_VERSION,
-    name,
-    description,
-    authorPubkey: sdk.appKey().publicKey(),
-    createdAt: new Date().toISOString(),
-    items: [],
-  }
-
+  bytes: Uint8Array,
+): Promise<UploadedItem> {
   const obj = await sdk.upload(
     new PinnedObject(),
-    new Blob([CHANNEL_MARKER as BlobPart]).stream(),
+    new Blob([bytes as BlobPart]).stream(),
   )
-  obj.updateMetadata(new TextEncoder().encode(JSON.stringify(channel)))
   await sdk.pinObject(obj)
-  await sdk.updateObjectMetadata(obj)
-
   return {
-    channel,
-    channelID: obj.id(),
-    channelURL: sdk.shareObject(obj, FAR_FUTURE),
+    id: obj.id(),
+    itemURL: sdk.shareObject(obj, FAR_FUTURE),
+    byteSize: bytes.length,
   }
 }
 
-export async function fetchChannel(
+export async function downloadItem(
   sdk: Sdk,
-  channelURL: string,
-): Promise<ChannelMetadata> {
-  const obj = await sdk.sharedObject(channelURL)
-  const parsed = JSON.parse(new TextDecoder().decode(obj.metadata()))
-  if (parsed?.version !== CHANNEL_METADATA_VERSION) {
-    throw new Error(
-      `Unsupported channel metadata version (got ${parsed?.version}, expected ${CHANNEL_METADATA_VERSION})`,
-    )
+  itemURL: string,
+): Promise<Uint8Array> {
+  const obj = await sdk.sharedObject(itemURL)
+  const stream = sdk.download(obj)
+  const reader = stream.getReader()
+  const chunks: Uint8Array[] = []
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    chunks.push(value)
   }
-  return parsed as ChannelMetadata
+  const total = chunks.reduce((n, c) => n + c.length, 0)
+  const out = new Uint8Array(total)
+  let off = 0
+  for (const c of chunks) {
+    out.set(c, off)
+    off += c.length
+  }
+  return out
 }

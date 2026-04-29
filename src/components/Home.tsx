@@ -10,7 +10,7 @@ import { SubscribeToChannel } from './SubscribeToChannel'
 type View =
   | { kind: 'idle' }
   | { kind: 'creating' }
-  | { kind: 'created'; channelURL: string; name: string }
+  | { kind: 'created'; subscribeURL: string; name: string }
   | { kind: 'subscribing' }
   | { kind: 'channels' }
   | { kind: 'composing'; channel: OwnedChannel }
@@ -31,8 +31,8 @@ export function Home() {
     return (
       <CreateChannel
         onCancel={() => setView({ kind: 'idle' })}
-        onCreated={(channelURL, name) =>
-          setView({ kind: 'created', channelURL, name })
+        onCreated={(subscribeURL, name) =>
+          setView({ kind: 'created', subscribeURL, name })
         }
       />
     )
@@ -54,10 +54,10 @@ export function Home() {
           <div className="flex flex-col sm:flex-row gap-2 sm:justify-center">
             <button
               type="button"
-              onClick={() => copyURL(view.channelURL, 'Channel URL copied')}
+              onClick={() => copyURL(view.subscribeURL, 'Subscribe URL copied')}
               className="px-4 py-2.5 bg-green-600 hover:bg-green-700 text-white text-sm font-medium rounded-lg transition-colors"
             >
-              Copy share URL
+              Copy subscribe URL
             </button>
             <button
               type="button"
