@@ -3,8 +3,8 @@ import { CHANNEL_METADATA_VERSION, type ChannelMetadata } from './types'
 
 // 1-byte sentinel: keeps the channel's object ID (and share URL) stable forever; all mutable state lives in metadata.
 const CHANNEL_MARKER = new Uint8Array([0x01])
-// Year-9999 makes channel share URLs effectively permanent (verified by Day-0 probe 2).
-const FAR_FUTURE = new Date('9999-12-31T00:00:00Z')
+// Year-9999 makes channel and item share URLs effectively permanent (verified by Day-0 probe 2).
+export const FAR_FUTURE = new Date('9999-12-31T00:00:00Z')
 
 export type CreatedChannel = {
   channel: ChannelMetadata
