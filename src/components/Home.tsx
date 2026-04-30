@@ -212,7 +212,7 @@ export function Home() {
 
   return (
     <div className="flex-1 p-6">
-      <div className="max-w-5xl mx-auto flex flex-col lg:flex-row gap-6">
+      <div className="max-w-5xl mx-auto flex flex-col lg:flex-row lg:items-start gap-6">
         <Sidebar
           onCreate={gotoCreating}
           onSubscribe={() => setView({ kind: 'subscribing' })}

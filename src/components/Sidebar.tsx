@@ -22,7 +22,7 @@ export function Sidebar({
     .slice(0, CAP)
 
   return (
-    <aside className="w-full lg:w-60 shrink-0 space-y-6">
+    <aside className="w-full lg:w-60 shrink-0 border border-neutral-200 rounded-lg bg-white p-3 space-y-6">
       <section className="space-y-2">
         <button
           type="button"

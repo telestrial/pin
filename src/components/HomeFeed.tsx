@@ -24,11 +24,15 @@ export function HomeFeed({
   }, [lastRefreshedAt, refresh, subscriptions])
 
   if (loading && entries.length === 0 && errors.length === 0) {
-    return <p className="text-neutral-500 text-sm">Loading feed…</p>
+    return (
+      <div className="border border-neutral-200 rounded-lg bg-white p-4">
+        <p className="text-neutral-500 text-sm">Loading feed…</p>
+      </div>
+    )
   }
 
   return (
-    <div className="space-y-4">
+    <div className="border border-neutral-200 rounded-lg bg-white p-4 space-y-4">
       {errors.length > 0 && (
         <div className="px-3 py-2 bg-red-50 border border-red-200 rounded-lg text-red-800 text-xs space-y-1">
           <p className="font-medium">

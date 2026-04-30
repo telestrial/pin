@@ -23,7 +23,7 @@ export function Navbar() {
   }
 
   return (
-    <header className="border-b border-neutral-200/80">
+    <header className="bg-white border-b border-neutral-200/80">
       <div className="flex items-center justify-between px-6 py-3 max-w-5xl mx-auto">
         <h1 className="text-sm font-semibold text-neutral-900 tracking-tight">
           {APP_NAME}
