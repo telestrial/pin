@@ -3,7 +3,7 @@ import type { ItemType } from '../core/types'
 import type { OwnedChannel } from '../stores/auth'
 import { ComposeAudio } from './ComposeAudio'
 import { ComposeImage } from './ComposeImage'
-import { ComposeText } from './ComposeText'
+import { ComposePost } from './ComposePost'
 import { ComposeVideo } from './ComposeVideo'
 
 const TABS: { type: ItemType; label: string }[] = [
@@ -55,7 +55,7 @@ export function Compose({
         </div>
       </div>
 
-      {type === 'text' && <ComposeText {...formProps} />}
+      {type === 'text' && <ComposePost {...formProps} />}
       {type === 'image' && <ComposeImage {...formProps} />}
       {type === 'audio' && <ComposeAudio {...formProps} />}
       {type === 'video' && <ComposeVideo {...formProps} />}

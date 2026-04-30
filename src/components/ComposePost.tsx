@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { publishItem } from '../core/channels'
 import { type OwnedChannel, useAuthStore } from '../stores/auth'
 
-export function ComposeText({
+export function ComposePost({
   channel,
   onCancel,
   onPublished,
