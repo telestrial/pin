@@ -13,6 +13,7 @@ import { ReadFile } from './ReadFile'
 import { ReadImage } from './ReadImage'
 import { ReadText } from './ReadText'
 import { ReadVideo } from './ReadVideo'
+import { Sidebar } from './Sidebar'
 import { SubscribeToChannel } from './SubscribeToChannel'
 
 type View =
@@ -165,35 +166,6 @@ export function Home() {
     return <Compose channels={myChannels} onPublished={handlePublished} />
   })()
 
-  const ctas = (
-    <div className="flex flex-col sm:flex-row gap-2 sm:justify-center">
-      <button
-        type="button"
-        onClick={() => setView({ kind: 'subscribing' })}
-        className="px-4 py-2.5 bg-green-600 hover:bg-green-700 text-white text-sm font-medium rounded-lg transition-colors"
-      >
-        Subscribe to a channel
-      </button>
-      <button
-        type="button"
-        onClick={gotoCreating}
-        className="px-4 py-2.5 bg-neutral-100 hover:bg-neutral-200 text-neutral-900 text-sm font-medium rounded-lg transition-colors"
-      >
-        Create a channel
-      </button>
-    </div>
-  )
-
-  const yourChannelsAffordance = myChannels.length > 0 && (
-    <button
-      type="button"
-      onClick={() => setView({ kind: 'channels' })}
-      className="text-xs text-neutral-500 hover:text-neutral-900 transition-colors underline underline-offset-2"
-    >
-      Your channels ({myChannels.length})
-    </button>
-  )
-
   if (subscriptions.length === 0) {
     return (
       <div className="flex-1 flex items-center justify-center p-6">
@@ -206,8 +178,33 @@ export function Home() {
               Subscribe to a channel, or create one of your own.
             </p>
           </div>
-          {ctas}
-          {yourChannelsAffordance && <div>{yourChannelsAffordance}</div>}
+          <div className="flex flex-col sm:flex-row gap-2 sm:justify-center">
+            <button
+              type="button"
+              onClick={() => setView({ kind: 'subscribing' })}
+              className="px-4 py-2.5 bg-green-600 hover:bg-green-700 text-white text-sm font-medium rounded-lg transition-colors"
+            >
+              Subscribe to a channel
+            </button>
+            <button
+              type="button"
+              onClick={gotoCreating}
+              className="px-4 py-2.5 bg-neutral-100 hover:bg-neutral-200 text-neutral-900 text-sm font-medium rounded-lg transition-colors"
+            >
+              Create a channel
+            </button>
+          </div>
+          {myChannels.length > 0 && (
+            <div>
+              <button
+                type="button"
+                onClick={() => setView({ kind: 'channels' })}
+                className="text-xs text-neutral-500 hover:text-neutral-900 transition-colors underline underline-offset-2"
+              >
+                Your channels ({myChannels.length})
+              </button>
+            </div>
+          )}
         </div>
       </div>
     )
@@ -215,22 +212,18 @@ export function Home() {
 
   return (
     <div className="flex-1 p-6">
-      <div className="max-w-2xl mx-auto space-y-6">
-        <div className="flex items-baseline justify-between gap-4">
-          <h2 className="text-xs font-medium text-neutral-500 uppercase tracking-wider">
-            Following {subscriptions.length} channel
-            {subscriptions.length === 1 ? '' : 's'}
-          </h2>
-          {yourChannelsAffordance}
-        </div>
-
-        {composerSlot}
-
-        <HomeFeed
-          onItemClick={(entry) => setView({ kind: 'reading', entry })}
+      <div className="max-w-5xl mx-auto flex flex-col lg:flex-row gap-6">
+        <Sidebar
+          onCreate={gotoCreating}
+          onSubscribe={() => setView({ kind: 'subscribing' })}
+          onSeeAll={() => setView({ kind: 'channels' })}
         />
-
-        {ctas}
+        <div className="flex-1 lg:max-w-2xl space-y-6 min-w-0">
+          {composerSlot}
+          <HomeFeed
+            onItemClick={(entry) => setView({ kind: 'reading', entry })}
+          />
+        </div>
       </div>
     </div>
   )
