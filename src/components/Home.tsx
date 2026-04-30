@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import type { FeedEntry } from '../core/feed'
 import { type OwnedChannel, useAuthStore } from '../stores/auth'
 import { useToastStore } from '../stores/toast'
 import { BlueskyLoginScreen } from './BlueskyLoginScreen'
@@ -6,6 +7,7 @@ import { ChannelsView } from './ChannelsView'
 import { ComposeText } from './ComposeText'
 import { CreateChannel } from './CreateChannel'
 import { HomeFeed } from './HomeFeed'
+import { ReadText } from './ReadText'
 import { SubscribeToChannel } from './SubscribeToChannel'
 
 type GatedView =
@@ -20,6 +22,7 @@ type View =
   | { kind: 'channels' }
   | { kind: 'composing'; channel: OwnedChannel }
   | { kind: 'published'; itemURL: string; title: string }
+  | { kind: 'reading'; entry: FeedEntry }
   | { kind: 'bluesky-login'; resumeTo: GatedView; cancelTo: View }
 
 export function Home() {
@@ -125,6 +128,16 @@ export function Home() {
     )
   }
 
+  if (view.kind === 'reading') {
+    return (
+      <ReadText
+        item={view.entry.item}
+        channelName={view.entry.channel.name}
+        onBack={() => setView({ kind: 'idle' })}
+      />
+    )
+  }
+
   if (view.kind === 'published') {
     return (
       <div className="flex-1 flex items-center justify-center p-6">
@@ -201,9 +214,7 @@ export function Home() {
             </p>
           </div>
           {ctas}
-          {yourChannelsAffordance && (
-            <div>{yourChannelsAffordance}</div>
-          )}
+          {yourChannelsAffordance && <div>{yourChannelsAffordance}</div>}
         </div>
       </div>
     )
@@ -220,7 +231,9 @@ export function Home() {
           {yourChannelsAffordance}
         </div>
 
-        <HomeFeed />
+        <HomeFeed
+          onItemClick={(entry) => setView({ kind: 'reading', entry })}
+        />
 
         {ctas}
       </div>

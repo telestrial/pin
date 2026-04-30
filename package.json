@@ -12,6 +12,8 @@
   "dependencies": {
     "@atproto/api": "^0.19.11",
     "@siafoundation/sia-storage": "^0.0.8",
+    "dompurify": "^3.4.1",
+    "marked": "^18.0.2",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "zustand": "^5.0.11"
@@ -20,6 +22,7 @@
     "@biomejs/biome": "^2.4.12",
     "@playwright/test": "^1.59.1",
     "@tailwindcss/vite": "^4.1.18",
+    "@types/dompurify": "^3.2.0",
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.1.1",

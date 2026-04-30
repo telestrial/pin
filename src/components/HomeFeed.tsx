@@ -1,4 +1,5 @@
 import { useEffect } from 'react'
+import type { FeedEntry } from '../core/feed'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
 
@@ -13,7 +14,11 @@ function formatRelative(iso: string): string {
   return new Date(iso).toLocaleDateString()
 }
 
-export function HomeFeed() {
+export function HomeFeed({
+  onItemClick,
+}: {
+  onItemClick: (entry: FeedEntry) => void
+}) {
   const subscriptions = useAuthStore((s) => s.subscriptions)
   const entries = useFeedStore((s) => s.entries)
   const errors = useFeedStore((s) => s.errors)
@@ -54,18 +59,29 @@ export function HomeFeed() {
 
       {entries.length > 0 ? (
         <ul className="divide-y divide-neutral-200/80">
-          {entries.map(({ item, channel }) => (
-            <li key={item.id} className="py-3 space-y-1">
-              <p className="text-sm text-neutral-900">{item.title}</p>
-              {item.summary && (
-                <p className="text-sm text-neutral-600">{item.summary}</p>
-              )}
-              <p className="text-xs text-neutral-500">
-                {channel.name} · {formatRelative(item.publishedAt)} ·{' '}
-                {item.type}
-              </p>
-            </li>
-          ))}
+          {entries.map((entry) => {
+            const { item, channel } = entry
+            const clickable = item.type === 'text'
+            return (
+              <li key={item.id}>
+                <button
+                  type="button"
+                  onClick={clickable ? () => onItemClick(entry) : undefined}
+                  disabled={!clickable}
+                  className="w-full text-left py-3 space-y-1 enabled:hover:bg-neutral-50 enabled:cursor-pointer disabled:cursor-default px-2 -mx-2 rounded transition-colors"
+                >
+                  <p className="text-sm text-neutral-900">{item.title}</p>
+                  {item.summary && (
+                    <p className="text-sm text-neutral-600">{item.summary}</p>
+                  )}
+                  <p className="text-xs text-neutral-500">
+                    {channel.name} · {formatRelative(item.publishedAt)} ·{' '}
+                    {item.type}
+                  </p>
+                </button>
+              </li>
+            )
+          })}
         </ul>
       ) : (
         <p className="text-neutral-500 text-sm">
