@@ -4,6 +4,7 @@ import { useAuthStore } from '../stores/auth'
 import { useToastStore } from '../stores/toast'
 import { BlueskyLoginScreen } from './BlueskyLoginScreen'
 import { ChannelsView } from './ChannelsView'
+import { ChannelView } from './ChannelView'
 import { Compose } from './Compose'
 import { CreateChannel } from './CreateChannel'
 import { HomeFeed } from './HomeFeed'
@@ -22,7 +23,8 @@ type View =
   | { kind: 'created'; subscribeURL: string; name: string }
   | { kind: 'subscribing' }
   | { kind: 'channels' }
-  | { kind: 'reading'; entry: FeedEntry }
+  | { kind: 'viewing-channel'; authorHandle: string; channelID: string }
+  | { kind: 'reading'; entry: FeedEntry; returnTo: View }
   | { kind: 'bluesky-login'; resumeTo: View; cancelTo: View }
 
 export function Home() {
@@ -125,12 +127,37 @@ export function Home() {
   }
 
   if (view.kind === 'channels') {
-    return <ChannelsView onCancel={() => setView({ kind: 'idle' })} />
+    return (
+      <ChannelsView
+        onCancel={() => setView({ kind: 'idle' })}
+        onChannelClick={(authorHandle, channelID) =>
+          setView({ kind: 'viewing-channel', authorHandle, channelID })
+        }
+      />
+    )
+  }
+
+  if (view.kind === 'viewing-channel') {
+    const channelView = view
+    return (
+      <ChannelView
+        authorHandle={view.authorHandle}
+        channelID={view.channelID}
+        onItemClick={(entry) =>
+          setView({ kind: 'reading', entry, returnTo: channelView })
+        }
+        onChannelClick={(authorHandle, channelID) =>
+          setView({ kind: 'viewing-channel', authorHandle, channelID })
+        }
+        onBack={() => setView({ kind: 'idle' })}
+      />
+    )
   }
 
   if (view.kind === 'reading') {
     const { item, channel } = view.entry
-    const onBack = () => setView({ kind: 'idle' })
+    const returnTo = view.returnTo
+    const onBack = () => setView(returnTo)
     const readerProps = { item, channelName: channel.name, onBack }
     if (item.type === 'image') return <ReadImage {...readerProps} />
     if (item.type === 'audio') return <ReadAudio {...readerProps} />
@@ -217,11 +244,19 @@ export function Home() {
           onCreate={gotoCreating}
           onSubscribe={() => setView({ kind: 'subscribing' })}
           onSeeAll={() => setView({ kind: 'channels' })}
+          onChannelClick={(authorHandle, channelID) =>
+            setView({ kind: 'viewing-channel', authorHandle, channelID })
+          }
         />
         <div className="flex-1 lg:max-w-2xl space-y-6 min-w-0">
           {composerSlot}
           <HomeFeed
-            onItemClick={(entry) => setView({ kind: 'reading', entry })}
+            onItemClick={(entry) =>
+              setView({ kind: 'reading', entry, returnTo: { kind: 'idle' } })
+            }
+            onChannelClick={(authorHandle, channelID) =>
+              setView({ kind: 'viewing-channel', authorHandle, channelID })
+            }
           />
         </div>
       </div>

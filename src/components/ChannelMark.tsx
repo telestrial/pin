@@ -32,18 +32,21 @@ export function ChannelMark({
   channelID,
   channelName,
   authorHandle,
+  size = 'md',
 }: {
   channelID: string
   channelName: string
   authorHandle: string
+  size?: 'md' | 'lg'
 }) {
   const [bg, fg] = PALETTE[paletteIndex(channelID)]
   const letter = firstLetter(channelName, authorHandle)
+  const sizeClass = size === 'lg' ? 'size-16 text-2xl' : 'size-10 text-sm'
   return (
     <div
       aria-hidden="true"
       style={{ backgroundColor: bg, color: fg }}
-      className="size-10 shrink-0 rounded-full flex items-center justify-center text-sm font-semibold select-none"
+      className={`${sizeClass} shrink-0 rounded-full flex items-center justify-center font-semibold select-none`}
     >
       {letter}
     </div>

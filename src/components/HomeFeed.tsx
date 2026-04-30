@@ -63,8 +63,10 @@ function useItemBlobURL(itemURL: string, mimeType: string) {
 
 export function HomeFeed({
   onItemClick,
+  onChannelClick,
 }: {
   onItemClick: (entry: FeedEntry) => void
+  onChannelClick: (authorHandle: string, channelID: string) => void
 }) {
   const subscriptions = useAuthStore((s) => s.subscriptions)
   const sortOrder = useAuthStore((s) => s.feedSortOrder)
@@ -186,6 +188,7 @@ export function HomeFeed({
               key={entry.item.id}
               entry={entry}
               onItemClick={onItemClick}
+              onChannelClick={onChannelClick}
             />
           ))}
         </ul>
@@ -361,38 +364,60 @@ function renderBody(item: ItemRef): React.ReactNode {
   return null
 }
 
-function FeedRow({
+export function FeedRow({
   entry,
   onItemClick,
+  onChannelClick,
 }: {
   entry: FeedEntry
   onItemClick: (entry: FeedEntry) => void
+  onChannelClick: (authorHandle: string, channelID: string) => void
 }) {
   const { item, channel } = entry
   const isNote = item.type === 'text' && item.title === ''
   const showTitle = !isNote && !!item.title
 
+  const handleChannelClick = (e: React.MouseEvent | React.KeyboardEvent) => {
+    e.stopPropagation()
+    onChannelClick(channel.authorHandle, channel.channelID)
+  }
+
   const inner = (
     <div className="flex gap-3">
-      <ChannelMark
-        channelID={channel.channelID}
-        channelName={channel.name}
-        authorHandle={channel.authorHandle}
-      />
+      <button
+        type="button"
+        onClick={handleChannelClick}
+        className="self-start shrink-0 rounded-full focus:outline-none focus:ring-2 focus:ring-green-600 cursor-pointer"
+        aria-label={`View channel ${channel.name}`}
+      >
+        <ChannelMark
+          channelID={channel.channelID}
+          channelName={channel.name}
+          authorHandle={channel.authorHandle}
+        />
+      </button>
       <div className="min-w-0 flex-1 space-y-2">
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0 space-y-0.5">
-            <p className="text-sm font-semibold text-neutral-900 truncate">
+            <button
+              type="button"
+              onClick={handleChannelClick}
+              className="block max-w-full text-sm font-semibold text-neutral-900 truncate hover:underline cursor-pointer text-left"
+            >
               {channel.name}
-            </p>
+            </button>
             {showTitle && (
               <p className="text-base font-semibold text-neutral-900 wrap-break-word">
                 {item.title}
               </p>
             )}
-            <p className="text-xs text-neutral-500 truncate">
+            <button
+              type="button"
+              onClick={handleChannelClick}
+              className="block max-w-full text-xs text-neutral-500 truncate hover:underline cursor-pointer text-left"
+            >
               @{channel.authorHandle}
-            </p>
+            </button>
           </div>
           <div className="flex items-center gap-2 shrink-0">
             <span className="text-xs font-medium px-2 py-0.5 bg-neutral-100 text-neutral-600 rounded-full whitespace-nowrap">

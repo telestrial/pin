@@ -6,10 +6,12 @@ export function Sidebar({
   onCreate,
   onSubscribe,
   onSeeAll,
+  onChannelClick,
 }: {
   onCreate: () => void
   onSubscribe: () => void
   onSeeAll: () => void
+  onChannelClick: (authorHandle: string, channelID: string) => void
 }) {
   const myChannels = useAuthStore((s) => s.myChannels)
   const subscriptions = useAuthStore((s) => s.subscriptions)
@@ -20,6 +22,11 @@ export function Sidebar({
   const subsToShow = [...subscriptions]
     .sort((a, b) => b.addedAt.localeCompare(a.addedAt))
     .slice(0, CAP)
+
+  const ownedAuthorHandle = (channelID: string) => {
+    const sub = subscriptions.find((s) => s.channelID === channelID)
+    return sub?.authorHandle
+  }
 
   return (
     <aside className="w-full lg:w-60 shrink-0 border border-neutral-200 rounded-lg bg-white p-3 space-y-6">
@@ -37,14 +44,23 @@ export function Sidebar({
               Your channels
             </h3>
             <ul>
-              {channelsToShow.map((c) => (
-                <li
-                  key={c.channelID}
-                  className="px-3 py-1.5 text-sm text-neutral-700 truncate"
-                >
-                  {c.name}
-                </li>
-              ))}
+              {channelsToShow.map((c) => {
+                const handle = ownedAuthorHandle(c.channelID)
+                return (
+                  <li key={c.channelID}>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        handle && onChannelClick(handle, c.channelID)
+                      }
+                      disabled={!handle}
+                      className="w-full text-left px-3 py-1.5 text-sm text-neutral-700 hover:text-neutral-900 hover:bg-neutral-50 rounded transition-colors truncate disabled:opacity-50 cursor-pointer"
+                    >
+                      {c.name}
+                    </button>
+                  </li>
+                )
+              })}
             </ul>
             <button
               type="button"
@@ -72,11 +88,14 @@ export function Sidebar({
             </h3>
             <ul>
               {subsToShow.map((s) => (
-                <li
-                  key={`${s.authorHandle}/${s.channelID}`}
-                  className="px-3 py-1.5 text-sm text-neutral-700 truncate"
-                >
-                  {s.cachedName ?? s.channelID}
+                <li key={`${s.authorHandle}/${s.channelID}`}>
+                  <button
+                    type="button"
+                    onClick={() => onChannelClick(s.authorHandle, s.channelID)}
+                    className="w-full text-left px-3 py-1.5 text-sm text-neutral-700 hover:text-neutral-900 hover:bg-neutral-50 rounded transition-colors truncate cursor-pointer"
+                  >
+                    {s.cachedName ?? s.channelID}
+                  </button>
                 </li>
               ))}
             </ul>

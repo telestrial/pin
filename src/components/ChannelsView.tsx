@@ -2,7 +2,13 @@ import { buildSubscribeURL } from '../core/channels'
 import { useAuthStore } from '../stores/auth'
 import { CopyButton } from './CopyButton'
 
-export function ChannelsView({ onCancel }: { onCancel: () => void }) {
+export function ChannelsView({
+  onCancel,
+  onChannelClick,
+}: {
+  onCancel: () => void
+  onChannelClick: (authorHandle: string, channelID: string) => void
+}) {
   const myChannels = useAuthStore((s) => s.myChannels)
   const subscriptions = useAuthStore((s) => s.subscriptions)
   const session = useAuthStore((s) => s.atprotoSession)
@@ -22,29 +28,45 @@ export function ChannelsView({ onCancel }: { onCancel: () => void }) {
             </p>
           ) : (
             <ul className="divide-y divide-neutral-200/80">
-              {myChannels.map((c) => (
-                <li
-                  key={c.channelID}
-                  className="py-3 flex items-center justify-between gap-4"
-                >
-                  <div className="min-w-0">
-                    <p className="text-sm text-neutral-900 truncate">
-                      {c.name}
-                    </p>
-                    <p className="text-[11px] font-mono text-neutral-400 truncate">
-                      {c.channelID}
-                    </p>
-                  </div>
-                  {session && (
-                    <div className="shrink-0">
-                      <CopyButton
-                        value={buildSubscribeURL(session.handle, c.channelKey)}
-                        label="Subscribe URL copied"
-                      />
-                    </div>
-                  )}
-                </li>
-              ))}
+              {myChannels.map((c) => {
+                const sub = subscriptions.find(
+                  (s) => s.channelID === c.channelID,
+                )
+                const handle = sub?.authorHandle ?? session?.handle
+                return (
+                  <li
+                    key={c.channelID}
+                    className="py-3 flex items-center justify-between gap-4"
+                  >
+                    <button
+                      type="button"
+                      onClick={() =>
+                        handle && onChannelClick(handle, c.channelID)
+                      }
+                      disabled={!handle}
+                      className="min-w-0 flex-1 text-left hover:bg-neutral-50 -mx-2 px-2 py-1 rounded transition-colors disabled:opacity-50 cursor-pointer"
+                    >
+                      <p className="text-sm text-neutral-900 truncate">
+                        {c.name}
+                      </p>
+                      <p className="text-[11px] font-mono text-neutral-400 truncate">
+                        {c.channelID}
+                      </p>
+                    </button>
+                    {session && (
+                      <div className="shrink-0">
+                        <CopyButton
+                          value={buildSubscribeURL(
+                            session.handle,
+                            c.channelKey,
+                          )}
+                          label="Subscribe URL copied"
+                        />
+                      </div>
+                    )}
+                  </li>
+                )
+              })}
             </ul>
           )}
         </section>
@@ -61,12 +83,18 @@ export function ChannelsView({ onCancel }: { onCancel: () => void }) {
             <ul className="divide-y divide-neutral-200/80">
               {subscriptions.map((s) => (
                 <li key={`${s.authorHandle}/${s.channelID}`} className="py-3">
-                  <p className="text-sm text-neutral-900 truncate">
-                    {s.cachedName ?? s.channelID}
-                  </p>
-                  <p className="text-xs text-neutral-500 truncate">
-                    @{s.authorHandle}
-                  </p>
+                  <button
+                    type="button"
+                    onClick={() => onChannelClick(s.authorHandle, s.channelID)}
+                    className="w-full text-left hover:bg-neutral-50 -mx-2 px-2 py-1 rounded transition-colors cursor-pointer"
+                  >
+                    <p className="text-sm text-neutral-900 truncate">
+                      {s.cachedName ?? s.channelID}
+                    </p>
+                    <p className="text-xs text-neutral-500 truncate">
+                      @{s.authorHandle}
+                    </p>
+                  </button>
                 </li>
               ))}
             </ul>
