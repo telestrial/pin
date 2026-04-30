@@ -19,8 +19,12 @@
       }
       canvas {
         display: block;
-        max-width: 100%;
-        max-height: 100%;
+        /* Fill the viewport while preserving 4:3 aspect — picks whichever
+           dimension fits both the width and the height. In fullscreen on a
+           16:9 screen this fills the height with letterboxing left/right;
+           in the embedded 4:3 iframe it fills the iframe exactly. */
+        width: min(100vw, calc(100vh * 4 / 3));
+        height: min(100vh, calc(100vw * 3 / 4));
         cursor: none;
       }
     </style>
