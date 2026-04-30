@@ -7,8 +7,10 @@ import { ChannelsView } from './ChannelsView'
 import { Compose } from './Compose'
 import { CreateChannel } from './CreateChannel'
 import { HomeFeed } from './HomeFeed'
+import { ReadAudio } from './ReadAudio'
 import { ReadImage } from './ReadImage'
 import { ReadText } from './ReadText'
+import { ReadVideo } from './ReadVideo'
 import { SubscribeToChannel } from './SubscribeToChannel'
 
 type GatedView =
@@ -132,12 +134,11 @@ export function Home() {
   if (view.kind === 'reading') {
     const { item, channel } = view.entry
     const onBack = () => setView({ kind: 'idle' })
-    if (item.type === 'image') {
-      return (
-        <ReadImage item={item} channelName={channel.name} onBack={onBack} />
-      )
-    }
-    return <ReadText item={item} channelName={channel.name} onBack={onBack} />
+    const readerProps = { item, channelName: channel.name, onBack }
+    if (item.type === 'image') return <ReadImage {...readerProps} />
+    if (item.type === 'audio') return <ReadAudio {...readerProps} />
+    if (item.type === 'video') return <ReadVideo {...readerProps} />
+    return <ReadText {...readerProps} />
   }
 
   if (view.kind === 'published') {

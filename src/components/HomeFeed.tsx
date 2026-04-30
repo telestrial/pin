@@ -61,14 +61,12 @@ export function HomeFeed({
         <ul className="divide-y divide-neutral-200/80">
           {entries.map((entry) => {
             const { item, channel } = entry
-            const clickable = item.type === 'text' || item.type === 'image'
             return (
               <li key={item.id}>
                 <button
                   type="button"
-                  onClick={clickable ? () => onItemClick(entry) : undefined}
-                  disabled={!clickable}
-                  className="w-full text-left py-3 space-y-1 enabled:hover:bg-neutral-50 enabled:cursor-pointer disabled:cursor-default px-2 -mx-2 rounded transition-colors"
+                  onClick={() => onItemClick(entry)}
+                  className="w-full text-left py-3 space-y-1 hover:bg-neutral-50 cursor-pointer px-2 -mx-2 rounded transition-colors"
                 >
                   <p className="text-sm text-neutral-900">{item.title}</p>
                   {item.summary && (

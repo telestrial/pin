@@ -1,14 +1,16 @@
 import { useState } from 'react'
 import type { ItemType } from '../core/types'
 import type { OwnedChannel } from '../stores/auth'
+import { ComposeAudio } from './ComposeAudio'
 import { ComposeImage } from './ComposeImage'
 import { ComposeText } from './ComposeText'
+import { ComposeVideo } from './ComposeVideo'
 
-type ComposableType = Extract<ItemType, 'text' | 'image'>
-
-const TABS: { type: ComposableType; label: string }[] = [
+const TABS: { type: ItemType; label: string }[] = [
   { type: 'text', label: 'Text' },
   { type: 'image', label: 'Image' },
+  { type: 'audio', label: 'Audio' },
+  { type: 'video', label: 'Video' },
 ]
 
 export function Compose({
@@ -20,7 +22,9 @@ export function Compose({
   onCancel: () => void
   onPublished: (itemURL: string, title: string) => void
 }) {
-  const [type, setType] = useState<ComposableType>('text')
+  const [type, setType] = useState<ItemType>('text')
+
+  const formProps = { channel, onCancel, onPublished }
 
   return (
     <div className="w-full max-w-md mx-auto p-6 space-y-5">
@@ -51,19 +55,10 @@ export function Compose({
         </div>
       </div>
 
-      {type === 'text' ? (
-        <ComposeText
-          channel={channel}
-          onCancel={onCancel}
-          onPublished={onPublished}
-        />
-      ) : (
-        <ComposeImage
-          channel={channel}
-          onCancel={onCancel}
-          onPublished={onPublished}
-        />
-      )}
+      {type === 'text' && <ComposeText {...formProps} />}
+      {type === 'image' && <ComposeImage {...formProps} />}
+      {type === 'audio' && <ComposeAudio {...formProps} />}
+      {type === 'video' && <ComposeVideo {...formProps} />}
     </div>
   )
 }
