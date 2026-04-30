@@ -1,9 +1,69 @@
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { downloadItemBytes } from '../core/channels'
 import type { FeedEntry } from '../core/feed'
+import type { ItemRef } from '../core/types'
+import { installAppBridge } from '../lib/appBridge'
+import { APP_SANDBOX } from '../lib/constants'
 import { renderMarkdown } from '../lib/markdown'
-import { formatRelative } from '../lib/time'
+import {
+  formatAbsolute,
+  formatRelative,
+  formatRelativeShort,
+} from '../lib/time'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
+import { ChannelMark } from './ChannelMark'
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
+  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`
+  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`
+}
+
+function useItemBytes(itemURL: string) {
+  const sdk = useAuthStore((s) => s.sdk)
+  const [bytes, setBytes] = useState<Uint8Array | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!sdk) return
+    let cancelled = false
+    setBytes(null)
+    setError(null)
+    downloadItemBytes(sdk, itemURL)
+      .then((b) => {
+        if (cancelled) return
+        setBytes(b)
+      })
+      .catch((e) => {
+        if (cancelled) return
+        setError(e instanceof Error ? e.message : 'Failed to load')
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [sdk, itemURL])
+
+  return { bytes, error }
+}
+
+function useItemBlobURL(itemURL: string, mimeType: string) {
+  const { bytes, error } = useItemBytes(itemURL)
+  const [url, setUrl] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!bytes) return
+    const blob = new Blob([bytes as BlobPart], { type: mimeType })
+    const blobURL = URL.createObjectURL(blob)
+    setUrl(blobURL)
+    return () => {
+      URL.revokeObjectURL(blobURL)
+    }
+  }, [bytes, mimeType])
+
+  return { url, error }
+}
 
 export function HomeFeed({
   onItemClick,
@@ -85,6 +145,169 @@ export function HomeFeed({
   )
 }
 
+function NoteBody({ item }: { item: ItemRef }) {
+  const html = useMemo(() => renderMarkdown(item.summary ?? ''), [item.summary])
+  return (
+    <div
+      className="markdown wrap-break-word text-sm text-neutral-900"
+      // biome-ignore lint/security/noDangerouslySetInnerHtml: HTML is sanitized via DOMPurify
+      dangerouslySetInnerHTML={{ __html: html }}
+    />
+  )
+}
+
+function ImageBody({ item }: { item: ItemRef }) {
+  const { url, error } = useItemBlobURL(item.itemURL, item.mimeType)
+  if (error) return <p className="text-xs text-red-600">{error}</p>
+  if (!url)
+    return (
+      <div className="w-full h-48 bg-neutral-100 rounded-lg animate-pulse" />
+    )
+  return (
+    <img
+      src={url}
+      alt={item.title}
+      className="block w-full max-h-96 object-contain rounded-lg border border-neutral-200 bg-neutral-50"
+    />
+  )
+}
+
+function AudioBody({ item }: { item: ItemRef }) {
+  const { url, error } = useItemBlobURL(item.itemURL, item.mimeType)
+  if (error) return <p className="text-xs text-red-600">{error}</p>
+  if (!url)
+    return <div className="w-full h-14 bg-neutral-100 rounded animate-pulse" />
+  return (
+    <audio
+      controls
+      src={url}
+      onClick={(e) => e.stopPropagation()}
+      className="w-full"
+    >
+      <track kind="captions" />
+    </audio>
+  )
+}
+
+function VideoBody({ item }: { item: ItemRef }) {
+  const { url, error } = useItemBlobURL(item.itemURL, item.mimeType)
+  if (error) return <p className="text-xs text-red-600">{error}</p>
+  if (!url)
+    return (
+      <div className="w-full aspect-video bg-neutral-100 rounded-lg animate-pulse" />
+    )
+  return (
+    <video
+      controls
+      src={url}
+      onClick={(e) => e.stopPropagation()}
+      className="w-full max-h-96 rounded-lg border border-neutral-200 bg-black"
+    >
+      <track kind="captions" />
+    </video>
+  )
+}
+
+function AppBody({ item }: { item: ItemRef }) {
+  const iframeRef = useRef<HTMLIFrameElement>(null)
+  const { bytes, error } = useItemBytes(item.itemURL)
+  const html = useMemo(
+    () => (bytes ? new TextDecoder().decode(bytes) : null),
+    [bytes],
+  )
+
+  useEffect(() => {
+    return installAppBridge(() => iframeRef.current, item.id)
+  }, [item.id])
+
+  if (error) return <p className="text-xs text-red-600">{error}</p>
+  if (!html)
+    return (
+      <div className="w-full aspect-4/3 bg-neutral-100 rounded-lg animate-pulse" />
+    )
+  return (
+    <iframe
+      ref={iframeRef}
+      title={item.title}
+      srcDoc={html}
+      sandbox={APP_SANDBOX}
+      allow="fullscreen"
+      className="w-full aspect-4/3 rounded-lg border border-neutral-200 bg-white"
+    />
+  )
+}
+
+function FileBody({ item }: { item: ItemRef }) {
+  const sdk = useAuthStore((s) => s.sdk)
+  const [downloading, setDownloading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  async function handleDownload(e: React.MouseEvent) {
+    e.stopPropagation()
+    if (!sdk) return
+    setDownloading(true)
+    setError(null)
+    try {
+      const bytes = await downloadItemBytes(sdk, item.itemURL)
+      const blob = new Blob([bytes as BlobPart], { type: item.mimeType })
+      const blobURL = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = blobURL
+      a.download = item.filename ?? item.title
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(blobURL)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to download')
+    } finally {
+      setDownloading(false)
+    }
+  }
+
+  return (
+    <div className="flex items-center gap-3 p-3 bg-neutral-50 border border-neutral-200 rounded-lg">
+      <div className="min-w-0 flex-1">
+        <p className="text-sm text-neutral-900 truncate">
+          {item.filename ?? item.title}
+        </p>
+        <p className="text-xs text-neutral-500">
+          {item.mimeType} · {formatBytes(item.byteSize)}
+        </p>
+        {error && <p className="text-xs text-red-600 mt-1">{error}</p>}
+      </div>
+      <button
+        type="button"
+        onClick={handleDownload}
+        disabled={downloading}
+        className="px-3 py-1.5 text-xs font-medium bg-green-600 hover:bg-green-700 disabled:bg-neutral-200 text-white rounded transition-colors shrink-0"
+      >
+        {downloading ? 'Downloading…' : 'Download'}
+      </button>
+    </div>
+  )
+}
+
+function typeLabel(item: ItemRef): string {
+  if (item.type === 'text') return item.title === '' ? 'Note' : 'Post'
+  return item.type.charAt(0).toUpperCase() + item.type.slice(1)
+}
+
+function renderBody(item: ItemRef): React.ReactNode {
+  if (item.type === 'text') {
+    if (item.title === '') return <NoteBody item={item} />
+    return item.summary ? (
+      <p className="text-sm text-neutral-600">{item.summary}</p>
+    ) : null
+  }
+  if (item.type === 'image') return <ImageBody item={item} />
+  if (item.type === 'audio') return <AudioBody item={item} />
+  if (item.type === 'video') return <VideoBody item={item} />
+  if (item.type === 'app') return <AppBody item={item} />
+  if (item.type === 'file') return <FileBody item={item} />
+  return null
+}
+
 function FeedRow({
   entry,
   onItemClick,
@@ -93,48 +316,73 @@ function FeedRow({
   onItemClick: (entry: FeedEntry) => void
 }) {
   const { item, channel } = entry
-  const isNote = item.title === ''
+  const isNote = item.type === 'text' && item.title === ''
+  const showTitle = !isNote && !!item.title
 
-  const noteHTML = useMemo(
-    () => (isNote ? renderMarkdown(item.summary ?? '') : null),
-    [isNote, item.summary],
-  )
-
-  const meta = (
-    <p className="text-xs text-neutral-500">
-      {channel.name} · {formatRelative(item.publishedAt)}
-      {!isNote && ` · ${item.type}`}
-    </p>
+  const inner = (
+    <div className="flex gap-3">
+      <ChannelMark
+        channelID={channel.channelID}
+        channelName={channel.name}
+        authorHandle={channel.authorHandle}
+      />
+      <div className="min-w-0 flex-1 space-y-2">
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0 space-y-0.5">
+            <p className="text-sm font-semibold text-neutral-900 truncate">
+              {channel.name}
+            </p>
+            {showTitle && (
+              <p className="text-base font-semibold text-neutral-900 wrap-break-word">
+                {item.title}
+              </p>
+            )}
+            <p className="text-xs text-neutral-500 truncate">
+              @{channel.authorHandle}
+            </p>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <span className="text-xs font-medium px-2 py-0.5 bg-neutral-100 text-neutral-600 rounded-full whitespace-nowrap">
+              {typeLabel(item)}
+            </span>
+            <p
+              className="text-xs text-neutral-500 whitespace-nowrap"
+              title={formatAbsolute(item.publishedAt)}
+            >
+              {formatRelativeShort(item.publishedAt)}
+            </p>
+          </div>
+        </div>
+        {renderBody(item)}
+      </div>
+    </div>
   )
 
   if (isNote) {
     return (
       <li>
-        <div className="py-3 space-y-1 px-2 -mx-2">
-          <div
-            className="markdown wrap-break-word text-sm text-neutral-900"
-            // biome-ignore lint/security/noDangerouslySetInnerHtml: HTML is sanitized via DOMPurify
-            dangerouslySetInnerHTML={{ __html: noteHTML ?? '' }}
-          />
-          {meta}
-        </div>
+        <div className="py-4 px-2 -mx-2">{inner}</div>
       </li>
     )
   }
 
   return (
     <li>
-      <button
-        type="button"
+      {/* biome-ignore lint/a11y/useSemanticElements: row contains nested interactives (audio/video controls, download button) so a button element would nest interactives */}
+      <div
+        role="button"
+        tabIndex={0}
         onClick={() => onItemClick(entry)}
-        className="w-full text-left py-3 space-y-1 hover:bg-neutral-50 cursor-pointer px-2 -mx-2 rounded transition-colors"
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault()
+            onItemClick(entry)
+          }
+        }}
+        className="py-4 px-2 -mx-2 rounded hover:bg-neutral-50 cursor-pointer transition-colors"
       >
-        <p className="text-sm text-neutral-900">{item.title}</p>
-        {item.summary && (
-          <p className="text-sm text-neutral-600">{item.summary}</p>
-        )}
-        {meta}
-      </button>
+        {inner}
+      </div>
     </li>
   )
 }
