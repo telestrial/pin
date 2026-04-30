@@ -77,11 +77,11 @@ src/
 
 `core/` doesn't import React, DOM, or `localStorage`. A future React Native client (using `react-native-sia`) can be a new UI layer over the same module — the Sia and ATProto plumbing transfers unchanged.
 
-## Webapp host API
+## App host API
 
-Items of type `webapp` (a single self-contained `.html` file) run inside an iframe with `sandbox="allow-scripts allow-modals allow-pointer-lock"`. The sandbox blocks network, popups, top-navigation, forms, same-origin access — a webapp can compute, render, and accept input but can't reach our DOM, our keys, or any external service.
+Items of type `app` (a single self-contained `.html` file) run inside an iframe with `sandbox="allow-scripts allow-modals allow-pointer-lock"`. The sandbox blocks network, popups, top-navigation, forms, same-origin access — an app can compute, render, and accept input but can't reach our DOM, our keys, or any external service.
 
-It also can't use its own `localStorage` — null-origin iframes don't get storage. For state that should persist across sessions (high scores, save games, user preferences), the host exposes a `postMessage` RPC. State is scoped by `webappID` (the Sia content hash of the HTML), so the same bytes share state across whichever channels publish them. Storage is local to the device; not synced across devices in v1.
+It also can't use its own `localStorage` — null-origin iframes don't get storage. For state that should persist across sessions (high scores, save games, user preferences), the host exposes a `postMessage` RPC. State is scoped by `appID` (the Sia content hash of the HTML), so the same bytes share state across whichever channels publish them. Storage is local to the device; not synced across devices in v1.
 
 ### Read a stored value
 

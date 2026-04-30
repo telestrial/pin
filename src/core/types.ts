@@ -1,7 +1,7 @@
 export const CHANNEL_MANIFEST_VERSION = 1
 export const SUBSCRIPTIONS_VERSION = 1
 
-export type ItemType = 'text' | 'image' | 'audio' | 'video' | 'file' | 'webapp'
+export type ItemType = 'text' | 'image' | 'audio' | 'video' | 'file' | 'app'
 
 export type ItemRef = {
   id: string

@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { downloadItemBytes } from '../core/channels'
 import type { ItemRef } from '../core/types'
-import { WEBAPP_SANDBOX } from '../lib/constants'
-import { installWebappBridge } from '../lib/webappBridge'
+import { installAppBridge } from '../lib/appBridge'
+import { APP_SANDBOX } from '../lib/constants'
 import { useAuthStore } from '../stores/auth'
 
-export function ReadWebapp({
+export function ReadApp({
   item,
   channelName,
   onBack,
@@ -31,7 +31,7 @@ export function ReadWebapp({
       })
       .catch((e) => {
         if (cancelled) return
-        setError(e instanceof Error ? e.message : 'Failed to load webapp')
+        setError(e instanceof Error ? e.message : 'Failed to load app')
       })
     return () => {
       cancelled = true
@@ -39,7 +39,7 @@ export function ReadWebapp({
   }, [sdk, item.itemURL])
 
   useEffect(() => {
-    return installWebappBridge(() => iframeRef.current, item.id)
+    return installAppBridge(() => iframeRef.current, item.id)
   }, [item.id])
 
   function enterFullscreen() {
@@ -80,7 +80,7 @@ export function ReadWebapp({
               ref={iframeRef}
               title={item.title}
               srcDoc={html}
-              sandbox={WEBAPP_SANDBOX}
+              sandbox={APP_SANDBOX}
               allow="fullscreen"
               className="w-full aspect-4/3 rounded-lg border border-neutral-200 bg-white"
             />

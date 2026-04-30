@@ -1,9 +1,9 @@
 import { type ChangeEvent, useEffect, useState } from 'react'
 import { publishItem } from '../core/channels'
-import { WEBAPP_SANDBOX } from '../lib/constants'
+import { APP_SANDBOX } from '../lib/constants'
 import { type OwnedChannel, useAuthStore } from '../stores/auth'
 
-export function ComposeWebapp({
+export function ComposeApp({
   channel,
   onCancel,
   onPublished,
@@ -74,7 +74,7 @@ export function ComposeWebapp({
         agent,
         { channelID: channel.channelID, channelKey: channel.channelKey },
         {
-          type: 'webapp',
+          type: 'app',
           title: trimmedTitle,
           mimeType: 'text/html',
           bytes: new Uint8Array(buf),
@@ -111,9 +111,9 @@ export function ComposeWebapp({
 
         {previewHTML !== null && (
           <iframe
-            title="Webapp preview"
+            title="App preview"
             srcDoc={previewHTML}
-            sandbox={WEBAPP_SANDBOX}
+            sandbox={APP_SANDBOX}
             allow="fullscreen"
             className="w-full aspect-4/3 rounded-lg border border-neutral-200 bg-white"
           />
@@ -138,7 +138,7 @@ export function ComposeWebapp({
 
       {submitting && (
         <p className="text-neutral-500 text-xs">
-          Uploading webapp to Sia. Larger HTML files take longer — every object
+          Uploading app to Sia. Larger HTML files take longer — every object
           pays a full slab of erasure-coded redundancy.
         </p>
       )}

@@ -1,10 +1,10 @@
-// Host-side bridge for sandboxed webapp items. Webapps run in null-origin
+// Host-side bridge for sandboxed app items. Apps run in null-origin
 // iframes with no localStorage of their own — this lets them persist state
-// via postMessage RPC. Storage is scoped by webappID (the Sia content hash
+// via postMessage RPC. Storage is scoped by appID (the Sia content hash
 // of the HTML), so the same bytes share state across the channels that
 // publish them.
 
-const STORAGE_PREFIX = 'webapp-state'
+const STORAGE_PREFIX = 'app-state'
 
 type GetRequest = {
   type: 'dispatch:state.get'
@@ -30,9 +30,9 @@ function isRequest(data: unknown): data is Request {
   return typeof d.requestID === 'string' && typeof d.key === 'string'
 }
 
-export function installWebappBridge(
+export function installAppBridge(
   getIframe: () => HTMLIFrameElement | null,
-  webappID: string,
+  appID: string,
 ): () => void {
   const handler = (e: MessageEvent) => {
     const iframe = getIframe()
@@ -41,7 +41,7 @@ export function installWebappBridge(
     if (!isRequest(e.data)) return
 
     const req = e.data
-    const storageKey = `${STORAGE_PREFIX}:${webappID}:${req.key}`
+    const storageKey = `${STORAGE_PREFIX}:${appID}:${req.key}`
     const post = (msg: unknown) =>
       iframe.contentWindow?.postMessage(msg, '*')
 

@@ -1,14 +1,14 @@
 import { useState } from 'react'
 import type { OwnedChannel } from '../stores/auth'
+import { ComposeApp } from './ComposeApp'
 import { ComposeAudio } from './ComposeAudio'
 import { ComposeFile } from './ComposeFile'
 import { ComposeImage } from './ComposeImage'
 import { ComposeNote } from './ComposeNote'
 import { ComposePost } from './ComposePost'
 import { ComposeVideo } from './ComposeVideo'
-import { ComposeWebapp } from './ComposeWebapp'
 
-type Tab = 'note' | 'post' | 'image' | 'audio' | 'video' | 'file' | 'webapp'
+type Tab = 'note' | 'post' | 'image' | 'audio' | 'video' | 'file' | 'app'
 
 const TABS: { tab: Tab; label: string }[] = [
   { tab: 'note', label: 'Note' },
@@ -17,7 +17,7 @@ const TABS: { tab: Tab; label: string }[] = [
   { tab: 'audio', label: 'Audio' },
   { tab: 'video', label: 'Video' },
   { tab: 'file', label: 'File' },
-  { tab: 'webapp', label: 'Webapp' },
+  { tab: 'app', label: 'App' },
 ]
 
 export function Compose({
@@ -68,7 +68,7 @@ export function Compose({
       {tab === 'audio' && <ComposeAudio {...formProps} />}
       {tab === 'video' && <ComposeVideo {...formProps} />}
       {tab === 'file' && <ComposeFile {...formProps} />}
-      {tab === 'webapp' && <ComposeWebapp {...formProps} />}
+      {tab === 'app' && <ComposeApp {...formProps} />}
     </div>
   )
 }
