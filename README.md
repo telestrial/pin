@@ -4,7 +4,7 @@ Decentralized personal feeds. Channels you own, subscriptions you pick, no platf
 
 ## What it does
 
-A **channel** is a publishing handle — a person, a persona, a topic, a project, whatever the creator names it. You can own as many channels as you want, and subscribe to other people's by pasting their subscribe URL. Items inside a channel are typed: text (markdown), image, audio, or video. Your home is a chronological collation of items from every channel you've subscribed to, mixed across types.
+A **channel** is a publishing handle — a person, a persona, a topic, a project, whatever the creator names it. You can own as many channels as you want, and subscribe to other people's by pasting their subscribe URL. Items inside a channel are typed: text (markdown — short notes inline, longer posts click-through), image, audio, video, file (catch-all for anything outside the strict media whitelists), or app (a self-contained HTML widget that runs in a sandboxed iframe — see the App host API section below). Your home is a chronological collation of items from every channel you've subscribed to, mixed across types.
 
 ## Why it's cool
 
@@ -27,8 +27,8 @@ Open the printed `http://localhost:5173` URL in Chrome. The first-time flow walk
 
 1. **Window A (author)**: finish Sia + Bluesky onboarding. Click **Create a channel**, give it a name. Copy the subscribe URL.
 2. **Window B (subscriber)**, ideally an Incognito window with a different Sia account to demonstrate cross-tenant: finish Sia onboarding only. Click **Subscribe to a channel** and paste Window A's subscribe URL.
-3. Back in Window A: **Your channels** → publish a text item, an image, an audio clip, and a video. ~20 seconds per upload (Sia per-object full-slab erasure-coded redundancy).
-4. In Window B: **Refresh** the feed. All four items appear, mixed chronologically. Click each to read or play.
+3. Back in Window A: publish a few items from the inline composer at the top of the feed — a note, a post, an image, an audio clip, a video. ~20 seconds per upload (Sia per-object full-slab erasure-coded redundancy).
+4. In Window B: items appear LIVE as Window A publishes — no refresh needed. Dispatch subscribes to ATProto's JetStream firehose, filtered to the channels you follow, so publishes propagate within ~1 second. The green "Live" indicator in the toolbar shows the WS connection. Manual Refresh stays as a backstop.
 
 ## Sia SDK usage
 
@@ -124,3 +124,7 @@ Values are JSON-serialized; anything `JSON.stringify` accepts works. The host re
 - **Native mobile.** `core/` is platform-agnostic and ready; v1 ships the web SPA only.
 - **Pagination, drafts, item editing, AppView discovery.** Single-page manifest, single-attempt publishes, single-channel-key per channel.
 - **Object packing.** Every Sia upload pays a full slab of erasure-coded redundancy regardless of content size — small text items are inefficient. `sdk.uploadPacked()` is the v2 fix.
+
+## Credits
+
+Scaffolded from [SiaFoundation/create-sia-app](https://github.com/SiaFoundation/create-sia-app) by [Alex Freska](https://github.com/alexfreska).
