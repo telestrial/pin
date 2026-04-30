@@ -1,9 +1,47 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import type { FeedEntry } from '../core/feed'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
 import { ChannelMark } from './ChannelMark'
 import { FeedRow } from './HomeFeed'
+
+type TypeFilter =
+  | 'all'
+  | 'note'
+  | 'post'
+  | 'image'
+  | 'audio'
+  | 'video'
+  | 'file'
+  | 'app'
+
+const FILTER_ORDER: TypeFilter[] = [
+  'all',
+  'note',
+  'post',
+  'image',
+  'audio',
+  'video',
+  'file',
+  'app',
+]
+
+const FILTER_LABEL: Record<TypeFilter, string> = {
+  all: 'All',
+  note: 'Notes',
+  post: 'Posts',
+  image: 'Images',
+  audio: 'Audio',
+  video: 'Video',
+  file: 'Files',
+  app: 'Apps',
+}
+
+function entryFilter(entry: FeedEntry): TypeFilter {
+  const { item } = entry
+  if (item.type === 'text') return item.title === '' ? 'note' : 'post'
+  return item.type
+}
 
 export function ChannelView({
   authorHandle,
@@ -30,6 +68,8 @@ export function ChannelView({
   const live = useFeedStore((s) => s.live)
   const refreshChannel = useFeedStore((s) => s.refreshChannel)
 
+  const [filter, setFilter] = useState<TypeFilter>('all')
+
   const channelEntries = useMemo(() => {
     const filtered = entries.filter(
       (e) =>
@@ -42,6 +82,17 @@ export function ChannelView({
     })
     return filtered
   }, [entries, authorHandle, channelID, sortOrder])
+
+  const availableFilters = useMemo(() => {
+    const present = new Set<TypeFilter>(['all'])
+    for (const e of channelEntries) present.add(entryFilter(e))
+    return FILTER_ORDER.filter((f) => present.has(f))
+  }, [channelEntries])
+
+  const displayedEntries = useMemo(() => {
+    if (filter === 'all') return channelEntries
+    return channelEntries.filter((e) => entryFilter(e) === filter)
+  }, [channelEntries, filter])
 
   const channelName =
     sub?.cachedName ?? channelEntries[0]?.channel.name ?? channelID
@@ -77,6 +128,27 @@ export function ChannelView({
         </div>
 
         <div className="border border-neutral-200 rounded-lg bg-white p-4 space-y-4">
+          {availableFilters.length > 1 && (
+            <div className="flex flex-wrap gap-1.5">
+              {availableFilters.map((f) => {
+                const active = filter === f
+                return (
+                  <button
+                    key={f}
+                    type="button"
+                    onClick={() => setFilter(f)}
+                    className={`px-3 py-1 text-xs font-medium rounded-full transition-colors cursor-pointer ${
+                      active
+                        ? 'bg-neutral-900 text-white'
+                        : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200 hover:text-neutral-900'
+                    }`}
+                  >
+                    {FILTER_LABEL[f]}
+                  </button>
+                )
+              })}
+            </div>
+          )}
           <div className="flex items-center justify-between gap-3">
             <div
               className="flex gap-0.5 bg-neutral-100 rounded-md p-0.5"
@@ -134,9 +206,9 @@ export function ChannelView({
             </div>
           </div>
 
-          {channelEntries.length > 0 ? (
+          {displayedEntries.length > 0 ? (
             <ul className="divide-y divide-neutral-200/80">
-              {channelEntries.map((entry) => (
+              {displayedEntries.map((entry) => (
                 <FeedRow
                   key={entry.item.id}
                   entry={entry}
@@ -146,7 +218,11 @@ export function ChannelView({
               ))}
             </ul>
           ) : (
-            <p className="text-neutral-500 text-sm">No items yet.</p>
+            <p className="text-neutral-500 text-sm">
+              {filter === 'all'
+                ? 'No items yet.'
+                : `No ${FILTER_LABEL[filter].toLowerCase()} yet.`}
+            </p>
           )}
         </div>
       </div>
