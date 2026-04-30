@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Pong</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        background: #000;
+        overflow: hidden;
+      }
+      body {
+        display: grid;
+        place-items: center;
+      }
+      canvas {
+        display: block;
+        max-width: 100%;
+        max-height: 100%;
+        cursor: none;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="game" width="800" height="600"></canvas>
+
+    <script>
+      // ===== Dispatch host bridge =====
+      // postMessage RPC the Dispatch host exposes to webapp items, scoped per
+      // Sia content hash. Times out after 1s so the page is also playable
+      // standalone (e.g. opened directly via file://) — best score just
+      // doesn't persist in that case.
+      function dispatchGet(key, timeoutMs = 1000) {
+        return new Promise((resolve) => {
+          const requestID = crypto.randomUUID()
+          let done = false
+          const handler = (e) => {
+            if (done) return
+            if (
+              e.data &&
+              e.data.type === 'dispatch:state.get.result' &&
+              e.data.requestID === requestID
+            ) {
+              done = true
+              window.removeEventListener('message', handler)
+              resolve(e.data.value)
+            }
+          }
+          window.addEventListener('message', handler)
+          window.parent.postMessage(
+            { type: 'dispatch:state.get', requestID, key },
+            '*',
+          )
+          setTimeout(() => {
+            if (done) return
+            done = true
+            window.removeEventListener('message', handler)
+            resolve(null)
+          }, timeoutMs)
+        })
+      }
+      function dispatchSet(key, value) {
+        window.parent.postMessage(
+          {
+            type: 'dispatch:state.set',
+            requestID: crypto.randomUUID(),
+            key,
+            value,
+          },
+          '*',
+        )
+      }
+
+      // ===== Game =====
+      const canvas = document.getElementById('game')
+      const ctx = canvas.getContext('2d')
+      const W = canvas.width
+      const H = canvas.height
+      const PADDLE_W = 12
+      const PADDLE_H = 100
+      const BALL = 12
+
+      let playerY = H / 2 - PADDLE_H / 2
+      let cpuY = H / 2 - PADDLE_H / 2
+      const ball = { x: W / 2, y: H / 2, vx: 0, vy: 0 }
+      let score = 0
+      let best = 0
+      let state = 'loading' // 'loading' | 'waiting' | 'playing'
+
+      function serve(direction) {
+        ball.x = W / 2
+        ball.y = H / 2
+        const angle = (Math.random() - 0.5) * (Math.PI / 2.5) // ±36°
+        // Cap below paddle width (12) so the ball can't tunnel through.
+        const baseSpeed = Math.min(5 + score * 0.4, 11)
+        ball.vx = Math.cos(angle) * baseSpeed * direction
+        ball.vy = Math.sin(angle) * baseSpeed
+      }
+
+      function startGame() {
+        score = 0
+        state = 'playing'
+        serve(Math.random() < 0.5 ? -1 : 1)
+      }
+
+      function paddleBounce(paddleY, dirAfter) {
+        // dirAfter: +1 (ball flies right after) or -1 (ball flies left after)
+        const hitOffset = (ball.y - (paddleY + PADDLE_H / 2)) / (PADDLE_H / 2) // -1..1
+        // Same anti-tunnel cap as serve().
+        const speed = Math.min(Math.hypot(ball.vx, ball.vy) * 1.04, 11)
+        const angle = hitOffset * (Math.PI / 4) // up to ±45°
+        ball.vx = Math.cos(angle) * speed * dirAfter
+        ball.vy = Math.sin(angle) * speed
+      }
+
+      function recordBest() {
+        if (score > best) {
+          best = score
+          dispatchSet('best', best)
+        }
+      }
+
+      canvas.addEventListener('mousemove', (e) => {
+        const rect = canvas.getBoundingClientRect()
+        const scaleY = H / rect.height
+        const y = (e.clientY - rect.top) * scaleY
+        playerY = Math.max(0, Math.min(H - PADDLE_H, y - PADDLE_H / 2))
+      })
+
+      canvas.addEventListener(
+        'touchmove',
+        (e) => {
+          e.preventDefault()
+          const touch = e.touches[0]
+          if (!touch) return
+          const rect = canvas.getBoundingClientRect()
+          const scaleY = H / rect.height
+          const y = (touch.clientY - rect.top) * scaleY
+          playerY = Math.max(0, Math.min(H - PADDLE_H, y - PADDLE_H / 2))
+        },
+        { passive: false },
+      )
+
+      canvas.addEventListener('click', () => {
+        if (state === 'waiting') startGame()
+      })
+
+      canvas.addEventListener('touchstart', () => {
+        if (state === 'waiting') startGame()
+      })
+
+      function tick() {
+        if (state === 'playing') {
+          ball.x += ball.vx
+          ball.y += ball.vy
+
+          // Top/bottom walls
+          if (ball.y < BALL / 2) {
+            ball.y = BALL / 2
+            ball.vy = Math.abs(ball.vy)
+          }
+          if (ball.y > H - BALL / 2) {
+            ball.y = H - BALL / 2
+            ball.vy = -Math.abs(ball.vy)
+          }
+
+          // Player paddle
+          if (
+            ball.vx < 0 &&
+            ball.x - BALL / 2 < PADDLE_W &&
+            ball.y > playerY &&
+            ball.y < playerY + PADDLE_H
+          ) {
+            ball.x = PADDLE_W + BALL / 2
+            paddleBounce(playerY, 1)
+          }
+
+          // CPU paddle
+          if (
+            ball.vx > 0 &&
+            ball.x + BALL / 2 > W - PADDLE_W &&
+            ball.y > cpuY &&
+            ball.y < cpuY + PADDLE_H
+          ) {
+            ball.x = W - PADDLE_W - BALL / 2
+            paddleBounce(cpuY, -1)
+          }
+
+          // Score / miss
+          if (ball.x > W + BALL) {
+            // Ball passed CPU → player scores
+            score += 1
+            recordBest()
+            serve(-1) // serve toward player
+          }
+          if (ball.x < -BALL) {
+            // Ball passed player → game over
+            recordBest()
+            state = 'waiting'
+          }
+
+          // CPU AI: track ball with bounded speed + small target jitter
+          const cpuMaxSpeed = 3.5 + Math.min(score * 0.18, 3.5)
+          const targetY =
+            ball.y - PADDLE_H / 2 + (Math.random() - 0.5) * 8
+          if (cpuY < targetY) cpuY = Math.min(cpuY + cpuMaxSpeed, targetY)
+          else if (cpuY > targetY) cpuY = Math.max(cpuY - cpuMaxSpeed, targetY)
+          cpuY = Math.max(0, Math.min(H - PADDLE_H, cpuY))
+        }
+
+        // ===== Render =====
+        ctx.fillStyle = '#000'
+        ctx.fillRect(0, 0, W, H)
+
+        // Center dashed line
+        ctx.fillStyle = '#fff'
+        for (let y = 0; y < H; y += 24) {
+          ctx.fillRect(W / 2 - 1, y + 4, 2, 14)
+        }
+
+        // Score (player, big, top-left half) and best (small, top-right half)
+        ctx.textBaseline = 'top'
+        ctx.font = 'bold 72px ui-monospace, "Courier New", monospace'
+        ctx.fillStyle = '#fff'
+        ctx.textAlign = 'left'
+        ctx.fillText(String(score), 40, 30)
+        if (best > 0) {
+          ctx.font = '18px ui-monospace, "Courier New", monospace'
+          ctx.fillStyle = '#888'
+          ctx.textAlign = 'right'
+          ctx.fillText('best ' + best, W - 40, 40)
+        }
+
+        // Paddles
+        ctx.fillStyle = '#fff'
+        ctx.fillRect(0, playerY, PADDLE_W, PADDLE_H)
+        ctx.fillRect(W - PADDLE_W, cpuY, PADDLE_W, PADDLE_H)
+
+        // Ball
+        ctx.fillRect(ball.x - BALL / 2, ball.y - BALL / 2, BALL, BALL)
+
+        // Overlays
+        if (state === 'loading' || state === 'waiting') {
+          ctx.fillStyle = 'rgba(0,0,0,0.65)'
+          ctx.fillRect(0, 0, W, H)
+          ctx.textAlign = 'center'
+          ctx.textBaseline = 'middle'
+          if (state === 'loading') {
+            ctx.font = '20px ui-monospace, "Courier New", monospace'
+            ctx.fillStyle = '#aaa'
+            ctx.fillText('loading…', W / 2, H / 2)
+          } else {
+            ctx.font = 'bold 56px ui-monospace, "Courier New", monospace'
+            ctx.fillStyle = '#fff'
+            ctx.fillText('PONG', W / 2, H / 2 - 30)
+            ctx.font = '18px ui-monospace, "Courier New", monospace'
+            ctx.fillStyle = '#aaa'
+            ctx.fillText('click to play', W / 2, H / 2 + 20)
+            if (best > 0) {
+              ctx.fillText('best ' + best, W / 2, H / 2 + 50)
+            }
+          }
+        }
+
+        requestAnimationFrame(tick)
+      }
+
+      // ===== Init =====
+      dispatchGet('best').then((stored) => {
+        if (typeof stored === 'number') best = stored
+        state = 'waiting'
+      })
+      requestAnimationFrame(tick)
+    </script>
+  </body>
+</html>
