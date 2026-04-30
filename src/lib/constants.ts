@@ -16,3 +16,9 @@ export const APP_META: AppMetadata = {
 // Erasure coding parameters — passed to sdk.upload() and encodedSize().
 export const DATA_SHARDS = 10
 export const PARITY_SHARDS = 20
+
+// iframe sandbox flags for the webapp item type. Strict-by-default; each token
+// adds back one capability. Notably absent: allow-same-origin (would let the
+// iframe read our state), allow-forms (exfiltration via form POST),
+// allow-popups, allow-top-navigation (redirect attacks), allow-downloads.
+export const WEBAPP_SANDBOX = 'allow-scripts allow-modals allow-pointer-lock'

@@ -6,8 +6,9 @@ import { ComposeImage } from './ComposeImage'
 import { ComposeNote } from './ComposeNote'
 import { ComposePost } from './ComposePost'
 import { ComposeVideo } from './ComposeVideo'
+import { ComposeWebapp } from './ComposeWebapp'
 
-type Tab = 'note' | 'post' | 'image' | 'audio' | 'video' | 'file'
+type Tab = 'note' | 'post' | 'image' | 'audio' | 'video' | 'file' | 'webapp'
 
 const TABS: { tab: Tab; label: string }[] = [
   { tab: 'note', label: 'Note' },
@@ -16,6 +17,7 @@ const TABS: { tab: Tab; label: string }[] = [
   { tab: 'audio', label: 'Audio' },
   { tab: 'video', label: 'Video' },
   { tab: 'file', label: 'File' },
+  { tab: 'webapp', label: 'Webapp' },
 ]
 
 export function Compose({
@@ -66,6 +68,7 @@ export function Compose({
       {tab === 'audio' && <ComposeAudio {...formProps} />}
       {tab === 'video' && <ComposeVideo {...formProps} />}
       {tab === 'file' && <ComposeFile {...formProps} />}
+      {tab === 'webapp' && <ComposeWebapp {...formProps} />}
     </div>
   )
 }

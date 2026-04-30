@@ -12,6 +12,7 @@ import { ReadFile } from './ReadFile'
 import { ReadImage } from './ReadImage'
 import { ReadText } from './ReadText'
 import { ReadVideo } from './ReadVideo'
+import { ReadWebapp } from './ReadWebapp'
 import { SubscribeToChannel } from './SubscribeToChannel'
 
 type GatedView =
@@ -140,6 +141,7 @@ export function Home() {
     if (item.type === 'audio') return <ReadAudio {...readerProps} />
     if (item.type === 'video') return <ReadVideo {...readerProps} />
     if (item.type === 'file') return <ReadFile {...readerProps} />
+    if (item.type === 'webapp') return <ReadWebapp {...readerProps} />
     return <ReadText {...readerProps} />
   }
 

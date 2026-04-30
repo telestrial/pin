@@ -1,0 +1,95 @@
+import { useEffect, useRef, useState } from 'react'
+import { downloadItemBytes } from '../core/channels'
+import type { ItemRef } from '../core/types'
+import { WEBAPP_SANDBOX } from '../lib/constants'
+import { useAuthStore } from '../stores/auth'
+
+export function ReadWebapp({
+  item,
+  channelName,
+  onBack,
+}: {
+  item: ItemRef
+  channelName: string
+  onBack: () => void
+}) {
+  const sdk = useAuthStore((s) => s.sdk)
+  const iframeRef = useRef<HTMLIFrameElement>(null)
+  const [html, setHtml] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!sdk) return
+    let cancelled = false
+    setHtml(null)
+    setError(null)
+    downloadItemBytes(sdk, item.itemURL)
+      .then((bytes) => {
+        if (cancelled) return
+        setHtml(new TextDecoder().decode(bytes))
+      })
+      .catch((e) => {
+        if (cancelled) return
+        setError(e instanceof Error ? e.message : 'Failed to load webapp')
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [sdk, item.itemURL])
+
+  function enterFullscreen() {
+    iframeRef.current?.requestFullscreen?.()
+  }
+
+  return (
+    <div className="flex-1 p-6">
+      <article className="max-w-2xl mx-auto space-y-5">
+        <button
+          type="button"
+          onClick={onBack}
+          className="text-xs text-neutral-500 hover:text-neutral-900 transition-colors"
+        >
+          ← Back to feed
+        </button>
+
+        <header className="space-y-1">
+          <h1 className="text-2xl font-semibold text-neutral-900 wrap-break-word">
+            {item.title}
+          </h1>
+          <p className="text-xs text-neutral-500">
+            {channelName} ·{' '}
+            {new Date(item.publishedAt).toLocaleString(undefined, {
+              dateStyle: 'medium',
+              timeStyle: 'short',
+            })}
+          </p>
+        </header>
+
+        {error ? (
+          <p className="text-red-600 text-sm wrap-break-word">{error}</p>
+        ) : html === null ? (
+          <p className="text-neutral-500 text-sm">Loading…</p>
+        ) : (
+          <div className="space-y-2">
+            <iframe
+              ref={iframeRef}
+              title={item.title}
+              srcDoc={html}
+              sandbox={WEBAPP_SANDBOX}
+              className="w-full aspect-[4/3] rounded-lg border border-neutral-200 bg-white"
+            />
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={enterFullscreen}
+                className="text-xs text-neutral-500 hover:text-neutral-900 transition-colors underline underline-offset-2"
+              >
+                Fullscreen
+              </button>
+            </div>
+          </div>
+        )}
+      </article>
+    </div>
+  )
+}
