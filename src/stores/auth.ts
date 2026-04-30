@@ -21,6 +21,8 @@ export type OwnedChannel = {
   createdAt: string
 }
 
+export type FeedSortOrder = 'oldest' | 'newest'
+
 type AuthState = {
   sdk: Sdk | null
   storedKeyHex: string | null
@@ -32,6 +34,7 @@ type AuthState = {
   subscriptions: SubscriptionRef[]
   atprotoSession: ATProtoSession | null
   atprotoAgent: AtpAgent | null
+  feedSortOrder: FeedSortOrder
   setSdk: (sdk: Sdk) => void
   setStep: (step: AuthStep) => void
   setError: (error: string | null) => void
@@ -40,7 +43,11 @@ type AuthState = {
   setApprovalURL: (url: string | null) => void
   addMyChannel: (channel: OwnedChannel) => void
   addSubscription: (sub: SubscriptionRef) => void
-  setATProtoSession: (session: ATProtoSession | null, agent: AtpAgent | null) => void
+  setATProtoSession: (
+    session: ATProtoSession | null,
+    agent: AtpAgent | null,
+  ) => void
+  setFeedSortOrder: (order: FeedSortOrder) => void
   reset: () => void
 }
 
@@ -57,6 +64,7 @@ export const useAuthStore = create<AuthState>()(
       subscriptions: [],
       atprotoSession: null,
       atprotoAgent: null,
+      feedSortOrder: 'newest',
       setSdk: (sdk) => set({ sdk, step: 'connected', error: null }),
       setStep: (step) => set({ step, error: null }),
       setError: (error) => set({ error }),
@@ -77,6 +85,7 @@ export const useAuthStore = create<AuthState>()(
         ),
       setATProtoSession: (atprotoSession, atprotoAgent) =>
         set({ atprotoSession, atprotoAgent }),
+      setFeedSortOrder: (feedSortOrder) => set({ feedSortOrder }),
       reset: () => {
         useFeedStore.getState().reset()
         set({
@@ -100,6 +109,7 @@ export const useAuthStore = create<AuthState>()(
         myChannels: state.myChannels,
         subscriptions: state.subscriptions,
         atprotoSession: state.atprotoSession,
+        feedSortOrder: state.feedSortOrder,
       }),
     },
   ),

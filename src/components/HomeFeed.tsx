@@ -71,6 +71,8 @@ export function HomeFeed({
   onItemClick: (entry: FeedEntry) => void
 }) {
   const subscriptions = useAuthStore((s) => s.subscriptions)
+  const sortOrder = useAuthStore((s) => s.feedSortOrder)
+  const setSortOrder = useAuthStore((s) => s.setFeedSortOrder)
   const entries = useFeedStore((s) => s.entries)
   const errors = useFeedStore((s) => s.errors)
   const loading = useFeedStore((s) => s.loading)
@@ -83,9 +85,67 @@ export function HomeFeed({
     }
   }, [lastRefreshedAt, refresh, subscriptions])
 
+  const sortedEntries = useMemo(() => {
+    return [...entries].sort((a, b) => {
+      const cmp = a.item.publishedAt.localeCompare(b.item.publishedAt)
+      return sortOrder === 'oldest' ? cmp : -cmp
+    })
+  }, [entries, sortOrder])
+
+  const toolbar = (
+    <div className="flex items-center justify-between gap-3">
+      <div
+        className="flex gap-0.5 bg-neutral-100 rounded-md p-0.5"
+        role="tablist"
+        aria-label="Sort feed"
+      >
+        {(['newest', 'oldest'] as const).map((order) => {
+          const active = sortOrder === order
+          return (
+            <button
+              key={order}
+              type="button"
+              role="tab"
+              aria-selected={active}
+              onClick={() => setSortOrder(order)}
+              className={`px-2.5 py-1 text-xs font-medium rounded transition-colors ${
+                active
+                  ? 'bg-white text-neutral-900 shadow-sm'
+                  : 'text-neutral-600 hover:text-neutral-900'
+              }`}
+            >
+              {order === 'newest' ? 'Newest' : 'Oldest'}
+            </button>
+          )
+        })}
+      </div>
+      <div className="flex items-center gap-2 text-xs text-neutral-500">
+        {lastRefreshedAt && (
+          <span className="hidden sm:inline">
+            Updated {formatRelative(lastRefreshedAt)}
+          </span>
+        )}
+        <button
+          type="button"
+          onClick={() => refresh(subscriptions)}
+          disabled={loading}
+          title={
+            lastRefreshedAt
+              ? `Last refreshed ${formatRelative(lastRefreshedAt)}`
+              : undefined
+          }
+          className="px-2.5 py-1 text-xs font-medium text-neutral-700 hover:text-neutral-900 hover:bg-neutral-100 rounded transition-colors disabled:opacity-50"
+        >
+          {loading ? 'Refreshing…' : 'Refresh'}
+        </button>
+      </div>
+    </div>
+  )
+
   if (loading && entries.length === 0 && errors.length === 0) {
     return (
-      <div className="border border-neutral-200 rounded-lg bg-white p-4">
+      <div className="border border-neutral-200 rounded-lg bg-white p-4 space-y-4">
+        {toolbar}
         <p className="text-neutral-500 text-sm">Loading feed…</p>
       </div>
     )
@@ -93,6 +153,7 @@ export function HomeFeed({
 
   return (
     <div className="border border-neutral-200 rounded-lg bg-white p-4 space-y-4">
+      {toolbar}
       {errors.length > 0 && (
         <div className="px-3 py-2 bg-red-50 border border-red-200 rounded-lg text-red-800 text-xs space-y-1">
           <p className="font-medium">
@@ -112,9 +173,9 @@ export function HomeFeed({
         </div>
       )}
 
-      {entries.length > 0 ? (
+      {sortedEntries.length > 0 ? (
         <ul className="divide-y divide-neutral-200/80">
-          {entries.map((entry) => (
+          {sortedEntries.map((entry) => (
             <FeedRow
               key={entry.item.id}
               entry={entry}
@@ -127,20 +188,6 @@ export function HomeFeed({
           No items yet from your subscriptions.
         </p>
       )}
-
-      <div className="flex items-center gap-3 text-xs text-neutral-500">
-        <button
-          type="button"
-          onClick={() => refresh(subscriptions)}
-          disabled={loading}
-          className="text-neutral-500 hover:text-neutral-900 transition-colors underline underline-offset-2 disabled:opacity-50"
-        >
-          {loading ? 'Refreshing…' : 'Refresh'}
-        </button>
-        {lastRefreshedAt && (
-          <span>Last refreshed {formatRelative(lastRefreshedAt)}</span>
-        )}
-      </div>
     </div>
   )
 }
