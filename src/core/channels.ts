@@ -162,6 +162,36 @@ export function buildItemRef(
   }
 }
 
+export async function deletePublishedItem(
+  sdk: Sdk,
+  agent: AtpAgent,
+  channel: { channelID: string; channelKey: string },
+  itemID: string,
+): Promise<ChannelManifest> {
+  const session = agent.session
+  if (!session) throw new Error('ATProto agent has no session')
+
+  const current = await fetchChannel(
+    session.did,
+    channel.channelID,
+    channel.channelKey,
+  )
+
+  const updated: ChannelManifest = {
+    ...current,
+    publishedAt: new Date().toISOString(),
+    items: current.items.filter((i) => i.id !== itemID),
+  }
+
+  const keyBytes = channelKeyFromBase64(channel.channelKey)
+  const ciphertext = await encryptForChannel(keyBytes, JSON.stringify(updated))
+  await putChannelRecord(agent, channel.channelID, ciphertext)
+
+  await sdk.deleteObject(itemID)
+
+  return updated
+}
+
 export async function appendItemToChannel(
   agent: AtpAgent,
   channel: { channelID: string; channelKey: string },
