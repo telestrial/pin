@@ -25,6 +25,12 @@ function pinTitle(ref: PinnedItemRef): string {
   return '(untitled)'
 }
 
+export const PIN_ITEM_DRAG_TYPE = 'application/x-pin-item'
+
+function isDraggableType(ref: PinnedItemRef): boolean {
+  return ref.item.type !== 'text'
+}
+
 function typeLabel(ref: PinnedItemRef): string {
   if (ref.item.type === 'text') return ref.item.title === '' ? 'Note' : 'Post'
   return ref.item.type.charAt(0).toUpperCase() + ref.item.type.slice(1)
@@ -301,12 +307,30 @@ export function PinSidebar({
             {sorted.map((ref) => {
               const url = ref.item.itemURL
               const busy = isPinning(url)
+              const draggable = isDraggableType(ref)
               return (
                 <li key={url} className="group relative">
                   <button
                     type="button"
+                    draggable={draggable}
+                    onDragStart={
+                      draggable
+                        ? (e) => {
+                            e.dataTransfer.effectAllowed = 'copy'
+                            e.dataTransfer.setData(
+                              PIN_ITEM_DRAG_TYPE,
+                              JSON.stringify(ref),
+                            )
+                          }
+                        : undefined
+                    }
                     onClick={() => onItemClick?.(ref)}
                     disabled={!onItemClick}
+                    title={
+                      draggable
+                        ? 'Drag into the composer to republish in your channel'
+                        : undefined
+                    }
                     className="w-full px-2 py-1.5 rounded transition-colors text-left flex items-start gap-2 enabled:hover:bg-neutral-50 enabled:cursor-pointer"
                   >
                     <ChannelAvatar

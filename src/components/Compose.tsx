@@ -1,5 +1,7 @@
 import { useState } from 'react'
-import type { OwnedChannel } from '../stores/auth'
+import { downloadItemBytes } from '../core/channels'
+import type { PinnedItemRef } from '../stores/pin'
+import { type OwnedChannel, useAuthStore } from '../stores/auth'
 import { useToastStore } from '../stores/toast'
 import { ComposeApp } from './ComposeApp'
 import { ComposeAudio } from './ComposeAudio'
@@ -8,6 +10,7 @@ import { ComposeImage } from './ComposeImage'
 import { ComposeNote } from './ComposeNote'
 import { ComposePost } from './ComposePost'
 import { ComposeVideo } from './ComposeVideo'
+import { PIN_ITEM_DRAG_TYPE } from './PinSidebar'
 
 type Tab = 'note' | 'post' | 'image' | 'audio' | 'video' | 'file' | 'app'
 
@@ -34,6 +37,38 @@ function tabForFile(file: File): Tab {
   return 'file'
 }
 
+function tabForPinItemType(type: PinnedItemRef['item']['type']): Tab {
+  switch (type) {
+    case 'image':
+      return 'image'
+    case 'audio':
+      return 'audio'
+    case 'video':
+      return 'video'
+    case 'app':
+      return 'app'
+    default:
+      return 'file'
+  }
+}
+
+function filenameForPinItem(ref: PinnedItemRef): string {
+  if (ref.item.filename) return ref.item.filename
+  const safeTitle = (ref.item.title || ref.item.type).replace(/[^\w.-]+/g, '_')
+  const ext = (() => {
+    if (ref.item.mimeType === 'image/jpeg') return 'jpg'
+    if (ref.item.mimeType === 'image/png') return 'png'
+    if (ref.item.mimeType === 'image/webp') return 'webp'
+    if (ref.item.mimeType === 'audio/mpeg') return 'mp3'
+    if (ref.item.mimeType === 'audio/mp4') return 'm4a'
+    if (ref.item.mimeType === 'audio/x-m4a') return 'm4a'
+    if (ref.item.mimeType === 'video/mp4') return 'mp4'
+    if (ref.item.mimeType === 'text/html') return 'html'
+    return 'bin'
+  })()
+  return `${safeTitle}.${ext}`
+}
+
 export function Compose({
   channels,
   hideChannel = false,
@@ -48,7 +83,9 @@ export function Compose({
   const [resetCounter, setResetCounter] = useState(0)
   const [pendingFile, setPendingFile] = useState<File | null>(null)
   const [isDragging, setIsDragging] = useState(false)
+  const [downloadingPin, setDownloadingPin] = useState(false)
   const addToast = useToastStore((s) => s.addToast)
+  const sdk = useAuthStore((s) => s.sdk)
 
   const selected =
     channels.find((c) => c.channelID === selectedID) ?? channels[0]
@@ -62,14 +99,21 @@ export function Compose({
     },
   }
 
+  function isAcceptedDrag(e: React.DragEvent): boolean {
+    return (
+      e.dataTransfer.types.includes('Files') ||
+      e.dataTransfer.types.includes(PIN_ITEM_DRAG_TYPE)
+    )
+  }
+
   function handleDragEnter(e: React.DragEvent) {
-    if (!e.dataTransfer.types.includes('Files')) return
+    if (!isAcceptedDrag(e)) return
     e.preventDefault()
     setIsDragging(true)
   }
 
   function handleDragOver(e: React.DragEvent) {
-    if (!e.dataTransfer.types.includes('Files')) return
+    if (!isAcceptedDrag(e)) return
     e.preventDefault()
     e.dataTransfer.dropEffect = 'copy'
   }
@@ -78,9 +122,51 @@ export function Compose({
     if (e.currentTarget === e.target) setIsDragging(false)
   }
 
+  async function handlePinItemDrop(payload: string) {
+    if (!sdk) {
+      addToast('Sign in first')
+      return
+    }
+    let ref: PinnedItemRef
+    try {
+      ref = JSON.parse(payload) as PinnedItemRef
+    } catch {
+      addToast('Invalid pinned-item payload')
+      return
+    }
+    setDownloadingPin(true)
+    try {
+      const bytes = await downloadItemBytes(sdk, ref.item.itemURL)
+      const file = new File(
+        [bytes as BlobPart],
+        filenameForPinItem(ref),
+        { type: ref.item.mimeType },
+      )
+      setPendingFile(file)
+      setTab(tabForPinItemType(ref.item.type))
+      setResetCounter((n) => n + 1)
+      addToast('Pinned item attached')
+    } catch (e) {
+      addToast(
+        e instanceof Error
+          ? `Couldn't fetch pinned item: ${e.message}`
+          : "Couldn't fetch pinned item",
+      )
+    } finally {
+      setDownloadingPin(false)
+    }
+  }
+
   function handleDrop(e: React.DragEvent) {
     e.preventDefault()
     setIsDragging(false)
+
+    const pinPayload = e.dataTransfer.getData(PIN_ITEM_DRAG_TYPE)
+    if (pinPayload) {
+      handlePinItemDrop(pinPayload)
+      return
+    }
+
     const files = e.dataTransfer.files
     if (files.length === 0) return
     if (files.length > 1) addToast('Only the first file was used')
@@ -102,10 +188,12 @@ export function Compose({
           : 'border-neutral-200'
       }`}
     >
-      {isDragging && (
+      {(isDragging || downloadingPin) && (
         <div className="absolute inset-0 z-10 rounded-lg bg-green-50/90 flex items-center justify-center pointer-events-none">
           <p className="text-sm font-medium text-green-700">
-            Drop to attach a single file
+            {downloadingPin
+              ? 'Fetching pinned item…'
+              : 'Drop to attach — file or pinned item'}
           </p>
         </div>
       )}
