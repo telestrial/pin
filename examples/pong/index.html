@@ -108,6 +108,18 @@
       let best = 0
       let state = 'loading' // 'loading' | 'waiting' | 'playing' | 'paused'
 
+      // ===== Diagnostics =====
+      // Tracks FPS, average frame time, and mousemove events per second.
+      // Rendered as a small green line on the canvas. Reset every ~1 second.
+      let frameCount = 0
+      let lastFpsAt = performance.now()
+      let fps = 0
+      let frameTimeAccMs = 0
+      let avgFrameMs = 0
+      let mmCount = 0
+      let lastMmAt = performance.now()
+      let mmPerSec = 0
+
       function serve(direction) {
         ball.x = W / 2
         ball.y = H / 2
@@ -158,6 +170,7 @@
       // paddle even when the cursor is in the letterbox bars left/right of
       // the canvas in fullscreen.
       document.addEventListener('mousemove', (e) => {
+        mmCount++
         const rect = canvas.getBoundingClientRect()
         const scaleY = H / rect.height
         const y = (e.clientY - rect.top) * scaleY
@@ -197,6 +210,7 @@
       })
 
       function tick() {
+        const tickStart = performance.now()
         if (state === 'playing') {
           ball.x += ball.vx
           ball.y += ball.vy
@@ -320,6 +334,34 @@
             ctx.fillText('score ' + score, W / 2, H / 2 + 50)
           }
         }
+
+        // ===== Diagnostics overlay =====
+        // Update counters once per ~1s to keep numbers stable to read.
+        frameCount++
+        frameTimeAccMs += performance.now() - tickStart
+        const now = performance.now()
+        if (now - lastFpsAt >= 1000) {
+          fps = (frameCount * 1000) / (now - lastFpsAt)
+          avgFrameMs = frameTimeAccMs / frameCount
+          frameCount = 0
+          frameTimeAccMs = 0
+          lastFpsAt = now
+        }
+        if (now - lastMmAt >= 1000) {
+          mmPerSec = (mmCount * 1000) / (now - lastMmAt)
+          mmCount = 0
+          lastMmAt = now
+        }
+        // Render in logical space — drawn last so it sits on top of overlays.
+        ctx.font = '14px ui-monospace, "Courier New", monospace'
+        ctx.fillStyle = '#0f0'
+        ctx.textAlign = 'left'
+        ctx.textBaseline = 'bottom'
+        ctx.fillText(
+          `${fps.toFixed(0)} fps · ${avgFrameMs.toFixed(1)} ms · ${mmPerSec.toFixed(0)} mm/s · ${canvas.width}×${canvas.height} dpr${(window.devicePixelRatio || 1).toFixed(1)}`,
+          8,
+          H - 8,
+        )
 
         requestAnimationFrame(tick)
       }
