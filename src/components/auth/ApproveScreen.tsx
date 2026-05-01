@@ -1,8 +1,7 @@
+import { Pin } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import type { Builder } from '@siafoundation/sia-storage'
 import { useAuthStore } from '../../stores/auth'
-import { CopyButton } from '../CopyButton'
-import { DevNote } from '../DevNote'
 
 export function ApproveScreen({
   builder,
@@ -61,60 +60,42 @@ export function ApproveScreen({
 
   return (
     <div className="flex flex-col items-center justify-center flex-1 px-4">
-      <div className="w-full max-w-md space-y-6">
-        <div className="text-center space-y-2">
-          <h1 className="text-2xl font-semibold text-neutral-900">
-            Approve Connection
-          </h1>
-          <p className="text-neutral-600 text-sm">
-            Open the link below to approve this app, then return here.
-          </p>
+      <div className="w-full max-w-md space-y-8">
+        <div className="text-center space-y-4">
+          <div className="inline-flex items-center justify-center size-14 rounded-2xl bg-green-50 border border-green-100">
+            <Pin className="size-7 text-green-600" fill="currentColor" />
+          </div>
+          <div className="space-y-2">
+            <h1 className="text-2xl font-semibold text-neutral-900 tracking-tight">
+              Approve Pin at sia.storage
+            </h1>
+            <p className="text-neutral-600 text-sm leading-relaxed">
+              Open the link below, approve Pin to use your storage account,
+              then come back here.
+            </p>
+          </div>
         </div>
-
-        <DevNote title="Out-of-Band Approval">
-          <p>
-            The user must visit the approval URL in another tab (or on the
-            indexer&apos;s dashboard) to authorize your app. This is an
-            out-of-band step — your app polls for approval via{' '}
-            <code className="text-amber-700">builder.waitForApproval()</code>.
-            Once approved, the flow continues to recovery phrase setup.
-          </p>
-        </DevNote>
 
         {approvalURL && (
           <div className="space-y-3">
-            <div className="flex items-center gap-2 p-3 bg-white border border-neutral-300 rounded-lg">
-              <span className="flex-1 text-sm font-mono text-neutral-600 truncate">
-                {approvalURL}
-              </span>
-              <CopyButton value={approvalURL} label="URL copied" />
-            </div>
             <a
               href={approvalURL}
               target="_blank"
               rel="noopener noreferrer"
               className="block w-full text-center py-3 bg-green-600 hover:bg-green-700 text-white font-medium rounded-lg transition-colors"
             >
-              Open Link
+              Open approval page →
             </a>
+            <button
+              type="button"
+              onClick={handleManualCheck}
+              disabled={manualChecking}
+              className="w-full py-2 text-sm text-neutral-500 hover:text-neutral-900 transition-colors"
+            >
+              {manualChecking ? 'Checking…' : "I've approved — continue"}
+            </button>
           </div>
         )}
-
-        <button
-          type="button"
-          onClick={handleManualCheck}
-          disabled={manualChecking}
-          className="w-full py-3 bg-neutral-100 hover:bg-neutral-200 disabled:bg-neutral-200 disabled:text-neutral-400 text-neutral-900 font-medium rounded-lg transition-colors"
-        >
-          {manualChecking ? (
-            <span className="flex items-center justify-center gap-2">
-              <span className="w-4 h-4 border-2 border-neutral-300 border-t-neutral-900 rounded-full animate-spin" />
-              Checking...
-            </span>
-          ) : (
-            'Check Approval'
-          )}
-        </button>
 
         <div className="flex items-center justify-center gap-2 text-xs text-neutral-500">
           {polling ? (
@@ -123,10 +104,10 @@ export function ApproveScreen({
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-500 opacity-75" />
                 <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-green-600" />
               </span>
-              Polling for approval...
+              Waiting for approval…
             </>
           ) : pollError ? (
-            <span>Auto-polling stopped</span>
+            <span>Auto-check stopped — use the button above</span>
           ) : null}
         </div>
       </div>

@@ -1,3 +1,4 @@
+import { Pin } from 'lucide-react'
 import { useState } from 'react'
 import {
   type Builder,
@@ -6,7 +7,6 @@ import {
 } from '@siafoundation/sia-storage'
 import { useAuthStore } from '../../stores/auth'
 import { CopyButton } from '../CopyButton'
-import { DevNote } from '../DevNote'
 
 export function RecoveryScreen({
   builder,
@@ -34,7 +34,7 @@ export function RecoveryScreen({
       try {
         validateRecoveryPhrase(value.trim())
       } catch {
-        setPhraseError('Invalid recovery phrase')
+        setPhraseError('That doesn\'t look like a valid recovery phrase.')
       }
     }
   }
@@ -50,7 +50,7 @@ export function RecoveryScreen({
     try {
       validateRecoveryPhrase(mnemonic)
     } catch {
-      setPhraseError('Invalid recovery phrase')
+      setPhraseError('That doesn\'t look like a valid recovery phrase.')
       return
     }
 
@@ -69,25 +69,21 @@ export function RecoveryScreen({
   if (mode === 'choose') {
     return (
       <div className="flex flex-col items-center justify-center flex-1 px-4">
-        <div className="w-full max-w-md space-y-6">
-          <div className="text-center space-y-2">
-            <h1 className="text-2xl font-semibold text-neutral-900">
-              Recovery Phrase
-            </h1>
-            <p className="text-neutral-600 text-sm">
-              Generate a new recovery phrase or enter an existing one.
-            </p>
+        <div className="w-full max-w-md space-y-8">
+          <div className="text-center space-y-4">
+            <div className="inline-flex items-center justify-center size-14 rounded-2xl bg-green-50 border border-green-100">
+              <Pin className="size-7 text-green-600" fill="currentColor" />
+            </div>
+            <div className="space-y-2">
+              <h1 className="text-2xl font-semibold text-neutral-900 tracking-tight">
+                Your custody key
+              </h1>
+              <p className="text-neutral-600 text-sm leading-relaxed">
+                A 12-word phrase that controls your Pin account. Anyone with
+                it can read and publish your channels — keep it private.
+              </p>
+            </div>
           </div>
-
-          <DevNote title="Recovery Phrases & Key Derivation">
-            <p>
-              The 12-word BIP-39 recovery phrase deterministically derives the
-              user&apos;s cryptographic keys. The same phrase always produces
-              the same keys, enabling account recovery. The derived app key is
-              exported and stored in localStorage (via Zustand persist) so users
-              don&apos;t need to re-enter it.
-            </p>
-          </DevNote>
 
           <div className="space-y-3">
             <button
@@ -95,14 +91,14 @@ export function RecoveryScreen({
               onClick={handleGenerate}
               className="w-full py-3 bg-green-600 hover:bg-green-700 text-white font-medium rounded-lg transition-colors"
             >
-              Generate New Phrase
+              Create a new account
             </button>
             <button
               type="button"
               onClick={() => setMode('import')}
               className="w-full py-3 bg-neutral-100 hover:bg-neutral-200 text-neutral-900 font-medium rounded-lg transition-colors"
             >
-              Enter Existing Phrase
+              I have a recovery phrase
             </button>
           </div>
         </div>
@@ -114,15 +110,15 @@ export function RecoveryScreen({
     <div className="flex flex-col items-center justify-center flex-1 px-4">
       <div className="w-full max-w-md space-y-6">
         <div className="text-center space-y-2">
-          <h1 className="text-2xl font-semibold text-neutral-900">
+          <h1 className="text-2xl font-semibold text-neutral-900 tracking-tight">
             {mode === 'generate'
-              ? 'Save Your Recovery Phrase'
-              : 'Enter Recovery Phrase'}
+              ? 'Save these 12 words'
+              : 'Welcome back'}
           </h1>
-          <p className="text-neutral-600 text-sm">
+          <p className="text-neutral-600 text-sm leading-relaxed">
             {mode === 'generate'
-              ? 'Write down these 12 words in order. You will need them to recover your account.'
-              : 'Enter your 12-word recovery phrase.'}
+              ? 'Write them down somewhere safe. They\'re the only way back into your account if you lose this browser.'
+              : 'Enter your 12-word recovery phrase to restore your account.'}
           </p>
         </div>
 
@@ -151,7 +147,7 @@ export function RecoveryScreen({
             <textarea
               value={phrase}
               onChange={(e) => handleValidatePhrase(e.target.value)}
-              placeholder="Enter your 12-word recovery phrase..."
+              placeholder="word word word word word word word word word word word word"
               rows={3}
               className="w-full px-4 py-3 bg-white border border-neutral-300 rounded-lg text-neutral-900 placeholder-neutral-400 focus:outline-none focus:border-green-600"
             />
@@ -167,7 +163,11 @@ export function RecoveryScreen({
           disabled={loading || !phrase.trim()}
           className="w-full py-3 bg-green-600 hover:bg-green-700 disabled:bg-neutral-200 disabled:text-neutral-400 text-white font-medium rounded-lg transition-colors"
         >
-          {loading ? 'Registering...' : 'Complete Setup'}
+          {loading
+            ? 'Setting up…'
+            : mode === 'generate'
+              ? "I've saved it — continue"
+              : 'Restore my account'}
         </button>
 
         <button
