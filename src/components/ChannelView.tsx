@@ -29,6 +29,7 @@ export function ChannelView({
   onSeeAll,
   onEdit,
   onUnpin,
+  onUnsubscribe,
   onBack,
   rightSidebar,
   composerSlot,
@@ -45,6 +46,7 @@ export function ChannelView({
   onSeeAll: () => void
   onEdit?: () => void
   onUnpin?: () => void
+  onUnsubscribe?: () => void
   onBack: () => void
   rightSidebar: React.ReactNode
   composerSlot?: React.ReactNode
@@ -157,7 +159,7 @@ export function ChannelView({
                   {channelEntries.length === 1 ? '' : 's'}
                 </p>
               </div>
-              {(onEdit || onUnpin) && (
+              {(onEdit || onUnpin || onUnsubscribe) && (
                 <div className="shrink-0 flex flex-col gap-1.5">
                   {onEdit && (
                     <button
@@ -175,6 +177,15 @@ export function ChannelView({
                       className="px-3 py-1.5 text-xs font-medium text-neutral-500 hover:text-red-700 bg-neutral-50 hover:bg-red-50 rounded-md transition-colors cursor-pointer"
                     >
                       Unpin channel
+                    </button>
+                  )}
+                  {onUnsubscribe && (
+                    <button
+                      type="button"
+                      onClick={onUnsubscribe}
+                      className="px-3 py-1.5 text-xs font-medium text-neutral-500 hover:text-red-700 bg-neutral-50 hover:bg-red-50 rounded-md transition-colors cursor-pointer"
+                    >
+                      Unsubscribe
                     </button>
                   )}
                 </div>

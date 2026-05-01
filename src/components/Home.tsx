@@ -250,6 +250,22 @@ export function Home() {
             : undefined
         }
         onUnpin={owned ? handleUnpinChannel : undefined}
+        onUnsubscribe={
+          !owned
+            ? () => {
+                if (
+                  !window.confirm(
+                    `Unsubscribe from this channel? Items already pinned to your storage stay where they are.`,
+                  )
+                )
+                  return
+                useAuthStore.getState().removeSubscription(view.channelID)
+                useFeedStore.getState().removeChannel(view.channelID)
+                addToast('Unsubscribed')
+                setView({ kind: 'idle', filter: 'all' })
+              }
+            : undefined
+        }
         onBack={() => setView({ kind: 'idle', filter: 'all' })}
         composerSlot={channelComposerSlot}
         rightSidebar={
