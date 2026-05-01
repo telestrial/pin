@@ -3,16 +3,20 @@ import { useAuthStore } from '../stores/auth'
 const CAP = 10
 
 export function Sidebar({
+  onHome,
   onCreate,
   onSubscribe,
   onSeeAll,
   onChannelClick,
+  activeHome,
   activeChannelID,
 }: {
+  onHome: () => void
   onCreate: () => void
   onSubscribe: () => void
   onSeeAll: () => void
   onChannelClick: (authorHandle: string, channelID: string) => void
+  activeHome?: boolean
   activeChannelID?: string
 }) {
   const myChannels = useAuthStore((s) => s.myChannels)
@@ -32,6 +36,22 @@ export function Sidebar({
 
   return (
     <aside className="w-full lg:w-60 shrink-0 border border-neutral-200 rounded-lg bg-white p-3 space-y-6">
+      <section>
+        <button
+          type="button"
+          onClick={onHome}
+          className="w-full px-3 py-2 text-sm font-medium rounded-md transition-colors cursor-pointer text-neutral-700 hover:text-neutral-900 hover:bg-neutral-50 flex items-center justify-between gap-2 text-left"
+        >
+          <span>Home</span>
+          {activeHome && (
+            <span
+              aria-hidden="true"
+              className="size-1.5 rounded-full bg-neutral-900 shrink-0"
+            />
+          )}
+        </button>
+      </section>
+
       <section className="space-y-2">
         <button
           type="button"
@@ -42,10 +62,7 @@ export function Sidebar({
         </button>
         {channelsToShow.length > 0 && (
           <>
-            <h3 className="text-xs font-medium text-neutral-500 uppercase tracking-wider px-3 pt-2">
-              Your channels
-            </h3>
-            <ul>
+            <ul aria-label="Your channels">
               {channelsToShow.map((c) => {
                 const handle = ownedAuthorHandle(c.channelID)
                 const active = c.channelID === activeChannelID
@@ -57,13 +74,15 @@ export function Sidebar({
                         handle && onChannelClick(handle, c.channelID)
                       }
                       disabled={!handle}
-                      className={`w-full text-left px-3 py-1.5 text-sm rounded transition-colors truncate disabled:opacity-50 cursor-pointer ${
-                        active
-                          ? 'bg-neutral-100 text-neutral-900 font-medium'
-                          : 'text-neutral-700 hover:text-neutral-900 hover:bg-neutral-50'
-                      }`}
+                      className="w-full px-3 py-1.5 text-sm rounded transition-colors disabled:opacity-50 cursor-pointer text-neutral-700 hover:text-neutral-900 hover:bg-neutral-50 flex items-center justify-between gap-2 text-left"
                     >
-                      {c.name}
+                      <span className="truncate">{c.name}</span>
+                      {active && (
+                        <span
+                          aria-hidden="true"
+                          className="size-1.5 rounded-full bg-neutral-900 shrink-0"
+                        />
+                      )}
                     </button>
                   </li>
                 )
@@ -90,10 +109,7 @@ export function Sidebar({
         </button>
         {subsToShow.length > 0 && (
           <>
-            <h3 className="text-xs font-medium text-neutral-500 uppercase tracking-wider px-3 pt-2">
-              Subscribed
-            </h3>
-            <ul>
+            <ul aria-label="Subscribed channels">
               {subsToShow.map((s) => {
                 const active = s.channelID === activeChannelID
                 return (
@@ -103,13 +119,17 @@ export function Sidebar({
                       onClick={() =>
                         onChannelClick(s.authorHandle, s.channelID)
                       }
-                      className={`w-full text-left px-3 py-1.5 text-sm rounded transition-colors truncate cursor-pointer ${
-                        active
-                          ? 'bg-neutral-100 text-neutral-900 font-medium'
-                          : 'text-neutral-700 hover:text-neutral-900 hover:bg-neutral-50'
-                      }`}
+                      className="w-full px-3 py-1.5 text-sm rounded transition-colors cursor-pointer text-neutral-700 hover:text-neutral-900 hover:bg-neutral-50 flex items-center justify-between gap-2 text-left"
                     >
-                      {s.cachedName ?? s.channelID}
+                      <span className="truncate">
+                        {s.cachedName ?? s.channelID}
+                      </span>
+                      {active && (
+                        <span
+                          aria-hidden="true"
+                          className="size-1.5 rounded-full bg-neutral-900 shrink-0"
+                        />
+                      )}
                     </button>
                   </li>
                 )

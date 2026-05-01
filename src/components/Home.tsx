@@ -175,6 +175,7 @@ export function Home() {
             filter: 'all',
           })
         }
+        onHome={() => setView({ kind: 'idle', filter: 'all' })}
         onCreate={gotoCreating}
         onSubscribe={() => setView({ kind: 'subscribing' })}
         onSeeAll={() => setView({ kind: 'channels' })}
@@ -215,6 +216,7 @@ export function Home() {
     const onBack = () => setView(returnTo)
     const sidebar = (
       <Sidebar
+        onHome={() => setView({ kind: 'idle', filter: 'all' })}
         onCreate={gotoCreating}
         onSubscribe={() => setView({ kind: 'subscribing' })}
         onSeeAll={() => setView({ kind: 'channels' })}
@@ -229,10 +231,15 @@ export function Home() {
         activeChannelID={channel.channelID}
       />
     )
+    const backLabel =
+      view.returnTo.kind === 'viewing-channel'
+        ? `Back to ${channel.name}`
+        : 'Back to feed'
     const readerProps = {
       item,
       channelName: channel.name,
       onBack,
+      backLabel,
       sidebar,
     }
     if (item.type === 'image') return <ReadImage {...readerProps} />
@@ -319,6 +326,7 @@ export function Home() {
     <div className="flex-1 p-6">
       <div className="max-w-5xl mx-auto flex flex-col lg:flex-row lg:items-start gap-6">
         <Sidebar
+          onHome={() => setView({ kind: 'idle', filter: 'all' })}
           onCreate={gotoCreating}
           onSubscribe={() => setView({ kind: 'subscribing' })}
           onSeeAll={() => setView({ kind: 'channels' })}
@@ -330,6 +338,7 @@ export function Home() {
               filter: 'all',
             })
           }
+          activeHome={true}
         />
         <div className="flex-1 lg:max-w-2xl space-y-6 min-w-0">
           {composerSlot}
