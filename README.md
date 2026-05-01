@@ -181,9 +181,9 @@ A note on browser support: we pinned `@siafoundation/sia-storage` early and buil
 
 ## Credits
 
-Pin stands on top of two pieces of infrastructure built by other people:
+Pin sits on infrastructure built by other people:
 
-- **The [Sia Foundation](https://sia.tech) engineering team** for [`@siafoundation/sia-storage`](https://www.npmjs.com/package/@siafoundation/sia-storage) — the JS/WASM SDK that does the heavy lifting (erasure coding, per-object encryption, host coordination, indexer auth). Pin is mostly a UI on top of their work.
+- **My colleagues at the [Sia Foundation](https://sia.tech)** maintain [the libraries](https://github.com/SiaFoundation) advancing the broader [Sia network](https://sia.tech): [Luke Champine](https://github.com/lukechampine), [Nate](https://github.com/n8mgr), [Christopher Schinnerl](https://github.com/ChrisSchinnerl), [Peter-Jan Brone](https://github.com/peterjan), [Christopher Tarry](https://github.com/chris124567), [Alrighttt](https://github.com/Alrighttt), and [Alex Freska](https://github.com/alexfreska).
 - **[ATProto](https://atproto.com) and [Bluesky](https://bsky.app)** for the protocol and the public infrastructure (PDS, [JetStream](https://github.com/bluesky-social/jetstream) relay) that handle Pin's mutable channel-naming layer. `@atproto/api` for client calls; the JetStream firehose for sub-second live updates without polling.
 
 Scaffolded from [SiaFoundation/create-sia-app](https://github.com/SiaFoundation/create-sia-app) by [Alex Freska](https://github.com/alexfreska).
