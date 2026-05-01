@@ -84,8 +84,8 @@ export function ComposeAudio({
         type="file"
         accept="audio/mpeg,audio/mp4,audio/x-m4a,.mp3,.m4a"
         onChange={handleFileChange}
-        required
-        className="block w-full text-sm text-neutral-700 file:mr-3 file:px-3 file:py-1.5 file:rounded-md file:border-0 file:text-xs file:font-medium file:bg-neutral-100 file:text-neutral-900 hover:file:bg-neutral-200 file:cursor-pointer"
+        disabled={!!file}
+        className="block w-full text-sm text-neutral-700 file:mr-3 file:px-3 file:py-1.5 file:rounded-md file:border-0 file:text-xs file:font-medium file:bg-neutral-100 file:text-neutral-900 hover:file:bg-neutral-200 file:cursor-pointer disabled:opacity-50"
       />
 
       {previewURL && (
