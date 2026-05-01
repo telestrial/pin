@@ -99,6 +99,14 @@
       }
       window.addEventListener('resize', resizeCanvas)
       document.addEventListener('fullscreenchange', resizeCanvas)
+      // ResizeObserver catches the case where the iframe is mounted with a
+      // not-yet-laid-out body — getBoundingClientRect would return 0×0 at
+      // first run, making the canvas pixel buffer 1×1 and the whole game
+      // invisibly black-on-black. The observer fires once layout settles.
+      if (typeof ResizeObserver !== 'undefined') {
+        const ro = new ResizeObserver(() => resizeCanvas())
+        ro.observe(canvas)
+      }
       resizeCanvas()
 
       let playerY = H / 2 - PADDLE_H / 2
