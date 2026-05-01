@@ -67,8 +67,8 @@ export function SubscribeToChannel({
           Subscribe to a channel
         </h1>
         <p className="text-neutral-500 text-sm">
-          Paste a Dispatch subscribe URL. The URL contains the author's handle,
-          the channel handle, and the decryption key.
+          Paste a Pin subscribe URL. The URL contains the author's handle, the
+          channel handle, and the decryption key.
         </p>
       </div>
 
@@ -82,7 +82,7 @@ export function SubscribeToChannel({
           disabled={submitting}
           required
           rows={3}
-          placeholder="dispatch://author.bsky.social#k=..."
+          placeholder="pin://author.bsky.social#k=..."
           className="w-full px-3 py-2 bg-white border border-neutral-300 rounded-lg text-[11px] font-mono text-neutral-900 placeholder-neutral-400 focus:outline-none focus:border-green-600 disabled:bg-neutral-50 disabled:text-neutral-500"
         />
       </label>

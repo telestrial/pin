@@ -1,4 +1,4 @@
-# Dispatch
+# Pin
 
 Decentralized personal feeds. Channels you own, subscriptions you pick, no platform between author and reader.
 
@@ -8,7 +8,7 @@ A **channel** is a publishing handle — a person, a persona, a topic, a project
 
 ## Why it's cool
 
-There is no Dispatch server, no Dispatch database, no platform between authors and readers. Item bytes live on Sia, encrypted with per-object keys. The mutable channel record (name, description, item refs) lives on ATProto as a publicly-readable record whose body is encrypted ciphertext under a per-channel key `K` — the key never appears anywhere except the URL fragment of the subscribe link. Anyone can fetch a channel's record from ATProto; only people you've sent the subscribe URL to can decrypt it. This composes the same "URL fragment is the access capability" pattern that Sia uses for object sharing, lifted to the channel layer.
+There is no Pin server, no Pin database, no platform between authors and readers. Item bytes live on Sia, encrypted with per-object keys. The mutable channel record (name, description, item refs) lives on ATProto as a publicly-readable record whose body is encrypted ciphertext under a per-channel key `K` — the key never appears anywhere except the URL fragment of the subscribe link. Anyone can fetch a channel's record from ATProto; only people you've sent the subscribe URL to can decrypt it. This composes the same "URL fragment is the access capability" pattern that Sia uses for object sharing, lifted to the channel layer.
 
 The product around that architecture is deliberately calm: no notifications, no like counts, no algorithmic feed, no replies, no @mentions, no threads. Friend-scaled, not follower-scaled. A reply is a new item in some channel; the conversation emerges from what people publish in response to each other.
 
@@ -28,11 +28,11 @@ Open the printed `http://localhost:5173` URL in Chrome. The first-time flow walk
 1. **Window A (author)**: finish Sia + Bluesky onboarding. Click **Create a channel**, give it a name. Copy the subscribe URL.
 2. **Window B (subscriber)**, ideally an Incognito window with a different Sia account to demonstrate cross-tenant: finish Sia onboarding only. Click **Subscribe to a channel** and paste Window A's subscribe URL.
 3. Back in Window A: publish a few items from the inline composer at the top of the feed — a note, a post, an image, an audio clip, a video. ~20 seconds per upload (Sia per-object full-slab erasure-coded redundancy).
-4. In Window B: items appear LIVE as Window A publishes — no refresh needed. Dispatch subscribes to ATProto's JetStream firehose, filtered to the channels you follow, so publishes propagate within ~1 second. The green "Live" indicator in the toolbar shows the WS connection. Manual Refresh stays as a backstop.
+4. In Window B: items appear LIVE as Window A publishes — no refresh needed. Pin subscribes to ATProto's JetStream firehose, filtered to the channels you follow, so publishes propagate within ~1 second. The green "Live" indicator in the toolbar shows the WS connection. Manual Refresh stays as a backstop.
 
 ## Sia SDK usage
 
-Dispatch uses [`@siafoundation/sia-storage`](https://www.npmjs.com/package/@siafoundation/sia-storage) load-bearingly:
+Pin uses [`@siafoundation/sia-storage`](https://www.npmjs.com/package/@siafoundation/sia-storage) load-bearingly:
 
 | SDK call | Where it's used |
 | --- | --- |
@@ -64,7 +64,7 @@ Item bytes (per item)              Channel state (per channel)
 
 - **Channel ATProto record** body is *only* `{ $type, encryptedManifest }`. No client-controlled metadata fields.
 - **Channel ID** (the rkey) is derived from `K`, not stored as a separate field. Listing an author's collection reveals only opaque rkeys.
-- **Subscribe URL** is `dispatch://<authorHandle>#k=<base64-K>`. Sharing the URL = granting decrypt access. Without `K`, you can tell *that* the author publishes (via the rkey list) but nothing about *what*.
+- **Subscribe URL** is `pin://<authorHandle>#k=<base64-K>`. Sharing the URL = granting decrypt access. Without `K`, you can tell *that* the author publishes (via the rkey list) but nothing about *what*.
 - **Item URLs** (which themselves contain Sia's per-object encryption keys in their fragments) are stored *inside* the encrypted manifest, so without `K` you also can't fetch the item bytes meaningfully.
 
 ```

@@ -268,7 +268,7 @@ export function buildSubscribeURL(
   authorHandle: string,
   channelKey: string,
 ): string {
-  return `dispatch://${authorHandle}#k=${channelKey}`
+  return `pin://${authorHandle}#k=${channelKey}`
 }
 
 export async function parseSubscribeURL(url: string): Promise<{
@@ -276,10 +276,10 @@ export async function parseSubscribeURL(url: string): Promise<{
   channelID: string
   channelKey: string
 }> {
-  const m = url.trim().match(/^dispatch:\/\/([^#/]+)#k=(.+)$/)
+  const m = url.trim().match(/^pin:\/\/([^#/]+)#k=(.+)$/)
   if (!m) {
     throw new Error(
-      'Invalid subscribe URL (expected dispatch://<handle>#k=<key>)',
+      'Invalid subscribe URL (expected pin://<handle>#k=<key>)',
     )
   }
   const [, authorHandle, channelKey] = m

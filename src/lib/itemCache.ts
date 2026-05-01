@@ -1,4 +1,4 @@
-const DB_NAME = 'dispatch-cache'
+const DB_NAME = 'pin-cache'
 const DB_VERSION = 1
 const STORE = 'items'
 const HARD_CAP_BYTES = 500 * 1024 * 1024

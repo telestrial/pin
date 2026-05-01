@@ -47,7 +47,7 @@ export function BlueskyLoginScreen({
           Sign in to Bluesky
         </h1>
         <p className="text-neutral-500 text-sm">
-          Dispatch publishes channel records to your ATProto repo via Bluesky.
+          Pin publishes channel records to your ATProto repo via Bluesky.
           Use an{' '}
           <a
             href="https://bsky.app/settings/app-passwords"
