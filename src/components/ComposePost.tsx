@@ -1,23 +1,25 @@
 import { useState } from 'react'
-import { publishItem } from '../core/channels'
 import { type OwnedChannel, useAuthStore } from '../stores/auth'
+import { useToastStore } from '../stores/toast'
+import { useUploadQueueStore } from '../stores/uploadQueue'
 
 export function ComposePost({
   channel,
-  onPublished,
+  onQueued,
 }: {
   channel: OwnedChannel
-  onPublished: (itemURL: string, title: string) => void
+  onQueued: () => void
 }) {
   const sdk = useAuthStore((s) => s.sdk)
   const agent = useAuthStore((s) => s.atprotoAgent)
+  const enqueue = useUploadQueueStore((s) => s.enqueue)
+  const addToast = useToastStore((s) => s.addToast)
 
   const [title, setTitle] = useState('')
   const [body, setBody] = useState('')
-  const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  async function handleSubmit(e: React.FormEvent) {
+  function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     if (!sdk) return
     if (!agent || !agent.session) {
@@ -27,25 +29,18 @@ export function ComposePost({
     const trimmedTitle = title.trim()
     const trimmedBody = body.trim()
     if (!trimmedTitle || !trimmedBody) return
-    setSubmitting(true)
     setError(null)
-    try {
-      const result = await publishItem(
-        sdk,
-        agent,
-        { channelID: channel.channelID, channelKey: channel.channelKey },
-        {
-          type: 'text',
-          title: trimmedTitle,
-          mimeType: 'text/markdown',
-          bytes: new TextEncoder().encode(trimmedBody),
-        },
-      )
-      onPublished(result.itemRef.itemURL, result.itemRef.title)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to publish')
-      setSubmitting(false)
-    }
+    enqueue({
+      payload: {
+        type: 'text',
+        title: trimmedTitle,
+        mimeType: 'text/markdown',
+        bytes: new TextEncoder().encode(trimmedBody),
+      },
+      channelIDs: [channel.channelID],
+    })
+    addToast(`Queued “${trimmedTitle}” for publish`)
+    onQueued()
   }
 
   return (
@@ -63,9 +58,8 @@ export function ComposePost({
             type="text"
             value={title}
             onChange={(e) => setTitle(e.target.value)}
-            disabled={submitting}
             required
-            className="w-full px-3 py-2 bg-white border border-neutral-300 rounded-lg text-sm text-neutral-900 focus:outline-none focus:border-green-600 disabled:bg-neutral-50 disabled:text-neutral-500"
+            className="w-full px-3 py-2 bg-white border border-neutral-300 rounded-lg text-sm text-neutral-900 focus:outline-none focus:border-green-600"
           />
         </label>
 
@@ -76,30 +70,22 @@ export function ComposePost({
           <textarea
             value={body}
             onChange={(e) => setBody(e.target.value)}
-            disabled={submitting}
             required
             rows={10}
             placeholder="# Hello world&#10;&#10;Whatever you want to say."
-            className="w-full px-3 py-2 bg-white border border-neutral-300 rounded-lg text-sm text-neutral-900 placeholder-neutral-400 focus:outline-none focus:border-green-600 disabled:bg-neutral-50 disabled:text-neutral-500 font-mono"
+            className="w-full px-3 py-2 bg-white border border-neutral-300 rounded-lg text-sm text-neutral-900 placeholder-neutral-400 focus:outline-none focus:border-green-600 font-mono"
           />
         </label>
       </div>
 
       {error && <p className="text-red-600 text-sm wrap-break-word">{error}</p>}
 
-      {submitting && (
-        <p className="text-neutral-500 text-xs">
-          Uploading item to Sia. ~20 seconds — every object pays a full slab of
-          erasure-coded redundancy.
-        </p>
-      )}
-
       <button
         type="submit"
-        disabled={submitting || !title.trim() || !body.trim()}
+        disabled={!title.trim() || !body.trim()}
         className="w-full px-4 py-2.5 bg-green-600 hover:bg-green-700 disabled:bg-neutral-200 disabled:text-neutral-400 text-white text-sm font-medium rounded-lg transition-colors"
       >
-        {submitting ? 'Publishing…' : 'Publish'}
+        Publish
       </button>
     </form>
   )

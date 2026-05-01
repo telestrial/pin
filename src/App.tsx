@@ -5,6 +5,7 @@ import { Navbar } from './components/Navbar'
 import { Toasts } from './components/Toast'
 import { resumeSession } from './core/atproto'
 import { useJetstream } from './lib/useJetstream'
+import { useUploadRunner } from './lib/useUploadRunner'
 import { useAuthStore } from './stores/auth'
 import { usePinStore } from './stores/pin'
 
@@ -13,6 +14,7 @@ export default function App() {
   const sdk = useAuthStore((s) => s.sdk)
 
   useJetstream()
+  useUploadRunner()
 
   useEffect(() => {
     const { atprotoSession, atprotoAgent, setATProtoSession } =

@@ -1,22 +1,24 @@
 import { useState } from 'react'
-import { publishItem } from '../core/channels'
 import { type OwnedChannel, useAuthStore } from '../stores/auth'
+import { useToastStore } from '../stores/toast'
+import { useUploadQueueStore } from '../stores/uploadQueue'
 
 export function ComposeNote({
   channel,
-  onPublished,
+  onQueued,
 }: {
   channel: OwnedChannel
-  onPublished: (itemURL: string, title: string) => void
+  onQueued: () => void
 }) {
   const sdk = useAuthStore((s) => s.sdk)
   const agent = useAuthStore((s) => s.atprotoAgent)
+  const enqueue = useUploadQueueStore((s) => s.enqueue)
+  const addToast = useToastStore((s) => s.addToast)
 
   const [body, setBody] = useState('')
-  const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  async function handleSubmit(e: React.FormEvent) {
+  function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     if (!sdk) return
     if (!agent || !agent.session) {
@@ -25,26 +27,19 @@ export function ComposeNote({
     }
     const trimmedBody = body.trim()
     if (!trimmedBody) return
-    setSubmitting(true)
     setError(null)
-    try {
-      const result = await publishItem(
-        sdk,
-        agent,
-        { channelID: channel.channelID, channelKey: channel.channelKey },
-        {
-          type: 'text',
-          title: '',
-          summary: trimmedBody,
-          mimeType: 'text/markdown',
-          bytes: new TextEncoder().encode(trimmedBody),
-        },
-      )
-      onPublished(result.itemRef.itemURL, result.itemRef.title)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to publish')
-      setSubmitting(false)
-    }
+    enqueue({
+      payload: {
+        type: 'text',
+        title: '',
+        summary: trimmedBody,
+        mimeType: 'text/markdown',
+        bytes: new TextEncoder().encode(trimmedBody),
+      },
+      channelIDs: [channel.channelID],
+    })
+    addToast('Queued for publish')
+    onQueued()
   }
 
   return (
@@ -60,29 +55,21 @@ export function ComposeNote({
         <textarea
           value={body}
           onChange={(e) => setBody(e.target.value)}
-          disabled={submitting}
           required
           rows={5}
           placeholder="Whatever's on your mind."
-          className="w-full px-3 py-2 bg-white border border-neutral-300 rounded-lg text-sm text-neutral-900 placeholder-neutral-400 focus:outline-none focus:border-green-600 disabled:bg-neutral-50 disabled:text-neutral-500 font-mono"
+          className="w-full px-3 py-2 bg-white border border-neutral-300 rounded-lg text-sm text-neutral-900 placeholder-neutral-400 focus:outline-none focus:border-green-600 font-mono"
         />
       </label>
 
       {error && <p className="text-red-600 text-sm wrap-break-word">{error}</p>}
 
-      {submitting && (
-        <p className="text-neutral-500 text-xs">
-          Uploading item to Sia. ~20 seconds — every object pays a full slab of
-          erasure-coded redundancy.
-        </p>
-      )}
-
       <button
         type="submit"
-        disabled={submitting || !body.trim()}
+        disabled={!body.trim()}
         className="w-full px-4 py-2.5 bg-green-600 hover:bg-green-700 disabled:bg-neutral-200 disabled:text-neutral-400 text-white text-sm font-medium rounded-lg transition-colors"
       >
-        {submitting ? 'Publishing…' : 'Publish'}
+        Publish
       </button>
     </form>
   )

@@ -144,15 +144,11 @@ export async function fetchChannel(
   return parsed as ChannelManifest
 }
 
-export async function publishItem(
-  sdk: Sdk,
-  agent: AtpAgent,
-  channel: { channelID: string; channelKey: string },
+export function buildItemRef(
+  uploaded: { id: string; itemURL: string; byteSize: number },
   payload: ItemPayload,
-): Promise<{ manifest: ChannelManifest; itemRef: ItemRef }> {
-  const uploaded = await uploadItem(sdk, payload.bytes)
-
-  const itemRef: ItemRef = {
+): ItemRef {
+  return {
     id: uploaded.id,
     itemURL: uploaded.itemURL,
     type: payload.type,
@@ -164,11 +160,16 @@ export async function publishItem(
     durationMs: payload.durationMs,
     filename: payload.filename,
   }
+}
 
+export async function appendItemToChannel(
+  agent: AtpAgent,
+  channel: { channelID: string; channelKey: string },
+  itemRef: ItemRef,
+): Promise<ChannelManifest> {
   const session = agent.session
   if (!session) throw new Error('ATProto agent has no session')
 
-  // Re-fetch the latest manifest (publisher's own — guaranteed decrypt-able).
   const current = await fetchChannel(
     session.did,
     channel.channelID,
@@ -185,7 +186,7 @@ export async function publishItem(
   const ciphertext = await encryptForChannel(keyBytes, JSON.stringify(updated))
   await putChannelRecord(agent, channel.channelID, ciphertext)
 
-  return { manifest: updated, itemRef }
+  return updated
 }
 
 export async function downloadItemBytes(

@@ -73,10 +73,6 @@ export function Home() {
     })
   }
 
-  function handlePublished(itemURL: string, title: string) {
-    copyURL(itemURL, `Published “${title}” — share URL copied`)
-  }
-
   if (view.kind === 'bluesky-login') {
     return (
       <BlueskyLoginScreen
@@ -306,7 +302,7 @@ export function Home() {
         </button>
       )
     }
-    return <Compose channels={myChannels} onPublished={handlePublished} />
+    return <Compose channels={myChannels} />
   })()
 
   if (subscriptions.length === 0) {

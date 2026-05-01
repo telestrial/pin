@@ -20,13 +20,7 @@ const TABS: { tab: Tab; label: string }[] = [
   { tab: 'app', label: 'App' },
 ]
 
-export function Compose({
-  channels,
-  onPublished,
-}: {
-  channels: OwnedChannel[]
-  onPublished: (itemURL: string, title: string) => void
-}) {
+export function Compose({ channels }: { channels: OwnedChannel[] }) {
   const [tab, setTab] = useState<Tab>('note')
   const [selectedID, setSelectedID] = useState<string>(
     channels[0]?.channelID ?? '',
@@ -39,10 +33,7 @@ export function Compose({
 
   const formProps = {
     channel: selected,
-    onPublished: (itemURL: string, title: string) => {
-      setResetCounter((n) => n + 1)
-      onPublished(itemURL, title)
-    },
+    onQueued: () => setResetCounter((n) => n + 1),
   }
 
   return (

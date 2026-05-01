@@ -12,10 +12,12 @@ export type UploadedItem = {
 export async function uploadItem(
   sdk: Sdk,
   bytes: Uint8Array,
+  onShard?: () => void,
 ): Promise<UploadedItem> {
   const obj = await sdk.upload(
     new PinnedObject(),
     new Blob([bytes as BlobPart]).stream(),
+    onShard ? { onShardUploaded: () => onShard() } : undefined,
   )
   await sdk.pinObject(obj)
   return {
