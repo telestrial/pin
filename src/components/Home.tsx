@@ -12,6 +12,7 @@ import { ChannelsView } from './ChannelsView'
 import { ChannelView } from './ChannelView'
 import { Compose } from './Compose'
 import { CreateChannel } from './CreateChannel'
+import { EditApp } from './EditApp'
 import { EditChannel } from './EditChannel'
 import { EditPost } from './EditPost'
 import type { TypeFilter } from './FilterPills'
@@ -47,6 +48,12 @@ type View =
   | { kind: 'reading'; entry: FeedEntry; returnTo: View }
   | {
       kind: 'editing-post'
+      item: ItemRef
+      channel: OwnedChannel
+      returnTo: View
+    }
+  | {
+      kind: 'editing-app'
       item: ItemRef
       channel: OwnedChannel
       returnTo: View
@@ -287,6 +294,18 @@ export function Home() {
     )
   }
 
+  if (view.kind === 'editing-app') {
+    const returnTo = view.returnTo
+    return (
+      <EditApp
+        item={view.item}
+        channel={view.channel}
+        onCancel={() => setView(returnTo)}
+        onSaved={() => setView(returnTo)}
+      />
+    )
+  }
+
   if (view.kind === 'reading') {
     const { item, channel } = view.entry
     const returnTo = view.returnTo
@@ -348,15 +367,26 @@ export function Home() {
         },
       },
     }
+    const ownedChannel = myChannels.find(
+      (c) => c.channelID === channel.channelID,
+    )
     if (item.type === 'image') return <ReadImage {...readerProps} />
     if (item.type === 'audio') return <ReadAudio {...readerProps} />
     if (item.type === 'video') return <ReadVideo {...readerProps} />
     if (item.type === 'file') return <ReadFile {...readerProps} />
-    if (item.type === 'app') return <ReadApp {...readerProps} />
-    const ownedForPost =
-      item.title !== ''
-        ? myChannels.find((c) => c.channelID === channel.channelID)
+    if (item.type === 'app') {
+      const onEditApp = ownedChannel
+        ? () =>
+            setView({
+              kind: 'editing-app',
+              item,
+              channel: ownedChannel,
+              returnTo: readingView,
+            })
         : undefined
+      return <ReadApp {...readerProps} onEdit={onEditApp} />
+    }
+    const ownedForPost = item.title !== '' ? ownedChannel : undefined
     const onEditPost = ownedForPost
       ? () =>
           setView({

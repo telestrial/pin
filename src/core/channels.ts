@@ -230,7 +230,7 @@ export async function deletePublishedItem(
   return updated
 }
 
-export async function editPost(
+export async function editItem(
   sdk: Sdk,
   agent: AtpAgent,
   channel: { channelID: string; channelKey: string },
