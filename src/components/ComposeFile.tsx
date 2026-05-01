@@ -13,17 +13,21 @@ function formatBytes(n: number): string {
 export function ComposeFile({
   channel,
   onQueued,
+  initialFile,
 }: {
   channel: OwnedChannel
   onQueued: () => void
+  initialFile?: File | null
 }) {
   const sdk = useAuthStore((s) => s.sdk)
   const agent = useAuthStore((s) => s.atprotoAgent)
   const enqueue = useUploadQueueStore((s) => s.enqueue)
   const addToast = useToastStore((s) => s.addToast)
 
-  const [title, setTitle] = useState('')
-  const [file, setFile] = useState<File | null>(null)
+  const [title, setTitle] = useState(
+    initialFile ? initialFile.name.replace(/\.[^.]+$/, '') : '',
+  )
+  const [file, setFile] = useState<File | null>(initialFile ?? null)
   const [error, setError] = useState<string | null>(null)
 
   function handleFileChange(e: ChangeEvent<HTMLInputElement>) {
