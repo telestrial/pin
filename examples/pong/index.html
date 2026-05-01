@@ -9,28 +9,60 @@
       body {
         margin: 0;
         padding: 0;
-        height: 100%;
         background: #000;
         overflow: hidden;
-      }
-      body {
-        display: grid;
-        place-items: center;
         cursor: none;
+      }
+      /* Use viewport units directly on body to avoid a height-inheritance
+         chain that breaks in some iframe layout configurations and leaves
+         body 0-tall — which clips the absolutely-centered canvas. */
+      body {
+        width: 100vw;
+        height: 100vh;
       }
       canvas {
         display: block;
-        /* Fill the viewport while preserving 4:3 aspect — picks whichever
-           dimension fits both the width and the height. In fullscreen on a
-           16:9 screen this fills the height with letterboxing left/right;
-           in the embedded 4:3 iframe it fills the iframe exactly. */
+        /* Self-position via vw/vh so the canvas doesn't depend on body
+           layout/grid being correct. Picks whichever dimension fits both
+           sides of 4:3. In fullscreen on 16:9 this fills the height with
+           letterboxing; in the embedded iframe it fills the iframe exactly. */
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        transform: translate(-50%, -50%);
         width: min(100vw, calc(100vh * 4 / 3));
         height: min(100vh, calc(100vw * 3 / 4));
+      }
+      /* Always-visible escape hatch in case the canvas ever fails to
+         render (cross-iframe layout race, sandbox quirk, etc). Click
+         enters fullscreen and starts/resumes — fullscreen reliably
+         resizes the canvas correctly. */
+      #play-btn {
+        position: fixed;
+        bottom: 8px;
+        right: 8px;
+        padding: 6px 10px;
+        font-family: ui-monospace, 'Courier New', monospace;
+        font-size: 11px;
+        background: #fff;
+        color: #000;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        opacity: 0.6;
+        z-index: 10;
+      }
+      #play-btn:hover {
+        opacity: 1;
+      }
+      body[data-state='playing'] #play-btn {
+        display: none;
       }
     </style>
   </head>
   <body>
     <canvas id="game" width="800" height="600"></canvas>
+    <button id="play-btn" type="button">⛶ Click to play</button>
 
     <script>
       // ===== Dispatch host bridge =====
@@ -226,14 +258,17 @@
         { passive: false },
       )
 
-      canvas.addEventListener('click', () => {
+      function clickToPlay() {
         if (state === 'waiting') startGame()
         else if (state === 'paused') resumeGame()
-      })
+      }
 
-      canvas.addEventListener('touchstart', () => {
-        if (state === 'waiting') startGame()
-        else if (state === 'paused') resumeGame()
+      canvas.addEventListener('click', clickToPlay)
+      canvas.addEventListener('touchstart', clickToPlay)
+      // Always-visible button as a render-failure escape hatch.
+      document.getElementById('play-btn').addEventListener('click', (e) => {
+        e.stopPropagation()
+        clickToPlay()
       })
 
       // Esc out of fullscreen mid-game → pause. Click resumes (re-enters
@@ -317,6 +352,12 @@
 
       function tick() {
         const tickStart = performance.now()
+
+        // Reflect state into body[data-state] so the play-button CSS can
+        // hide itself during play and reappear when waiting/paused.
+        if (document.body.dataset.state !== state) {
+          document.body.dataset.state = state
+        }
 
         // Advance physics on fixed clock, regardless of rAF rate.
         const elapsed = Math.min(tickStart - lastFrameAt, 100)
