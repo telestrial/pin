@@ -7,10 +7,12 @@ export function ReadImage({
   item,
   channelName,
   onBack,
+  sidebar,
 }: {
   item: ItemRef
   channelName: string
   onBack: () => void
+  sidebar: React.ReactNode
 }) {
   const sdk = useAuthStore((s) => s.sdk)
   const [imgURL, setImgURL] = useState<string | null>(null)
@@ -41,40 +43,43 @@ export function ReadImage({
 
   return (
     <div className="flex-1 p-6">
-      <article className="max-w-2xl mx-auto space-y-5">
-        <button
-          type="button"
-          onClick={onBack}
-          className="text-xs text-neutral-500 hover:text-neutral-900 transition-colors"
-        >
-          ← Back to feed
-        </button>
+      <div className="max-w-5xl mx-auto flex flex-col lg:flex-row lg:items-start gap-6">
+        {sidebar}
+        <article className="flex-1 lg:max-w-2xl space-y-5 min-w-0">
+          <button
+            type="button"
+            onClick={onBack}
+            className="text-xs text-neutral-500 hover:text-neutral-900 transition-colors"
+          >
+            ← Back to feed
+          </button>
 
-        <header className="space-y-1">
-          <h1 className="text-2xl font-semibold text-neutral-900 wrap-break-word">
-            {item.title}
-          </h1>
-          <p className="text-xs text-neutral-500">
-            {channelName} ·{' '}
-            {new Date(item.publishedAt).toLocaleString(undefined, {
-              dateStyle: 'medium',
-              timeStyle: 'short',
-            })}
-          </p>
-        </header>
+          <header className="space-y-1">
+            <h1 className="text-2xl font-semibold text-neutral-900 wrap-break-word">
+              {item.title}
+            </h1>
+            <p className="text-xs text-neutral-500">
+              {channelName} ·{' '}
+              {new Date(item.publishedAt).toLocaleString(undefined, {
+                dateStyle: 'medium',
+                timeStyle: 'short',
+              })}
+            </p>
+          </header>
 
-        {error ? (
-          <p className="text-red-600 text-sm wrap-break-word">{error}</p>
-        ) : imgURL === null ? (
-          <p className="text-neutral-500 text-sm">Loading…</p>
-        ) : (
-          <img
-            src={imgURL}
-            alt={item.title}
-            className="max-w-full rounded-lg border border-neutral-200 bg-neutral-50"
-          />
-        )}
-      </article>
+          {error ? (
+            <p className="text-red-600 text-sm wrap-break-word">{error}</p>
+          ) : imgURL === null ? (
+            <p className="text-neutral-500 text-sm">Loading…</p>
+          ) : (
+            <img
+              src={imgURL}
+              alt={item.title}
+              className="max-w-full rounded-lg border border-neutral-200 bg-neutral-50"
+            />
+          )}
+        </article>
+      </div>
     </div>
   )
 }

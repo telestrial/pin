@@ -7,11 +7,13 @@ export function Sidebar({
   onSubscribe,
   onSeeAll,
   onChannelClick,
+  activeChannelID,
 }: {
   onCreate: () => void
   onSubscribe: () => void
   onSeeAll: () => void
   onChannelClick: (authorHandle: string, channelID: string) => void
+  activeChannelID?: string
 }) {
   const myChannels = useAuthStore((s) => s.myChannels)
   const subscriptions = useAuthStore((s) => s.subscriptions)
@@ -46,6 +48,7 @@ export function Sidebar({
             <ul>
               {channelsToShow.map((c) => {
                 const handle = ownedAuthorHandle(c.channelID)
+                const active = c.channelID === activeChannelID
                 return (
                   <li key={c.channelID}>
                     <button
@@ -54,7 +57,11 @@ export function Sidebar({
                         handle && onChannelClick(handle, c.channelID)
                       }
                       disabled={!handle}
-                      className="w-full text-left px-3 py-1.5 text-sm text-neutral-700 hover:text-neutral-900 hover:bg-neutral-50 rounded transition-colors truncate disabled:opacity-50 cursor-pointer"
+                      className={`w-full text-left px-3 py-1.5 text-sm rounded transition-colors truncate disabled:opacity-50 cursor-pointer ${
+                        active
+                          ? 'bg-neutral-100 text-neutral-900 font-medium'
+                          : 'text-neutral-700 hover:text-neutral-900 hover:bg-neutral-50'
+                      }`}
                     >
                       {c.name}
                     </button>
@@ -87,17 +94,26 @@ export function Sidebar({
               Subscribed
             </h3>
             <ul>
-              {subsToShow.map((s) => (
-                <li key={`${s.authorHandle}/${s.channelID}`}>
-                  <button
-                    type="button"
-                    onClick={() => onChannelClick(s.authorHandle, s.channelID)}
-                    className="w-full text-left px-3 py-1.5 text-sm text-neutral-700 hover:text-neutral-900 hover:bg-neutral-50 rounded transition-colors truncate cursor-pointer"
-                  >
-                    {s.cachedName ?? s.channelID}
-                  </button>
-                </li>
-              ))}
+              {subsToShow.map((s) => {
+                const active = s.channelID === activeChannelID
+                return (
+                  <li key={`${s.authorHandle}/${s.channelID}`}>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onChannelClick(s.authorHandle, s.channelID)
+                      }
+                      className={`w-full text-left px-3 py-1.5 text-sm rounded transition-colors truncate cursor-pointer ${
+                        active
+                          ? 'bg-neutral-100 text-neutral-900 font-medium'
+                          : 'text-neutral-700 hover:text-neutral-900 hover:bg-neutral-50'
+                      }`}
+                    >
+                      {s.cachedName ?? s.channelID}
+                    </button>
+                  </li>
+                )
+              })}
             </ul>
             <button
               type="button"

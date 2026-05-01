@@ -14,10 +14,12 @@ export function ReadFile({
   item,
   channelName,
   onBack,
+  sidebar,
 }: {
   item: ItemRef
   channelName: string
   onBack: () => void
+  sidebar: React.ReactNode
 }) {
   const sdk = useAuthStore((s) => s.sdk)
   const [downloading, setDownloading] = useState(false)
@@ -57,60 +59,65 @@ export function ReadFile({
 
   return (
     <div className="flex-1 p-6">
-      <article className="max-w-2xl mx-auto space-y-5">
-        <button
-          type="button"
-          onClick={onBack}
-          className="text-xs text-neutral-500 hover:text-neutral-900 transition-colors"
-        >
-          ← Back to feed
-        </button>
-
-        <header className="space-y-1">
-          <h1 className="text-2xl font-semibold text-neutral-900 wrap-break-word">
-            {item.title}
-          </h1>
-          <p className="text-xs text-neutral-500">
-            {channelName} ·{' '}
-            {new Date(item.publishedAt).toLocaleString(undefined, {
-              dateStyle: 'medium',
-              timeStyle: 'short',
-            })}
-          </p>
-        </header>
-
-        <div className="px-4 py-4 bg-neutral-50 rounded-lg border border-neutral-200 space-y-4">
-          <dl className="text-sm space-y-1">
-            <div className="flex gap-3">
-              <dt className="text-neutral-500 w-20 shrink-0">Filename</dt>
-              <dd className="text-neutral-900 wrap-break-word">{filename}</dd>
-            </div>
-            <div className="flex gap-3">
-              <dt className="text-neutral-500 w-20 shrink-0">Type</dt>
-              <dd className="text-neutral-900 wrap-break-word">
-                {item.mimeType || 'application/octet-stream'}
-              </dd>
-            </div>
-            <div className="flex gap-3">
-              <dt className="text-neutral-500 w-20 shrink-0">Size</dt>
-              <dd className="text-neutral-900">{formatBytes(item.byteSize)}</dd>
-            </div>
-          </dl>
-
+      <div className="max-w-5xl mx-auto flex flex-col lg:flex-row lg:items-start gap-6">
+        {sidebar}
+        <article className="flex-1 lg:max-w-2xl space-y-5 min-w-0">
           <button
             type="button"
-            onClick={handleDownload}
-            disabled={downloading}
-            className="w-full px-4 py-2.5 bg-green-600 hover:bg-green-700 disabled:bg-neutral-200 disabled:text-neutral-400 text-white text-sm font-medium rounded-lg transition-colors"
+            onClick={onBack}
+            className="text-xs text-neutral-500 hover:text-neutral-900 transition-colors"
           >
-            {downloading ? 'Downloading from Sia…' : 'Download'}
+            ← Back to feed
           </button>
 
-          {error && (
-            <p className="text-red-600 text-sm wrap-break-word">{error}</p>
-          )}
-        </div>
-      </article>
+          <header className="space-y-1">
+            <h1 className="text-2xl font-semibold text-neutral-900 wrap-break-word">
+              {item.title}
+            </h1>
+            <p className="text-xs text-neutral-500">
+              {channelName} ·{' '}
+              {new Date(item.publishedAt).toLocaleString(undefined, {
+                dateStyle: 'medium',
+                timeStyle: 'short',
+              })}
+            </p>
+          </header>
+
+          <div className="px-4 py-4 bg-neutral-50 rounded-lg border border-neutral-200 space-y-4">
+            <dl className="text-sm space-y-1">
+              <div className="flex gap-3">
+                <dt className="text-neutral-500 w-20 shrink-0">Filename</dt>
+                <dd className="text-neutral-900 wrap-break-word">{filename}</dd>
+              </div>
+              <div className="flex gap-3">
+                <dt className="text-neutral-500 w-20 shrink-0">Type</dt>
+                <dd className="text-neutral-900 wrap-break-word">
+                  {item.mimeType || 'application/octet-stream'}
+                </dd>
+              </div>
+              <div className="flex gap-3">
+                <dt className="text-neutral-500 w-20 shrink-0">Size</dt>
+                <dd className="text-neutral-900">
+                  {formatBytes(item.byteSize)}
+                </dd>
+              </div>
+            </dl>
+
+            <button
+              type="button"
+              onClick={handleDownload}
+              disabled={downloading}
+              className="w-full px-4 py-2.5 bg-green-600 hover:bg-green-700 disabled:bg-neutral-200 disabled:text-neutral-400 text-white text-sm font-medium rounded-lg transition-colors"
+            >
+              {downloading ? 'Downloading from Sia…' : 'Download'}
+            </button>
+
+            {error && (
+              <p className="text-red-600 text-sm wrap-break-word">{error}</p>
+            )}
+          </div>
+        </article>
+      </div>
     </div>
   )
 }

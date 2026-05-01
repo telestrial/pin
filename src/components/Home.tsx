@@ -175,6 +175,9 @@ export function Home() {
             filter: 'all',
           })
         }
+        onCreate={gotoCreating}
+        onSubscribe={() => setView({ kind: 'subscribing' })}
+        onSeeAll={() => setView({ kind: 'channels' })}
         onEdit={
           owned
             ? () =>
@@ -210,7 +213,28 @@ export function Home() {
     const { item, channel } = view.entry
     const returnTo = view.returnTo
     const onBack = () => setView(returnTo)
-    const readerProps = { item, channelName: channel.name, onBack }
+    const sidebar = (
+      <Sidebar
+        onCreate={gotoCreating}
+        onSubscribe={() => setView({ kind: 'subscribing' })}
+        onSeeAll={() => setView({ kind: 'channels' })}
+        onChannelClick={(authorHandle, channelID) =>
+          setView({
+            kind: 'viewing-channel',
+            authorHandle,
+            channelID,
+            filter: 'all',
+          })
+        }
+        activeChannelID={channel.channelID}
+      />
+    )
+    const readerProps = {
+      item,
+      channelName: channel.name,
+      onBack,
+      sidebar,
+    }
     if (item.type === 'image') return <ReadImage {...readerProps} />
     if (item.type === 'audio') return <ReadAudio {...readerProps} />
     if (item.type === 'video') return <ReadVideo {...readerProps} />
