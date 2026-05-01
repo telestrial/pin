@@ -14,7 +14,7 @@ export function EditPost({
   item: ItemRef
   channel: OwnedChannel
   onCancel: () => void
-  onSaved: () => void
+  onSaved: (newItem: ItemRef) => void
 }) {
   const sdk = useAuthStore((s) => s.sdk)
   const agent = useAuthStore((s) => s.atprotoAgent)
@@ -58,7 +58,7 @@ export function EditPost({
     setSubmitting(true)
     setError(null)
     try {
-      await editItem(sdk, agent, channel, item.id, {
+      const result = await editItem(sdk, agent, channel, item.id, {
         type: 'text',
         title: trimmedTitle,
         mimeType: 'text/markdown',
@@ -67,7 +67,7 @@ export function EditPost({
       const sub = subscriptions.find((s) => s.channelID === channel.channelID)
       if (sub) await refreshChannel(sub)
       addToast(`Updated “${trimmedTitle}”`)
-      onSaved()
+      onSaved(result.item)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to save')
       setSubmitting(false)

@@ -236,7 +236,7 @@ export async function editItem(
   channel: { channelID: string; channelKey: string },
   oldItemID: string,
   payload: ItemPayload,
-): Promise<ChannelManifest> {
+): Promise<{ manifest: ChannelManifest; item: ItemRef }> {
   const session = agent.session
   if (!session) throw new Error('ATProto agent has no session')
 
@@ -280,7 +280,7 @@ export async function editItem(
   // Drop old bytes best-effort; subscribers who pinned keep their snapshot.
   sdk.deleteObject(oldItemID).catch(() => {})
 
-  return updated
+  return { manifest: updated, item: newItem }
 }
 
 export async function appendItemToChannel(

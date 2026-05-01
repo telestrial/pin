@@ -284,24 +284,46 @@ export function Home() {
 
   if (view.kind === 'editing-post') {
     const returnTo = view.returnTo
+    const handleSaved = (newItem: ItemRef) => {
+      if (returnTo.kind === 'reading') {
+        setView({
+          kind: 'reading',
+          entry: { item: newItem, channel: returnTo.entry.channel },
+          returnTo: returnTo.returnTo,
+        })
+      } else {
+        setView(returnTo)
+      }
+    }
     return (
       <EditPost
         item={view.item}
         channel={view.channel}
         onCancel={() => setView(returnTo)}
-        onSaved={() => setView(returnTo)}
+        onSaved={handleSaved}
       />
     )
   }
 
   if (view.kind === 'editing-app') {
     const returnTo = view.returnTo
+    const handleSaved = (newItem: ItemRef) => {
+      if (returnTo.kind === 'reading') {
+        setView({
+          kind: 'reading',
+          entry: { item: newItem, channel: returnTo.entry.channel },
+          returnTo: returnTo.returnTo,
+        })
+      } else {
+        setView(returnTo)
+      }
+    }
     return (
       <EditApp
         item={view.item}
         channel={view.channel}
         onCancel={() => setView(returnTo)}
-        onSaved={() => setView(returnTo)}
+        onSaved={handleSaved}
       />
     )
   }

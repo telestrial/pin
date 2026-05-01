@@ -15,7 +15,7 @@ export function EditApp({
   item: ItemRef
   channel: OwnedChannel
   onCancel: () => void
-  onSaved: () => void
+  onSaved: (newItem: ItemRef) => void
 }) {
   const sdk = useAuthStore((s) => s.sdk)
   const agent = useAuthStore((s) => s.atprotoAgent)
@@ -101,7 +101,7 @@ export function EditApp({
       const bytes = newFile
         ? new Uint8Array(await newFile.arrayBuffer())
         : new TextEncoder().encode(currentHTML ?? '')
-      await editItem(sdk, agent, channel, item.id, {
+      const result = await editItem(sdk, agent, channel, item.id, {
         type: 'app',
         title: trimmedTitle,
         mimeType: 'text/html',
@@ -110,7 +110,7 @@ export function EditApp({
       const sub = subscriptions.find((s) => s.channelID === channel.channelID)
       if (sub) await refreshChannel(sub)
       addToast(`Updated “${trimmedTitle}”`)
-      onSaved()
+      onSaved(result.item)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to save')
       setSubmitting(false)
