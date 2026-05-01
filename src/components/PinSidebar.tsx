@@ -1,7 +1,12 @@
-import { HardDrive, X } from 'lucide-react'
+import { CheckCircle2, HardDrive, RotateCw, X } from 'lucide-react'
 import { type PinnedItemRef, usePinStore } from '../stores/pin'
 import { useAuthStore } from '../stores/auth'
 import { useToastStore } from '../stores/toast'
+import {
+  type UploadTask,
+  type UploadTaskState,
+  useUploadQueueStore,
+} from '../stores/uploadQueue'
 import { ChannelMark } from './ChannelMark'
 
 function formatBytes(n: number): string {
@@ -22,6 +27,22 @@ function typeLabel(ref: PinnedItemRef): string {
   return ref.item.type.charAt(0).toUpperCase() + ref.item.type.slice(1)
 }
 
+function taskTitle(task: UploadTask): string {
+  const p = task.payload
+  if (p.title) return p.title
+  if (p.summary) return p.summary.slice(0, 60)
+  if (p.filename) return p.filename
+  return 'item'
+}
+
+function taskStateLabel(state: UploadTaskState): string {
+  if (state === 'pending') return 'Queued'
+  if (state === 'uploading') return 'Uploading'
+  if (state === 'publishing') return 'Publishing'
+  if (state === 'success') return 'Published'
+  return 'Failed'
+}
+
 export function PinSidebar({
   onItemClick,
 }: {
@@ -33,6 +54,13 @@ export function PinSidebar({
   const isPinning = usePinStore((s) => s.isPinning)
   const unpin = usePinStore((s) => s.unpin)
   const addToast = useToastStore((s) => s.addToast)
+  const tasks = useUploadQueueStore((s) => s.tasks)
+  const retryTask = useUploadQueueStore((s) => s.retry)
+  const removeTask = useUploadQueueStore((s) => s.remove)
+
+  const inFlight = [...tasks].sort((a, b) =>
+    b.createdAt.localeCompare(a.createdAt),
+  )
 
   const sorted = [...pinned].sort((a, b) =>
     b.pinnedAt.localeCompare(a.pinnedAt),
@@ -94,6 +122,80 @@ export function PinSidebar({
           )}
         </div>
       </section>
+
+      {inFlight.length > 0 && (
+        <section className="space-y-2">
+          <h2 className="text-xs font-semibold tracking-wide uppercase text-neutral-500 px-1">
+            In flight
+          </h2>
+          <ul aria-label="Upload queue">
+            {inFlight.map((task) => {
+              const stateColor =
+                task.state === 'failed'
+                  ? 'text-red-600'
+                  : task.state === 'success'
+                    ? 'text-green-600'
+                    : 'text-neutral-500'
+              const showProgress =
+                task.state === 'uploading' || task.state === 'publishing'
+              return (
+                <li
+                  key={task.id}
+                  className="px-2 py-1.5 rounded space-y-1 bg-neutral-50/60"
+                >
+                  <div className="flex items-start gap-2">
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs font-medium text-neutral-900 truncate">
+                        {taskTitle(task)}
+                      </p>
+                      <p className={`text-[10px] ${stateColor} truncate`}>
+                        {taskStateLabel(task.state)}
+                        {task.state === 'success' && (
+                          <CheckCircle2 className="inline size-3 ml-1 align-text-bottom" />
+                        )}
+                        {task.error ? ` — ${task.error}` : ''}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-0.5 shrink-0">
+                      {task.state === 'failed' && (
+                        <button
+                          type="button"
+                          onClick={() => retryTask(task.id)}
+                          title="Retry"
+                          aria-label={`Retry ${taskTitle(task)}`}
+                          className="p-1 rounded text-neutral-400 hover:text-neutral-900 hover:bg-neutral-100"
+                        >
+                          <RotateCw className="size-3" aria-hidden="true" />
+                        </button>
+                      )}
+                      {task.state !== 'uploading' &&
+                        task.state !== 'publishing' && (
+                          <button
+                            type="button"
+                            onClick={() => removeTask(task.id)}
+                            title="Dismiss"
+                            aria-label={`Dismiss ${taskTitle(task)}`}
+                            className="p-1 rounded text-neutral-400 hover:text-neutral-900 hover:bg-neutral-100"
+                          >
+                            <X className="size-3" aria-hidden="true" />
+                          </button>
+                        )}
+                    </div>
+                  </div>
+                  {showProgress && (
+                    <div className="h-1 rounded-full bg-neutral-200 overflow-hidden">
+                      <div
+                        className="h-full bg-green-600 transition-[width] duration-200"
+                        style={{ width: `${Math.max(2, task.progress)}%` }}
+                      />
+                    </div>
+                  )}
+                </li>
+              )
+            })}
+          </ul>
+        </section>
+      )}
 
       <section className="space-y-2">
         <h2 className="text-xs font-semibold tracking-wide uppercase text-neutral-500 px-1">
