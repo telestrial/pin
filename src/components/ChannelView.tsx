@@ -13,7 +13,6 @@ import {
   type TypeFilter,
 } from './FilterPills'
 import { FeedRow } from './HomeFeed'
-import { PinSidebar } from './PinSidebar'
 import { Sidebar } from './Sidebar'
 
 export function ChannelView({
@@ -29,6 +28,7 @@ export function ChannelView({
   onSeeAll,
   onEdit,
   onBack,
+  rightSidebar,
 }: {
   authorHandle: string
   channelID: string
@@ -42,6 +42,7 @@ export function ChannelView({
   onSeeAll: () => void
   onEdit?: () => void
   onBack: () => void
+  rightSidebar: React.ReactNode
 }) {
   const sub = useAuthStore((s) =>
     s.subscriptions.find(
@@ -242,7 +243,7 @@ export function ChannelView({
             )}
           </div>
         </div>
-        <PinSidebar />
+        {rightSidebar}
       </div>
     </div>
   )

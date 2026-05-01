@@ -5,8 +5,8 @@ import { useAuthStore } from '../stores/auth'
 
 export function PinButton({ input }: { input: PinInput }) {
   const sdk = useAuthStore((s) => s.sdk)
-  const isPinned = usePinStore((s) => s.isPinned(input.itemURL))
-  const isPinning = usePinStore((s) => s.isPinning(input.itemURL))
+  const isPinned = usePinStore((s) => s.isPinned(input.item.itemURL))
+  const isPinning = usePinStore((s) => s.isPinning(input.item.itemURL))
   const pin = usePinStore((s) => s.pin)
   const unpin = usePinStore((s) => s.unpin)
   const addToast = useToastStore((s) => s.addToast)
@@ -16,7 +16,7 @@ export function PinButton({ input }: { input: PinInput }) {
     if (!sdk || isPinning) return
     try {
       if (isPinned) {
-        await unpin(sdk, input.itemURL)
+        await unpin(sdk, input.item.itemURL)
         addToast('Unpinned')
       } else {
         await pin(sdk, input)

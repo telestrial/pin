@@ -7,19 +7,17 @@ import {
   pinItemBytes,
   unpinItemBytes,
 } from '../core/pin'
-import type { ItemType } from '../core/types'
+import type { ItemRef } from '../core/types'
 import { APP_KEY } from '../lib/constants'
 
 export type PinnedItemRef = {
-  itemURL: string
+  item: ItemRef
+  channel: {
+    authorHandle: string
+    channelID: string
+    name: string
+  }
   objectID: string
-  channelID: string
-  channelHandle: string
-  channelName: string
-  type: ItemType
-  title: string
-  mimeType: string
-  byteSize: number
   pinnedAt: string
 }
 
@@ -44,32 +42,33 @@ export const usePinStore = create<PinState>()(
       account: null,
       pinning: new Set<string>(),
       pin: async (sdk, input) => {
-        if (get().pinned.some((p) => p.itemURL === input.itemURL)) return
+        const url = input.item.itemURL
+        if (get().pinned.some((p) => p.item.itemURL === url)) return
         const pinning = new Set(get().pinning)
-        pinning.add(input.itemURL)
+        pinning.add(url)
         set({ pinning })
         try {
-          const { objectID } = await pinItemBytes(sdk, input.itemURL)
+          const { objectID } = await pinItemBytes(sdk, url)
           const ref: PinnedItemRef = {
             ...input,
             objectID,
             pinnedAt: new Date().toISOString(),
           }
           const next = new Set(get().pinning)
-          next.delete(input.itemURL)
+          next.delete(url)
           set((s) => ({ pinned: [...s.pinned, ref], pinning: next }))
           fetchAccountSnapshot(sdk)
             .then((account) => set({ account }))
             .catch(() => {})
         } catch (e) {
           const next = new Set(get().pinning)
-          next.delete(input.itemURL)
+          next.delete(url)
           set({ pinning: next })
           throw e
         }
       },
       unpin: async (sdk, itemURL) => {
-        const ref = get().pinned.find((p) => p.itemURL === itemURL)
+        const ref = get().pinned.find((p) => p.item.itemURL === itemURL)
         if (!ref) return
         const pinning = new Set(get().pinning)
         pinning.add(itemURL)
@@ -79,7 +78,7 @@ export const usePinStore = create<PinState>()(
           const next = new Set(get().pinning)
           next.delete(itemURL)
           set((s) => ({
-            pinned: s.pinned.filter((p) => p.itemURL !== itemURL),
+            pinned: s.pinned.filter((p) => p.item.itemURL !== itemURL),
             pinning: next,
           }))
           fetchAccountSnapshot(sdk)
@@ -100,7 +99,8 @@ export const usePinStore = create<PinState>()(
           // best-effort
         }
       },
-      isPinned: (itemURL) => get().pinned.some((p) => p.itemURL === itemURL),
+      isPinned: (itemURL) =>
+        get().pinned.some((p) => p.item.itemURL === itemURL),
       isPinning: (itemURL) => get().pinning.has(itemURL),
       reset: () =>
         set({ pinned: [], account: null, pinning: new Set<string>() }),

@@ -192,6 +192,17 @@ export function Home() {
             : undefined
         }
         onBack={() => setView({ kind: 'idle', filter: 'all' })}
+        rightSidebar={
+          <PinSidebar
+            onItemClick={(ref) =>
+              setView({
+                kind: 'reading',
+                entry: { item: ref.item, channel: ref.channel },
+                returnTo: channelView,
+              })
+            }
+          />
+        }
       />
     )
   }
@@ -232,7 +243,18 @@ export function Home() {
         activeChannelID={channel.channelID}
       />
     )
-    const rightSidebar = <PinSidebar />
+    const readingView = view
+    const rightSidebar = (
+      <PinSidebar
+        onItemClick={(ref) =>
+          setView({
+            kind: 'reading',
+            entry: { item: ref.item, channel: ref.channel },
+            returnTo: readingView.returnTo,
+          })
+        }
+      />
+    )
     const backLabel =
       view.returnTo.kind === 'viewing-channel'
         ? `Back to ${channel.name}`
@@ -245,14 +267,12 @@ export function Home() {
       sidebar,
       rightSidebar,
       pinInput: {
-        itemURL: item.itemURL,
-        type: item.type,
-        title: item.title,
-        mimeType: item.mimeType,
-        byteSize: item.byteSize,
-        channelID: channel.channelID,
-        channelHandle: channel.authorHandle,
-        channelName: channel.name,
+        item,
+        channel: {
+          authorHandle: channel.authorHandle,
+          channelID: channel.channelID,
+          name: channel.name,
+        },
       },
     }
     if (item.type === 'image') return <ReadImage {...readerProps} />
@@ -371,7 +391,15 @@ export function Home() {
             }
           />
         </div>
-        <PinSidebar />
+        <PinSidebar
+          onItemClick={(ref) =>
+            setView({
+              kind: 'reading',
+              entry: { item: ref.item, channel: ref.channel },
+              returnTo: idleView,
+            })
+          }
+        />
       </div>
     </div>
   )
