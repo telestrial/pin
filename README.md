@@ -135,6 +135,18 @@ window.parent.postMessage(
 
 Values are JSON-serialized; anything `JSON.stringify` accepts works. The host replies with `{ type: 'dispatch:state.set.result', requestID, ok: true }`, or `{ ok: false, error }` on failure (quota exceeded, serialization failed).
 
+### How could an app actually use Sia?
+
+The sandbox blocks network and same-origin access, so an app can't call Sia hosts itself. There are roughly three shapes for letting an app *use* the SDK without giving it free rein, each with a different place where permission lives:
+
+1. **Host-as-proxy (the v1 shape).** The host has the SDK; the app makes typed `postMessage` requests; the host executes and returns the result. Permission lives at the RPC boundary — we approve or deny each call individually. Simple to reason about. The API the app sees isn't shaped like the SDK; it's shaped like whatever message types we choose to expose.
+
+2. **SDK-as-contract.** The app imports a shim that *looks* like the SDK (`await sdk.upload(...)`), and the shim marshals each call over `postMessage`. The host implements the SDK on the app's behalf. App code reads like ordinary SDK usage; permission still lives at the host boundary, but the contract is the SDK itself. This is the cleanest shape if we ever want apps to be portable to other host environments — a desktop runtime, a different web client, a CLI — without rewriting them.
+
+3. **AppKey-per-app.** Sia's existing `AppKey` *is* the permission primitive — every authenticated session is scoped to one, and the indexer already enforces per-AppKey storage caps (`maxPinnedData`, `remainingStorage`). We could derive a sub-AppKey deterministically from `(user-AppKey, appID)`, let the app run a real SDK instance against that sub-key, and have the user approve a storage cap at install time. The sandbox still blocks raw network, but the host could expose just enough of a network shim for the app's SDK to reach the indexer — gated by the sub-AppKey's authorization. The most federated shape: each app becomes a first-class Sia identity, with its own quota and an isolated pinned set, separate from the host user's.
+
+The third shape is architecturally interesting because **Sia already has the permission primitive — we don't need to invent one**. Storage cap, isolated pinned set, all derivable from a root identity. We'd be making the AppKey hierarchy one level deeper, and the existing indexer enforcement comes along for free. v1 ships shape #1 because it was the smallest thing that worked for pong's hi-score; v2 thinking probably starts at #3.
+
 ### What's open
 
 Pong is one example; the broader question — what *should* an app be able to do — is barely explored. Every capability beyond pure compute is a host-side permission decision, and none of them are settled. A non-exhaustive list of questions v2 has to answer, in roughly increasing order of risk:
