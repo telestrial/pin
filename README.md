@@ -1,5 +1,7 @@
 # Pin
 
+**Try it: [pin-liard.vercel.app](https://pin-liard.vercel.app/)** (Chrome only — Firefox's WebTransport stack misbehaves with the Sia WASM bridge.)
+
 Decentralized personal feeds. Channels you own, subscriptions you pick, no platform between author and reader.
 
 ## What it does
