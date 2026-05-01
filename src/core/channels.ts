@@ -283,6 +283,49 @@ export async function editItem(
   return { manifest: updated, item: newItem }
 }
 
+export async function editItemMetadata(
+  agent: AtpAgent,
+  channel: { channelID: string; channelKey: string },
+  oldItemID: string,
+  patch: { title?: string; summary?: string; filename?: string },
+): Promise<{ manifest: ChannelManifest; item: ItemRef }> {
+  const session = agent.session
+  if (!session) throw new Error('ATProto agent has no session')
+
+  const current = await fetchChannel(
+    session.did,
+    channel.channelID,
+    channel.channelKey,
+  )
+  const oldIndex = current.items.findIndex((i) => i.id === oldItemID)
+  if (oldIndex === -1) throw new Error('Item not found in channel')
+  const oldItem = current.items[oldIndex]
+
+  // Manifest-only update: same id, same itemURL, same bytes on Sia.
+  // Just rewrite the manifest with patched fields. No upload, no delete.
+  const newItem: ItemRef = {
+    ...oldItem,
+    title: patch.title ?? oldItem.title,
+    summary: patch.summary ?? oldItem.summary,
+    filename: patch.filename ?? oldItem.filename,
+  }
+
+  const updatedItems = [...current.items]
+  updatedItems[oldIndex] = newItem
+
+  const updated: ChannelManifest = {
+    ...current,
+    publishedAt: new Date().toISOString(),
+    items: updatedItems,
+  }
+
+  const keyBytes = channelKeyFromBase64(channel.channelKey)
+  const ciphertext = await encryptForChannel(keyBytes, JSON.stringify(updated))
+  await putChannelRecord(agent, channel.channelID, ciphertext)
+
+  return { manifest: updated, item: newItem }
+}
+
 export async function appendItemToChannel(
   agent: AtpAgent,
   channel: { channelID: string; channelKey: string },

@@ -13,6 +13,7 @@ export function ReadImage({
   sidebar,
   rightSidebar,
   pinInput,
+  onEdit,
 }: {
   item: ItemRef
   channelName: string
@@ -21,6 +22,7 @@ export function ReadImage({
   sidebar: React.ReactNode
   rightSidebar: React.ReactNode
   pinInput: PinInput
+  onEdit?: () => void
 }) {
   const sdk = useAuthStore((s) => s.sdk)
   const [imgURL, setImgURL] = useState<string | null>(null)
@@ -62,7 +64,18 @@ export function ReadImage({
             >
               {backLabel}
             </button>
-            <PinButton input={pinInput} />
+            <div className="flex items-center gap-1.5">
+              {onEdit && (
+                <button
+                  type="button"
+                  onClick={onEdit}
+                  className="px-2.5 py-1 text-xs font-medium text-neutral-600 hover:text-neutral-900 bg-neutral-100 hover:bg-neutral-200 rounded-full transition-colors cursor-pointer"
+                >
+                  Edit
+                </button>
+              )}
+              <PinButton input={pinInput} />
+            </div>
           </div>
 
           <header className="space-y-1">

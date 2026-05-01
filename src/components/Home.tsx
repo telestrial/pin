@@ -14,6 +14,7 @@ import { Compose } from './Compose'
 import { CreateChannel } from './CreateChannel'
 import { EditApp } from './EditApp'
 import { EditChannel } from './EditChannel'
+import { EditImage } from './EditImage'
 import { EditPost } from './EditPost'
 import type { TypeFilter } from './FilterPills'
 import { HomeFeed } from './HomeFeed'
@@ -54,6 +55,12 @@ type View =
     }
   | {
       kind: 'editing-app'
+      item: ItemRef
+      channel: OwnedChannel
+      returnTo: View
+    }
+  | {
+      kind: 'editing-image'
       item: ItemRef
       channel: OwnedChannel
       returnTo: View
@@ -329,6 +336,29 @@ export function Home() {
     )
   }
 
+  if (view.kind === 'editing-image') {
+    const returnTo = view.returnTo
+    const handleSaved = (newItem: ItemRef) => {
+      if (returnTo.kind === 'reading') {
+        setView({
+          kind: 'reading',
+          entry: { item: newItem, channel: returnTo.entry.channel },
+          returnTo: returnTo.returnTo,
+        })
+      } else {
+        setView(returnTo)
+      }
+    }
+    return (
+      <EditImage
+        item={view.item}
+        channel={view.channel}
+        onCancel={() => setView(returnTo)}
+        onSaved={handleSaved}
+      />
+    )
+  }
+
   if (view.kind === 'reading') {
     const { item, channel } = view.entry
     const returnTo = view.returnTo
@@ -394,7 +424,18 @@ export function Home() {
     const ownedChannel = myChannels.find(
       (c) => c.channelID === channel.channelID,
     )
-    if (item.type === 'image') return <ReadImage {...readerProps} />
+    if (item.type === 'image') {
+      const onEditImage = ownedChannel
+        ? () =>
+            setView({
+              kind: 'editing-image',
+              item,
+              channel: ownedChannel,
+              returnTo: readingView,
+            })
+        : undefined
+      return <ReadImage {...readerProps} onEdit={onEditImage} />
+    }
     if (item.type === 'audio') return <ReadAudio {...readerProps} />
     if (item.type === 'video') return <ReadVideo {...readerProps} />
     if (item.type === 'file') return <ReadFile {...readerProps} />
