@@ -261,6 +261,7 @@ export function Home() {
                 filter: 'all',
               })
             }
+            activeChannelID={view.channelID}
           />
         }
       />
@@ -367,6 +368,7 @@ export function Home() {
             filter: 'all',
           })
         }
+        activeChannelID={channel.channelID}
       />
     )
     const backLabel =

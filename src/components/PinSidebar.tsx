@@ -49,9 +49,11 @@ function taskStateLabel(state: UploadTaskState): string {
 export function PinSidebar({
   onItemClick,
   onChannelClick,
+  activeChannelID,
 }: {
   onItemClick?: (ref: PinnedItemRef) => void
   onChannelClick?: (authorHandle: string, channelID: string) => void
+  activeChannelID?: string
 }) {
   const sdk = useAuthStore((s) => s.sdk)
   const myChannels = useAuthStore((s) => s.myChannels)
@@ -167,37 +169,46 @@ export function PinSidebar({
           </h2>
           <ul aria-label="Your channels">
             {ownedChannelStorage.map(
-              ({ channel, bytes, itemCount, authorHandle, coverArt }) => (
-                <li key={channel.channelID}>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      authorHandle &&
-                      onChannelClick?.(authorHandle, channel.channelID)
-                    }
-                    disabled={!onChannelClick || !authorHandle}
-                    className="w-full px-2 py-1.5 rounded transition-colors text-left flex items-start gap-2 enabled:hover:bg-neutral-50 enabled:cursor-pointer disabled:opacity-50"
-                  >
-                    <ChannelAvatar
-                      channelID={channel.channelID}
-                      channelName={channel.name}
-                      authorHandle={authorHandle}
-                      coverArt={coverArt}
-                      size="sm"
-                    />
-                    <div className="min-w-0 flex-1 space-y-0.5">
-                      <p className="text-xs font-medium text-neutral-900 truncate">
-                        {channel.name}
-                      </p>
-                      <p className="text-[10px] text-neutral-500 truncate">
-                        {itemCount === 0
-                          ? 'Empty'
-                          : `${itemCount} item${itemCount === 1 ? '' : 's'} · ${formatBytes(bytes)}`}
-                      </p>
-                    </div>
-                  </button>
-                </li>
-              ),
+              ({ channel, bytes, itemCount, authorHandle, coverArt }) => {
+                const active = channel.channelID === activeChannelID
+                return (
+                  <li key={channel.channelID}>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        authorHandle &&
+                        onChannelClick?.(authorHandle, channel.channelID)
+                      }
+                      disabled={!onChannelClick || !authorHandle}
+                      className="w-full px-2 py-1.5 rounded transition-colors text-left flex items-start gap-2 enabled:hover:bg-neutral-50 enabled:cursor-pointer disabled:opacity-50"
+                    >
+                      <ChannelAvatar
+                        channelID={channel.channelID}
+                        channelName={channel.name}
+                        authorHandle={authorHandle}
+                        coverArt={coverArt}
+                        size="sm"
+                      />
+                      <div className="min-w-0 flex-1 space-y-0.5">
+                        <p className="text-xs font-medium text-neutral-900 truncate">
+                          {channel.name}
+                        </p>
+                        <p className="text-[10px] text-neutral-500 truncate">
+                          {itemCount === 0
+                            ? 'Empty'
+                            : `${itemCount} item${itemCount === 1 ? '' : 's'} · ${formatBytes(bytes)}`}
+                        </p>
+                      </div>
+                      {active && (
+                        <span
+                          aria-hidden="true"
+                          className="size-1.5 rounded-full bg-neutral-900 shrink-0 mt-2"
+                        />
+                      )}
+                    </button>
+                  </li>
+                )
+              },
             )}
           </ul>
         </section>
