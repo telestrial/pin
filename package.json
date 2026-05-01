@@ -11,7 +11,7 @@
   },
   "dependencies": {
     "@atproto/api": "^0.19.11",
-    "@siafoundation/sia-storage": "^0.0.8",
+    "@siafoundation/sia-storage": "0.0.9",
     "dompurify": "^3.4.1",
     "lucide-react": "^1.14.0",
     "marked": "^18.0.2",

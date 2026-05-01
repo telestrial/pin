@@ -6,7 +6,7 @@
       "name": "dispatch",
       "dependencies": {
         "@atproto/api": "^0.19.11",
-        "@siafoundation/sia-storage": "^0.0.8",
+        "@siafoundation/sia-storage": "0.0.9",
         "dompurify": "^3.4.1",
         "lucide-react": "^1.14.0",
         "marked": "^18.0.2",
@@ -215,17 +215,17 @@
 
     "@rollup/rollup-win32-x64-msvc": ["@rollup/rollup-win32-x64-msvc@4.60.2", "", { "os": "win32", "cpu": "x64" }, "sha512-Nd/SgG27WoA9e+/TdK74KnHz852TLa94ovOYySo/yMPuTmpckK/jIF2jSwS3g7ELSKXK13/cVdmg1Z/DaCWKxA=="],
 
-    "@siafoundation/sia-storage": ["@siafoundation/sia-storage@0.0.8", "", { "optionalDependencies": { "@siafoundation/sia-storage-darwin-arm64": "0.0.8", "@siafoundation/sia-storage-darwin-x64": "0.0.8", "@siafoundation/sia-storage-linux-arm64-gnu": "0.0.8", "@siafoundation/sia-storage-linux-x64-gnu": "0.0.8", "@siafoundation/sia-storage-win32-x64-msvc": "0.0.8" } }, "sha512-zhZhP/KsiOM5Sp0xMRHk5Wn+8AuA4Ho2upLFsiL0eNl/lftAKVePi7/dg8UWHed7FwDUWsWgGnZD1FcwUhdrnQ=="],
+    "@siafoundation/sia-storage": ["@siafoundation/sia-storage@0.0.9", "", { "optionalDependencies": { "@siafoundation/sia-storage-darwin-arm64": "0.0.9", "@siafoundation/sia-storage-darwin-x64": "0.0.9", "@siafoundation/sia-storage-linux-arm64-gnu": "0.0.9", "@siafoundation/sia-storage-linux-x64-gnu": "0.0.9", "@siafoundation/sia-storage-win32-x64-msvc": "0.0.9" } }, "sha512-Cb4oWWdAltn9aC4g1utPK+BNmqBBbMIYIOLS37/dCChtIe35XPelXXKHO0ZZafej75f8okJ1DrG1bdxrzG/DgQ=="],
 
-    "@siafoundation/sia-storage-darwin-arm64": ["@siafoundation/sia-storage-darwin-arm64@0.0.8", "", { "os": "darwin", "cpu": "arm64" }, "sha512-S/geqpEPND+grBij6PkDYiY0+YHfYkHjGPa5JubMZJO5ZuWttnDXesqMkHWSSVFfJMfGPZt+ULwHEs/IQKGjxQ=="],
+    "@siafoundation/sia-storage-darwin-arm64": ["@siafoundation/sia-storage-darwin-arm64@0.0.9", "", { "os": "darwin", "cpu": "arm64" }, "sha512-t195gflM+1WX1PszyUBbwyQnkBjOKSIOtO70a3cNnR2d4kyAMPWzBV3jTWDajUE3ouWOD6Mof69C8BlpyN/+cA=="],
 
-    "@siafoundation/sia-storage-darwin-x64": ["@siafoundation/sia-storage-darwin-x64@0.0.8", "", { "os": "darwin", "cpu": "x64" }, "sha512-PE2Vkgi5pqf9m5Za/KZeEj49HvWJltuvmXOfe3xM0YorJRb2q2vUPc5JKEM5LAkcSJMNV9VsXmbODqZEq6z8/w=="],
+    "@siafoundation/sia-storage-darwin-x64": ["@siafoundation/sia-storage-darwin-x64@0.0.9", "", { "os": "darwin", "cpu": "x64" }, "sha512-e0F24QC04DRDbR/EROhag94h2LWT1PDRAeK/UYDhMgOdrsmimIrT72KWtblFG3vo885jq9/v8c75TqGwJ3AGCQ=="],
 
-    "@siafoundation/sia-storage-linux-arm64-gnu": ["@siafoundation/sia-storage-linux-arm64-gnu@0.0.8", "", { "os": "linux", "cpu": "arm64" }, "sha512-S7W+AZJXwkvCkFhe3/dExcVrtgoYGOkKIdAA+cG/Fn/P9QaoHZ2J1r7MBfbieObWOK8CC7u3WguPzg6NsQWJkA=="],
+    "@siafoundation/sia-storage-linux-arm64-gnu": ["@siafoundation/sia-storage-linux-arm64-gnu@0.0.9", "", { "os": "linux", "cpu": "arm64" }, "sha512-QOoMXQjIXr9OAa/0bLz0dRqBQebJDhLbbfCkLIYm/yN7aGiMQSdFq3/jy5rZ9kgW4aJCsFzYjt8DaO6nK7jWtg=="],
 
-    "@siafoundation/sia-storage-linux-x64-gnu": ["@siafoundation/sia-storage-linux-x64-gnu@0.0.8", "", { "os": "linux", "cpu": "x64" }, "sha512-KdO4wq2G/TAu0xqEDOx5IW9JjSrZnZVtzrhQjaDaaoIUWF2Ft/IcpU4eCbSGLFd3NQtJmT8Z+2kcPHOPCNCR+w=="],
+    "@siafoundation/sia-storage-linux-x64-gnu": ["@siafoundation/sia-storage-linux-x64-gnu@0.0.9", "", { "os": "linux", "cpu": "x64" }, "sha512-h0PnqAAkPBcszcszvDU+2+U+Rcvn7xxcnTZ6Bcw7Pvb6rf1qjvCi0G+3KdggdUCCp3W+YBj/X9FtVcmVyF95cQ=="],
 
-    "@siafoundation/sia-storage-win32-x64-msvc": ["@siafoundation/sia-storage-win32-x64-msvc@0.0.8", "", { "os": "win32", "cpu": "x64" }, "sha512-GuNedmz63Z1MQCFnjSh+GFwVI+A6iOEICLxHWH3W5CoG/7H334WhPz//tKUCEyynEc4O58gw7phmnNa518FCzQ=="],
+    "@siafoundation/sia-storage-win32-x64-msvc": ["@siafoundation/sia-storage-win32-x64-msvc@0.0.9", "", { "os": "win32", "cpu": "x64" }, "sha512-eAA2hA4UO+xXyq8kmC9tQ9gZmbnp+7sJA27kX/Xm9yVVGphAVO0kVtDjW6SUJ9Kj0G2tnP8jx83pHH9wVyY0WA=="],
 
     "@tailwindcss/node": ["@tailwindcss/node@4.2.4", "", { "dependencies": { "@jridgewell/remapping": "^2.3.5", "enhanced-resolve": "^5.19.0", "jiti": "^2.6.1", "lightningcss": "1.32.0", "magic-string": "^0.30.21", "source-map-js": "^1.2.1", "tailwindcss": "4.2.4" } }, "sha512-Ai7+yQPxz3ddrDQzFfBKdHEVBg0w3Zl83jnjuwxnZOsnH9pGn93QHQtpU0p/8rYWxvbFZHneni6p1BSLK4DkGA=="],
 
