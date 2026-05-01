@@ -1,4 +1,8 @@
+import { useMemo } from 'react'
+import type { ChannelCover } from '../core/types'
 import { useAuthStore } from '../stores/auth'
+import { useFeedStore } from '../stores/feed'
+import { ChannelAvatar } from './ChannelAvatar'
 
 const CAP = 10
 
@@ -21,6 +25,17 @@ export function Sidebar({
 }) {
   const myChannels = useAuthStore((s) => s.myChannels)
   const subscriptions = useAuthStore((s) => s.subscriptions)
+  const feedEntries = useFeedStore((s) => s.entries)
+
+  const coverByChannelID = useMemo(() => {
+    const map = new Map<string, ChannelCover>()
+    for (const e of feedEntries) {
+      if (e.channel.coverArt && !map.has(e.channel.channelID)) {
+        map.set(e.channel.channelID, e.channel.coverArt)
+      }
+    }
+    return map
+  }, [feedEntries])
 
   const channelsToShow = [...myChannels]
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
@@ -74,9 +89,16 @@ export function Sidebar({
                         handle && onChannelClick(handle, c.channelID)
                       }
                       disabled={!handle}
-                      className="w-full px-3 py-1.5 text-sm rounded transition-colors disabled:opacity-50 cursor-pointer text-neutral-700 hover:text-neutral-900 hover:bg-neutral-50 flex items-center justify-between gap-2 text-left"
+                      className="w-full px-3 py-1.5 text-sm rounded transition-colors disabled:opacity-50 cursor-pointer text-neutral-700 hover:text-neutral-900 hover:bg-neutral-50 flex items-center gap-2 text-left"
                     >
-                      <span className="truncate">{c.name}</span>
+                      <ChannelAvatar
+                        channelID={c.channelID}
+                        channelName={c.name}
+                        authorHandle={handle ?? ''}
+                        coverArt={coverByChannelID.get(c.channelID)}
+                        size="sm"
+                      />
+                      <span className="truncate flex-1">{c.name}</span>
                       {active && (
                         <span
                           aria-hidden="true"
@@ -119,9 +141,16 @@ export function Sidebar({
                       onClick={() =>
                         onChannelClick(s.authorHandle, s.channelID)
                       }
-                      className="w-full px-3 py-1.5 text-sm rounded transition-colors cursor-pointer text-neutral-700 hover:text-neutral-900 hover:bg-neutral-50 flex items-center justify-between gap-2 text-left"
+                      className="w-full px-3 py-1.5 text-sm rounded transition-colors cursor-pointer text-neutral-700 hover:text-neutral-900 hover:bg-neutral-50 flex items-center gap-2 text-left"
                     >
-                      <span className="truncate">
+                      <ChannelAvatar
+                        channelID={s.channelID}
+                        channelName={s.cachedName ?? s.channelID}
+                        authorHandle={s.authorHandle}
+                        coverArt={coverByChannelID.get(s.channelID)}
+                        size="sm"
+                      />
+                      <span className="truncate flex-1">
                         {s.cachedName ?? s.channelID}
                       </span>
                       {active && (

@@ -9,7 +9,8 @@ import {
   type UploadTaskState,
   useUploadQueueStore,
 } from '../stores/uploadQueue'
-import { ChannelMark } from './ChannelMark'
+import type { ChannelCover } from '../core/types'
+import { ChannelAvatar } from './ChannelAvatar'
 
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`
@@ -65,6 +66,16 @@ export function PinSidebar({
   const removeTask = useUploadQueueStore((s) => s.remove)
   const feedEntries = useFeedStore((s) => s.entries)
 
+  const coverByChannelID = useMemo(() => {
+    const map = new Map<string, ChannelCover>()
+    for (const e of feedEntries) {
+      if (e.channel.coverArt && !map.has(e.channel.channelID)) {
+        map.set(e.channel.channelID, e.channel.coverArt)
+      }
+    }
+    return map
+  }, [feedEntries])
+
   const ownedChannelStorage = useMemo(() => {
     return myChannels
       .map((c) => {
@@ -78,10 +89,11 @@ export function PinSidebar({
           bytes,
           itemCount: items.length,
           authorHandle: sub?.authorHandle ?? '',
+          coverArt: coverByChannelID.get(c.channelID),
         }
       })
       .sort((a, b) => b.bytes - a.bytes)
-  }, [myChannels, feedEntries, subscriptions])
+  }, [myChannels, feedEntries, subscriptions, coverByChannelID])
 
   const inFlight = [...tasks].sort((a, b) =>
     b.createdAt.localeCompare(a.createdAt),
@@ -155,7 +167,7 @@ export function PinSidebar({
           </h2>
           <ul aria-label="Your channels">
             {ownedChannelStorage.map(
-              ({ channel, bytes, itemCount, authorHandle }) => (
+              ({ channel, bytes, itemCount, authorHandle, coverArt }) => (
                 <li key={channel.channelID}>
                   <button
                     type="button"
@@ -166,10 +178,11 @@ export function PinSidebar({
                     disabled={!onChannelClick || !authorHandle}
                     className="w-full px-2 py-1.5 rounded transition-colors text-left flex items-start gap-2 enabled:hover:bg-neutral-50 enabled:cursor-pointer disabled:opacity-50"
                   >
-                    <ChannelMark
+                    <ChannelAvatar
                       channelID={channel.channelID}
                       channelName={channel.name}
                       authorHandle={authorHandle}
+                      coverArt={coverArt}
                       size="sm"
                     />
                     <div className="min-w-0 flex-1 space-y-0.5">
@@ -285,10 +298,11 @@ export function PinSidebar({
                     disabled={!onItemClick}
                     className="w-full px-2 py-1.5 rounded transition-colors text-left flex items-start gap-2 enabled:hover:bg-neutral-50 enabled:cursor-pointer"
                   >
-                    <ChannelMark
+                    <ChannelAvatar
                       channelID={ref.channel.channelID}
                       channelName={ref.channel.name}
                       authorHandle={ref.channel.authorHandle}
+                      coverArt={coverByChannelID.get(ref.channel.channelID)}
                       size="sm"
                     />
                     <div className="min-w-0 flex-1 space-y-0.5">

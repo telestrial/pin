@@ -13,7 +13,7 @@ export function ChannelAvatar({
   channelName: string
   authorHandle: string
   coverArt?: ChannelCover
-  size?: 'md' | 'lg'
+  size?: 'sm' | 'md' | 'lg'
 }) {
   if (!coverArt) {
     return (
@@ -47,10 +47,11 @@ function CoverImage({
   channelID: string
   channelName: string
   authorHandle: string
-  size: 'md' | 'lg'
+  size: 'sm' | 'md' | 'lg'
 }) {
   const { url, error } = useItemBlobURL(coverArt.itemURL, coverArt.mimeType)
-  const sizeClass = size === 'lg' ? 'size-16' : 'size-10'
+  const sizeClass =
+    size === 'lg' ? 'size-16' : size === 'sm' ? 'size-7' : 'size-10'
 
   if (error || !url) {
     return (
