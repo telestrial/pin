@@ -131,14 +131,30 @@
       let lastMmAt = performance.now()
       let mmPerSec = 0
 
-      function serve(direction) {
+      // Two-phase serve: setupServe parks the ball at center and arms a
+      // delay; applyServe (called from physicsStep when the timer expires)
+      // gives it the actual velocity. The delay between points lets the
+      // player re-center their paddle.
+      const SERVE_DELAY_MS = 700
+      let serveDelayMs = 0
+      let pendingServeDirection = 0
+
+      function setupServe(direction) {
         ball.x = W / 2
         ball.y = H / 2
+        ball.vx = 0
+        ball.vy = 0
+        pendingServeDirection = direction
+        serveDelayMs = SERVE_DELAY_MS
+      }
+
+      function applyServe() {
         const angle = (Math.random() - 0.5) * (Math.PI / 2.5) // ±36°
         // Cap below paddle width (12) so the ball can't tunnel through.
         const baseSpeed = Math.min(4 + score * 0.4, 11)
-        ball.vx = Math.cos(angle) * baseSpeed * direction
+        ball.vx = Math.cos(angle) * baseSpeed * pendingServeDirection
         ball.vy = Math.sin(angle) * baseSpeed
+        pendingServeDirection = 0
       }
 
       function enterFullscreen() {
@@ -151,7 +167,7 @@
       function startGame() {
         score = 0
         state = 'playing'
-        serve(Math.random() < 0.5 ? -1 : 1)
+        setupServe(Math.random() < 0.5 ? -1 : 1)
         enterFullscreen()
       }
 
@@ -222,52 +238,60 @@
 
       function physicsStep() {
         if (state !== 'playing') return
-        ball.x += ball.vx
-        ball.y += ball.vy
 
-        // Top/bottom walls
-        if (ball.y < BALL / 2) {
-          ball.y = BALL / 2
-          ball.vy = Math.abs(ball.vy)
-        }
-        if (ball.y > H - BALL / 2) {
-          ball.y = H - BALL / 2
-          ball.vy = -Math.abs(ball.vy)
-        }
+        // Pre-serve pause: ball sits at center, no motion or collisions.
+        // CPU AI keeps running below so it tracks the ball's parked position.
+        if (serveDelayMs > 0) {
+          serveDelayMs -= PHYSICS_DT_MS
+          if (serveDelayMs <= 0) applyServe()
+        } else {
+          ball.x += ball.vx
+          ball.y += ball.vy
 
-        // Player paddle
-        if (
-          ball.vx < 0 &&
-          ball.x - BALL / 2 < PADDLE_W &&
-          ball.y > playerY &&
-          ball.y < playerY + PADDLE_H
-        ) {
-          ball.x = PADDLE_W + BALL / 2
-          paddleBounce(playerY, 1)
-        }
+          // Top/bottom walls
+          if (ball.y < BALL / 2) {
+            ball.y = BALL / 2
+            ball.vy = Math.abs(ball.vy)
+          }
+          if (ball.y > H - BALL / 2) {
+            ball.y = H - BALL / 2
+            ball.vy = -Math.abs(ball.vy)
+          }
 
-        // CPU paddle
-        if (
-          ball.vx > 0 &&
-          ball.x + BALL / 2 > W - PADDLE_W &&
-          ball.y > cpuY &&
-          ball.y < cpuY + PADDLE_H
-        ) {
-          ball.x = W - PADDLE_W - BALL / 2
-          paddleBounce(cpuY, -1)
-        }
+          // Player paddle
+          if (
+            ball.vx < 0 &&
+            ball.x - BALL / 2 < PADDLE_W &&
+            ball.y > playerY &&
+            ball.y < playerY + PADDLE_H
+          ) {
+            ball.x = PADDLE_W + BALL / 2
+            paddleBounce(playerY, 1)
+          }
 
-        // Score / miss
-        if (ball.x > W + BALL) {
-          // Ball passed CPU → player scores
-          score += 1
-          recordBest()
-          serve(-1) // serve toward player
-        }
-        if (ball.x < -BALL) {
-          // Ball passed player → game over
-          recordBest()
-          state = 'waiting'
+          // CPU paddle
+          if (
+            ball.vx > 0 &&
+            ball.x + BALL / 2 > W - PADDLE_W &&
+            ball.y > cpuY &&
+            ball.y < cpuY + PADDLE_H
+          ) {
+            ball.x = W - PADDLE_W - BALL / 2
+            paddleBounce(cpuY, -1)
+          }
+
+          // Score / miss
+          if (ball.x > W + BALL) {
+            // Ball passed CPU → player scores
+            score += 1
+            recordBest()
+            setupServe(-1) // serve toward player after a short delay
+          }
+          if (ball.x < -BALL) {
+            // Ball passed player → game over
+            recordBest()
+            state = 'waiting'
+          }
         }
 
         // CPU AI: track ball with bounded speed + target jitter.
