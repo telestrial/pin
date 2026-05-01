@@ -93,11 +93,15 @@ src/
 
 ## App host API
 
-Items of type `app` (a single self-contained `.html` file) run inside an iframe with `sandbox="allow-scripts allow-modals allow-pointer-lock"`. The sandbox blocks network, popups, top-navigation, forms, same-origin access — an app can compute, render, and accept input but can't reach our DOM, our keys, or any external service.
+A program-as-item — type `app`, a single self-contained `.html` file — is one of the more interesting consequences of the architecture. The program is content-addressed, encrypted, and distributed by exactly the same machinery as a JPEG: it travels like media. Pong, included as a bundled example, ships in a channel as a small HTML file you can subscribe to, fetch, and run. Where it gets interesting is what an app should and shouldn't be able to *do* — that surface is barely sketched in v1.
 
-It also can't use its own `localStorage` — null-origin iframes don't get storage. For state that should persist across sessions (high scores, save games, user preferences), the host exposes a `postMessage` RPC. State is scoped by `appID` (the Sia content hash of the HTML), so the same bytes share state across whichever channels publish them. Storage is local to the device; not synced across devices in v1. The protocol's `dispatch:` message-type prefix predates the app's rename and is preserved so that already-published apps continue to work.
+Apps run inside an iframe with `sandbox="allow-scripts allow-modals allow-pointer-lock"`. The sandbox blocks network, popups, top-navigation, forms, and same-origin access — an app can compute, render, and accept input, but can't reach our DOM, our keys, the user's other tabs, or any external service. Anything an app needs from the outside has to come through a `postMessage` channel the host explicitly proxies. **That's the permission boundary**: the host decides which capabilities it exposes as RPCs, and apps are free to use only those.
 
-### Read a stored value
+### What we shipped in v1
+
+One RPC pair: per-app local state. Null-origin iframes don't get their own `localStorage`, so the host exposes get/set so apps can persist things like high scores, save games, or preferences. State is scoped by `appID` (the Sia content hash of the HTML), so the same bytes share state across whichever channels publish them. Storage is local to the device; not synced across devices in v1. The protocol's `dispatch:` message-type prefix predates the app's rename and is preserved so that already-published apps continue to work.
+
+#### Read a stored value
 
 ```js
 const requestID = crypto.randomUUID()
@@ -115,7 +119,7 @@ window.addEventListener('message', (e) => {
 })
 ```
 
-### Write a value
+#### Write a value
 
 ```js
 window.parent.postMessage(
@@ -130,6 +134,19 @@ window.parent.postMessage(
 ```
 
 Values are JSON-serialized; anything `JSON.stringify` accepts works. The host replies with `{ type: 'dispatch:state.set.result', requestID, ok: true }`, or `{ ok: false, error }` on failure (quota exceeded, serialization failed).
+
+### What's open
+
+Pong is one example; the broader question — what *should* an app be able to do — is barely explored. Every capability beyond pure compute is a host-side permission decision, and none of them are settled. A non-exhaustive list of questions v2 has to answer, in roughly increasing order of risk:
+
+- **Read other items in the same channel.** Useful (an app could render its own playlist over audio items in the channel), low risk.
+- **Read the manifest's metadata** (channel name, description, item refs). Same shape — useful for context-aware apps.
+- **Upload a new item to its own channel.** Only meaningful if the running user owns the channel; needs an explicit "this app wants to publish on your behalf" prompt to avoid vandalism.
+- **See the user's pinned set.** Privacy concern; probably no by default.
+- **Sign with the user's `AppKey`.** Identity proxy — powerful and dangerous; needs explicit per-call consent UI.
+- **Pin a URL the app constructs.** Storage-cost vector against the user's Sia allowance; needs consent and probably a size cap.
+
+The framing that makes this tractable: apps can't reach Sia or ATProto directly. Anything they do goes through host RPCs. So designing the App Host API is the same exercise as designing a permission surface over the Sia SDK — *which calls are safe to proxy, under what consent model, at what scope*. v1 says "compute and your own state, nothing else." Growing that surface is a v2 question.
 
 ## Out of v1 scope
 
