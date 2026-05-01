@@ -2,7 +2,7 @@ import { useMemo } from 'react'
 import type { FeedEntry } from '../core/feed'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
-import { ChannelMark } from './ChannelMark'
+import { ChannelAvatar } from './ChannelAvatar'
 import {
   availableFiltersFor,
   entryFilter,
@@ -66,6 +66,7 @@ export function ChannelView({
 
   const channelName =
     sub?.cachedName ?? channelEntries[0]?.channel.name ?? channelID
+  const coverArt = channelEntries[0]?.channel.coverArt
 
   return (
     <div className="flex-1 p-6">
@@ -79,10 +80,11 @@ export function ChannelView({
         </button>
 
         <div className="border border-neutral-200 rounded-lg bg-white p-5 flex items-center gap-5">
-          <ChannelMark
+          <ChannelAvatar
             channelID={channelID}
             channelName={channelName}
             authorHandle={authorHandle}
+            coverArt={coverArt}
             size="lg"
           />
           <div className="min-w-0 flex-1">

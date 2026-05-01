@@ -56,6 +56,7 @@ export const useFeedStore = create<FeedState>()((set) => ({
             authorHandle: sub.authorHandle,
             channelID: sub.channelID,
             name: manifest.name,
+            coverArt: manifest.coverArt,
           },
         }))
         return { entries: [...others, ...fresh] }

@@ -1,9 +1,14 @@
 import { fetchChannel } from './channels'
-import type { ItemRef, SubscriptionRef } from './types'
+import type { ChannelCover, ItemRef, SubscriptionRef } from './types'
 
 export type FeedEntry = {
   item: ItemRef
-  channel: { authorHandle: string; channelID: string; name: string }
+  channel: {
+    authorHandle: string
+    channelID: string
+    name: string
+    coverArt?: ChannelCover
+  }
 }
 
 export type FeedFetchError = {
@@ -23,7 +28,11 @@ export async function buildHomeFeed(
 ): Promise<FeedFetchResult> {
   const settled = await Promise.allSettled(
     subscriptions.map((sub) =>
-      fetchChannel(sub.authorDID || sub.authorHandle, sub.channelID, sub.channelKey),
+      fetchChannel(
+        sub.authorDID || sub.authorHandle,
+        sub.channelID,
+        sub.channelKey,
+      ),
     ),
   )
 
@@ -42,6 +51,7 @@ export async function buildHomeFeed(
             authorHandle: sub.authorHandle,
             channelID: sub.channelID,
             name: manifest.name,
+            coverArt: manifest.coverArt,
           },
         })
       }

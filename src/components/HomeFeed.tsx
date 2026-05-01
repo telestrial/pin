@@ -9,7 +9,7 @@ import { formatAbsolute, formatRelativeShort } from '../lib/time'
 import { useItemBlobURL, useItemBytes } from '../lib/useItemBytes'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
-import { ChannelMark } from './ChannelMark'
+import { ChannelAvatar } from './ChannelAvatar'
 import {
   availableFiltersFor,
   entryFilter,
@@ -375,10 +375,11 @@ export function FeedRow({
         className="self-start shrink-0 rounded-full focus:outline-none focus:ring-2 focus:ring-green-600 cursor-pointer"
         aria-label={`View channel ${channel.name}`}
       >
-        <ChannelMark
+        <ChannelAvatar
           channelID={channel.channelID}
           channelName={channel.name}
           authorHandle={channel.authorHandle}
+          coverArt={channel.coverArt}
         />
       </button>
       <div className="min-w-0 flex-1 space-y-2">
