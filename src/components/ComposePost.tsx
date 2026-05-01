@@ -44,49 +44,35 @@ export function ComposePost({
   }
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-5">
-      <p className="text-neutral-500 text-sm">
-        A text item. Markdown is supported.
-      </p>
-
-      <div className="space-y-3">
-        <label className="block space-y-1">
-          <span className="text-xs font-medium text-neutral-700 uppercase tracking-wider">
-            Title
-          </span>
-          <input
-            type="text"
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            required
-            className="w-full px-3 py-2 bg-white border border-neutral-300 rounded-lg text-sm text-neutral-900 focus:outline-none focus:border-green-600"
-          />
-        </label>
-
-        <label className="block space-y-1">
-          <span className="text-xs font-medium text-neutral-700 uppercase tracking-wider">
-            Body
-          </span>
-          <textarea
-            value={body}
-            onChange={(e) => setBody(e.target.value)}
-            required
-            rows={10}
-            placeholder="# Hello world&#10;&#10;Whatever you want to say."
-            className="w-full px-3 py-2 bg-white border border-neutral-300 rounded-lg text-sm text-neutral-900 placeholder-neutral-400 focus:outline-none focus:border-green-600 font-mono"
-          />
-        </label>
-      </div>
+    <form onSubmit={handleSubmit} className="space-y-2">
+      <input
+        type="text"
+        value={title}
+        onChange={(e) => setTitle(e.target.value)}
+        required
+        placeholder="Title"
+        className="w-full px-3 py-2 bg-white border border-neutral-300 rounded-lg text-sm text-neutral-900 focus:outline-none focus:border-green-600"
+      />
+      <textarea
+        value={body}
+        onChange={(e) => setBody(e.target.value)}
+        required
+        rows={6}
+        placeholder="# Hello world&#10;&#10;Markdown supported."
+        className="w-full px-3 py-2 bg-white border border-neutral-300 rounded-lg text-sm text-neutral-900 placeholder-neutral-400 focus:outline-none focus:border-green-600 font-mono"
+      />
 
       {error && <p className="text-red-600 text-sm wrap-break-word">{error}</p>}
 
-      <button
-        type="submit"
-        disabled={!title.trim() || !body.trim()}
-        className="w-full px-4 py-2.5 bg-green-600 hover:bg-green-700 disabled:bg-neutral-200 disabled:text-neutral-400 text-white text-sm font-medium rounded-lg transition-colors"
-      >
-        Publish
-      </button>
+      <div className="flex justify-end">
+        <button
+          type="submit"
+          disabled={!title.trim() || !body.trim()}
+          className="px-4 py-1.5 bg-green-600 hover:bg-green-700 disabled:bg-neutral-200 disabled:text-neutral-400 text-white text-sm font-medium rounded-md transition-colors"
+        >
+          Publish
+        </button>
+      </div>
     </form>
   )
 }

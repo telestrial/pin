@@ -74,54 +74,43 @@ export function ComposeImage({
   }
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-5">
-      <p className="text-neutral-500 text-sm">An image. JPEG, PNG, or WebP.</p>
+    <form onSubmit={handleSubmit} className="space-y-2">
+      <input
+        type="file"
+        accept="image/jpeg,image/png,image/webp"
+        onChange={handleFileChange}
+        required
+        className="block w-full text-sm text-neutral-700 file:mr-3 file:px-3 file:py-1.5 file:rounded-md file:border-0 file:text-xs file:font-medium file:bg-neutral-100 file:text-neutral-900 hover:file:bg-neutral-200 file:cursor-pointer"
+      />
 
-      <div className="space-y-3">
-        <label className="block space-y-1">
-          <span className="text-xs font-medium text-neutral-700 uppercase tracking-wider">
-            Image
-          </span>
-          <input
-            type="file"
-            accept="image/jpeg,image/png,image/webp"
-            onChange={handleFileChange}
-            required
-            className="block w-full text-sm text-neutral-700 file:mr-3 file:px-3 file:py-1.5 file:rounded-md file:border-0 file:text-xs file:font-medium file:bg-neutral-100 file:text-neutral-900 hover:file:bg-neutral-200 file:cursor-pointer"
-          />
-        </label>
+      {previewURL && (
+        <img
+          src={previewURL}
+          alt="preview"
+          className="max-w-full max-h-64 rounded-lg border border-neutral-200 object-contain bg-neutral-50"
+        />
+      )}
 
-        {previewURL && (
-          <img
-            src={previewURL}
-            alt="preview"
-            className="max-w-full max-h-80 rounded-lg border border-neutral-200 object-contain bg-neutral-50"
-          />
-        )}
-
-        <label className="block space-y-1">
-          <span className="text-xs font-medium text-neutral-700 uppercase tracking-wider">
-            Title
-          </span>
-          <input
-            type="text"
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            required
-            className="w-full px-3 py-2 bg-white border border-neutral-300 rounded-lg text-sm text-neutral-900 focus:outline-none focus:border-green-600"
-          />
-        </label>
-      </div>
+      <input
+        type="text"
+        value={title}
+        onChange={(e) => setTitle(e.target.value)}
+        required
+        placeholder="Title"
+        className="w-full px-3 py-2 bg-white border border-neutral-300 rounded-lg text-sm text-neutral-900 focus:outline-none focus:border-green-600"
+      />
 
       {error && <p className="text-red-600 text-sm wrap-break-word">{error}</p>}
 
-      <button
-        type="submit"
-        disabled={!file || !title.trim()}
-        className="w-full px-4 py-2.5 bg-green-600 hover:bg-green-700 disabled:bg-neutral-200 disabled:text-neutral-400 text-white text-sm font-medium rounded-lg transition-colors"
-      >
-        Publish
-      </button>
+      <div className="flex justify-end">
+        <button
+          type="submit"
+          disabled={!file || !title.trim()}
+          className="px-4 py-1.5 bg-green-600 hover:bg-green-700 disabled:bg-neutral-200 disabled:text-neutral-400 text-white text-sm font-medium rounded-md transition-colors"
+        >
+          Publish
+        </button>
+      </div>
     </form>
   )
 }

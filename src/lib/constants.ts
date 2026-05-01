@@ -17,6 +17,9 @@ export const APP_META: AppMetadata = {
 export const DATA_SHARDS = 10
 export const PARITY_SHARDS = 20
 
+// One more than Twitter's 280. Calmly, intentionally distinct.
+export const NOTE_CHAR_LIMIT = 281
+
 // iframe sandbox flags for the app item type. Strict-by-default; each token
 // adds back one capability. Notably absent: allow-same-origin (would let the
 // iframe read our state), allow-forms (exfiltration via form POST),

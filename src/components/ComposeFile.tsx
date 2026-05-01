@@ -62,66 +62,41 @@ export function ComposeFile({
   }
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-5">
-      <p className="text-neutral-500 text-sm">
-        Any file. The catch-all for things outside the typed media formats.
-      </p>
+    <form onSubmit={handleSubmit} className="space-y-2">
+      <input
+        type="file"
+        onChange={handleFileChange}
+        required
+        className="block w-full text-sm text-neutral-700 file:mr-3 file:px-3 file:py-1.5 file:rounded-md file:border-0 file:text-xs file:font-medium file:bg-neutral-100 file:text-neutral-900 hover:file:bg-neutral-200 file:cursor-pointer"
+      />
 
-      <div className="space-y-3">
-        <label className="block space-y-1">
-          <span className="text-xs font-medium text-neutral-700 uppercase tracking-wider">
-            File
-          </span>
-          <input
-            type="file"
-            onChange={handleFileChange}
-            required
-            className="block w-full text-sm text-neutral-700 file:mr-3 file:px-3 file:py-1.5 file:rounded-md file:border-0 file:text-xs file:font-medium file:bg-neutral-100 file:text-neutral-900 hover:file:bg-neutral-200 file:cursor-pointer"
-          />
-        </label>
+      {file && (
+        <p className="text-xs text-neutral-500 truncate">
+          {file.name} · {file.type || 'application/octet-stream'} ·{' '}
+          {formatBytes(file.size)}
+        </p>
+      )}
 
-        {file && (
-          <dl className="text-xs px-3 py-2 bg-neutral-50 rounded-lg border border-neutral-200 space-y-0.5">
-            <div className="flex gap-2">
-              <dt className="text-neutral-500 w-16 shrink-0">Filename</dt>
-              <dd className="text-neutral-900 wrap-break-word">{file.name}</dd>
-            </div>
-            <div className="flex gap-2">
-              <dt className="text-neutral-500 w-16 shrink-0">Type</dt>
-              <dd className="text-neutral-900">
-                {file.type || 'application/octet-stream'}
-              </dd>
-            </div>
-            <div className="flex gap-2">
-              <dt className="text-neutral-500 w-16 shrink-0">Size</dt>
-              <dd className="text-neutral-900">{formatBytes(file.size)}</dd>
-            </div>
-          </dl>
-        )}
-
-        <label className="block space-y-1">
-          <span className="text-xs font-medium text-neutral-700 uppercase tracking-wider">
-            Title
-          </span>
-          <input
-            type="text"
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            required
-            className="w-full px-3 py-2 bg-white border border-neutral-300 rounded-lg text-sm text-neutral-900 focus:outline-none focus:border-green-600"
-          />
-        </label>
-      </div>
+      <input
+        type="text"
+        value={title}
+        onChange={(e) => setTitle(e.target.value)}
+        required
+        placeholder="Title"
+        className="w-full px-3 py-2 bg-white border border-neutral-300 rounded-lg text-sm text-neutral-900 focus:outline-none focus:border-green-600"
+      />
 
       {error && <p className="text-red-600 text-sm wrap-break-word">{error}</p>}
 
-      <button
-        type="submit"
-        disabled={!file || !title.trim()}
-        className="w-full px-4 py-2.5 bg-green-600 hover:bg-green-700 disabled:bg-neutral-200 disabled:text-neutral-400 text-white text-sm font-medium rounded-lg transition-colors"
-      >
-        Publish
-      </button>
+      <div className="flex justify-end">
+        <button
+          type="submit"
+          disabled={!file || !title.trim()}
+          className="px-4 py-1.5 bg-green-600 hover:bg-green-700 disabled:bg-neutral-200 disabled:text-neutral-400 text-white text-sm font-medium rounded-md transition-colors"
+        >
+          Publish
+        </button>
+      </div>
     </form>
   )
 }
