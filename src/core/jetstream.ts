@@ -1,4 +1,4 @@
-import { CHANNEL_LEXICON } from './atproto'
+import { ALL_CHANNEL_LEXICONS } from './atproto'
 
 const JETSTREAM_US_EAST = 'wss://jetstream2.us-east.bsky.network/subscribe'
 const JETSTREAM_US_WEST = 'wss://jetstream2.us-west.bsky.network/subscribe'
@@ -56,7 +56,9 @@ export function connectJetstream(
 
   function buildURL(): string {
     const params = new URLSearchParams()
-    params.append('wantedCollections', CHANNEL_LEXICON)
+    for (const lexicon of ALL_CHANNEL_LEXICONS) {
+      params.append('wantedCollections', lexicon)
+    }
     for (const did of dids) {
       params.append('wantedDids', did)
     }
@@ -79,7 +81,12 @@ export function connectJetstream(
       try {
         const msg = JSON.parse(e.data as string)
         if (msg.kind !== 'commit') return
-        if (msg.commit?.collection !== CHANNEL_LEXICON) return
+        if (
+          !ALL_CHANNEL_LEXICONS.includes(
+            msg.commit?.collection as (typeof ALL_CHANNEL_LEXICONS)[number],
+          )
+        )
+          return
         listeners.onCommit({
           did: msg.did,
           rkey: msg.commit.rkey,
