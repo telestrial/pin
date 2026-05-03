@@ -34,7 +34,7 @@ Best in Chrome. Best with a friend — pair up, each open the URL on your own ma
 
 ---
 
-The rest of this README goes deeper: the specific Sia SDK calls Pin uses (and where), the architecture, the sandboxed App Host API, what's out of v1 scope, and how to run locally if you want to clone instead of clicking the link above.
+The rest of this README goes deeper: the specific Sia SDK calls Pin uses (and where), the architecture, the sandboxed App Host API, the roadmap, and how to run locally if you want to clone instead of clicking the link above.
 
 ## Sia SDK usage
 
@@ -60,7 +60,7 @@ ATProto via [`@atproto/api`](https://www.npmjs.com/package/@atproto/api) handles
 Item bytes (per item)              Channel state (per channel)
         │                                   │
    Sia object                          ATProto record under
-   (encrypted via                      dev.sia.dispatch.channel†
+   (encrypted via                      dev.sia.pin.channel†
     per-object URL                     (publicly readable; body is
     fragment key)                       AES-GCM-256 ciphertext)
         │                                   │
@@ -71,7 +71,7 @@ Item bytes (per item)              Channel state (per channel)
                                   K lives only in the subscribe URL fragment
 ```
 
-† The lexicon prefix `dev.sia.dispatch.channel` predates the app's rename to "Pin" and is preserved for stability. Existing channels round-trip without migration. The migration tool that would unblock a clean rename is described in "Out of v1 scope."
+† Writes go to `dev.sia.pin.channel`. Reads (and the JetStream subscription) also check the legacy `dev.sia.dispatch.channel` collection so pre-rename channels keep resolving. Channels migrate to the new lexicon on their next publish; channels that nobody publishes to stay readable in legacy forever.
 
 - **Channel ATProto record** body is *only* `{ $type, encryptedManifest }`. No client-controlled metadata fields.
 - **Channel ID** (the rkey) is derived from `K`, not stored as a separate field. Listing an author's collection reveals only opaque rkeys.
@@ -96,13 +96,13 @@ src/
 
 ## App host API
 
-A program-as-item — type `app`, a single self-contained `.html` file — is one of the more interesting consequences of the architecture. The program is content-addressed, encrypted, and distributed by exactly the same machinery as a JPEG: it travels like media. Pong, included as a bundled example, ships in a channel as a small HTML file you can subscribe to, fetch, and run. Where it gets interesting is what an app should and shouldn't be able to *do* — that surface is barely sketched in v1.
+A program-as-item — type `app`, a single self-contained `.html` file — is one of the more interesting consequences of the architecture. The program is content-addressed, encrypted, and distributed by exactly the same machinery as a JPEG: it travels like media. Pong, included as a bundled example, ships in a channel as a small HTML file you can subscribe to, fetch, and run. Where it gets interesting is what an app should and shouldn't be able to *do* — that surface is barely sketched today.
 
 Apps run inside an iframe with `sandbox="allow-scripts allow-modals allow-pointer-lock"`. The sandbox blocks network, popups, top-navigation, forms, and same-origin access — an app can compute, render, and accept input, but can't reach our DOM, our keys, the user's other tabs, or any external service. Anything an app needs from the outside has to come through a `postMessage` channel the host explicitly proxies. **That's the permission boundary**: the host decides which capabilities it exposes as RPCs, and apps are free to use only those.
 
-### What we shipped in v1
+### Today's shape
 
-One RPC pair: per-app local state. Null-origin iframes don't get their own `localStorage`, so the host exposes get/set so apps can persist things like high scores, save games, or preferences. State is scoped by `appID` (the Sia content hash of the HTML), so the same bytes share state across whichever channels publish them. Storage is local to the device; not synced across devices in v1. The protocol's `dispatch:` message-type prefix predates the app's rename and is preserved so that already-published apps continue to work.
+One RPC pair: per-app local state. Null-origin iframes don't get their own `localStorage`, so the host exposes get/set so apps can persist things like high scores, save games, or preferences. State is scoped by `appID` (the Sia content hash of the HTML), so the same bytes share state across whichever channels publish them. Storage is local to the device; not synced across devices (yet). The protocol's `dispatch:` message-type prefix predates the app's rename and is preserved so that already-published apps continue to work.
 
 #### Read a stored value
 
@@ -142,17 +142,17 @@ Values are JSON-serialized; anything `JSON.stringify` accepts works. The host re
 
 The sandbox blocks network and same-origin access, so an app can't call Sia hosts itself. There are roughly three shapes for letting an app *use* the SDK without giving it free rein, each with a different place where permission lives:
 
-1. **Host-as-proxy (the v1 shape).** The host has the SDK; the app makes typed `postMessage` requests; the host executes and returns the result. Permission lives at the RPC boundary — we approve or deny each call individually. Simple to reason about. The API the app sees isn't shaped like the SDK; it's shaped like whatever message types we choose to expose.
+1. **Host-as-proxy (the current shape).** The host has the SDK; the app makes typed `postMessage` requests; the host executes and returns the result. Permission lives at the RPC boundary — we approve or deny each call individually. Simple to reason about. The API the app sees isn't shaped like the SDK; it's shaped like whatever message types we choose to expose.
 
 2. **SDK-as-contract.** The app imports a shim that *looks* like the SDK (`await sdk.upload(...)`), and the shim marshals each call over `postMessage`. The host implements the SDK on the app's behalf. App code reads like ordinary SDK usage; permission still lives at the host boundary, but the contract is the SDK itself. This is the cleanest shape if we ever want apps to be portable to other host environments — a desktop runtime, a different web client, a CLI — without rewriting them.
 
 3. **AppKey-per-app.** Sia's existing `AppKey` *is* the permission primitive — every authenticated session is scoped to one, and the indexer already enforces per-AppKey storage caps (`maxPinnedData`, `remainingStorage`). We could derive a sub-AppKey deterministically from `(user-AppKey, appID)`, let the app run a real SDK instance against that sub-key, and have the user approve a storage cap at install time. The sandbox still blocks raw network, but the host could expose just enough of a network shim for the app's SDK to reach the indexer — gated by the sub-AppKey's authorization. The most federated shape: each app becomes a first-class Sia identity, with its own quota and an isolated pinned set, separate from the host user's.
 
-The third shape is architecturally interesting because **Sia already has the permission primitive — we don't need to invent one**. Storage cap, isolated pinned set, all derivable from a root identity. We'd be making the AppKey hierarchy one level deeper, and the existing indexer enforcement comes along for free. v1 ships shape #1 because it was the smallest thing that worked for pong's hi-score; v2 thinking probably starts at #3.
+The third shape is architecturally interesting because **Sia already has the permission primitive — we don't need to invent one**. Storage cap, isolated pinned set, all derivable from a root identity. We'd be making the AppKey hierarchy one level deeper, and the existing indexer enforcement comes along for free. Pin currently runs shape #1 because it was the smallest thing that worked for pong's hi-score; future thinking probably starts at #3.
 
 ### What's open
 
-Pong is one example; the broader question — what *should* an app be able to do — is barely explored. Every capability beyond pure compute is a host-side permission decision, and none of them are settled. A non-exhaustive list of questions v2 has to answer, in roughly increasing order of risk:
+Pong is one example; the broader question — what *should* an app be able to do — is barely explored. Every capability beyond pure compute is a host-side permission decision, and none of them are settled. A non-exhaustive list of open questions, in roughly increasing order of risk:
 
 - **Read other items in the same channel.** Useful (an app could render its own playlist over audio items in the channel), low risk.
 - **Read the manifest's metadata** (channel name, description, item refs). Same shape — useful for context-aware apps.
@@ -161,19 +161,19 @@ Pong is one example; the broader question — what *should* an app be able to do
 - **Sign with the user's `AppKey`.** Identity proxy — powerful and dangerous; needs explicit per-call consent UI.
 - **Pin a URL the app constructs.** Storage-cost vector against the user's Sia allowance; needs consent and probably a size cap.
 
-The framing that makes this tractable: apps can't reach Sia or ATProto directly. Anything they do goes through host RPCs. So designing the App Host API is the same exercise as designing a permission surface over the Sia SDK — *which calls are safe to proxy, under what consent model, at what scope*. v1 says "compute and your own state, nothing else." Growing that surface is a v2 question.
+The framing that makes this tractable: apps can't reach Sia or ATProto directly. Anything they do goes through host RPCs. So designing the App Host API is the same exercise as designing a permission surface over the Sia SDK — *which calls are safe to proxy, under what consent model, at what scope*. Today's answer: compute and your own state, nothing else. Growing that surface is the open question.
 
-## Out of v1 scope
+## Roadmap
 
-- **Per-recipient access control + revocation.** v1 is "everyone with the subscribe URL has equal access" — same model as Sia's `shareObject`. v2 plan: per-subscriber NaCl box envelopes via a separate ATProto record collection, plus key rotation on removal.
-- **Notifications, replies, likes, mentions, threads.** Intentionally absent — not a v2 plan either. Conversation by inference, not threading.
-- **Native mobile.** `core/` is platform-agnostic and ready; v1 ships the web SPA only.
-- **Editing.** Channel metadata (name, description, cover image) is fully editable from the channel header. **Posts** (text items with a title) and **apps** (HTML items) are editable in v1: title and/or body. The implementation uploads new bytes to Sia and only swaps the manifest pointer if the upload succeeds; on failure the old version stays live and the orphan upload is rolled back. Edited items keep their original `publishedAt` so editing isn't republishing — they stay where they were in chronological order. Apps editing is the load-bearing case: ship a program, find a bug, fix it in place. Notes (titleless short-form text) and other media types (image, audio, video, file) are not editable in v1; retract and republish. **Pinned copies on subscribers' devices are *snapshots*** — an author's edit changes the manifest's pointer, but readers' mirrored bytes stay as they were when they pinned. That's true to "K is custody, not authorship": the reader's pin is fixed-in-time stewardship; the author's edit doesn't reach into the reader's library.
-- **Pagination, drafts, AppView discovery.** Single-page manifest, single-channel-key per channel.
-- **Object packing.** Every Sia upload pays a full slab of erasure-coded redundancy regardless of content size — small text items are inefficient. `sdk.uploadPacked()` is the v2 fix.
-- **Persistent upload queue.** Tab close during a slow upload drops the pending bytes. v2 stores task bytes in IndexedDB by task UUID so the queue resumes across reload.
-- **Channel export / import (manifest portability).** A small JSON file containing `{ channelKey, channelID, manifest }` is the entire backup image of a channel. v2 surfaces **Download manifest** + **Import manifest** affordances. Import walks every item URL and re-pins the bytes into the importer's indexer scope (mandatory because each AppKey is a distinct pinned-objects scope), then republishes the manifest under the importer's DID. Same-user import = clean migration (AppKey rotation, cross-device portability, app-rebrand recovery — would have unblocked moving the lexicon off `dev.sia.dispatch.*` for the Pin rename). Different-user import = fork, surfaced as an explicit verb with a `forkedFrom` provenance field. The framing: **`K` is custody capability, not authorship credential.**
-- **Collections / albums.** v1 has no way to group items — posting 10 photos means publishing 10 times, and they appear as 10 rows in the feed. The schema question worth working through: does an album become *one item with N media URLs* (`itemURL` becomes `itemURLs[]`, and "single image" is just N=1), *one item-of-type-`collection`* whose body references other items, or *N items with a shared `groupID`* (manifest-level grouping, per-item bytes stay flat)? Each has different ergonomics for the **pin** verb. Multi-URL or group-ID let a subscriber pin the whole collection or just one image inside it; collection-type maps pin cleanly to the whole. Sia cost stays the same regardless — N photos = N objects = N slabs of redundancy — but `sdk.uploadPacked()` becomes load-bearing for any of these shapes, since collection authors publish in bursts. Lean: **multi-URL ItemRef.** Cleanest schema migration; single-image is just N=1; rendering branches once on count; pin granularity stays at the URL level, so subscribers can keep partial collections after pinning.
+- **Per-recipient access control + revocation.** Pin currently treats subscribe URLs as universal access — anyone with the URL has equal read, same model as Sia's `shareObject`. The plan: per-subscriber NaCl box envelopes via a separate ATProto record collection, with key rotation on removal.
+- **Notifications, replies, likes, mentions, threads.** Intentionally absent. Not on the roadmap either — conversation by inference, not threading.
+- **Native mobile.** `core/` is platform-agnostic and ready. Pin currently ships the web SPA only; a React Native client built on `react-native-sia` is the path.
+- **More editing surface.** Channel metadata (name, description, cover image) is fully editable from the channel header. **Posts** (text items with a title) and **apps** (HTML items) are editable today: title and/or body. The implementation uploads new bytes to Sia and only swaps the manifest pointer if the upload succeeds; on failure the old version stays live and the orphan upload is rolled back. Edited items keep their original `publishedAt` so editing isn't republishing — they stay where they were in chronological order. Apps editing is the load-bearing case: ship a program, find a bug, fix it in place. Notes (titleless short-form text) and other media types (image, audio, video, file) aren't editable yet; retract and republish. **Pinned copies on subscribers' devices are *snapshots*** — an author's edit changes the manifest's pointer, but readers' mirrored bytes stay as they were when they pinned. That's true to "K is custody, not authorship": the reader's pin is fixed-in-time stewardship; the author's edit doesn't reach into the reader's library.
+- **Pagination, drafts, AppView discovery.** Single-page manifest, single channel-key per channel — none of these are here yet.
+- **Object packing.** Every Sia upload pays a full slab of erasure-coded redundancy regardless of content size — small text items are inefficient. `sdk.uploadPacked()` is the fix.
+- **Persistent upload queue.** Tab close during a slow upload drops the pending bytes. The fix: store task bytes in IndexedDB by task UUID so the queue resumes across reload.
+- **Channel export / import (manifest portability).** A small JSON file containing `{ channelKey, channelID, manifest }` is the entire backup image of a channel. The plan: **Download manifest** + **Import manifest** affordances. Import walks every item URL and re-pins the bytes into the importer's indexer scope (mandatory because each AppKey is a distinct pinned-objects scope), then republishes the manifest under the importer's DID. Same-user import = clean migration (AppKey rotation, cross-device portability, and the path that would let us retire the legacy `dev.sia.dispatch.channel` lexicon entirely). Different-user import = fork, surfaced as an explicit verb with a `forkedFrom` provenance field. The framing: **`K` is custody capability, not authorship credential.**
+- **Collections / albums.** Pin has no way to group items — posting 10 photos means publishing 10 times, and they appear as 10 rows in the feed. The schema question worth working through: does an album become *one item with N media URLs* (`itemURL` becomes `itemURLs[]`, and "single image" is just N=1), *one item-of-type-`collection`* whose body references other items, or *N items with a shared `groupID`* (manifest-level grouping, per-item bytes stay flat)? Each has different ergonomics for the **pin** verb. Multi-URL or group-ID let a subscriber pin the whole collection or just one image inside it; collection-type maps pin cleanly to the whole. Sia cost stays the same regardless — N photos = N objects = N slabs of redundancy — but `sdk.uploadPacked()` becomes load-bearing for any of these shapes, since collection authors publish in bursts. Lean: **multi-URL ItemRef.** Cleanest schema migration; single-image is just N=1; rendering branches once on count; pin granularity stays at the URL level, so subscribers can keep partial collections after pinning.
 
 ## Run it locally
 
