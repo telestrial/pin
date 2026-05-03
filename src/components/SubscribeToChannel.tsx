@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { fetchChannel, parseSubscribeURL } from '../core/channels'
+import type { FeedEntry } from '../core/feed'
 import { useAuthStore } from '../stores/auth'
+import { useFeedStore } from '../stores/feed'
 
 export function SubscribeToChannel({
   onCancel,
@@ -50,6 +52,21 @@ export function SubscribeToChannel({
         label: manifest.name,
         addedAt: new Date().toISOString(),
       })
+
+      // Populate feed entries from the manifest we already fetched. Without
+      // this, existing items don't show until JetStream pushes a new commit
+      // or the user hits Refresh.
+      const fresh: FeedEntry[] = manifest.items.map((item) => ({
+        item,
+        channel: {
+          authorHandle: parsed.authorHandle,
+          channelID: parsed.channelID,
+          name: manifest.name,
+          coverArt: manifest.coverArt,
+        },
+      }))
+      useFeedStore.setState((s) => ({ entries: [...s.entries, ...fresh] }))
+
       onSubscribed(manifest.name)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to fetch channel')
