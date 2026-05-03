@@ -1,6 +1,7 @@
 import { type ChangeEvent, useEffect, useState } from 'react'
 import { createChannel } from '../core/channels'
 import { useAuthStore } from '../stores/auth'
+import { useFeedStore } from '../stores/feed'
 
 const ACCEPTED_COVER_MIMES = ['image/jpeg', 'image/png', 'image/webp']
 
@@ -15,6 +16,7 @@ export function CreateChannel({
   const agent = useAuthStore((s) => s.atprotoAgent)
   const addMyChannel = useAuthStore((s) => s.addMyChannel)
   const addSubscription = useAuthStore((s) => s.addSubscription)
+  const setManifest = useFeedStore((s) => s.setManifest)
 
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
@@ -90,6 +92,7 @@ export function CreateChannel({
         addedAt: new Date().toISOString(),
         label: result.manifest.name,
       })
+      setManifest(result.channelID, result.manifest)
       onCreated(result.subscribeURL, result.manifest.name)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to create channel')

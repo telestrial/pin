@@ -5,16 +5,18 @@ import {
   type FeedEntry,
   type FeedFetchError,
 } from '../core/feed'
-import type { SubscriptionRef } from '../core/types'
+import type { ChannelManifest, SubscriptionRef } from '../core/types'
 
 type FeedState = {
   entries: FeedEntry[]
   errors: FeedFetchError[]
+  manifests: Record<string, ChannelManifest>
   loading: boolean
   lastRefreshedAt: string | null
   live: boolean
   refresh: (subscriptions: SubscriptionRef[]) => Promise<void>
   refreshChannel: (sub: SubscriptionRef) => Promise<void>
+  setManifest: (channelID: string, manifest: ChannelManifest) => void
   removeChannel: (channelID: string) => void
   setLive: (live: boolean) => void
   reset: () => void
@@ -23,6 +25,7 @@ type FeedState = {
 export const useFeedStore = create<FeedState>()((set) => ({
   entries: [],
   errors: [],
+  manifests: {},
   loading: false,
   lastRefreshedAt: null,
   live: false,
@@ -32,6 +35,7 @@ export const useFeedStore = create<FeedState>()((set) => ({
     set({
       entries: result.entries,
       errors: result.errors,
+      manifests: result.manifests,
       lastRefreshedAt: new Date().toISOString(),
       loading: false,
     })
@@ -60,7 +64,10 @@ export const useFeedStore = create<FeedState>()((set) => ({
             coverArt: manifest.coverArt,
           },
         }))
-        return { entries: [...others, ...fresh] }
+        return {
+          entries: [...others, ...fresh],
+          manifests: { ...s.manifests, [sub.channelID]: manifest },
+        }
       })
     } catch (e) {
       console.warn(
@@ -69,16 +76,25 @@ export const useFeedStore = create<FeedState>()((set) => ({
       )
     }
   },
-  removeChannel: (channelID) =>
+  setManifest: (channelID, manifest) =>
     set((s) => ({
-      entries: s.entries.filter((e) => e.channel.channelID !== channelID),
-      errors: s.errors.filter((e) => e.channelID !== channelID),
+      manifests: { ...s.manifests, [channelID]: manifest },
     })),
+  removeChannel: (channelID) =>
+    set((s) => {
+      const { [channelID]: _, ...remainingManifests } = s.manifests
+      return {
+        entries: s.entries.filter((e) => e.channel.channelID !== channelID),
+        errors: s.errors.filter((e) => e.channelID !== channelID),
+        manifests: remainingManifests,
+      }
+    }),
   setLive: (live) => set({ live }),
   reset: () =>
     set({
       entries: [],
       errors: [],
+      manifests: {},
       loading: false,
       lastRefreshedAt: null,
       live: false,

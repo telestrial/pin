@@ -1,5 +1,3 @@
-import { useMemo } from 'react'
-import type { ChannelCover } from '../core/types'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
 import { ChannelAvatar } from './ChannelAvatar'
@@ -25,17 +23,7 @@ export function Sidebar({
 }) {
   const myChannels = useAuthStore((s) => s.myChannels)
   const subscriptions = useAuthStore((s) => s.subscriptions)
-  const feedEntries = useFeedStore((s) => s.entries)
-
-  const coverByChannelID = useMemo(() => {
-    const map = new Map<string, ChannelCover>()
-    for (const e of feedEntries) {
-      if (e.channel.coverArt && !map.has(e.channel.channelID)) {
-        map.set(e.channel.channelID, e.channel.coverArt)
-      }
-    }
-    return map
-  }, [feedEntries])
+  const manifests = useFeedStore((s) => s.manifests)
 
   const channelsToShow = [...myChannels]
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
@@ -95,7 +83,7 @@ export function Sidebar({
                         channelID={c.channelID}
                         channelName={c.name}
                         authorHandle={handle ?? ''}
-                        coverArt={coverByChannelID.get(c.channelID)}
+                        coverArt={manifests[c.channelID]?.coverArt}
                         size="sm"
                       />
                       <span className="truncate flex-1">{c.name}</span>
@@ -147,7 +135,7 @@ export function Sidebar({
                         channelID={s.channelID}
                         channelName={s.cachedName ?? s.channelID}
                         authorHandle={s.authorHandle}
-                        coverArt={coverByChannelID.get(s.channelID)}
+                        coverArt={manifests[s.channelID]?.coverArt}
                         size="sm"
                       />
                       <span className="truncate flex-1">

@@ -1,7 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
-import { fetchChannel } from '../core/channels'
+import { useEffect, useMemo } from 'react'
 import type { FeedEntry } from '../core/feed'
-import type { ChannelManifest } from '../core/types'
 import { renderMarkdown } from '../lib/markdown'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
@@ -62,22 +60,14 @@ export function ChannelView({
   const loading = useFeedStore((s) => s.loading)
   const live = useFeedStore((s) => s.live)
   const refreshChannel = useFeedStore((s) => s.refreshChannel)
+  const manifest = useFeedStore((s) => s.manifests[channelID])
 
-  const [manifest, setManifest] = useState<ChannelManifest | null>(null)
+  // Backfill the manifest cache on cold-mount (e.g. empty channel that
+  // contributed no feed entries to the initial refresh). Subsequent updates
+  // arrive automatically via JetStream → refreshChannel.
   useEffect(() => {
-    if (!sub) return
-    let cancelled = false
-    fetchChannel(sub.authorDID || sub.authorHandle, channelID, sub.channelKey)
-      .then((m) => {
-        if (!cancelled) setManifest(m)
-      })
-      .catch(() => {
-        // Header gracefully degrades to cachedName + ChannelMark.
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [sub, channelID])
+    if (sub && !manifest) refreshChannel(sub)
+  }, [sub, manifest, refreshChannel])
 
   const channelEntries = useMemo(() => {
     const filtered = entries.filter(
@@ -107,7 +97,7 @@ export function ChannelView({
     sub?.cachedName ??
     channelEntries[0]?.channel.name ??
     channelID
-  const coverArt = manifest?.coverArt ?? channelEntries[0]?.channel.coverArt
+  const coverArt = manifest?.coverArt
   const description = manifest?.description ?? ''
 
   return (

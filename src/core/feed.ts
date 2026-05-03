@@ -1,5 +1,10 @@
 import { fetchChannel } from './channels'
-import type { ChannelCover, ItemRef, SubscriptionRef } from './types'
+import type {
+  ChannelCover,
+  ChannelManifest,
+  ItemRef,
+  SubscriptionRef,
+} from './types'
 
 export type FeedEntry = {
   item: ItemRef
@@ -21,6 +26,7 @@ export type FeedFetchError = {
 export type FeedFetchResult = {
   entries: FeedEntry[]
   errors: FeedFetchError[]
+  manifests: Record<string, ChannelManifest>
 }
 
 export async function buildHomeFeed(
@@ -38,12 +44,14 @@ export async function buildHomeFeed(
 
   const entries: FeedEntry[] = []
   const errors: FeedFetchError[] = []
+  const manifests: Record<string, ChannelManifest> = {}
 
   for (let i = 0; i < settled.length; i++) {
     const result = settled[i]
     const sub = subscriptions[i]
     if (result.status === 'fulfilled') {
       const manifest = result.value
+      manifests[sub.channelID] = manifest
       for (const item of manifest.items) {
         entries.push({
           item,
@@ -76,5 +84,5 @@ export async function buildHomeFeed(
         : 0,
   )
 
-  return { entries, errors }
+  return { entries, errors, manifests }
 }

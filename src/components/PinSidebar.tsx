@@ -9,7 +9,6 @@ import {
   type UploadTaskState,
   useUploadQueueStore,
 } from '../stores/uploadQueue'
-import type { ChannelCover } from '../core/types'
 import { ChannelAvatar } from './ChannelAvatar'
 
 function formatBytes(n: number): string {
@@ -73,16 +72,7 @@ export function PinSidebar({
   const retryTask = useUploadQueueStore((s) => s.retry)
   const removeTask = useUploadQueueStore((s) => s.remove)
   const feedEntries = useFeedStore((s) => s.entries)
-
-  const coverByChannelID = useMemo(() => {
-    const map = new Map<string, ChannelCover>()
-    for (const e of feedEntries) {
-      if (e.channel.coverArt && !map.has(e.channel.channelID)) {
-        map.set(e.channel.channelID, e.channel.coverArt)
-      }
-    }
-    return map
-  }, [feedEntries])
+  const manifests = useFeedStore((s) => s.manifests)
 
   const ownedChannelStorage = useMemo(() => {
     return myChannels
@@ -97,11 +87,11 @@ export function PinSidebar({
           bytes,
           itemCount: items.length,
           authorHandle: sub?.authorHandle ?? '',
-          coverArt: coverByChannelID.get(c.channelID),
+          coverArt: manifests[c.channelID]?.coverArt,
         }
       })
       .sort((a, b) => b.bytes - a.bytes)
-  }, [myChannels, feedEntries, subscriptions, coverByChannelID])
+  }, [myChannels, feedEntries, subscriptions, manifests])
 
   const inFlight = [...tasks].sort((a, b) =>
     b.createdAt.localeCompare(a.createdAt),
@@ -337,7 +327,7 @@ export function PinSidebar({
                       channelID={ref.channel.channelID}
                       channelName={ref.channel.name}
                       authorHandle={ref.channel.authorHandle}
-                      coverArt={coverByChannelID.get(ref.channel.channelID)}
+                      coverArt={manifests[ref.channel.channelID]?.coverArt}
                       size="sm"
                     />
                     <div className="min-w-0 flex-1 space-y-0.5">

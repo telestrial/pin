@@ -65,7 +65,10 @@ export function SubscribeToChannel({
           coverArt: manifest.coverArt,
         },
       }))
-      useFeedStore.setState((s) => ({ entries: [...s.entries, ...fresh] }))
+      useFeedStore.setState((s) => ({
+        entries: [...s.entries, ...fresh],
+        manifests: { ...s.manifests, [parsed.channelID]: manifest },
+      }))
 
       onSubscribed(manifest.name)
     } catch (e) {
