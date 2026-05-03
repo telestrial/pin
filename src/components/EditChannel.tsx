@@ -29,7 +29,7 @@ export function EditChannel({
 }) {
   const sdk = useAuthStore((s) => s.sdk)
   const agent = useAuthStore((s) => s.atprotoAgent)
-  const session = useAuthStore((s) => s.atprotoSession)
+  const atprotoDID = useAuthStore((s) => s.atprotoDID)
   const updateMyChannelName = useAuthStore((s) => s.updateMyChannelName)
   const updateSubscriptionName = useAuthStore((s) => s.updateSubscriptionName)
   const refreshChannel = useFeedStore((s) => s.refreshChannel)
@@ -51,12 +51,12 @@ export function EditChannel({
 
   useEffect(() => {
     let cancelled = false
-    if (!session) {
+    if (!atprotoDID) {
       setLoadError('Bluesky session not active.')
       setLoading(false)
       return
     }
-    fetchChannel(session.did, channelID, channelKey)
+    fetchChannel(atprotoDID, channelID, channelKey)
       .then((manifest) => {
         if (cancelled) return
         setOriginal(manifest)
@@ -72,7 +72,7 @@ export function EditChannel({
     return () => {
       cancelled = true
     }
-  }, [session, channelID, channelKey])
+  }, [atprotoDID, channelID, channelKey])
 
   useEffect(() => {
     if (!newCoverFile) {

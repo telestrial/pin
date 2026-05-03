@@ -3,8 +3,7 @@ import { AuthFlow } from './components/auth/AuthFlow'
 import { Home } from './components/Home'
 import { Navbar } from './components/Navbar'
 import { Toasts } from './components/Toast'
-import { resumeSession } from './core/atproto'
-import { persistAtprotoSession } from './lib/atprotoSession'
+import { bootOauth } from './lib/atprotoClient'
 import './lib/debug'
 import { useJetstream } from './lib/useJetstream'
 import { useSettingsSync } from './lib/useSettingsSync'
@@ -20,20 +19,35 @@ export default function App() {
   useUploadRunner()
   useSettingsSync()
 
+  // OAuth bootstrap — runs once on mount. bootOauth() memoizes the init()
+  // call so React StrictMode's double-mount doesn't race two concurrent
+  // callbacks against the same URL params (the second would lose, since
+  // the first consumed them). Both StrictMode runs share one promise.
+  // If a session is restored or freshly minted, we hydrate the store and
+  // fetch the handle for display + subscribe URLs.
   useEffect(() => {
-    const { atprotoSession, atprotoAgent, setATProtoSession } =
-      useAuthStore.getState()
-    if (!atprotoSession || atprotoAgent) return
-
+    if (useAuthStore.getState().atprotoAgent) return
     let cancelled = false
-    resumeSession(atprotoSession, persistAtprotoSession)
-      .then((agent) => {
+    ;(async () => {
+      try {
+        const result = await bootOauth()
+        if (!result) return
+        const { agent, session } = result
+        let handle: string | null = useAuthStore.getState().atprotoHandle
+        try {
+          const profile = await agent.getProfile({ actor: session.did })
+          handle = profile.data.handle
+        } catch {
+          // Profile fetch failed — keep whatever handle was cached.
+        }
         if (cancelled) return
-        setATProtoSession(agent.session ?? atprotoSession, agent)
-      })
-      .catch((e) => {
-        console.warn('Failed to resume ATProto session:', e)
-      })
+        useAuthStore
+          .getState()
+          .setATProtoIdentity(agent, session.did, handle)
+      } catch (e) {
+        console.warn('Failed to init ATProto OAuth client:', e)
+      }
+    })()
     return () => {
       cancelled = true
     }

@@ -1,10 +1,4 @@
-import {
-  AtpAgent,
-  type AtpPersistSessionHandler,
-  type AtpSessionData,
-} from '@atproto/api'
-
-export type { AtpPersistSessionHandler, AtpSessionEvent } from '@atproto/api'
+import { Agent, AtpAgent } from '@atproto/api'
 
 export const CHANNEL_LEXICON = 'dev.sia.pin.channel'
 export const LEGACY_CHANNEL_LEXICON = 'dev.sia.dispatch.channel'
@@ -20,43 +14,20 @@ export type ChannelRecord = {
   encryptedManifest: string // base64 of (1-byte version || 12-byte IV || AES-GCM ciphertext)
 }
 
-export type ATProtoSession = AtpSessionData
-
-export async function signIn(
-  identifier: string,
-  password: string,
-  persistSession?: AtpPersistSessionHandler,
-): Promise<{ session: ATProtoSession; agent: AtpAgent }> {
-  const agent = new AtpAgent({ service: DEFAULT_SERVICE, persistSession })
-  await agent.login({ identifier, password })
-  if (!agent.session) {
-    throw new Error('Login succeeded but no session returned')
-  }
-  return { session: agent.session, agent }
-}
-
-export async function resumeSession(
-  session: ATProtoSession,
-  persistSession?: AtpPersistSessionHandler,
-): Promise<AtpAgent> {
-  const agent = new AtpAgent({ service: DEFAULT_SERVICE, persistSession })
-  await agent.resumeSession(session)
-  return agent
-}
-
+// The authenticated agent is now constructed by the caller from an OAuthSession.
+// This module just consumes it.
 export async function putChannelRecord(
-  agent: AtpAgent,
+  agent: Agent,
   channelID: string,
   encryptedManifest: string,
 ): Promise<{ uri: string; cid: string }> {
-  const session = agent.session
-  if (!session) throw new Error('ATProto agent has no session')
+  const did = agent.assertDid
   const record: ChannelRecord = {
     $type: CHANNEL_LEXICON,
     encryptedManifest,
   }
   const result = await agent.com.atproto.repo.putRecord({
-    repo: session.did,
+    repo: did,
     collection: CHANNEL_LEXICON,
     rkey: channelID,
     record,
@@ -68,6 +39,9 @@ export async function putChannelRecord(
 // Read-both, prefer-new. Tries the current lexicon first; falls back to the
 // legacy 'dev.sia.dispatch.channel' if the record isn't found in the new one.
 // Lets pre-rename channels keep working without a forced migration.
+//
+// Unauthenticated reads — uses a bare AtpAgent against bsky.social since this
+// path doesn't require user auth.
 export async function getChannelRecord(
   authorHandleOrDID: string,
   channelID: string,
@@ -127,16 +101,15 @@ export async function listChannelRecords(
 // Best-effort retract from both lexicons. Either may 404 (the record only
 // existed in one collection) — treat that as success.
 export async function deleteChannelRecord(
-  agent: AtpAgent,
+  agent: Agent,
   channelID: string,
 ): Promise<void> {
-  const session = agent.session
-  if (!session) throw new Error('ATProto agent has no session')
+  const did = agent.assertDid
   await Promise.all(
     ALL_CHANNEL_LEXICONS.map(async (collection) => {
       try {
         await agent.com.atproto.repo.deleteRecord({
-          repo: session.did,
+          repo: did,
           collection,
           rkey: channelID,
         })

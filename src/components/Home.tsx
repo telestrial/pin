@@ -146,10 +146,12 @@ export function Home() {
   }
 
   if (view.kind === 'bluesky-login') {
+    // No onSignedIn — sign-in redirects out and comes back through App.tsx's
+    // OAuth init effect, which hydrates the store. The user lands on the
+    // home view after the round-trip; resumeTo is no longer plumbed.
     return (
       <BlueskyLoginScreen
         onCancel={() => setView(view.cancelTo)}
-        onSignedIn={() => setView(view.resumeTo)}
         sidebar={renderSidebar()}
         rightSidebar={renderPinSidebar()}
       />

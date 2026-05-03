@@ -1,8 +1,7 @@
-import type { AtpAgent } from '@atproto/api'
+import type { Agent } from '@atproto/api'
 import type { Sdk } from '@siafoundation/sia-storage'
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import type { ATProtoSession } from '../core/atproto'
 import type { SubscriptionRef } from '../core/types'
 import { APP_KEY } from '../lib/constants'
 import { useFeedStore } from './feed'
@@ -34,8 +33,9 @@ type AuthState = {
   approvalURL: string | null
   myChannels: OwnedChannel[]
   subscriptions: SubscriptionRef[]
-  atprotoSession: ATProtoSession | null
-  atprotoAgent: AtpAgent | null
+  atprotoAgent: Agent | null
+  atprotoDID: string | null
+  atprotoHandle: string | null
   feedSortOrder: FeedSortOrder
   settingsObjectID: string | null
   settingsLoaded: boolean
@@ -51,9 +51,10 @@ type AuthState = {
   addSubscription: (sub: SubscriptionRef) => void
   updateSubscriptionName: (channelID: string, name: string) => void
   removeSubscription: (channelID: string) => void
-  setATProtoSession: (
-    session: ATProtoSession | null,
-    agent: AtpAgent | null,
+  setATProtoIdentity: (
+    agent: Agent | null,
+    did: string | null,
+    handle: string | null,
   ) => void
   setFeedSortOrder: (order: FeedSortOrder) => void
   hydrateSettings: (
@@ -77,8 +78,9 @@ export const useAuthStore = create<AuthState>()(
       approvalURL: null,
       myChannels: [],
       subscriptions: [],
-      atprotoSession: null,
       atprotoAgent: null,
+      atprotoDID: null,
+      atprotoHandle: null,
       feedSortOrder: 'newest',
       settingsObjectID: null,
       settingsLoaded: false,
@@ -124,8 +126,8 @@ export const useAuthStore = create<AuthState>()(
             (sub) => sub.channelID !== channelID,
           ),
         })),
-      setATProtoSession: (atprotoSession, atprotoAgent) =>
-        set({ atprotoSession, atprotoAgent }),
+      setATProtoIdentity: (atprotoAgent, atprotoDID, atprotoHandle) =>
+        set({ atprotoAgent, atprotoDID, atprotoHandle }),
       setFeedSortOrder: (feedSortOrder) => set({ feedSortOrder }),
       hydrateSettings: (myChannels, subscriptions, objectID) =>
         set({
@@ -148,8 +150,9 @@ export const useAuthStore = create<AuthState>()(
           approvalURL: null,
           myChannels: [],
           subscriptions: [],
-          atprotoSession: null,
           atprotoAgent: null,
+          atprotoDID: null,
+          atprotoHandle: null,
           settingsObjectID: null,
           settingsLoaded: false,
         })
@@ -162,7 +165,8 @@ export const useAuthStore = create<AuthState>()(
         indexerURL: state.indexerURL,
         myChannels: state.myChannels,
         subscriptions: state.subscriptions,
-        atprotoSession: state.atprotoSession,
+        atprotoDID: state.atprotoDID,
+        atprotoHandle: state.atprotoHandle,
         feedSortOrder: state.feedSortOrder,
         settingsObjectID: state.settingsObjectID,
       }),

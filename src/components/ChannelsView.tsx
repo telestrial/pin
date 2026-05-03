@@ -19,7 +19,7 @@ export function ChannelsView({
 }) {
   const myChannels = useAuthStore((s) => s.myChannels)
   const subscriptions = useAuthStore((s) => s.subscriptions)
-  const session = useAuthStore((s) => s.atprotoSession)
+  const atprotoHandle = useAuthStore((s) => s.atprotoHandle)
   const errors = useFeedStore((s) => s.errors)
 
   return (
@@ -44,7 +44,7 @@ export function ChannelsView({
                 const sub = subscriptions.find(
                   (s) => s.channelID === c.channelID,
                 )
-                const handle = sub?.authorHandle ?? session?.handle
+                const handle = sub?.authorHandle ?? atprotoHandle
                 return (
                   <li
                     key={c.channelID}
@@ -65,11 +65,11 @@ export function ChannelsView({
                         {c.channelID}
                       </p>
                     </button>
-                    {session && (
+                    {atprotoHandle && (
                       <div className="shrink-0">
                         <CopyButton
                           value={buildSubscribeURL(
-                            session.handle,
+                            atprotoHandle,
                             c.channelKey,
                           )}
                           label="Subscribe URL copied"

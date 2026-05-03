@@ -27,7 +27,7 @@ export function ComposeNote({
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     if (!sdk || !canSubmit) return
-    if (!agent || !agent.session) {
+    if (!agent || !agent.did) {
       setError('Bluesky session not active. Cancel and try again to sign in.')
       return
     }

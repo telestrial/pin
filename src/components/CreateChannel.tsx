@@ -19,6 +19,8 @@ export function CreateChannel({
 }) {
   const sdk = useAuthStore((s) => s.sdk)
   const agent = useAuthStore((s) => s.atprotoAgent)
+  const atprotoDID = useAuthStore((s) => s.atprotoDID)
+  const atprotoHandle = useAuthStore((s) => s.atprotoHandle)
   const addMyChannel = useAuthStore((s) => s.addMyChannel)
   const addSubscription = useAuthStore((s) => s.addSubscription)
   const setManifest = useFeedStore((s) => s.setManifest)
@@ -60,7 +62,7 @@ export function CreateChannel({
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     if (!sdk) return
-    if (!agent?.session) {
+    if (!agent || !atprotoDID || !atprotoHandle) {
       setError('Bluesky session not active. Cancel and try again to sign in.')
       return
     }
@@ -77,7 +79,7 @@ export function CreateChannel({
           mimeType: coverFile.type,
         }
       }
-      const result = await createChannel(sdk, agent, {
+      const result = await createChannel(sdk, agent, atprotoHandle, {
         name: trimmedName,
         description: description.trim(),
         coverImage,
@@ -89,8 +91,8 @@ export function CreateChannel({
         createdAt: result.manifest.publishedAt,
       })
       addSubscription({
-        authorHandle: agent.session.handle,
-        authorDID: agent.session.did,
+        authorHandle: atprotoHandle,
+        authorDID: atprotoDID,
         channelID: result.channelID,
         channelKey: result.channelKey,
         cachedName: result.manifest.name,

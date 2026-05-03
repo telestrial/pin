@@ -1,4 +1,4 @@
-import type { AtpAgent } from '@atproto/api'
+import type { Agent } from '@atproto/api'
 import type { Sdk } from '@siafoundation/sia-storage'
 import {
   deleteChannelRecord,
@@ -41,15 +41,15 @@ export type ItemPayload = {
 
 export async function createChannel(
   sdk: Sdk,
-  agent: AtpAgent,
+  agent: Agent,
+  authorHandle: string,
   args: {
     name: string
     description: string
     coverImage?: { bytes: Uint8Array; mimeType: string }
   },
 ): Promise<CreatedChannel> {
-  const session = agent.session
-  if (!session) throw new Error('ATProto agent has no session')
+  const did = agent.assertDid
 
   const keyBytes = await generateChannelKey()
   const channelKey = channelKeyToBase64(keyBytes)
@@ -66,7 +66,7 @@ export async function createChannel(
     name: args.name,
     description: args.description,
     authorPubkey: sdk.appKey().publicKey(),
-    authorATProtoDID: session.did,
+    authorATProtoDID: did,
     publishedAt: new Date().toISOString(),
     coverArt,
     items: [],
@@ -79,7 +79,7 @@ export async function createChannel(
     channelID,
     channelKey,
     manifest,
-    subscribeURL: buildSubscribeURL(session.handle, channelKey),
+    subscribeURL: buildSubscribeURL(authorHandle, channelKey),
   }
 }
 
@@ -92,15 +92,14 @@ export type EditChannelPatch = {
 
 export async function editChannel(
   sdk: Sdk,
-  agent: AtpAgent,
+  agent: Agent,
   channel: { channelID: string; channelKey: string },
   patch: EditChannelPatch,
 ): Promise<ChannelManifest> {
-  const session = agent.session
-  if (!session) throw new Error('ATProto agent has no session')
+  const did = agent.assertDid
 
   const current = await fetchChannel(
-    session.did,
+    did,
     channel.channelID,
     channel.channelKey,
   )
@@ -168,14 +167,13 @@ export function buildItemRef(
 
 export async function unpinChannel(
   sdk: Sdk,
-  agent: AtpAgent,
+  agent: Agent,
   channel: { channelID: string; channelKey: string },
 ): Promise<void> {
-  const session = agent.session
-  if (!session) throw new Error('ATProto agent has no session')
+  const did = agent.assertDid
 
   const manifest = await fetchChannel(
-    session.did,
+    did,
     channel.channelID,
     channel.channelKey,
   )
@@ -202,15 +200,14 @@ export async function unpinChannel(
 
 export async function deletePublishedItem(
   sdk: Sdk,
-  agent: AtpAgent,
+  agent: Agent,
   channel: { channelID: string; channelKey: string },
   itemID: string,
 ): Promise<ChannelManifest> {
-  const session = agent.session
-  if (!session) throw new Error('ATProto agent has no session')
+  const did = agent.assertDid
 
   const current = await fetchChannel(
-    session.did,
+    did,
     channel.channelID,
     channel.channelKey,
   )
@@ -232,16 +229,15 @@ export async function deletePublishedItem(
 
 export async function editItem(
   sdk: Sdk,
-  agent: AtpAgent,
+  agent: Agent,
   channel: { channelID: string; channelKey: string },
   oldItemID: string,
   payload: ItemPayload,
 ): Promise<{ manifest: ChannelManifest; item: ItemRef }> {
-  const session = agent.session
-  if (!session) throw new Error('ATProto agent has no session')
+  const did = agent.assertDid
 
   const current = await fetchChannel(
-    session.did,
+    did,
     channel.channelID,
     channel.channelKey,
   )
@@ -284,16 +280,15 @@ export async function editItem(
 }
 
 export async function editItemMetadata(
-  agent: AtpAgent,
+  agent: Agent,
   channel: { channelID: string; channelKey: string },
   oldItemID: string,
   patch: { title?: string; summary?: string; filename?: string },
 ): Promise<{ manifest: ChannelManifest; item: ItemRef }> {
-  const session = agent.session
-  if (!session) throw new Error('ATProto agent has no session')
+  const did = agent.assertDid
 
   const current = await fetchChannel(
-    session.did,
+    did,
     channel.channelID,
     channel.channelKey,
   )
@@ -327,15 +322,14 @@ export async function editItemMetadata(
 }
 
 export async function appendItemToChannel(
-  agent: AtpAgent,
+  agent: Agent,
   channel: { channelID: string; channelKey: string },
   itemRef: ItemRef,
 ): Promise<ChannelManifest> {
-  const session = agent.session
-  if (!session) throw new Error('ATProto agent has no session')
+  const did = agent.assertDid
 
   const current = await fetchChannel(
-    session.did,
+    did,
     channel.channelID,
     channel.channelKey,
   )
