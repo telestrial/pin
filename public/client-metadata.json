@@ -1,0 +1,16 @@
+{
+  "client_id": "https://pin-liard.vercel.app/client-metadata.json",
+  "client_name": "Pin",
+  "client_uri": "https://pin-liard.vercel.app",
+  "logo_uri": "https://pin-liard.vercel.app/favicon.svg",
+  "redirect_uris": [
+    "https://pin-liard.vercel.app/",
+    "https://pin-git-dev-telestrials-projects.vercel.app/"
+  ],
+  "scope": "atproto transition:generic",
+  "grant_types": ["authorization_code", "refresh_token"],
+  "response_types": ["code"],
+  "application_type": "web",
+  "token_endpoint_auth_method": "none",
+  "dpop_bound_access_tokens": true
+}
