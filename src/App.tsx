@@ -4,6 +4,7 @@ import { Home } from './components/Home'
 import { Navbar } from './components/Navbar'
 import { Toasts } from './components/Toast'
 import { resumeSession } from './core/atproto'
+import { persistAtprotoSession } from './lib/atprotoSession'
 import './lib/debug'
 import { useJetstream } from './lib/useJetstream'
 import { useSettingsSync } from './lib/useSettingsSync'
@@ -25,7 +26,7 @@ export default function App() {
     if (!atprotoSession || atprotoAgent) return
 
     let cancelled = false
-    resumeSession(atprotoSession)
+    resumeSession(atprotoSession, persistAtprotoSession)
       .then((agent) => {
         if (cancelled) return
         setATProtoSession(agent.session ?? atprotoSession, agent)

@@ -1,4 +1,10 @@
-import { AtpAgent, type AtpSessionData } from '@atproto/api'
+import {
+  AtpAgent,
+  type AtpPersistSessionHandler,
+  type AtpSessionData,
+} from '@atproto/api'
+
+export type { AtpPersistSessionHandler, AtpSessionEvent } from '@atproto/api'
 
 export const CHANNEL_LEXICON = 'dev.sia.pin.channel'
 export const LEGACY_CHANNEL_LEXICON = 'dev.sia.dispatch.channel'
@@ -19,8 +25,9 @@ export type ATProtoSession = AtpSessionData
 export async function signIn(
   identifier: string,
   password: string,
+  persistSession?: AtpPersistSessionHandler,
 ): Promise<{ session: ATProtoSession; agent: AtpAgent }> {
-  const agent = new AtpAgent({ service: DEFAULT_SERVICE })
+  const agent = new AtpAgent({ service: DEFAULT_SERVICE, persistSession })
   await agent.login({ identifier, password })
   if (!agent.session) {
     throw new Error('Login succeeded but no session returned')
@@ -30,8 +37,9 @@ export async function signIn(
 
 export async function resumeSession(
   session: ATProtoSession,
+  persistSession?: AtpPersistSessionHandler,
 ): Promise<AtpAgent> {
-  const agent = new AtpAgent({ service: DEFAULT_SERVICE })
+  const agent = new AtpAgent({ service: DEFAULT_SERVICE, persistSession })
   await agent.resumeSession(session)
   return agent
 }

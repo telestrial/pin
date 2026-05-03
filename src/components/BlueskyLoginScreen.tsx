@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { signIn } from '../core/atproto'
+import { persistAtprotoSession } from '../lib/atprotoSession'
 import { useAuthStore } from '../stores/auth'
 import { FormCard } from './FormCard'
 
@@ -29,7 +30,11 @@ export function BlueskyLoginScreen({
     setSubmitting(true)
     setError(null)
     try {
-      const { session, agent } = await signIn(trimmedHandle, trimmedPassword)
+      const { session, agent } = await signIn(
+        trimmedHandle,
+        trimmedPassword,
+        persistAtprotoSession,
+      )
       setATProtoSession(session, agent)
       onSignedIn()
     } catch (e) {
