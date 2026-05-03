@@ -5,6 +5,7 @@ import { useItemBlobURL } from '../lib/useItemBytes'
 import { type OwnedChannel, useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
 import { useToastStore } from '../stores/toast'
+import { FormCard } from './FormCard'
 
 const ACCEPTED_MIMES = ['image/jpeg', 'image/png', 'image/webp']
 
@@ -13,11 +14,15 @@ export function EditImage({
   channel,
   onCancel,
   onSaved,
+  sidebar,
+  rightSidebar,
 }: {
   item: ItemRef
   channel: OwnedChannel
   onCancel: () => void
   onSaved: (newItem: ItemRef) => void
+  sidebar?: React.ReactNode
+  rightSidebar?: React.ReactNode
 }) {
   const sdk = useAuthStore((s) => s.sdk)
   const agent = useAuthStore((s) => s.atprotoAgent)
@@ -101,10 +106,12 @@ export function EditImage({
   const previewURL = newPreviewURL ?? currentURL
 
   return (
-    <form
-      onSubmit={handleSubmit}
-      className="w-full max-w-2xl mx-auto space-y-4 p-6"
+    <FormCard
+      sidebar={sidebar}
+      rightSidebar={rightSidebar}
+      onBack={onCancel}
     >
+      <form onSubmit={handleSubmit} className="space-y-4">
       <div className="space-y-1">
         <h1 className="text-xl font-semibold text-neutral-900">Edit image</h1>
         <p className="text-neutral-500 text-sm">
@@ -156,23 +163,14 @@ export function EditImage({
         </p>
       )}
 
-      <div className="flex gap-2">
-        <button
-          type="submit"
-          disabled={submitting}
-          className="flex-1 px-4 py-2.5 bg-green-600 hover:bg-green-700 disabled:bg-neutral-200 disabled:text-neutral-400 text-white text-sm font-medium rounded-lg transition-colors cursor-pointer"
-        >
-          {submitting ? 'Saving…' : 'Save changes'}
-        </button>
-        <button
-          type="button"
-          onClick={onCancel}
-          disabled={submitting}
-          className="px-4 py-2.5 bg-neutral-100 hover:bg-neutral-200 text-neutral-900 text-sm font-medium rounded-lg transition-colors disabled:opacity-50 cursor-pointer"
-        >
-          Cancel
-        </button>
-      </div>
-    </form>
+      <button
+        type="submit"
+        disabled={submitting}
+        className="w-full px-4 py-2.5 bg-green-600 hover:bg-green-700 disabled:bg-neutral-200 disabled:text-neutral-400 text-white text-sm font-medium rounded-lg transition-colors cursor-pointer"
+      >
+        {submitting ? 'Saving…' : 'Save changes'}
+      </button>
+      </form>
+    </FormCard>
   )
 }

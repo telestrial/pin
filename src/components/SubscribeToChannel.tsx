@@ -3,13 +3,18 @@ import { fetchChannel, parseSubscribeURL } from '../core/channels'
 import type { FeedEntry } from '../core/feed'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
+import { FormCard } from './FormCard'
 
 export function SubscribeToChannel({
   onCancel,
   onSubscribed,
+  sidebar,
+  rightSidebar,
 }: {
   onCancel: () => void
   onSubscribed: (channelName: string) => void
+  sidebar?: React.ReactNode
+  rightSidebar?: React.ReactNode
 }) {
   const subscriptions = useAuthStore((s) => s.subscriptions)
   const addSubscription = useAuthStore((s) => s.addSubscription)
@@ -78,10 +83,12 @@ export function SubscribeToChannel({
   }
 
   return (
-    <form
-      onSubmit={handleSubmit}
-      className="w-full max-w-md mx-auto space-y-5 p-6"
+    <FormCard
+      sidebar={sidebar}
+      rightSidebar={rightSidebar}
+      onBack={onCancel}
     >
+      <form onSubmit={handleSubmit} className="space-y-5">
       <div className="space-y-1">
         <h1 className="text-xl font-semibold text-neutral-900">
           Subscribe to a channel
@@ -111,23 +118,14 @@ export function SubscribeToChannel({
         <p className="text-red-600 text-sm wrap-break-word">{error}</p>
       )}
 
-      <div className="flex gap-2">
-        <button
-          type="submit"
-          disabled={submitting || !url.trim()}
-          className="flex-1 px-4 py-2.5 bg-green-600 hover:bg-green-700 disabled:bg-neutral-200 disabled:text-neutral-400 text-white text-sm font-medium rounded-lg transition-colors"
-        >
-          {submitting ? 'Subscribing…' : 'Subscribe'}
-        </button>
-        <button
-          type="button"
-          onClick={onCancel}
-          disabled={submitting}
-          className="px-4 py-2.5 bg-neutral-100 hover:bg-neutral-200 text-neutral-900 text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
-        >
-          Cancel
-        </button>
-      </div>
-    </form>
+      <button
+        type="submit"
+        disabled={submitting || !url.trim()}
+        className="w-full px-4 py-2.5 bg-green-600 hover:bg-green-700 disabled:bg-neutral-200 disabled:text-neutral-400 text-white text-sm font-medium rounded-lg transition-colors"
+      >
+        {submitting ? 'Subscribing…' : 'Subscribe'}
+      </button>
+      </form>
+    </FormCard>
   )
 }

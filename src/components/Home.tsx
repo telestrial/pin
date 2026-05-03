@@ -17,6 +17,7 @@ import { EditChannel } from './EditChannel'
 import { EditImage } from './EditImage'
 import { EditPost } from './EditPost'
 import type { TypeFilter } from './FilterPills'
+import { FormCard } from './FormCard'
 import { HomeFeed } from './HomeFeed'
 import { ReadApp } from './ReadApp'
 import { ReadAudio } from './ReadAudio'
@@ -100,11 +101,57 @@ export function Home() {
     })
   }
 
+  function renderSidebar(activeChannelID?: string, activeHome = false) {
+    return (
+      <Sidebar
+        onHome={() => setView({ kind: 'idle', filter: 'all' })}
+        onCreate={gotoCreating}
+        onSubscribe={() => setView({ kind: 'subscribing' })}
+        onSeeAll={() => setView({ kind: 'channels' })}
+        onChannelClick={(authorHandle, channelID) =>
+          setView({
+            kind: 'viewing-channel',
+            authorHandle,
+            channelID,
+            filter: 'all',
+          })
+        }
+        activeHome={activeHome}
+        activeChannelID={activeChannelID}
+      />
+    )
+  }
+
+  function renderPinSidebar(activeChannelID?: string) {
+    return (
+      <PinSidebar
+        onItemClick={(ref) =>
+          setView({
+            kind: 'reading',
+            entry: { item: ref.item, channel: ref.channel },
+            returnTo: { kind: 'idle', filter: 'all' },
+          })
+        }
+        onChannelClick={(authorHandle, channelID) =>
+          setView({
+            kind: 'viewing-channel',
+            authorHandle,
+            channelID,
+            filter: 'all',
+          })
+        }
+        activeChannelID={activeChannelID}
+      />
+    )
+  }
+
   if (view.kind === 'bluesky-login') {
     return (
       <BlueskyLoginScreen
         onCancel={() => setView(view.cancelTo)}
         onSignedIn={() => setView(view.resumeTo)}
+        sidebar={renderSidebar()}
+        rightSidebar={renderPinSidebar()}
       />
     )
   }
@@ -116,14 +163,19 @@ export function Home() {
         onCreated={(subscribeURL, name) =>
           setView({ kind: 'created', subscribeURL, name })
         }
+        sidebar={renderSidebar()}
+        rightSidebar={renderPinSidebar()}
       />
     )
   }
 
   if (view.kind === 'created') {
     return (
-      <div className="flex-1 flex items-center justify-center p-6">
-        <div className="max-w-md w-full text-center space-y-5">
+      <FormCard
+        sidebar={renderSidebar()}
+        rightSidebar={renderPinSidebar()}
+      >
+        <div className="text-center space-y-5">
           <div className="space-y-1">
             <h1 className="text-xl font-semibold text-neutral-900">
               Channel created
@@ -136,7 +188,9 @@ export function Home() {
           <div className="flex flex-col sm:flex-row gap-2 sm:justify-center">
             <button
               type="button"
-              onClick={() => copyURL(view.subscribeURL, 'Subscribe URL copied')}
+              onClick={() =>
+                copyURL(view.subscribeURL, 'Subscribe URL copied')
+              }
               className="px-4 py-2.5 bg-green-600 hover:bg-green-700 text-white text-sm font-medium rounded-lg transition-colors"
             >
               Copy subscribe URL
@@ -150,7 +204,7 @@ export function Home() {
             </button>
           </div>
         </div>
-      </div>
+      </FormCard>
     )
   }
 
@@ -159,6 +213,8 @@ export function Home() {
       <SubscribeToChannel
         onCancel={() => setView({ kind: 'idle', filter: 'all' })}
         onSubscribed={() => setView({ kind: 'idle', filter: 'all' })}
+        sidebar={renderSidebar()}
+        rightSidebar={renderPinSidebar()}
       />
     )
   }
@@ -186,6 +242,8 @@ export function Home() {
           useFeedStore.getState().removeChannel(channelID)
           addToast(`Unsubscribed from "${name}"`)
         }}
+        sidebar={renderSidebar()}
+        rightSidebar={renderPinSidebar()}
       />
     )
   }
@@ -314,6 +372,8 @@ export function Home() {
           addToast(`Channel “${name}” updated`)
           setView(returnTo)
         }}
+        sidebar={renderSidebar(view.channelID)}
+        rightSidebar={renderPinSidebar(view.channelID)}
       />
     )
   }
@@ -337,6 +397,8 @@ export function Home() {
         channel={view.channel}
         onCancel={() => setView(returnTo)}
         onSaved={handleSaved}
+        sidebar={renderSidebar(view.channel.channelID)}
+        rightSidebar={renderPinSidebar(view.channel.channelID)}
       />
     )
   }
@@ -360,6 +422,8 @@ export function Home() {
         channel={view.channel}
         onCancel={() => setView(returnTo)}
         onSaved={handleSaved}
+        sidebar={renderSidebar(view.channel.channelID)}
+        rightSidebar={renderPinSidebar(view.channel.channelID)}
       />
     )
   }
@@ -383,6 +447,8 @@ export function Home() {
         channel={view.channel}
         onCancel={() => setView(returnTo)}
         onSaved={handleSaved}
+        sidebar={renderSidebar(view.channel.channelID)}
+        rightSidebar={renderPinSidebar(view.channel.channelID)}
       />
     )
   }
@@ -391,24 +457,11 @@ export function Home() {
     const { item, channel } = view.entry
     const returnTo = view.returnTo
     const onBack = () => setView(returnTo)
-    const sidebar = (
-      <Sidebar
-        onHome={() => setView({ kind: 'idle', filter: 'all' })}
-        onCreate={gotoCreating}
-        onSubscribe={() => setView({ kind: 'subscribing' })}
-        onSeeAll={() => setView({ kind: 'channels' })}
-        onChannelClick={(authorHandle, channelID) =>
-          setView({
-            kind: 'viewing-channel',
-            authorHandle,
-            channelID,
-            filter: 'all',
-          })
-        }
-        activeChannelID={channel.channelID}
-      />
-    )
+    const sidebar = renderSidebar(channel.channelID)
     const readingView = view
+    // Reading view's right sidebar passes returnTo through unchanged on
+    // pinned-item navigation, so clicking a pinned item replaces the current
+    // reading view rather than pushing onto the back stack.
     const rightSidebar = (
       <PinSidebar
         onItemClick={(ref) =>
@@ -540,8 +593,11 @@ export function Home() {
 
   if (subscriptions.length === 0) {
     return (
-      <div className="flex-1 flex items-center justify-center p-6">
-        <div className="max-w-md w-full text-center space-y-6">
+      <FormCard
+        sidebar={renderSidebar(undefined, true)}
+        rightSidebar={renderPinSidebar()}
+      >
+        <div className="text-center space-y-6">
           <div className="space-y-2">
             <h1 className="text-2xl font-semibold text-neutral-900">
               Your feed is empty
@@ -578,7 +634,7 @@ export function Home() {
             </div>
           )}
         </div>
-      </div>
+      </FormCard>
     )
   }
 

@@ -8,6 +8,7 @@ import type { ChannelCover, ChannelManifest } from '../core/types'
 import { useItemBlobURL } from '../lib/useItemBytes'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
+import { FormCard } from './FormCard'
 
 const ACCEPTED_COVER_MIMES = ['image/jpeg', 'image/png', 'image/webp']
 
@@ -16,11 +17,15 @@ export function EditChannel({
   channelKey,
   onCancel,
   onSaved,
+  sidebar,
+  rightSidebar,
 }: {
   channelID: string
   channelKey: string
   onCancel: () => void
   onSaved: (name: string) => void
+  sidebar?: React.ReactNode
+  rightSidebar?: React.ReactNode
 }) {
   const sdk = useAuthStore((s) => s.sdk)
   const agent = useAuthStore((s) => s.atprotoAgent)
@@ -142,38 +147,30 @@ export function EditChannel({
     }
   }
 
+  const card = (content: React.ReactNode) => (
+    <FormCard
+      sidebar={sidebar}
+      rightSidebar={rightSidebar}
+      onBack={onCancel}
+    >
+      {content}
+    </FormCard>
+  )
+
   if (loading) {
-    return (
-      <div className="flex-1 flex items-center justify-center p-6">
-        <p className="text-neutral-500 text-sm">Loading channel…</p>
-      </div>
-    )
+    return card(<p className="text-neutral-500 text-sm">Loading channel…</p>)
   }
 
   if (loadError || !original) {
-    return (
-      <div className="flex-1 flex items-center justify-center p-6">
-        <div className="max-w-md w-full text-center space-y-4">
-          <p className="text-red-600 text-sm wrap-break-word">
-            {loadError || 'Channel not found'}
-          </p>
-          <button
-            type="button"
-            onClick={onCancel}
-            className="px-4 py-2.5 bg-neutral-100 hover:bg-neutral-200 text-neutral-900 text-sm font-medium rounded-lg transition-colors cursor-pointer"
-          >
-            Back
-          </button>
-        </div>
-      </div>
+    return card(
+      <p className="text-red-600 text-sm wrap-break-word">
+        {loadError || 'Channel not found'}
+      </p>,
     )
   }
 
-  return (
-    <form
-      onSubmit={handleSubmit}
-      className="w-full max-w-md mx-auto space-y-5 p-6"
-    >
+  return card(
+    <form onSubmit={handleSubmit} className="space-y-5">
       <div className="space-y-1">
         <h1 className="text-xl font-semibold text-neutral-900">Edit channel</h1>
         <p className="text-neutral-500 text-sm">
@@ -234,24 +231,14 @@ export function EditChannel({
         </p>
       )}
 
-      <div className="flex gap-2">
-        <button
-          type="submit"
-          disabled={submitting || !name.trim()}
-          className="flex-1 px-4 py-2.5 bg-green-600 hover:bg-green-700 disabled:bg-neutral-200 disabled:text-neutral-400 text-white text-sm font-medium rounded-lg transition-colors cursor-pointer"
-        >
-          {submitting ? 'Saving…' : 'Save changes'}
-        </button>
-        <button
-          type="button"
-          onClick={onCancel}
-          disabled={submitting}
-          className="px-4 py-2.5 bg-neutral-100 hover:bg-neutral-200 text-neutral-900 text-sm font-medium rounded-lg transition-colors disabled:opacity-50 cursor-pointer"
-        >
-          Cancel
-        </button>
-      </div>
-    </form>
+      <button
+        type="submit"
+        disabled={submitting || !name.trim()}
+        className="w-full px-4 py-2.5 bg-green-600 hover:bg-green-700 disabled:bg-neutral-200 disabled:text-neutral-400 text-white text-sm font-medium rounded-lg transition-colors cursor-pointer"
+      >
+        {submitting ? 'Saving…' : 'Save changes'}
+      </button>
+    </form>,
   )
 }
 

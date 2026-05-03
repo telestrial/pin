@@ -1,13 +1,18 @@
 import { useState } from 'react'
 import { signIn } from '../core/atproto'
 import { useAuthStore } from '../stores/auth'
+import { FormCard } from './FormCard'
 
 export function BlueskyLoginScreen({
   onCancel,
   onSignedIn,
+  sidebar,
+  rightSidebar,
 }: {
   onCancel: () => void
   onSignedIn: () => void
+  sidebar?: React.ReactNode
+  rightSidebar?: React.ReactNode
 }) {
   const setATProtoSession = useAuthStore((s) => s.setATProtoSession)
 
@@ -38,10 +43,12 @@ export function BlueskyLoginScreen({
   }
 
   return (
-    <form
-      onSubmit={handleSubmit}
-      className="w-full max-w-md mx-auto space-y-5 p-6"
+    <FormCard
+      sidebar={sidebar}
+      rightSidebar={rightSidebar}
+      onBack={onCancel}
     >
+      <form onSubmit={handleSubmit} className="space-y-5">
       <div className="space-y-1">
         <h1 className="text-xl font-semibold text-neutral-900">
           Sign in to Bluesky
@@ -98,23 +105,14 @@ export function BlueskyLoginScreen({
 
       {error && <p className="text-red-600 text-sm wrap-break-word">{error}</p>}
 
-      <div className="flex gap-2">
-        <button
-          type="submit"
-          disabled={submitting || !handle.trim() || !password.trim()}
-          className="flex-1 px-4 py-2.5 bg-green-600 hover:bg-green-700 disabled:bg-neutral-200 disabled:text-neutral-400 text-white text-sm font-medium rounded-lg transition-colors"
-        >
-          {submitting ? 'Signing in…' : 'Sign in'}
-        </button>
-        <button
-          type="button"
-          onClick={onCancel}
-          disabled={submitting}
-          className="px-4 py-2.5 bg-neutral-100 hover:bg-neutral-200 text-neutral-900 text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
-        >
-          Cancel
-        </button>
-      </div>
-    </form>
+      <button
+        type="submit"
+        disabled={submitting || !handle.trim() || !password.trim()}
+        className="w-full px-4 py-2.5 bg-green-600 hover:bg-green-700 disabled:bg-neutral-200 disabled:text-neutral-400 text-white text-sm font-medium rounded-lg transition-colors"
+      >
+        {submitting ? 'Signing in…' : 'Sign in'}
+      </button>
+      </form>
+    </FormCard>
   )
 }

@@ -2,15 +2,20 @@ import { buildSubscribeURL } from '../core/channels'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
 import { CopyButton } from './CopyButton'
+import { FormCard } from './FormCard'
 
 export function ChannelsView({
   onCancel,
   onChannelClick,
   onUnsubscribe,
+  sidebar,
+  rightSidebar,
 }: {
   onCancel: () => void
   onChannelClick: (authorHandle: string, channelID: string) => void
   onUnsubscribe?: (channelID: string, name: string) => void
+  sidebar?: React.ReactNode
+  rightSidebar?: React.ReactNode
 }) {
   const myChannels = useAuthStore((s) => s.myChannels)
   const subscriptions = useAuthStore((s) => s.subscriptions)
@@ -18,9 +23,12 @@ export function ChannelsView({
   const errors = useFeedStore((s) => s.errors)
 
   return (
-    <div className="flex-1 p-6">
-      <div className="max-w-2xl mx-auto space-y-8">
-        <h1 className="text-xl font-semibold text-neutral-900">Channels</h1>
+    <FormCard
+      sidebar={sidebar}
+      rightSidebar={rightSidebar}
+      onBack={onCancel}
+    >
+      <h1 className="text-xl font-semibold text-neutral-900">Channels</h1>
 
         <section className="space-y-3">
           <h2 className="text-xs font-medium text-neutral-500 uppercase tracking-wider">
@@ -124,16 +132,7 @@ export function ChannelsView({
               })}
             </ul>
           )}
-        </section>
-
-        <button
-          type="button"
-          onClick={onCancel}
-          className="px-4 py-2.5 bg-neutral-100 hover:bg-neutral-200 text-neutral-900 text-sm font-medium rounded-lg transition-colors"
-        >
-          Back
-        </button>
-      </div>
-    </div>
+      </section>
+    </FormCard>
   )
 }
