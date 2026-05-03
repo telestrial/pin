@@ -31,11 +31,13 @@ export function HomeFeed({
   onFilterChange,
   onItemClick,
   onChannelClick,
+  onErrorClick,
 }: {
   filter: TypeFilter
   onFilterChange: (filter: TypeFilter) => void
   onItemClick: (entry: FeedEntry) => void
   onChannelClick: (authorHandle: string, channelID: string) => void
+  onErrorClick?: () => void
 }) {
   const subscriptions = useAuthStore((s) => s.subscriptions)
   const sortOrder = useAuthStore((s) => s.feedSortOrder)
@@ -147,10 +149,20 @@ export function HomeFeed({
       />
       {toolbar}
       {errors.length > 0 && (
-        <div className="px-3 py-2 bg-red-50 border border-red-200 rounded-lg text-red-800 text-xs space-y-1">
-          <p className="font-medium">
-            {errors.length} channel{errors.length === 1 ? '' : 's'} failed to
-            load
+        <button
+          type="button"
+          onClick={onErrorClick}
+          disabled={!onErrorClick}
+          className="block w-full text-left px-3 py-2 bg-red-50 border border-red-200 rounded-lg text-red-800 text-xs space-y-1 enabled:hover:bg-red-100 enabled:cursor-pointer transition-colors"
+        >
+          <p className="font-medium flex items-center justify-between gap-2">
+            <span>
+              {errors.length} channel{errors.length === 1 ? '' : 's'} failed to
+              load
+            </span>
+            {onErrorClick && (
+              <span className="text-red-600 font-normal">Manage →</span>
+            )}
           </p>
           <ul className="space-y-0.5">
             {errors.map((e) => (
@@ -162,7 +174,7 @@ export function HomeFeed({
               </li>
             ))}
           </ul>
-        </div>
+        </button>
       )}
 
       {displayedEntries.length === 0 ? (

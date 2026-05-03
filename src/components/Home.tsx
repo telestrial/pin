@@ -175,6 +175,17 @@ export function Home() {
             filter: 'all',
           })
         }
+        onUnsubscribe={(channelID, name) => {
+          if (
+            !window.confirm(
+              `Unsubscribe from "${name}"? Items already pinned to your storage stay where they are.`,
+            )
+          )
+            return
+          useAuthStore.getState().removeSubscription(channelID)
+          useFeedStore.getState().removeChannel(channelID)
+          addToast(`Unsubscribed from "${name}"`)
+        }}
       />
     )
   }
@@ -607,6 +618,7 @@ export function Home() {
                 filter: 'all',
               })
             }
+            onErrorClick={() => setView({ kind: 'channels' })}
           />
         </div>
         <PinSidebar
