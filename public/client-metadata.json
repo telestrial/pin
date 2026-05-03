@@ -7,7 +7,7 @@
     "https://pin-liard.vercel.app/",
     "https://pin-git-dev-telestrials-projects.vercel.app/"
   ],
-  "scope": "atproto transition:generic",
+  "scope": "atproto repo:dev.sia.pin.channel repo:dev.sia.dispatch.channel?action=delete",
   "grant_types": ["authorization_code", "refresh_token"],
   "response_types": ["code"],
   "application_type": "web",
