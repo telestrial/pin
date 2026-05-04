@@ -20,37 +20,21 @@ export default function App() {
   useSettingsSync()
 
   // OAuth bootstrap — runs once on mount. bootOauth() memoizes the init()
-  // call so React StrictMode's double-mount doesn't race two concurrent
-  // callbacks against the same URL params (the second would lose, since
-  // the first consumed them). Both StrictMode runs share one promise.
-  // If a session is restored or freshly minted, we hydrate the store and
-  // fetch the handle for display + subscribe URLs.
+  // call (handle fetch included) so React StrictMode's double-mount doesn't
+  // race two concurrent callbacks. Both StrictMode runs share one promise.
+  // AuthFlow awaits the same memoized promise to decide its initial step.
   useEffect(() => {
     if (useAuthStore.getState().atprotoAgent) return
-    let cancelled = false
-    ;(async () => {
-      try {
-        const result = await bootOauth()
+    bootOauth()
+      .then((result) => {
         if (!result) return
-        const { agent, session } = result
-        let handle: string | null = useAuthStore.getState().atprotoHandle
-        try {
-          const profile = await agent.getProfile({ actor: session.did })
-          handle = profile.data.handle
-        } catch {
-          // Profile fetch failed — keep whatever handle was cached.
-        }
-        if (cancelled) return
         useAuthStore
           .getState()
-          .setATProtoIdentity(agent, session.did, handle)
-      } catch (e) {
+          .setATProtoIdentity(result.agent, result.did, result.handle)
+      })
+      .catch((e) => {
         console.warn('Failed to init ATProto OAuth client:', e)
-      }
-    })()
-    return () => {
-      cancelled = true
-    }
+      })
   }, [])
 
   useEffect(() => {

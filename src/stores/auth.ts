@@ -10,6 +10,8 @@ import { useUploadQueueStore } from './uploadQueue'
 
 export type AuthStep =
   | 'loading'
+  | 'welcome'
+  | 'bluesky-onboarding'
   | 'connect'
   | 'approve'
   | 'recovery'

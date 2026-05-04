@@ -20,15 +20,19 @@ export function getOauthClient(): Promise<BrowserOAuthClient> {
 export type OAuthBootResult = {
   session: OAuthSession
   agent: Agent
+  did: string
+  handle: string | null
 } | null
 
 let bootPromise: Promise<OAuthBootResult> | null = null
 
 // Memoized OAuth bootstrap. Calling once kicks off init() (which restores an
-// existing session OR processes a callback if URL params are present).
-// Subsequent callers receive the same promise — no concurrent init() calls
-// racing each other (which happens by default under React StrictMode, where
-// effects run twice).
+// existing session OR processes a callback if URL params are present) plus
+// a handle lookup. Subsequent callers receive the same promise — no
+// concurrent init() calls racing each other (which happens by default under
+// React StrictMode, where effects run twice). Multiple consumers (App.tsx
+// to hydrate the store, AuthFlow to decide the next step) can both await
+// the same boot.
 export function bootOauth(): Promise<OAuthBootResult> {
   if (!bootPromise) bootPromise = doBoot()
   return bootPromise
@@ -40,7 +44,15 @@ async function doBoot(): Promise<OAuthBootResult> {
   if (!result) return null
   const session = result.session
   const agent = new Agent(session)
-  return { session, agent }
+  let handle: string | null = null
+  try {
+    const profile = await agent.getProfile({ actor: session.did })
+    handle = profile.data.handle
+  } catch {
+    // getProfile failed — handle stays null. Subscribe URLs and the handle
+    // display will be missing until next boot, but auth itself works.
+  }
+  return { session, agent, did: session.did, handle }
 }
 
 async function createClient(): Promise<BrowserOAuthClient> {
