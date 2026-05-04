@@ -52,7 +52,7 @@ Pin uses [`@siafoundation/sia-storage`](https://www.npmjs.com/package/@siafounda
 | `sdk.account()` | The storage card at the top of the right sidebar — `pinnedData / maxPinnedData`, refreshed on every pin / unpin / retract |
 | `sdk.appKey().publicKey()` | Recorded inside the encrypted channel manifest as the technical author identity |
 
-ATProto via [`@atproto/api`](https://www.npmjs.com/package/@atproto/api) handles the channel-record layer: session login, `com.atproto.repo.putRecord` / `getRecord` / `listRecords` / `deleteRecord`. JetStream WS subscription (`wantedCollections=dev.sia.dispatch.channel&wantedDids=<sub-DIDs>`) handles live updates without polling. Together with Sia, they cover the two halves Sia explicitly does not aim to solve on its own — naming and mutability of multi-user-readable state.
+ATProto handles the channel-record layer: [`@atproto/oauth-client-browser`](https://www.npmjs.com/package/@atproto/oauth-client-browser) for the user sign-in (standards OAuth handoff — Pin never sees their password), [`@atproto/api`](https://www.npmjs.com/package/@atproto/api) for the resulting Agent's `com.atproto.repo.putRecord` / `getRecord` / `listRecords` / `deleteRecord` calls. The OAuth scope is narrow — `repo:dev.sia.pin.channel` plus delete-only on the legacy `dev.sia.dispatch.channel` — so the auth screen at bsky.social grants access only to the lexicons Pin actually touches, never to the user's profile / posts / likes / follows. JetStream WS subscription handles live updates without polling. Together with Sia, ATProto covers the two halves Sia explicitly does not aim to solve on its own — naming and mutability of multi-user-readable state.
 
 ## Architecture
 
@@ -184,7 +184,7 @@ bun install
 bun run dev
 ```
 
-Open the printed `http://localhost:5173` URL in Chrome. The first-time flow walks through Sia onboarding (Connect → Approve at sia.storage → save Recovery phrase → connected). Bluesky login is requested *lazily* on the first action that mutates ATProto state — creating, editing, publishing to, or unpinning a channel.
+Open `http://127.0.0.1:5173` in Chrome. (Vite binds to the loopback IP rather than `localhost` because atproto OAuth's RFC 8252 redirect rules forbid the `localhost` hostname; the app auto-redirects you if you hit the localhost URL.) The first-time flow opens at a welcome screen with two paths: **Get started** routes through Bluesky sign-in first (OAuth — you redirect to bsky.social, authorize there, come back signed in) then through Sia approval (Connect → Approve at sia.storage → save Recovery phrase → connected); **Just reading** skips Bluesky and goes straight to Sia approval. Bluesky can also be added lazily later from inside the app the first time you try to create or publish.
 
 A note on browser support: we pinned `@siafoundation/sia-storage` early and built against Chrome throughout the 3-day window. Cross-browser validation was out of scope — Chrome was the target, it was green from day one, and we kept iterating. The app may run elsewhere, but Chrome is the only environment we exercised.
 
