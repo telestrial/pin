@@ -1,0 +1,765 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Snake</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        background: #000;
+        overflow: hidden;
+        cursor: none;
+      }
+      /* Use viewport units directly on body to avoid a height-inheritance
+         chain that breaks in some iframe layout configurations and leaves
+         body 0-tall — which clips the absolutely-centered canvas. */
+      body {
+        width: 100vw;
+        height: 100vh;
+      }
+      canvas {
+        display: block;
+        /* 4:3 aspect lock, self-centered. In a wider window this letterboxes
+           with black bars on the left/right; in a taller window, top/bottom.
+           A drawn frame inside the canvas finishes the retro look. */
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        transform: translate(-50%, -50%);
+        width: min(100vw, calc(100vh * 4 / 3));
+        height: min(100vh, calc(100vw * 3 / 4));
+      }
+      /* Always-visible escape hatch in case the canvas ever fails to
+         render (cross-iframe layout race, sandbox quirk, etc). Click
+         enters fullscreen and starts/resumes — fullscreen reliably
+         resizes the canvas correctly. */
+      #play-btn {
+        position: fixed;
+        bottom: 8px;
+        right: 8px;
+        padding: 6px 10px;
+        font-family: ui-monospace, 'Courier New', monospace;
+        font-size: 11px;
+        background: #fff;
+        color: #000;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        opacity: 0.6;
+        z-index: 10;
+      }
+      #play-btn:hover {
+        opacity: 1;
+      }
+      body[data-state='playing'] #play-btn {
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="game" width="800" height="600"></canvas>
+    <button id="play-btn" type="button">⛶ Click to play</button>
+
+    <script>
+      // ===== Dispatch host bridge =====
+      // postMessage RPC the Dispatch host exposes to app items, scoped per
+      // Sia content hash. Times out after 1s so the page is also playable
+      // standalone (e.g. opened directly via file://) — best score just
+      // doesn't persist in that case.
+      function dispatchGet(key, timeoutMs = 1000) {
+        return new Promise((resolve) => {
+          const requestID = crypto.randomUUID()
+          let done = false
+          const handler = (e) => {
+            if (done) return
+            if (
+              e.data &&
+              e.data.type === 'dispatch:state.get.result' &&
+              e.data.requestID === requestID
+            ) {
+              done = true
+              window.removeEventListener('message', handler)
+              resolve(e.data.value)
+            }
+          }
+          window.addEventListener('message', handler)
+          window.parent.postMessage(
+            { type: 'dispatch:state.get', requestID, key },
+            '*',
+          )
+          setTimeout(() => {
+            if (done) return
+            done = true
+            window.removeEventListener('message', handler)
+            resolve(null)
+          }, timeoutMs)
+        })
+      }
+      function dispatchSet(key, value) {
+        window.parent.postMessage(
+          {
+            type: 'dispatch:state.set',
+            requestID: crypto.randomUUID(),
+            key,
+            value,
+          },
+          '*',
+        )
+      }
+
+      // ===== Game =====
+      const canvas = document.getElementById('game')
+      const ctx = canvas.getContext('2d')
+      // Logical coordinate space — game lives here. The canvas's *physical*
+      // pixel buffer is sized in resizeCanvas() to match displayed size ×
+      // devicePixelRatio so text and edges render crisply on HiDPI / fullscreen.
+      const W = 800
+      const H = 600
+      const HEADER_H = 40 // top "phone OS chrome" strip
+      const COLS = 20
+      const ROWS = 14 // 800/40 = 20 cols × (600-40)/40 = 14 rows
+      const CELL = 40
+      const FRAME = 4 // logical px width of the play-field border
+
+      // ===== Palette =====
+      // Old-mobile LCD: olive-on-pale-green. Single fixed palette.
+      const PAL = {
+        bg: 'rgb(196, 207, 161)', // pale yellow-green
+        fg: 'rgb(42, 54, 34)', //    deep olive
+        bgRGB: [196, 207, 161],
+        fgRGB: [42, 54, 34],
+      }
+      function fgAlpha(a) {
+        return `rgba(${PAL.fgRGB[0]},${PAL.fgRGB[1]},${PAL.fgRGB[2]},${a})`
+      }
+      function bgAlpha(a) {
+        return `rgba(${PAL.bgRGB[0]},${PAL.bgRGB[1]},${PAL.bgRGB[2]},${a})`
+      }
+
+      function resizeCanvas() {
+        const dpr = window.devicePixelRatio || 1
+        const rect = canvas.getBoundingClientRect()
+        canvas.width = Math.max(1, Math.round(rect.width * dpr))
+        canvas.height = Math.max(1, Math.round(rect.height * dpr))
+      }
+      window.addEventListener('resize', resizeCanvas)
+      document.addEventListener('fullscreenchange', resizeCanvas)
+      // ResizeObserver catches the case where the iframe is mounted with a
+      // not-yet-laid-out body — getBoundingClientRect would return 0×0 at
+      // first run, making the canvas pixel buffer 1×1 and the whole game
+      // invisibly black-on-black. The observer fires once layout settles.
+      if (typeof ResizeObserver !== 'undefined') {
+        const ro = new ResizeObserver(() => resizeCanvas())
+        ro.observe(canvas)
+      }
+      resizeCanvas()
+
+      // Snake = array of {x, y} cells, head at index 0. Cell (x,y) lives
+      // in grid coordinates — drawing offsets y by HEADER_H to put it
+      // below the OS chrome strip.
+      let snake = []
+      let direction = { dx: 1, dy: 0 }
+      // Direction queue: holds pending direction changes so a fast double-tap
+      // (e.g. up→right) registers both, applied one-per-step. Without this,
+      // two presses between physics steps collapse into the second one and
+      // the first feels lost.
+      let queuedDirs = []
+      let apple = { x: 0, y: 0 }
+      let best = 0
+      let state = 'loading' // 'loading' | 'waiting' | 'playing' | 'paused' | 'won'
+
+      // ===== Win flourish =====
+      // When the snake fills every cell — snake.length === COLS*ROWS — we
+      // enter 'won': a wave-wink scatter from head to tail, then PERFECT
+      // text fades in. Click anywhere → back to menu.
+      const WIN_SCATTER_MS = 1000
+      const WIN_TEXT_FADE_MS = 400
+      let wonAtMs = 0
+
+      // ===== FPS =====
+      // User-adjustable on the title screen via Shift+↑ / Shift+↓. Tap to
+      // step by 1; hold to auto-repeat with a three-tier acceleration
+      // ramp (see tick() below). NOT persisted — only lasts that round.
+      // After death or win, fps resets to DEFAULT_FPS so the menu always
+      // opens at the default value. The number is the snake's step rate:
+      // how many cells per second it moves. Constant for the round —
+      // no in-game speedup; pick your pace and live with it.
+      const FPS_MIN = 3
+      const FPS_MAX = 30
+      const DEFAULT_FPS = 10
+      let fps = DEFAULT_FPS
+
+      // Press tracking for the menu's hold-to-accelerate behavior. Set on
+      // the initial keydown that's NOT an OS-generated repeat; cleared on
+      // keyup or blur. tick() reads these to drive the auto-repeat timer.
+      let menuPressDir = 0 // -1 (down) | 0 (none) | 1 (up)
+      let menuPressStartMs = 0
+      let menuLastApplyMs = 0
+
+      // ===== Game-tick clock =====
+      // Decouples snake step rate from rAF rate. The browser may clock an
+      // iframe's rAF at 60Hz, 144Hz, or anywhere between depending on input
+      // cadence, fullscreen compositor state, and power policy. We run game
+      // steps at the chosen FPS regardless of how often rAF fires.
+      const MAX_STEPS_PER_FRAME = 5 // avoid spiral of death on stalls
+      let lastFrameAt = performance.now()
+      let tickAccumulatorMs = 0
+
+      function currentTickMs() {
+        return 1000 / fps
+      }
+
+
+      function placeApple() {
+        const empty = []
+        for (let x = 0; x < COLS; x++) {
+          for (let y = 0; y < ROWS; y++) {
+            if (!snake.some((s) => s.x === x && s.y === y)) {
+              empty.push({ x, y })
+            }
+          }
+        }
+        // Filled board = win. Park the apple off-grid; can't be reached.
+        if (empty.length === 0) {
+          apple = { x: -1, y: -1 }
+          return
+        }
+        apple = empty[Math.floor(Math.random() * empty.length)]
+      }
+
+      function reset() {
+        // Three-segment snake center-ish, facing right. Tail at index 2,
+        // head at index 0.
+        const cx = Math.floor(COLS / 2)
+        const cy = Math.floor(ROWS / 2)
+        snake = [
+          { x: cx, y: cy },
+          { x: cx - 1, y: cy },
+          { x: cx - 2, y: cy },
+        ]
+        direction = { dx: 1, dy: 0 }
+        queuedDirs = []
+        placeApple()
+      }
+
+      function recordBest() {
+        const score = snake.length - 3 // apples eaten this round
+        if (score > best) {
+          best = score
+          dispatchSet('best', best)
+        }
+      }
+
+      function adjustSpeed(delta) {
+        fps = Math.max(FPS_MIN, Math.min(FPS_MAX, fps + delta))
+      }
+
+      function returnToMenu() {
+        // End-of-round: drop speed back to default ("only lasts that round").
+        fps = DEFAULT_FPS
+        // Also clear any active hold so a key still down at end-of-round
+        // doesn't keep walking the value once we're back on the menu.
+        menuPressDir = 0
+        state = 'waiting'
+      }
+
+      function triggerWin() {
+        recordBest()
+        state = 'won'
+        wonAtMs = performance.now()
+      }
+
+      function enterFullscreen() {
+        // Fullscreen needs a user gesture; this is called from click/touch
+        // handlers so the browser accepts it. If denied (user setting,
+        // running standalone, etc.) the game still plays in window.
+        document.documentElement.requestFullscreen?.().catch(() => {})
+      }
+
+      function startGame() {
+        reset()
+        state = 'playing'
+        enterFullscreen()
+      }
+
+      function resumeGame() {
+        state = 'playing'
+        enterFullscreen()
+      }
+
+      function clickToPlay() {
+        if (state === 'waiting') startGame()
+        else if (state === 'paused') resumeGame()
+        else if (state === 'won') returnToMenu()
+      }
+
+      canvas.addEventListener('click', clickToPlay)
+      canvas.addEventListener('touchstart', (e) => {
+        if (state === 'waiting' || state === 'paused' || state === 'won') {
+          clickToPlay()
+          return
+        }
+        const t = e.touches[0]
+        if (t) touchStart = { x: t.clientX, y: t.clientY }
+      })
+      // Always-visible button as a render-failure escape hatch.
+      document.getElementById('play-btn').addEventListener('click', (e) => {
+        e.stopPropagation()
+        clickToPlay()
+      })
+
+      // Esc out of fullscreen mid-game → pause. Click resumes (re-enters
+      // fullscreen). Other states aren't affected.
+      document.addEventListener('fullscreenchange', () => {
+        if (!document.fullscreenElement && state === 'playing') {
+          state = 'paused'
+        }
+      })
+
+      // ===== Input =====
+      function queueDirection(dx, dy) {
+        // Cap queue length so a key-mash can't pile up steered moves
+        // far into the future.
+        if (queuedDirs.length >= 3) queuedDirs.shift()
+        queuedDirs.push({ dx, dy })
+      }
+
+      document.addEventListener('keydown', (e) => {
+        if (state !== 'playing') {
+          // FPS adjustment lives only in the menu (waiting state) per
+          // design — Shift+↑ / Shift+↓. Tap = +1; hold = our own
+          // accelerating auto-repeat (driven by tick() reading menuPressDir
+          // & timestamps). We ignore OS-generated key-repeat events so we
+          // own the cadence completely.
+          if (state === 'waiting' && e.shiftKey && !e.repeat) {
+            if (e.key === 'ArrowUp') {
+              adjustSpeed(1)
+              menuPressDir = 1
+              menuPressStartMs = performance.now()
+              menuLastApplyMs = menuPressStartMs
+              e.preventDefault()
+              return
+            }
+            if (e.key === 'ArrowDown') {
+              adjustSpeed(-1)
+              menuPressDir = -1
+              menuPressStartMs = performance.now()
+              menuLastApplyMs = menuPressStartMs
+              e.preventDefault()
+              return
+            }
+          }
+          // Space / Enter on title or paused or won → click-equivalent.
+          if (
+            (state === 'waiting' ||
+              state === 'paused' ||
+              state === 'won') &&
+            (e.key === ' ' || e.key === 'Enter')
+          ) {
+            clickToPlay()
+            e.preventDefault()
+          }
+          return
+        }
+        let handled = true
+        switch (e.key) {
+          case 'ArrowUp':
+          case 'w':
+          case 'W':
+            queueDirection(0, -1)
+            break
+          case 'ArrowDown':
+          case 's':
+          case 'S':
+            queueDirection(0, 1)
+            break
+          case 'ArrowLeft':
+          case 'a':
+          case 'A':
+            queueDirection(-1, 0)
+            break
+          case 'ArrowRight':
+          case 'd':
+          case 'D':
+            queueDirection(1, 0)
+            break
+          default:
+            handled = false
+        }
+        if (handled) e.preventDefault()
+      })
+
+      // Release the menu hold on keyup or window blur. Releasing Shift
+      // also cancels the hold since the FPS shortcut requires Shift.
+      document.addEventListener('keyup', (e) => {
+        if (e.key === 'ArrowUp' && menuPressDir === 1) menuPressDir = 0
+        else if (e.key === 'ArrowDown' && menuPressDir === -1) menuPressDir = 0
+        else if (e.key === 'Shift') menuPressDir = 0
+      })
+      window.addEventListener('blur', () => {
+        menuPressDir = 0
+      })
+
+      // Touch: swipes apply during play. The threshold sets how far you
+      // have to drag before a direction commits — small enough to feel
+      // responsive, large enough to ignore jitter.
+      let touchStart = null
+      canvas.addEventListener(
+        'touchmove',
+        (e) => {
+          e.preventDefault()
+          if (!touchStart) return
+          const t = e.touches[0]
+          if (!t) return
+          const dx = t.clientX - touchStart.x
+          const dy = t.clientY - touchStart.y
+          const threshold = 30
+          if (Math.abs(dx) > Math.abs(dy)) {
+            if (dx > threshold) {
+              queueDirection(1, 0)
+              touchStart = { x: t.clientX, y: t.clientY }
+            } else if (dx < -threshold) {
+              queueDirection(-1, 0)
+              touchStart = { x: t.clientX, y: t.clientY }
+            }
+          } else {
+            if (dy > threshold) {
+              queueDirection(0, 1)
+              touchStart = { x: t.clientX, y: t.clientY }
+            } else if (dy < -threshold) {
+              queueDirection(0, -1)
+              touchStart = { x: t.clientX, y: t.clientY }
+            }
+          }
+        },
+        { passive: false },
+      )
+      canvas.addEventListener('touchend', () => {
+        touchStart = null
+      })
+
+      // ===== Step =====
+      function step() {
+        if (state !== 'playing') return
+
+        // Pull one usable direction off the queue. Skip same-as-current
+        // (no-ops) and direct-opposite (which would 180 the snake into
+        // its own neck).
+        while (queuedDirs.length) {
+          const d = queuedDirs.shift()
+          if (d.dx === direction.dx && d.dy === direction.dy) continue
+          if (d.dx === -direction.dx && d.dy === -direction.dy) continue
+          direction = d
+          break
+        }
+
+        const newHead = {
+          x: snake[0].x + direction.dx,
+          y: snake[0].y + direction.dy,
+        }
+
+        // Wall collision → death (round ends, back to menu).
+        if (
+          newHead.x < 0 ||
+          newHead.x >= COLS ||
+          newHead.y < 0 ||
+          newHead.y >= ROWS
+        ) {
+          recordBest()
+          returnToMenu()
+          return
+        }
+
+        const eating = newHead.x === apple.x && newHead.y === apple.y
+
+        // Self collision: check against all current segments EXCEPT the
+        // tail (which will move out of the way this step), unless we're
+        // eating, in which case the tail stays put and is fair game.
+        const checkUntil = eating ? snake.length : snake.length - 1
+        for (let i = 0; i < checkUntil; i++) {
+          if (snake[i].x === newHead.x && snake[i].y === newHead.y) {
+            recordBest()
+            returnToMenu()
+            return
+          }
+        }
+
+        snake.unshift(newHead)
+        if (eating) {
+          // Win: snake now fills the entire board.
+          if (snake.length >= COLS * ROWS) {
+            triggerWin()
+            return
+          }
+          placeApple()
+        } else {
+          snake.pop()
+        }
+      }
+
+      // ===== Render helpers =====
+      function drawHeader() {
+        // Background already filled. Draw chrome on top.
+        // Signal bars: 4 ascending vertical bars, baseline-aligned at y=27.
+        ctx.fillStyle = PAL.fg
+        const sigBaseY = 28
+        const sigHeights = [6, 10, 14, 18]
+        for (let i = 0; i < sigHeights.length; i++) {
+          const x = 14 + i * 6
+          const h = sigHeights[i]
+          ctx.fillRect(x, sigBaseY - h, 4, h)
+        }
+
+        // "Pin" — the carrier name. Bold so it reads as a brand.
+        ctx.font = 'bold 22px ui-monospace, "Courier New", monospace'
+        ctx.fillStyle = PAL.fg
+        ctx.textAlign = 'left'
+        ctx.textBaseline = 'middle'
+        ctx.fillText('Pin', 50, 20)
+
+        // Time HH:MM, real local clock. Updates every render — minute
+        // granularity means the visible string only changes once a minute.
+        const d = new Date()
+        const hh = String(d.getHours()).padStart(2, '0')
+        const mm = String(d.getMinutes()).padStart(2, '0')
+        ctx.font = '20px ui-monospace, "Courier New", monospace'
+        ctx.textAlign = 'right'
+        ctx.fillText(`${hh}:${mm}`, 740, 20)
+
+        // Battery: outlined rectangle + terminal nub on the right + ~80%
+        // internal fill. Static — could deplete-during-round later.
+        const bx = 750
+        const by = 12
+        const bw = 28
+        const bh = 16
+        ctx.lineWidth = 2
+        ctx.strokeStyle = PAL.fg
+        ctx.strokeRect(bx + 1, by + 1, bw - 2, bh - 2)
+        ctx.fillStyle = PAL.fg
+        ctx.fillRect(bx + bw, by + 5, 3, bh - 10) // terminal nub
+        const innerX = bx + 4
+        const innerY = by + 4
+        const innerW = bw - 8
+        const innerH = bh - 8
+        const fillW = Math.round(innerW * 0.8)
+        ctx.fillRect(innerX, innerY, fillW, innerH)
+
+        // Separator under the chrome strip.
+        ctx.fillRect(0, HEADER_H - 2, W, 2)
+      }
+
+      function drawFrame() {
+        ctx.lineWidth = FRAME
+        ctx.strokeStyle = PAL.fg
+        ctx.strokeRect(FRAME / 2, FRAME / 2, W - FRAME, H - FRAME)
+      }
+
+      function tick() {
+        const tickStart = performance.now()
+
+        // Reflect state into body[data-state] so the play-button CSS can
+        // hide itself during play and reappear when waiting/paused/won.
+        if (document.body.dataset.state !== state) {
+          document.body.dataset.state = state
+        }
+
+        // Advance game logic on a fixed clock, regardless of rAF rate.
+        const elapsed = Math.min(tickStart - lastFrameAt, 100)
+        lastFrameAt = tickStart
+        tickAccumulatorMs += elapsed
+        const tickMs = currentTickMs()
+        let steps = 0
+        while (
+          tickAccumulatorMs >= tickMs &&
+          steps < MAX_STEPS_PER_FRAME
+        ) {
+          step()
+          tickAccumulatorMs -= tickMs
+          steps++
+        }
+        // If we hit the cap, drop the rest so we don't perma-lag.
+        if (tickAccumulatorMs > tickMs * 5) tickAccumulatorMs = 0
+
+        // Menu hold-to-accelerate. Initial press already applied 1 step on
+        // keydown; if the key is still held, kick in auto-repeat after a
+        // dead zone, with a three-tier ramp so a long hold scans the range
+        // briskly while a brief hold still feels deliberate.
+        //   <300ms held → no auto-repeat (just the initial tap)
+        //   300–800ms  → 180ms between repeats
+        //   800–1600ms → 100ms
+        //   1600ms+    → 50ms
+        if (menuPressDir !== 0 && state === 'waiting') {
+          const heldMs = tickStart - menuPressStartMs
+          let interval = Infinity
+          if (heldMs >= 1600) interval = 50
+          else if (heldMs >= 800) interval = 100
+          else if (heldMs >= 300) interval = 180
+          if (
+            interval !== Infinity &&
+            tickStart - menuLastApplyMs >= interval
+          ) {
+            adjustSpeed(menuPressDir)
+            menuLastApplyMs = tickStart
+          }
+        }
+
+        // ===== Render =====
+        // Map logical 800×600 → physical canvas pixels. Drawing then happens
+        // in logical space; the browser rasterizes at native resolution.
+        ctx.setTransform(canvas.width / W, 0, 0, canvas.height / H, 0, 0)
+
+        ctx.fillStyle = PAL.bg
+        ctx.fillRect(0, 0, W, H)
+
+        drawHeader()
+
+        // Snake: solid full-cell squares, no inner gap. Adjacent segments
+        // form one continuous line — old-mobile-phone snake aesthetic, not
+        // the discrete-blocks look. During 'won', segments wink out in a
+        // wave from head (i=0, first to go) to tail (i=length-1, last).
+        ctx.fillStyle = PAL.fg
+        if (state === 'won') {
+          const winElapsed = performance.now() - wonAtMs
+          for (let i = 0; i < snake.length; i++) {
+            const seg = snake[i]
+            const segGoesAt = (i / snake.length) * WIN_SCATTER_MS
+            if (winElapsed < segGoesAt) {
+              ctx.fillRect(
+                seg.x * CELL,
+                HEADER_H + seg.y * CELL,
+                CELL,
+                CELL,
+              )
+            }
+          }
+        } else {
+          for (const seg of snake) {
+            ctx.fillRect(
+              seg.x * CELL,
+              HEADER_H + seg.y * CELL,
+              CELL,
+              CELL,
+            )
+          }
+        }
+
+        // Apple: same size, same color, same fill as a snake segment.
+        // Distinguishable purely by being a single isolated cell rather
+        // than part of a connected line. Hidden during 'won'.
+        if (apple.x >= 0 && state !== 'won') {
+          ctx.fillRect(apple.x * CELL, HEADER_H + apple.y * CELL, CELL, CELL)
+        }
+
+        // Score (apples eaten, big translucent, top-left of play area)
+        // and best (small, top-right). Drawn before the frame so the
+        // border sits on top.
+        if (state === 'playing' || state === 'paused') {
+          const score = snake.length - 3
+          ctx.textBaseline = 'top'
+          ctx.font = 'bold 56px ui-monospace, "Courier New", monospace'
+          ctx.fillStyle = fgAlpha(0.18)
+          ctx.textAlign = 'left'
+          ctx.fillText(String(score), 18, HEADER_H + 8)
+          if (best > 0) {
+            ctx.font = '18px ui-monospace, "Courier New", monospace'
+            ctx.fillStyle = fgAlpha(0.5)
+            ctx.textAlign = 'right'
+            ctx.fillText('best ' + best, W - 20, HEADER_H + 18)
+          }
+        }
+
+        drawFrame()
+
+        // Title / paused / won overlays — solid PAL.bg over the play area
+        // (header stays at full brightness like a real phone screen). Solid
+        // because the menu is its own screen — the play-area content
+        // shouldn't bleed through behind the menu text.
+        if (state === 'waiting' || state === 'paused') {
+          ctx.fillStyle = PAL.bg
+          ctx.fillRect(0, HEADER_H, W, H - HEADER_H)
+          ctx.textAlign = 'center'
+          ctx.textBaseline = 'middle'
+          const cx = W / 2
+          const cy = HEADER_H + (H - HEADER_H) / 2
+          if (state === 'waiting') {
+            ctx.font = 'bold 56px ui-monospace, "Courier New", monospace'
+            ctx.fillStyle = PAL.fg
+            ctx.fillText('SNAKE', cx, cy - 70)
+            ctx.font = '18px ui-monospace, "Courier New", monospace'
+            ctx.fillStyle = fgAlpha(0.85)
+            ctx.fillText('click to play', cx, cy - 12)
+            ctx.fillStyle = fgAlpha(0.65)
+            ctx.fillText('arrows or wasd', cx, cy + 16)
+            ctx.fillText(
+              'FPS: ' + fps + ' · shift ↑↓ to change',
+              cx,
+              cy + 44,
+            )
+            if (best > 0) {
+              ctx.fillStyle = fgAlpha(0.5)
+              ctx.fillText('best ' + best, cx, cy + 80)
+            }
+          } else {
+            ctx.font = 'bold 48px ui-monospace, "Courier New", monospace'
+            ctx.fillStyle = PAL.fg
+            ctx.fillText('PAUSED', cx, cy - 30)
+            ctx.font = '18px ui-monospace, "Courier New", monospace'
+            ctx.fillStyle = fgAlpha(0.7)
+            ctx.fillText('click to resume', cx, cy + 18)
+            ctx.fillText('score ' + (snake.length - 3), cx, cy + 46)
+          }
+        } else if (state === 'loading') {
+          ctx.fillStyle = PAL.bg
+          ctx.fillRect(0, HEADER_H, W, H - HEADER_H)
+          ctx.textAlign = 'center'
+          ctx.textBaseline = 'middle'
+          ctx.font = '20px ui-monospace, "Courier New", monospace'
+          ctx.fillStyle = fgAlpha(0.7)
+          ctx.fillText('loading…', W / 2, HEADER_H + (H - HEADER_H) / 2)
+        } else if (state === 'won') {
+          // PERFECT text fades in after the scatter completes.
+          const winElapsed = performance.now() - wonAtMs
+          if (winElapsed >= WIN_SCATTER_MS) {
+            const a = Math.min(
+              (winElapsed - WIN_SCATTER_MS) / WIN_TEXT_FADE_MS,
+              1,
+            )
+            // Solid PAL.bg fades in from transparent (revealing the
+            // already-empty playfield underneath) → opaque (own backdrop
+            // for the PERFECT text). a goes 0..1 over WIN_TEXT_FADE_MS.
+            ctx.fillStyle = bgAlpha(a)
+            ctx.fillRect(0, HEADER_H, W, H - HEADER_H)
+            ctx.textAlign = 'center'
+            ctx.textBaseline = 'middle'
+            const cx = W / 2
+            const cy = HEADER_H + (H - HEADER_H) / 2
+            ctx.font = 'bold 64px ui-monospace, "Courier New", monospace'
+            ctx.fillStyle = fgAlpha(a)
+            ctx.fillText('PERFECT', cx, cy - 24)
+            ctx.font = '18px ui-monospace, "Courier New", monospace'
+            ctx.fillStyle = fgAlpha(a * 0.75)
+            ctx.fillText('Now, make a cooler one.', cx, cy + 22)
+            if (a > 0.6) {
+              ctx.font = '14px ui-monospace, "Courier New", monospace'
+              ctx.fillStyle = fgAlpha((a - 0.6) * 1.5)
+              ctx.fillText('click to continue', cx, cy + 64)
+            }
+          }
+        }
+
+        requestAnimationFrame(tick)
+      }
+
+      // ===== Init =====
+      // Best score persists across reloads; speed and round state do not.
+      dispatchGet('best').then((stored) => {
+        if (typeof stored === 'number' && stored > 0) best = stored
+        state = 'waiting'
+      })
+      requestAnimationFrame(tick)
+    </script>
+  </body>
+</html>
