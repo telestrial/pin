@@ -470,7 +470,7 @@ export function Home() {
           setView({
             kind: 'reading',
             entry: { item: ref.item, channel: ref.channel },
-            returnTo: readingView.returnTo,
+            returnTo: view.returnTo,
           })
         }
         onChannelClick={(authorHandle, channelID) =>

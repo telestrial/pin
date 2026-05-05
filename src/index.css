@@ -32,6 +32,22 @@ body {
   animation: fade-in 0.2s ease-out;
 }
 
+/* Slow opacity-only fade-in for newly-arrived pinned-library rows.
+   Mirrors the 1500ms fade-out on click-to-unpin so entry and exit feel
+   symmetric. Used in PinSidebar; applied only to rows whose URL wasn't
+   in the known set on first render. */
+@keyframes pin-enter {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.animate-pin-enter {
+  animation: pin-enter 1500ms ease-out;
+}
+
 .animate-indeterminate {
   animation: indeterminate 1.5s ease-in-out infinite;
 }
@@ -117,4 +133,16 @@ body {
   border: 0;
   border-top: 1px solid #e5e5e5;
   margin: 1.5rem 0;
+}
+
+/* Armed-link cursor: while a pinned-library item is loaded as a link target
+   (set via App.tsx's useEffect on useComposeStore.armedItem), the cursor
+   turns Pin-green across the whole page so the user always knows they're
+   carrying something. The * selector + !important is needed to beat
+   per-element cursor rules (Tailwind cursor-pointer on buttons, text on
+   inputs, etc) — when armed, the pointer is *always* green. SVG hotspot
+   `2 1` aligns with the arrow's tip. */
+body[data-armed-link='true'],
+body[data-armed-link='true'] * {
+  cursor: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='22' height='22' viewBox='0 0 22 22'><path d='M2,1 L2,17 L6.5,13 L9.5,19 L12.5,18 L9.5,12 L15,12 Z' fill='%2316a34a' stroke='white' stroke-width='1' stroke-linejoin='round'/></svg>") 2 1, pointer !important;
 }

@@ -9,15 +9,47 @@ import { useJetstream } from './lib/useJetstream'
 import { useSettingsSync } from './lib/useSettingsSync'
 import { useUploadRunner } from './lib/useUploadRunner'
 import { useAuthStore } from './stores/auth'
+import { useComposeStore } from './stores/compose'
 import { usePinStore } from './stores/pin'
 
 export default function App() {
   const step = useAuthStore((s) => s.step)
   const sdk = useAuthStore((s) => s.sdk)
+  const armedItem = useComposeStore((s) => s.armedItem)
 
   useJetstream()
   useUploadRunner()
   useSettingsSync()
+
+  // While a pinned item is armed, mark the body so a global CSS rule
+  // (in index.css) swaps the cursor to a Pin-green arrow everywhere on
+  // the page — visible signal that the user is "carrying" something.
+  useEffect(() => {
+    if (armedItem) {
+      document.body.setAttribute('data-armed-link', 'true')
+    } else {
+      document.body.removeAttribute('data-armed-link')
+    }
+  }, [armedItem])
+
+  // Click outside the composer or a pinned-item row → disarm. Lets the
+  // user "throw away" the loaded cursor by clicking anywhere uninvolved.
+  // The pin itself stays in their library; only the carrying-state clears.
+  // Composer = `[data-compose-area]` (Compose.tsx wrapper); pinned-item row
+  // = `[data-pin-item-row]` (PinSidebar's per-row button). Anywhere else
+  // is outside, and the click drops the arm.
+  useEffect(() => {
+    if (!armedItem) return
+    function onClick(e: MouseEvent) {
+      const target = e.target as HTMLElement | null
+      if (!target) return
+      if (target.closest('[data-compose-area]')) return
+      if (target.closest('[data-pin-item-row]')) return
+      useComposeStore.getState().disarm()
+    }
+    window.addEventListener('click', onClick)
+    return () => window.removeEventListener('click', onClick)
+  }, [armedItem])
 
   // OAuth bootstrap — runs once on mount. bootOauth() memoizes the init()
   // call (handle fetch included) so React StrictMode's double-mount doesn't
