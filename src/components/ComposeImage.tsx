@@ -1,3 +1,4 @@
+import { Pin } from 'lucide-react'
 import { type ChangeEvent, useEffect, useState } from 'react'
 import { type OwnedChannel, useAuthStore } from '../stores/auth'
 import { useToastStore } from '../stores/toast'
@@ -25,6 +26,8 @@ export function ComposeImage({
   const [file, setFile] = useState<File | null>(initialFile ?? null)
   const [previewURL, setPreviewURL] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [isPinned, setIsPinned] = useState(false)
+  const canSubmit = !!file
 
   useEffect(() => {
     if (!file) {
@@ -51,6 +54,26 @@ export function ComposeImage({
     if (!title.trim()) {
       setTitle(f.name.replace(/\.[^.]+$/, ''))
     }
+  }
+
+  async function pinAndSave() {
+    if (!sdk || !file) return
+    const trimmedTitle = title.trim()
+    setError(null)
+    setIsPinned(true)
+    const buf = await file.arrayBuffer()
+    enqueue({
+      payload: {
+        type: 'image',
+        title: trimmedTitle,
+        mimeType: file.type,
+        bytes: new Uint8Array(buf),
+      },
+      channelIDs: [],
+      destination: 'library',
+    })
+    addToast(trimmedTitle ? `Queued “${trimmedTitle}” to pin` : 'Queued image to pin')
+    setTimeout(() => onQueued(), 220)
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -82,6 +105,22 @@ export function ComposeImage({
 
   return (
     <form onSubmit={handleSubmit} className="space-y-2">
+      <div className="flex justify-end">
+        <button
+          type="button"
+          onClick={pinAndSave}
+          disabled={!canSubmit}
+          title="Pin this image"
+          aria-label="Pin this image"
+          className="p-1.5 rounded-full text-neutral-400 enabled:hover:text-green-600 enabled:hover:bg-green-50 enabled:cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+        >
+          <Pin
+            className={`size-4 transition-colors ${
+              isPinned ? 'fill-green-600 text-green-600' : ''
+            }`}
+          />
+        </button>
+      </div>
       <input
         type="file"
         accept="image/jpeg,image/png,image/webp"

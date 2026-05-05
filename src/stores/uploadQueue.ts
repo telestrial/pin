@@ -8,6 +8,10 @@ export type UploadTaskState =
   | 'success'
   | 'failed'
 
+// 'channel'  → upload + write item to one or more channel manifests (publish)
+// 'library'  → upload + add to pinStore.pinned, no manifest write (just save)
+export type UploadDestination = 'channel' | 'library'
+
 export type UploadTask = {
   id: string
   state: UploadTaskState
@@ -16,6 +20,7 @@ export type UploadTask = {
   createdAt: string
   payload: ItemPayload
   channelIDs: string[]
+  destination: UploadDestination
 }
 
 type UploadQueueState = {
@@ -23,6 +28,7 @@ type UploadQueueState = {
   enqueue: (input: {
     payload: ItemPayload
     channelIDs: string[]
+    destination?: UploadDestination
   }) => string
   retry: (id: string) => void
   remove: (id: string) => void
@@ -37,7 +43,7 @@ function newId(): string {
 
 export const useUploadQueueStore = create<UploadQueueState>()((set) => ({
   tasks: [],
-  enqueue: ({ payload, channelIDs }) => {
+  enqueue: ({ payload, channelIDs, destination = 'channel' }) => {
     const id = newId()
     const task: UploadTask = {
       id,
@@ -46,6 +52,7 @@ export const useUploadQueueStore = create<UploadQueueState>()((set) => ({
       createdAt: new Date().toISOString(),
       payload,
       channelIDs,
+      destination,
     }
     set((s) => ({ tasks: [...s.tasks, task] }))
     return id

@@ -3,11 +3,13 @@ import { appendItemToChannel, buildItemRef } from '../core/channels'
 import { uploadItem } from '../core/sia'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
+import { usePinStore } from '../stores/pin'
 import { useToastStore } from '../stores/toast'
 import {
   type UploadTask,
   useUploadQueueStore,
 } from '../stores/uploadQueue'
+import { LIBRARY_CHANNEL } from './pinUpload'
 
 const SUCCESS_AUTO_REMOVE_MS = 4000
 
@@ -52,12 +54,18 @@ export function useUploadRunner() {
       const auth = useAuthStore.getState()
       const feed = useFeedStore.getState()
       const toast = useToastStore.getState()
+      const pin = usePinStore.getState()
 
-      const channels = task.channelIDs
-        .map((id) => auth.myChannels.find((c) => c.channelID === id))
-        .filter((c): c is NonNullable<typeof c> => !!c)
+      // Channel destination needs at least one valid channel; library
+      // destination doesn't (the bytes go to your Sia scope only).
+      const channels =
+        task.destination === 'channel'
+          ? task.channelIDs
+              .map((id) => auth.myChannels.find((c) => c.channelID === id))
+              .filter((c): c is NonNullable<typeof c> => !!c)
+          : []
 
-      if (channels.length === 0) {
+      if (task.destination === 'channel' && channels.length === 0) {
         queue.setState(task.id, 'failed', 'Channel no longer exists')
         return
       }
@@ -77,17 +85,26 @@ export function useUploadRunner() {
         useUploadQueueStore.getState().setProgress(task.id, 97)
 
         const itemRef = buildItemRef(uploaded, task.payload)
-        for (const ch of channels) {
-          await appendItemToChannel(agent, ch, itemRef)
-          const sub = auth.subscriptions.find(
-            (s) => s.channelID === ch.channelID,
-          )
-          if (sub) feed.refreshChannel(sub)
+
+        if (task.destination === 'library') {
+          await pin.pin(sdk, { item: itemRef, channel: LIBRARY_CHANNEL })
+        } else {
+          for (const ch of channels) {
+            await appendItemToChannel(agent, ch, itemRef)
+            const sub = auth.subscriptions.find(
+              (s) => s.channelID === ch.channelID,
+            )
+            if (sub) feed.refreshChannel(sub)
+          }
         }
 
         useUploadQueueStore.getState().setProgress(task.id, 100)
         queue.setState(task.id, 'success', undefined)
-        toast.addToast(`Published “${displayTitle(task)}”`)
+        toast.addToast(
+          task.destination === 'library'
+            ? `Pinned “${displayTitle(task)}”`
+            : `Published “${displayTitle(task)}”`,
+        )
 
         setTimeout(() => {
           useUploadQueueStore.getState().remove(task.id)
@@ -95,7 +112,11 @@ export function useUploadRunner() {
       } catch (e) {
         const msg = e instanceof Error ? e.message : 'Failed to publish'
         queue.setState(task.id, 'failed', msg)
-        toast.addToast(`Publish failed: ${msg}`)
+        toast.addToast(
+          task.destination === 'library'
+            ? `Pin failed: ${msg}`
+            : `Publish failed: ${msg}`,
+        )
       }
     }
 

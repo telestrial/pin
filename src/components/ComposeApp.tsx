@@ -1,3 +1,4 @@
+import { Pin } from 'lucide-react'
 import { type ChangeEvent, useEffect, useState } from 'react'
 import { APP_SANDBOX } from '../lib/constants'
 import { type OwnedChannel, useAuthStore } from '../stores/auth'
@@ -24,6 +25,8 @@ export function ComposeApp({
   const [file, setFile] = useState<File | null>(initialFile ?? null)
   const [previewHTML, setPreviewHTML] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [isPinned, setIsPinned] = useState(false)
+  const canSubmit = !!file
 
   useEffect(() => {
     if (!file) {
@@ -59,6 +62,28 @@ export function ComposeApp({
     }
   }
 
+  async function pinAndSave() {
+    if (!sdk || !file) return
+    const trimmedTitle = title.trim()
+    setError(null)
+    setIsPinned(true)
+    const buf = await file.arrayBuffer()
+    enqueue({
+      payload: {
+        type: 'app',
+        title: trimmedTitle,
+        mimeType: 'text/html',
+        bytes: new Uint8Array(buf),
+      },
+      channelIDs: [],
+      destination: 'library',
+    })
+    addToast(
+      trimmedTitle ? `Queued “${trimmedTitle}” to pin` : `Queued ${file.name} to pin`,
+    )
+    setTimeout(() => onQueued(), 220)
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     if (!sdk || !file) return
@@ -88,6 +113,22 @@ export function ComposeApp({
 
   return (
     <form onSubmit={handleSubmit} className="space-y-2">
+      <div className="flex justify-end">
+        <button
+          type="button"
+          onClick={pinAndSave}
+          disabled={!canSubmit}
+          title="Pin this app"
+          aria-label="Pin this app"
+          className="p-1.5 rounded-full text-neutral-400 enabled:hover:text-green-600 enabled:hover:bg-green-50 enabled:cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+        >
+          <Pin
+            className={`size-4 transition-colors ${
+              isPinned ? 'fill-green-600 text-green-600' : ''
+            }`}
+          />
+        </button>
+      </div>
       <input
         type="file"
         accept="text/html,.html,.htm"

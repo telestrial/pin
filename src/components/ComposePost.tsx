@@ -1,3 +1,4 @@
+import { Pin } from 'lucide-react'
 import { useState } from 'react'
 import { type OwnedChannel, useAuthStore } from '../stores/auth'
 import { useToastStore } from '../stores/toast'
@@ -18,6 +19,29 @@ export function ComposePost({
   const [title, setTitle] = useState('')
   const [body, setBody] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [isPinned, setIsPinned] = useState(false)
+  const canSubmit = !!title.trim() && !!body.trim()
+
+  function pinAndSave() {
+    if (!sdk) return
+    const trimmedTitle = title.trim()
+    const trimmedBody = body.trim()
+    if (!trimmedTitle || !trimmedBody) return
+    setError(null)
+    setIsPinned(true)
+    enqueue({
+      payload: {
+        type: 'text',
+        title: trimmedTitle,
+        mimeType: 'text/markdown',
+        bytes: new TextEncoder().encode(trimmedBody),
+      },
+      channelIDs: [],
+      destination: 'library',
+    })
+    addToast(`Queued “${trimmedTitle}” to pin`)
+    setTimeout(() => onQueued(), 220)
+  }
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -45,6 +69,22 @@ export function ComposePost({
 
   return (
     <form onSubmit={handleSubmit} className="space-y-2">
+      <div className="flex justify-end">
+        <button
+          type="button"
+          onClick={pinAndSave}
+          disabled={!canSubmit}
+          title="Pin this post"
+          aria-label="Pin this post"
+          className="p-1.5 rounded-full text-neutral-400 enabled:hover:text-green-600 enabled:hover:bg-green-50 enabled:cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+        >
+          <Pin
+            className={`size-4 transition-colors ${
+              isPinned ? 'fill-green-600 text-green-600' : ''
+            }`}
+          />
+        </button>
+      </div>
       <input
         type="text"
         value={title}

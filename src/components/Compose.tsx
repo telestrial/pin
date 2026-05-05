@@ -14,15 +14,15 @@ import { PIN_ITEM_DRAG_TYPE } from './PinSidebar'
 
 type Tab = 'note' | 'post' | 'image' | 'audio' | 'video' | 'file' | 'app'
 
-const TABS: { tab: Tab; label: string }[] = [
-  { tab: 'note', label: 'Note' },
-  { tab: 'post', label: 'Post' },
-  { tab: 'image', label: 'Image' },
-  { tab: 'audio', label: 'Audio' },
-  { tab: 'video', label: 'Video' },
-  { tab: 'file', label: 'File' },
-  { tab: 'app', label: 'App' },
-]
+// const TABS: { tab: Tab; label: string }[] = [
+//   { tab: 'note', label: 'Note' },
+//   { tab: 'post', label: 'Post' },
+//   { tab: 'image', label: 'Image' },
+//   { tab: 'audio', label: 'Audio' },
+//   { tab: 'video', label: 'Video' },
+//   { tab: 'file', label: 'File' },
+//   { tab: 'app', label: 'App' },
+// ]
 
 function tabForFile(file: File): Tab {
   const t = file.type
@@ -97,6 +97,13 @@ export function Compose({
       setPendingFile(null)
       setResetCounter((n) => n + 1)
     },
+  }
+
+  const noteProps = {
+    ...formProps,
+    channels,
+    hideChannel,
+    onChannelChange: setSelectedID,
   }
 
   function isAcceptedDrag(e: React.DragEvent): boolean {
@@ -178,6 +185,7 @@ export function Compose({
 
   return (
     <div
+      data-compose-area="true"
       onDragEnter={handleDragEnter}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
@@ -197,26 +205,7 @@ export function Compose({
           </p>
         </div>
       )}
-      <div className="flex items-center gap-2 flex-wrap">
-        {!hideChannel &&
-          (channels.length > 1 ? (
-            <select
-              value={selected.channelID}
-              onChange={(e) => setSelectedID(e.target.value)}
-              aria-label="Channel to post to"
-              className="text-xs font-medium text-neutral-900 bg-neutral-100 hover:bg-neutral-200 border-0 rounded px-2 py-1 cursor-pointer focus:outline-none focus:ring-2 focus:ring-green-600 focus:ring-offset-1"
-            >
-              {channels.map((c) => (
-                <option key={c.channelID} value={c.channelID}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
-          ) : (
-            <span className="text-xs font-medium text-neutral-900 px-2 py-1 bg-neutral-50 rounded">
-              {selected.name}
-            </span>
-          ))}
+      {/* <div className="flex items-center gap-2 flex-wrap">
         <div className="flex gap-1 flex-wrap" role="tablist">
           {TABS.map((t) => {
             const active = t.tab === tab
@@ -238,10 +227,10 @@ export function Compose({
             )
           })}
         </div>
-      </div>
+      </div> */}
 
       <div key={`${tab}-${selected.channelID}-${resetCounter}`}>
-        {tab === 'note' && <ComposeNote {...formProps} />}
+        {tab === 'note' && <ComposeNote {...noteProps} />}
         {tab === 'post' && <ComposePost {...formProps} />}
         {tab === 'image' && (
           <ComposeImage {...formProps} initialFile={pendingFile} />
