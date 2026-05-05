@@ -43,8 +43,8 @@ Pin uses [`@siafoundation/sia-storage`](https://www.npmjs.com/package/@siafounda
 | SDK call | Where it's used |
 | --- | --- |
 | `Sdk` instance per user | Every authenticated session ([core/sia.ts](src/core/sia.ts), AppKey approve flow from `create-sia-app`) |
-| `sdk.upload(new PinnedObject(), Blob.stream())` | Every published item — note, post, image, audio, video, file, app — and channel cover art |
-| `sdk.pinObject(obj)` | Two uses: durability for items you publish, AND mirroring an item from another channel into your own storage when you pin it |
+| `sdk.upload(new PinnedObject(), Blob.stream())` | Every published item — note, post, image, audio, video, file, app — and channel cover art. Also the **pin button on the compose forms**, which uploads to your Sia scope without writing to any channel manifest (a "save to my library, no post" verb distinct from publish). |
+| `sdk.pinObject(obj)` | Three uses: durability for items you publish, mirroring an item from another channel into your own storage when you pin it from the feed, and the same path for compose-form library uploads |
 | `sdk.shareObject(obj, validUntil)` | Per-item distribution URL with the per-object encryption key in the URL fragment; year-9999 expiries verified safe |
 | `sdk.sharedObject(url)` | Resolves a shared URL into a `PinnedObject` handle. Used before downloading (subscriber reads) and before mirroring (pinning a friend's item — `sharedObject` then `pinObject` adds the bytes to your indexer scope) |
 | `sdk.download(obj)` (as `ReadableStream`) | Subscriber reads (cached in IndexedDB after first fetch — see Architecture) |
@@ -88,7 +88,7 @@ Item bytes (per item)              Channel state (per channel)
 src/
   core/        # platform-agnostic: Sia + ATProto calls, channel crypto, manifest, feed, jetstream, pin
   components/  # web UI (React)
-  stores/      # Zustand — auth, feed, pin, upload queue, toast
+  stores/      # Zustand — auth, feed, pin, upload queue, compose (armed-link state), toast
   lib/         # constants, item cache, markdown, time helpers, app bridge, hooks
 ```
 
@@ -96,7 +96,7 @@ src/
 
 ## App host API
 
-A program-as-item — type `app`, a single self-contained `.html` file — is one of the more interesting consequences of the architecture. The program is content-addressed, encrypted, and distributed by exactly the same machinery as a JPEG: it travels like media. Pong, included as a bundled example, ships in a channel as a small HTML file you can subscribe to, fetch, and run. Where it gets interesting is what an app should and shouldn't be able to *do* — that surface is barely sketched today.
+A program-as-item — type `app`, a single self-contained `.html` file — is one of the more interesting consequences of the architecture. The program is content-addressed, encrypted, and distributed by exactly the same machinery as a JPEG: it travels like media. Pong and Snake, both included as bundled examples ([`examples/pong/`](examples/pong/), [`examples/snake/`](examples/snake/)), ship in a channel as small HTML files you can subscribe to, fetch, and run. Where it gets interesting is what an app should and shouldn't be able to *do* — that surface is barely sketched today.
 
 Apps run inside an iframe with `sandbox="allow-scripts allow-modals allow-pointer-lock"`. The sandbox blocks network, popups, top-navigation, forms, and same-origin access — an app can compute, render, and accept input, but can't reach our DOM, our keys, the user's other tabs, or any external service. Anything an app needs from the outside has to come through a `postMessage` channel the host explicitly proxies. **That's the permission boundary**: the host decides which capabilities it exposes as RPCs, and apps are free to use only those.
 
