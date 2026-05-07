@@ -255,7 +255,7 @@ export function Home() {
     const owned = myChannels.find((c) => c.channelID === view.channelID)
     const channelComposerSlot = owned
       ? atprotoAgent
-        ? <Compose channels={[owned]} hideChannel />
+        ? <Compose channels={[owned]} />
         : (
             <button
               type="button"
