@@ -419,6 +419,15 @@ export function FeedRow({
             </button>
           </div>
           <div className="flex items-center gap-1.5 shrink-0">
+            <p
+              className="text-xs text-neutral-500 whitespace-nowrap"
+              title={formatAbsolute(item.publishedAt)}
+            >
+              {formatRelativeShort(item.publishedAt)}
+            </p>
+            <span className="text-xs font-medium px-2 py-0.5 bg-neutral-100 text-neutral-600 rounded-full whitespace-nowrap">
+              {typeLabel(item)}
+            </span>
             <PinButton
               input={{
                 item,
@@ -429,15 +438,6 @@ export function FeedRow({
                 },
               }}
             />
-            <span className="text-xs font-medium px-2 py-0.5 bg-neutral-100 text-neutral-600 rounded-full whitespace-nowrap">
-              {typeLabel(item)}
-            </span>
-            <p
-              className="text-xs text-neutral-500 whitespace-nowrap"
-              title={formatAbsolute(item.publishedAt)}
-            >
-              {formatRelativeShort(item.publishedAt)}
-            </p>
           </div>
         </div>
         {renderBody(item)}
