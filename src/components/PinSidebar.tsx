@@ -34,7 +34,7 @@ function isDraggableItem(item: ItemRef): boolean {
 }
 
 function itemTypeLabel(item: ItemRef): string {
-  if (item.type === 'text') return item.title === '' ? 'Note' : 'Post'
+  if (item.type === 'text') return 'Post'
   return item.type.charAt(0).toUpperCase() + item.type.slice(1)
 }
 

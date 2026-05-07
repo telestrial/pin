@@ -2,7 +2,6 @@ import type { FeedEntry } from '../core/feed'
 
 export type TypeFilter =
   | 'all'
-  | 'note'
   | 'post'
   | 'image'
   | 'audio'
@@ -12,7 +11,6 @@ export type TypeFilter =
 
 const FILTER_ORDER: TypeFilter[] = [
   'all',
-  'note',
   'post',
   'image',
   'audio',
@@ -23,7 +21,6 @@ const FILTER_ORDER: TypeFilter[] = [
 
 export const FILTER_LABEL: Record<TypeFilter, string> = {
   all: 'All',
-  note: 'Notes',
   post: 'Posts',
   image: 'Images',
   audio: 'Audio',
@@ -34,7 +31,7 @@ export const FILTER_LABEL: Record<TypeFilter, string> = {
 
 export function entryFilter(entry: FeedEntry): TypeFilter {
   const { item } = entry
-  if (item.type === 'text') return item.title === '' ? 'note' : 'post'
+  if (item.type === 'text') return 'post'
   return item.type
 }
 

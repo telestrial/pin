@@ -199,7 +199,7 @@ export function HomeFeed({
   )
 }
 
-function NoteBody({ item }: { item: ItemRef }) {
+function PostBody({ item }: { item: ItemRef }) {
   const html = useMemo(() => renderMarkdown(item.summary ?? ''), [item.summary])
   return (
     <div
@@ -343,17 +343,12 @@ function FileBody({ item }: { item: ItemRef }) {
 }
 
 function typeLabel(item: ItemRef): string {
-  if (item.type === 'text') return item.title === '' ? 'Note' : 'Post'
+  if (item.type === 'text') return 'Post'
   return item.type.charAt(0).toUpperCase() + item.type.slice(1)
 }
 
 function renderBody(item: ItemRef): React.ReactNode {
-  if (item.type === 'text') {
-    if (item.title === '') return <NoteBody item={item} />
-    return item.summary ? (
-      <p className="text-sm text-neutral-600">{item.summary}</p>
-    ) : null
-  }
+  if (item.type === 'text') return <PostBody item={item} />
   if (item.type === 'image') return <ImageBody item={item} />
   if (item.type === 'audio') return <AudioBody item={item} />
   if (item.type === 'video') return <VideoBody item={item} />
@@ -372,8 +367,7 @@ export function FeedRow({
   onChannelClick: (authorHandle: string, channelID: string) => void
 }) {
   const { item, channel } = entry
-  const isNote = item.type === 'text' && item.title === ''
-  const showTitle = !isNote && !!item.title
+  const showTitle = item.type !== 'text' && !!item.title
 
   const handleChannelClick = (e: React.MouseEvent | React.KeyboardEvent) => {
     e.stopPropagation()
@@ -445,7 +439,7 @@ export function FeedRow({
     </div>
   )
 
-  if (isNote) {
+  if (item.type === 'text') {
     return (
       <li>
         <div className="py-4 px-2 -mx-2">{inner}</div>
