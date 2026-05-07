@@ -292,7 +292,7 @@ export function PinSidebar({
   }
 
   return (
-    <aside className="w-full lg:w-64 shrink-0 border border-neutral-200 rounded-lg bg-white p-3 space-y-5">
+    <aside className="w-full lg:w-64 lg:ml-auto shrink-0 border border-neutral-200 rounded-lg bg-white p-3 space-y-5">
       <section className="space-y-2">
         <div className="flex items-center gap-2 px-1">
           <HardDrive className="size-3.5 text-neutral-500" aria-hidden="true" />

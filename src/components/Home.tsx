@@ -660,7 +660,7 @@ export function Home() {
           }
           activeHome={true}
         />
-        <div className="flex-1 lg:max-w-2xl space-y-6 min-w-0">
+        <div className="flex-1 space-y-6 min-w-0">
           {composerSlot}
           <HomeFeed
             filter={idleView.filter}

@@ -111,7 +111,7 @@ export function ChannelView({
           onChannelClick={onChannelClick}
           activeChannelID={channelID}
         />
-        <div className="flex-1 lg:max-w-2xl space-y-5 min-w-0">
+        <div className="flex-1 space-y-5 min-w-0">
           <div className="border border-neutral-200 rounded-lg bg-white p-5 space-y-4">
             <button
               type="button"
