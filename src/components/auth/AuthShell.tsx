@@ -1,4 +1,4 @@
-import { Pin } from 'lucide-react'
+import { PinIcon } from '../PinIcon'
 
 // Wraps every AuthFlow screen so the Pin logo stays mounted and transitions
 // in place across step changes. Grey + pulsing while we're booting (WASM
@@ -22,8 +22,8 @@ export function AuthShell({
           }`}
           aria-hidden="true"
         >
-          <Pin
-            className={`size-7 transition-colors duration-500 ${
+          <PinIcon
+            className={`transition-colors duration-500 ${
               ready ? 'text-green-600' : 'text-neutral-400'
             }`}
             fill="currentColor"

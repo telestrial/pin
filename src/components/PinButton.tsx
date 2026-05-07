@@ -1,4 +1,3 @@
-import { Pin } from 'lucide-react'
 import { useState } from 'react'
 import { deletePublishedItem } from '../core/channels'
 import { fetchAccountSnapshot } from '../core/pin'
@@ -6,6 +5,7 @@ import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
 import { type PinInput, usePinStore } from '../stores/pin'
 import { useToastStore } from '../stores/toast'
+import { PinIcon } from './PinIcon'
 
 export function PinButton({ input }: { input: PinInput }) {
   const sdk = useAuthStore((s) => s.sdk)
@@ -89,12 +89,11 @@ export function PinButton({ input }: { input: PinInput }) {
       }`}
     >
       {busy ? (
-        <span className="block w-3.5 h-3.5">
-          <span className="block size-3.5 border-2 border-neutral-300 border-t-neutral-600 rounded-full animate-spin" />
+        <span className="block size-5">
+          <span className="block size-5 border-2 border-neutral-300 border-t-neutral-600 rounded-full animate-spin" />
         </span>
       ) : (
-        <Pin
-          className="w-3.5 h-3.5"
+        <PinIcon
           fill={isActive ? 'currentColor' : 'none'}
           aria-hidden="true"
         />

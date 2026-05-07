@@ -14,15 +14,15 @@ import { PIN_ITEM_DRAG_TYPE } from './PinSidebar'
 
 type Tab = 'note' | 'post' | 'image' | 'audio' | 'video' | 'file' | 'app'
 
-// const TABS: { tab: Tab; label: string }[] = [
-//   { tab: 'note', label: 'Note' },
-//   { tab: 'post', label: 'Post' },
-//   { tab: 'image', label: 'Image' },
-//   { tab: 'audio', label: 'Audio' },
-//   { tab: 'video', label: 'Video' },
-//   { tab: 'file', label: 'File' },
-//   { tab: 'app', label: 'App' },
-// ]
+const TABS: { tab: Tab; label: string }[] = [
+  { tab: 'note', label: 'Note' },
+  { tab: 'post', label: 'Post' },
+  { tab: 'image', label: 'Image' },
+  { tab: 'audio', label: 'Audio' },
+  { tab: 'video', label: 'Video' },
+  { tab: 'file', label: 'File' },
+  { tab: 'app', label: 'App' },
+]
 
 function tabForFile(file: File): Tab {
   const t = file.type
@@ -164,6 +164,30 @@ export function Compose({
     }
   }
 
+  const tabsNode = (
+    <div className="flex gap-1 flex-wrap" role="tablist">
+      {TABS.map((t) => {
+        const active = t.tab === tab
+        return (
+          <button
+            key={t.tab}
+            type="button"
+            role="tab"
+            aria-selected={active}
+            onClick={() => setTab(t.tab)}
+            className={`px-2.5 py-1 text-xs font-medium rounded transition-colors ${
+              active
+                ? 'bg-neutral-900 text-white'
+                : 'bg-neutral-100 text-neutral-700 hover:bg-neutral-200'
+            }`}
+          >
+            {t.label}
+          </button>
+        )
+      })}
+    </div>
+  )
+
   function handleDrop(e: React.DragEvent) {
     e.preventDefault()
     setIsDragging(false)
@@ -205,47 +229,23 @@ export function Compose({
           </p>
         </div>
       )}
-      {/* <div className="flex items-center gap-2 flex-wrap">
-        <div className="flex gap-1 flex-wrap" role="tablist">
-          {TABS.map((t) => {
-            const active = t.tab === tab
-            return (
-              <button
-                key={t.tab}
-                type="button"
-                role="tab"
-                aria-selected={active}
-                onClick={() => setTab(t.tab)}
-                className={`px-2.5 py-1 text-xs font-medium rounded transition-colors ${
-                  active
-                    ? 'bg-neutral-900 text-white'
-                    : 'bg-neutral-100 text-neutral-700 hover:bg-neutral-200'
-                }`}
-              >
-                {t.label}
-              </button>
-            )
-          })}
-        </div>
-      </div> */}
-
       <div key={`${tab}-${selected.channelID}-${resetCounter}`}>
-        {tab === 'note' && <ComposeNote {...noteProps} />}
-        {tab === 'post' && <ComposePost {...formProps} />}
+        {tab === 'note' && <ComposeNote {...noteProps} tabs={tabsNode} />}
+        {tab === 'post' && <ComposePost {...formProps} tabs={tabsNode} />}
         {tab === 'image' && (
-          <ComposeImage {...formProps} initialFile={pendingFile} />
+          <ComposeImage {...formProps} tabs={tabsNode} initialFile={pendingFile} />
         )}
         {tab === 'audio' && (
-          <ComposeAudio {...formProps} initialFile={pendingFile} />
+          <ComposeAudio {...formProps} tabs={tabsNode} initialFile={pendingFile} />
         )}
         {tab === 'video' && (
-          <ComposeVideo {...formProps} initialFile={pendingFile} />
+          <ComposeVideo {...formProps} tabs={tabsNode} initialFile={pendingFile} />
         )}
         {tab === 'file' && (
-          <ComposeFile {...formProps} initialFile={pendingFile} />
+          <ComposeFile {...formProps} tabs={tabsNode} initialFile={pendingFile} />
         )}
         {tab === 'app' && (
-          <ComposeApp {...formProps} initialFile={pendingFile} />
+          <ComposeApp {...formProps} tabs={tabsNode} initialFile={pendingFile} />
         )}
       </div>
     </div>

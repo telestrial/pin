@@ -1,7 +1,9 @@
-import { Pin } from 'lucide-react'
 import { useState } from 'react'
 import { NOTE_CHAR_LIMIT } from '../lib/constants'
+import { buildPinLink } from '../lib/pinLink'
+import { PinIcon } from './PinIcon'
 import { type OwnedChannel, useAuthStore } from '../stores/auth'
+import { useComposeStore } from '../stores/compose'
 import { useToastStore } from '../stores/toast'
 import { useUploadQueueStore } from '../stores/uploadQueue'
 
@@ -11,21 +13,54 @@ export function ComposeNote({
   hideChannel = false,
   onChannelChange,
   onQueued,
+  tabs,
 }: {
   channel: OwnedChannel
   channels: OwnedChannel[]
   hideChannel?: boolean
   onChannelChange: (channelID: string) => void
   onQueued: () => void
+  tabs?: React.ReactNode
 }) {
   const sdk = useAuthStore((s) => s.sdk)
   const agent = useAuthStore((s) => s.atprotoAgent)
+  const myChannels = useAuthStore((s) => s.myChannels)
   const enqueue = useUploadQueueStore((s) => s.enqueue)
   const addToast = useToastStore((s) => s.addToast)
+  const armedItem = useComposeStore((s) => s.armedItem)
+  const disarm = useComposeStore((s) => s.disarm)
 
   const [body, setBody] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [isPinned, setIsPinned] = useState(false)
+
+  function insertArmedPinLink(ta: HTMLTextAreaElement) {
+    if (!armedItem) return
+    const pos = ta.selectionStart ?? body.length
+    const owned = myChannels.find(
+      (c) => c.channelID === armedItem.channel.channelID,
+    )
+    const link = buildPinLink(armedItem, owned?.channelKey)
+    const next = body.slice(0, pos) + link + body.slice(ta.selectionEnd ?? pos)
+    setBody(next)
+    disarm()
+    requestAnimationFrame(() => {
+      ta.focus()
+      const caret = pos + link.length
+      ta.setSelectionRange(caret, caret)
+    })
+  }
+
+  function handleBodyClick(e: React.MouseEvent<HTMLTextAreaElement>) {
+    if (!armedItem) return
+    insertArmedPinLink(e.currentTarget)
+  }
+
+  function handleBodyPaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
+    if (!armedItem) return
+    e.preventDefault()
+    insertArmedPinLink(e.currentTarget)
+  }
 
   const trimmed = body.trim()
   const remaining = NOTE_CHAR_LIMIT - body.length
@@ -78,17 +113,18 @@ export function ComposeNote({
 
   return (
     <form onSubmit={handleSubmit} className="space-y-2">
-      <div className="flex justify-end">
+      <div className="flex items-center gap-2 flex-wrap">
+        {tabs}
         <button
           type="button"
           onClick={pinAndSave}
           disabled={!canSubmit}
           title="Pin this post"
           aria-label="Pin this post"
-          className="p-1.5 rounded-full text-neutral-400 enabled:hover:text-green-600 enabled:hover:bg-green-50 enabled:cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+          className="ml-auto p-1.5 rounded-full text-neutral-400 enabled:hover:text-green-600 enabled:hover:bg-green-50 enabled:cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
         >
-          <Pin
-            className={`size-4 transition-colors ${
+          <PinIcon
+            className={`transition-colors ${
               isPinned ? 'fill-green-600 text-green-600' : ''
             }`}
           />
@@ -97,6 +133,8 @@ export function ComposeNote({
       <textarea
         value={body}
         onChange={(e) => setBody(e.target.value)}
+        onClick={handleBodyClick}
+        onPaste={handleBodyPaste}
         required
         rows={3}
         placeholder="Whatever's on your mind."

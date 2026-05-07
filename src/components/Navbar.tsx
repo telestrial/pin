@@ -1,4 +1,4 @@
-import { Pin } from 'lucide-react'
+import { PinIcon } from './PinIcon'
 import { useMemo, useState } from 'react'
 import { flushPendingSettingsSave } from '../lib/useSettingsSync'
 import { APP_NAME } from '../lib/constants'
@@ -36,7 +36,7 @@ export function Navbar() {
     <header className="bg-white border-b border-neutral-200/80">
       <div className="flex items-center justify-between px-6 py-3 max-w-5xl mx-auto">
         <h1 className="flex items-center gap-1.5 text-sm font-semibold text-neutral-900 tracking-tight">
-          <Pin className="size-4 text-green-600" fill="currentColor" />
+          <PinIcon className="text-green-600" fill="currentColor" />
           {APP_NAME}
         </h1>
         {isConnected && publicKey && (

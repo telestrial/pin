@@ -1,4 +1,4 @@
-import { CheckCircle2, HardDrive, Pin, RotateCw, Search, X } from 'lucide-react'
+import { CheckCircle2, HardDrive, RotateCw, Search, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { type PinnedItemRef, usePinStore } from '../stores/pin'
 import type { ItemRef } from '../core/types'
@@ -12,6 +12,7 @@ import {
   useUploadQueueStore,
 } from '../stores/uploadQueue'
 import { ChannelAvatar } from './ChannelAvatar'
+import { PinIcon } from './PinIcon'
 
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`
@@ -519,7 +520,7 @@ export function PinSidebar({
                         : 'Click to load as a link target'
                     }
                     className={`px-3 py-2 transition-opacity duration-1500 cursor-pointer flex items-start gap-2 ${
-                      armed ? 'bg-[#FDF4D1]' : 'hover:bg-neutral-50'
+                      armed ? 'bg-[#FDF1CC]' : 'hover:bg-neutral-50'
                     } ${removing ? 'opacity-0' : 'opacity-100'} ${
                       entering ? 'animate-pin-enter' : ''
                     }`}
@@ -559,10 +560,10 @@ export function PinSidebar({
                         className="shrink-0 self-center p-1 rounded text-green-600 hover:text-green-700 hover:bg-green-50 cursor-pointer disabled:opacity-50"
                       >
                         {busy ? (
-                          <span className="block size-3.5 border-2 border-neutral-300 border-t-neutral-600 rounded-full animate-spin" />
+                          <span className="block size-5 border-2 border-neutral-300 border-t-neutral-600 rounded-full animate-spin" />
                         ) : (
-                          <Pin
-                            className={`size-3.5 ${removing ? '' : 'fill-current'}`}
+                          <PinIcon
+                            className={removing ? '' : 'fill-current'}
                             aria-hidden="true"
                           />
                         )}

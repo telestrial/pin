@@ -1,26 +1,61 @@
-import { Pin } from 'lucide-react'
 import { useState } from 'react'
+import { buildPinLink } from '../lib/pinLink'
 import { type OwnedChannel, useAuthStore } from '../stores/auth'
+import { useComposeStore } from '../stores/compose'
 import { useToastStore } from '../stores/toast'
 import { useUploadQueueStore } from '../stores/uploadQueue'
+import { PinIcon } from './PinIcon'
 
 export function ComposePost({
   channel,
   onQueued,
+  tabs,
 }: {
   channel: OwnedChannel
   onQueued: () => void
+  tabs?: React.ReactNode
 }) {
   const sdk = useAuthStore((s) => s.sdk)
   const agent = useAuthStore((s) => s.atprotoAgent)
+  const myChannels = useAuthStore((s) => s.myChannels)
   const enqueue = useUploadQueueStore((s) => s.enqueue)
   const addToast = useToastStore((s) => s.addToast)
+  const armedItem = useComposeStore((s) => s.armedItem)
+  const disarm = useComposeStore((s) => s.disarm)
 
   const [title, setTitle] = useState('')
   const [body, setBody] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [isPinned, setIsPinned] = useState(false)
   const canSubmit = !!title.trim() && !!body.trim()
+
+  function insertArmedPinLink(ta: HTMLTextAreaElement) {
+    if (!armedItem) return
+    const pos = ta.selectionStart ?? body.length
+    const owned = myChannels.find(
+      (c) => c.channelID === armedItem.channel.channelID,
+    )
+    const link = buildPinLink(armedItem, owned?.channelKey)
+    const next = body.slice(0, pos) + link + body.slice(ta.selectionEnd ?? pos)
+    setBody(next)
+    disarm()
+    requestAnimationFrame(() => {
+      ta.focus()
+      const caret = pos + link.length
+      ta.setSelectionRange(caret, caret)
+    })
+  }
+
+  function handleBodyClick(e: React.MouseEvent<HTMLTextAreaElement>) {
+    if (!armedItem) return
+    insertArmedPinLink(e.currentTarget)
+  }
+
+  function handleBodyPaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
+    if (!armedItem) return
+    e.preventDefault()
+    insertArmedPinLink(e.currentTarget)
+  }
 
   function pinAndSave() {
     if (!sdk) return
@@ -69,17 +104,18 @@ export function ComposePost({
 
   return (
     <form onSubmit={handleSubmit} className="space-y-2">
-      <div className="flex justify-end">
+      <div className="flex items-center gap-2 flex-wrap">
+        {tabs}
         <button
           type="button"
           onClick={pinAndSave}
           disabled={!canSubmit}
           title="Pin this post"
           aria-label="Pin this post"
-          className="p-1.5 rounded-full text-neutral-400 enabled:hover:text-green-600 enabled:hover:bg-green-50 enabled:cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+          className="ml-auto p-1.5 rounded-full text-neutral-400 enabled:hover:text-green-600 enabled:hover:bg-green-50 enabled:cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
         >
-          <Pin
-            className={`size-4 transition-colors ${
+          <PinIcon
+            className={`transition-colors ${
               isPinned ? 'fill-green-600 text-green-600' : ''
             }`}
           />
@@ -96,6 +132,8 @@ export function ComposePost({
       <textarea
         value={body}
         onChange={(e) => setBody(e.target.value)}
+        onClick={handleBodyClick}
+        onPaste={handleBodyPaste}
         required
         rows={6}
         placeholder="# Hello world&#10;&#10;Markdown supported."

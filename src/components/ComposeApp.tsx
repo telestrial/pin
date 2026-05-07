@@ -1,18 +1,20 @@
-import { Pin } from 'lucide-react'
 import { type ChangeEvent, useEffect, useState } from 'react'
 import { APP_SANDBOX } from '../lib/constants'
 import { type OwnedChannel, useAuthStore } from '../stores/auth'
 import { useToastStore } from '../stores/toast'
 import { useUploadQueueStore } from '../stores/uploadQueue'
+import { PinIcon } from './PinIcon'
 
 export function ComposeApp({
   channel,
   onQueued,
   initialFile,
+  tabs,
 }: {
   channel: OwnedChannel
   onQueued: () => void
   initialFile?: File | null
+  tabs?: React.ReactNode
 }) {
   const sdk = useAuthStore((s) => s.sdk)
   const agent = useAuthStore((s) => s.atprotoAgent)
@@ -113,17 +115,18 @@ export function ComposeApp({
 
   return (
     <form onSubmit={handleSubmit} className="space-y-2">
-      <div className="flex justify-end">
+      <div className="flex items-center gap-2 flex-wrap">
+        {tabs}
         <button
           type="button"
           onClick={pinAndSave}
           disabled={!canSubmit}
           title="Pin this app"
           aria-label="Pin this app"
-          className="p-1.5 rounded-full text-neutral-400 enabled:hover:text-green-600 enabled:hover:bg-green-50 enabled:cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+          className="ml-auto p-1.5 rounded-full text-neutral-400 enabled:hover:text-green-600 enabled:hover:bg-green-50 enabled:cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
         >
-          <Pin
-            className={`size-4 transition-colors ${
+          <PinIcon
+            className={`transition-colors ${
               isPinned ? 'fill-green-600 text-green-600' : ''
             }`}
           />
