@@ -3,6 +3,13 @@ export const SUBSCRIPTIONS_VERSION = 1
 
 export type ItemType = 'text' | 'image' | 'audio' | 'video' | 'file' | 'app'
 
+export type AttachmentRef = {
+  url: string
+  mimeType: string
+  filename?: string
+  byteSize: number
+}
+
 export type ItemRef = {
   id: string
   itemURL: string
@@ -14,7 +21,7 @@ export type ItemRef = {
   byteSize: number
   durationMs?: number
   filename?: string
-  attachments?: string[]
+  attachments?: AttachmentRef[]
 }
 
 export type ChannelCover = {

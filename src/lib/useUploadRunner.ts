@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { appendItemToChannel, buildItemRef } from '../core/channels'
 import { uploadItem } from '../core/sia'
+import type { AttachmentRef } from '../core/types'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
 import { usePinStore } from '../stores/pin'
@@ -93,13 +94,23 @@ export function useUploadRunner() {
           useUploadQueueStore.getState().setProgress(task.id, pct)
         }
 
-        const attachmentURLs: string[] = []
+        const attachmentRefs: AttachmentRef[] = []
         for (const src of sources) {
           if (src.kind === 'url') {
-            attachmentURLs.push(src.url)
+            attachmentRefs.push({
+              url: src.url,
+              mimeType: src.mimeType,
+              filename: src.filename,
+              byteSize: src.byteSize,
+            })
           } else {
             const a = await uploadItem(sdk, src.bytes, onShard)
-            attachmentURLs.push(a.itemURL)
+            attachmentRefs.push({
+              url: a.itemURL,
+              mimeType: src.mimeType,
+              filename: src.filename,
+              byteSize: src.bytes.length,
+            })
           }
         }
 
@@ -110,7 +121,7 @@ export function useUploadRunner() {
 
         const resolvedPayload = {
           ...task.payload,
-          attachments: attachmentURLs.length > 0 ? attachmentURLs : undefined,
+          attachments: attachmentRefs.length > 0 ? attachmentRefs : undefined,
           attachmentSources: undefined,
         }
         const itemRef = buildItemRef(uploaded, resolvedPayload)

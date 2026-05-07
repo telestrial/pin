@@ -1,4 +1,4 @@
-import { Check, FileText, X } from 'lucide-react'
+import { Check, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import type { AttachmentSource } from '../core/channels'
 import { NOTE_CHAR_LIMIT } from '../lib/constants'
@@ -8,9 +8,12 @@ import { useComposeStore } from '../stores/compose'
 import { useFeedStore } from '../stores/feed'
 import { useToastStore } from '../stores/toast'
 import { useUploadQueueStore } from '../stores/uploadQueue'
+import {
+  type AttachmentKind,
+  kindForMime,
+  MediaPreview,
+} from './AttachmentMedia'
 import { ChannelAvatar } from './ChannelAvatar'
-
-type AttachmentKind = 'image' | 'audio' | 'video' | 'file'
 
 type AttachmentDraft =
   | {
@@ -28,26 +31,12 @@ type AttachmentDraft =
       filename: string
       mimeType: string
       kind: AttachmentKind
-      itemURL: string
+      url: string
       byteSize: number
     }
 
-function kindForMime(mimeType: string): AttachmentKind {
-  if (mimeType.startsWith('image/')) return 'image'
-  if (mimeType.startsWith('audio/')) return 'audio'
-  if (mimeType.startsWith('video/')) return 'video'
-  return 'file'
-}
-
 function newTempID(): string {
   return `att-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
-}
-
-function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
-  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`
-  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`
 }
 
 export function Compose({ channels }: { channels: OwnedChannel[] }) {
@@ -110,7 +99,7 @@ export function Compose({ channels }: { channels: OwnedChannel[] }) {
         filename: armedItem.item.filename ?? armedItem.item.title ?? 'item',
         mimeType: armedItem.item.mimeType,
         kind: kindForMime(armedItem.item.mimeType),
-        itemURL: armedItem.item.itemURL,
+        url: armedItem.item.itemURL,
         byteSize: armedItem.item.byteSize,
       },
     ])
@@ -215,7 +204,13 @@ export function Compose({ channels }: { channels: OwnedChannel[] }) {
     setError(null)
     const attachmentSources: AttachmentSource[] = attachments.map((a) =>
       a.source === 'url'
-        ? { kind: 'url', url: a.itemURL }
+        ? {
+            kind: 'url',
+            url: a.url,
+            mimeType: a.mimeType,
+            filename: a.filename,
+            byteSize: a.byteSize,
+          }
         : {
             kind: 'bytes',
             bytes: a.bytes,
@@ -471,7 +466,7 @@ function UrlChipBody({
 }: {
   attachment: Extract<AttachmentDraft, { source: 'url' }>
 }) {
-  const { url } = useItemBlobURL(attachment.itemURL, attachment.mimeType)
+  const { url } = useItemBlobURL(attachment.url, attachment.mimeType)
   return (
     <MediaPreview
       previewURL={url}
@@ -479,63 +474,5 @@ function UrlChipBody({
       filename={attachment.filename}
       byteSize={attachment.byteSize}
     />
-  )
-}
-
-function MediaPreview({
-  previewURL,
-  kind,
-  filename,
-  byteSize,
-}: {
-  previewURL: string | null
-  kind: AttachmentKind
-  filename: string
-  byteSize: number
-}) {
-  if (kind === 'image') {
-    if (!previewURL) {
-      return <div className="w-full h-48 bg-neutral-100 animate-pulse" />
-    }
-    return (
-      <img
-        src={previewURL}
-        alt={filename}
-        className="block w-full h-auto max-h-96 object-contain bg-neutral-100"
-      />
-    )
-  }
-  if (kind === 'audio') {
-    return (
-      <div className="p-3 space-y-1.5">
-        <p className="text-xs text-neutral-700 truncate">{filename}</p>
-        {previewURL ? (
-          <audio src={previewURL} controls className="w-full" />
-        ) : (
-          <div className="h-8 bg-neutral-100 rounded animate-pulse" />
-        )}
-      </div>
-    )
-  }
-  if (kind === 'video') {
-    if (!previewURL) {
-      return <div className="w-full h-48 bg-neutral-100 animate-pulse" />
-    }
-    return (
-      <video
-        src={previewURL}
-        controls
-        className="block w-full h-auto max-h-96 object-contain bg-black"
-      />
-    )
-  }
-  return (
-    <div className="flex items-center gap-2 p-3">
-      <FileText className="size-5 text-neutral-500 shrink-0" aria-hidden />
-      <div className="min-w-0 flex-1">
-        <p className="text-xs text-neutral-900 truncate">{filename}</p>
-        <p className="text-xs text-neutral-500">{formatBytes(byteSize)}</p>
-      </div>
-    </div>
   )
 }

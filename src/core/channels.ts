@@ -15,6 +15,7 @@ import {
 } from './crypto'
 import { downloadItem, uploadItem } from './sia'
 import {
+  type AttachmentRef,
   CHANNEL_MANIFEST_VERSION,
   type ChannelCover,
   type ChannelManifest,
@@ -30,7 +31,13 @@ export type CreatedChannel = {
 }
 
 export type AttachmentSource =
-  | { kind: 'url'; url: string }
+  | {
+      kind: 'url'
+      url: string
+      mimeType: string
+      filename?: string
+      byteSize: number
+    }
   | { kind: 'bytes'; bytes: Uint8Array; mimeType: string; filename: string }
 
 export type ItemPayload = {
@@ -41,7 +48,7 @@ export type ItemPayload = {
   bytes: Uint8Array
   durationMs?: number
   filename?: string
-  attachments?: string[]
+  attachments?: AttachmentRef[]
   attachmentSources?: AttachmentSource[]
 }
 

@@ -1,0 +1,126 @@
+import { FileText } from 'lucide-react'
+import type { AttachmentRef } from '../core/types'
+import { useItemBlobURL } from '../lib/useItemBytes'
+
+export type AttachmentKind = 'image' | 'audio' | 'video' | 'file'
+
+export function kindForMime(mimeType: string): AttachmentKind {
+  if (mimeType.startsWith('image/')) return 'image'
+  if (mimeType.startsWith('audio/')) return 'audio'
+  if (mimeType.startsWith('video/')) return 'video'
+  return 'file'
+}
+
+export function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
+  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`
+  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`
+}
+
+export function MediaPreview({
+  previewURL,
+  kind,
+  filename,
+  byteSize,
+}: {
+  previewURL: string | null
+  kind: AttachmentKind
+  filename: string
+  byteSize: number
+}) {
+  if (kind === 'image') {
+    if (!previewURL) {
+      return <div className="w-full h-48 bg-neutral-100 animate-pulse" />
+    }
+    return (
+      <img
+        src={previewURL}
+        alt={filename}
+        className="block w-full h-auto max-h-96 object-contain bg-neutral-100"
+      />
+    )
+  }
+  if (kind === 'audio') {
+    return (
+      <div className="p-3 space-y-1.5">
+        <p className="text-xs text-neutral-700 truncate">{filename}</p>
+        {previewURL ? (
+          <audio src={previewURL} controls className="w-full" />
+        ) : (
+          <div className="h-8 bg-neutral-100 rounded animate-pulse" />
+        )}
+      </div>
+    )
+  }
+  if (kind === 'video') {
+    if (!previewURL) {
+      return <div className="w-full h-48 bg-neutral-100 animate-pulse" />
+    }
+    return (
+      <video
+        src={previewURL}
+        controls
+        className="block w-full h-auto max-h-96 object-contain bg-black"
+      />
+    )
+  }
+  return (
+    <div className="flex items-center gap-2 p-3">
+      <FileText className="size-5 text-neutral-500 shrink-0" aria-hidden />
+      <div className="min-w-0 flex-1">
+        <p className="text-xs text-neutral-900 truncate">{filename}</p>
+        <p className="text-xs text-neutral-500">{formatBytes(byteSize)}</p>
+      </div>
+    </div>
+  )
+}
+
+function AttachmentTile({ attachment }: { attachment: AttachmentRef }) {
+  const { url } = useItemBlobURL(attachment.url, attachment.mimeType)
+  return (
+    <div className="bg-neutral-50 border border-neutral-200 rounded-lg overflow-hidden">
+      <MediaPreview
+        previewURL={url}
+        kind={kindForMime(attachment.mimeType)}
+        filename={attachment.filename ?? 'item'}
+        byteSize={attachment.byteSize}
+      />
+    </div>
+  )
+}
+
+const DISPLAY_CAP = 4
+
+export function AttachmentGrid({
+  attachments,
+}: {
+  attachments: AttachmentRef[]
+}) {
+  if (attachments.length === 0) return null
+  const showAll = attachments.length <= DISPLAY_CAP
+  const visible = showAll
+    ? attachments
+    : attachments.slice(0, DISPLAY_CAP - 1)
+  const overflow = showAll ? 0 : attachments.length - visible.length
+  const tilesCount = visible.length + (overflow > 0 ? 1 : 0)
+  return (
+    <div
+      className={`mt-3 grid gap-2 ${
+        tilesCount === 1 ? 'grid-cols-1' : 'grid-cols-2'
+      }`}
+    >
+      {visible.map((a, i) => (
+        // biome-ignore lint/suspicious/noArrayIndexKey: attachments is a stable manifest array
+        <AttachmentTile key={i} attachment={a} />
+      ))}
+      {overflow > 0 && (
+        <div className="bg-neutral-100 border border-neutral-200 rounded-lg flex items-center justify-center min-h-32">
+          <span className="text-sm font-medium text-neutral-600">
+            +{overflow} more
+          </span>
+        </div>
+      )}
+    </div>
+  )
+}

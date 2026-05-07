@@ -9,6 +9,7 @@ import { formatAbsolute, formatRelativeShort } from '../lib/time'
 import { useItemBlobURL, useItemBytes } from '../lib/useItemBytes'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
+import { AttachmentGrid } from './AttachmentMedia'
 import { ChannelAvatar } from './ChannelAvatar'
 import {
   availableFiltersFor,
@@ -201,12 +202,21 @@ export function HomeFeed({
 
 function PostBody({ item }: { item: ItemRef }) {
   const html = useMemo(() => renderMarkdown(item.summary ?? ''), [item.summary])
+  const hasBody = !!item.summary && item.summary.length > 0
+  const hasAttachments = !!item.attachments && item.attachments.length > 0
   return (
-    <div
-      className="markdown wrap-break-word text-sm text-neutral-900"
-      // biome-ignore lint/security/noDangerouslySetInnerHtml: HTML is sanitized via DOMPurify
-      dangerouslySetInnerHTML={{ __html: html }}
-    />
+    <>
+      {hasBody && (
+        <div
+          className="markdown wrap-break-word text-sm text-neutral-900"
+          // biome-ignore lint/security/noDangerouslySetInnerHtml: HTML is sanitized via DOMPurify
+          dangerouslySetInnerHTML={{ __html: html }}
+        />
+      )}
+      {hasAttachments && item.attachments && (
+        <AttachmentGrid attachments={item.attachments} />
+      )}
+    </>
   )
 }
 
