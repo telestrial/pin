@@ -352,9 +352,9 @@ export function Compose({ channels }: { channels: OwnedChannel[] }) {
             onChange={(e) => setBody(e.target.value)}
             onPaste={handleTextareaPaste}
             onFocus={() => setExpanded(true)}
-            rows={3}
+            rows={1}
             placeholder="What are you thinking about?"
-            className={`block w-full mt-1.5 bg-transparent text-lg text-black placeholder-neutral-400 focus:outline-none resize-none border-0 p-0 transition-[max-height] duration-300 ease-out ${
+            className={`block w-full mt-1.5 bg-transparent text-lg text-black placeholder-neutral-400 focus:outline-none resize-none border-0 p-0 field-sizing-content transition-[max-height] duration-300 ease-out ${
               expanded
                 ? 'max-h-80 overflow-y-auto'
                 : 'max-h-7 overflow-hidden'
