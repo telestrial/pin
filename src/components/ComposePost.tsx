@@ -1,5 +1,4 @@
 import { useState } from 'react'
-import { buildPinLink } from '../lib/pinLink'
 import { type OwnedChannel, useAuthStore } from '../stores/auth'
 import { useComposeStore } from '../stores/compose'
 import { useToastStore } from '../stores/toast'
@@ -17,7 +16,6 @@ export function ComposePost({
 }) {
   const sdk = useAuthStore((s) => s.sdk)
   const agent = useAuthStore((s) => s.atprotoAgent)
-  const myChannels = useAuthStore((s) => s.myChannels)
   const enqueue = useUploadQueueStore((s) => s.enqueue)
   const addToast = useToastStore((s) => s.addToast)
   const armedItem = useComposeStore((s) => s.armedItem)
@@ -32,10 +30,7 @@ export function ComposePost({
   function insertArmedPinLink(ta: HTMLTextAreaElement) {
     if (!armedItem) return
     const pos = ta.selectionStart ?? body.length
-    const owned = myChannels.find(
-      (c) => c.channelID === armedItem.channel.channelID,
-    )
-    const link = buildPinLink(armedItem, owned?.channelKey)
+    const link = armedItem.item.itemURL
     const next = body.slice(0, pos) + link + body.slice(ta.selectionEnd ?? pos)
     setBody(next)
     disarm()
