@@ -97,12 +97,19 @@ export function AttachmentGrid({
 }: {
   attachments: AttachmentRef[]
 }) {
-  if (attachments.length === 0) return null
-  const showAll = attachments.length <= DISPLAY_CAP
-  const visible = showAll
-    ? attachments
-    : attachments.slice(0, DISPLAY_CAP - 1)
-  const overflow = showAll ? 0 : attachments.length - visible.length
+  // Drop malformed entries — pre-AttachmentRef-schema posts (slice 1's URL-only
+  // shape) would arrive as bare strings here. Render nothing rather than crash;
+  // the user can republish if they want them rendered.
+  const valid = attachments.filter(
+    (a): a is AttachmentRef =>
+      typeof a === 'object' &&
+      a !== null &&
+      typeof (a as { mimeType?: unknown }).mimeType === 'string',
+  )
+  if (valid.length === 0) return null
+  const showAll = valid.length <= DISPLAY_CAP
+  const visible = showAll ? valid : valid.slice(0, DISPLAY_CAP - 1)
+  const overflow = showAll ? 0 : valid.length - visible.length
   const tilesCount = visible.length + (overflow > 0 ? 1 : 0)
   return (
     <div
