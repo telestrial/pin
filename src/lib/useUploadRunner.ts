@@ -73,18 +73,47 @@ export function useUploadRunner() {
       queue.setState(task.id, 'uploading', undefined)
 
       try {
-        const expected = expectedShardCount(task.payload.bytes.length)
+        // Sequential upload: each attachment-with-bytes, then body. Parallel
+        // would be faster for multi-file posts but adds bookkeeping (per-source
+        // progress, error aggregation); revisit when a real "this felt slow"
+        // moment shows up.
+        const sources = task.payload.attachmentSources ?? []
+        const allByteSizes = [
+          ...sources.flatMap((s) => (s.kind === 'bytes' ? [s.bytes.length] : [])),
+          task.payload.bytes.length,
+        ]
+        const totalExpected = allByteSizes.reduce(
+          (acc, n) => acc + expectedShardCount(n),
+          0,
+        )
         let count = 0
-        const uploaded = await uploadItem(sdk, task.payload.bytes, () => {
+        const onShard = () => {
           count += 1
-          const pct = Math.min(95, (count / expected) * 100)
+          const pct = Math.min(95, (count / totalExpected) * 100)
           useUploadQueueStore.getState().setProgress(task.id, pct)
-        })
+        }
+
+        const attachmentURLs: string[] = []
+        for (const src of sources) {
+          if (src.kind === 'url') {
+            attachmentURLs.push(src.url)
+          } else {
+            const a = await uploadItem(sdk, src.bytes, onShard)
+            attachmentURLs.push(a.itemURL)
+          }
+        }
+
+        const uploaded = await uploadItem(sdk, task.payload.bytes, onShard)
 
         queue.setState(task.id, 'publishing', undefined)
         useUploadQueueStore.getState().setProgress(task.id, 97)
 
-        const itemRef = buildItemRef(uploaded, task.payload)
+        const resolvedPayload = {
+          ...task.payload,
+          attachments: attachmentURLs.length > 0 ? attachmentURLs : undefined,
+          attachmentSources: undefined,
+        }
+        const itemRef = buildItemRef(uploaded, resolvedPayload)
 
         if (task.destination === 'library') {
           await pin.pin(sdk, { item: itemRef, channel: LIBRARY_CHANNEL })

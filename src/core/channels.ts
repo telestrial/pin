@@ -29,6 +29,10 @@ export type CreatedChannel = {
   subscribeURL: string
 }
 
+export type AttachmentSource =
+  | { kind: 'url'; url: string }
+  | { kind: 'bytes'; bytes: Uint8Array; mimeType: string; filename: string }
+
 export type ItemPayload = {
   type: ItemType
   title: string
@@ -38,6 +42,7 @@ export type ItemPayload = {
   durationMs?: number
   filename?: string
   attachments?: string[]
+  attachmentSources?: AttachmentSource[]
 }
 
 export async function createChannel(

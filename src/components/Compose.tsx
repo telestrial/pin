@@ -1,6 +1,6 @@
-import { Check, FileText, Loader2, X } from 'lucide-react'
+import { Check, FileText, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
-import { uploadItem } from '../core/sia'
+import type { AttachmentSource } from '../core/channels'
 import { NOTE_CHAR_LIMIT } from '../lib/constants'
 import { useItemBlobURL } from '../lib/useItemBytes'
 import { type OwnedChannel, useAuthStore } from '../stores/auth'
@@ -15,27 +15,21 @@ type AttachmentKind = 'image' | 'audio' | 'video' | 'file'
 type AttachmentDraft =
   | {
       tempID: string
-      status: 'uploading'
+      source: 'bytes'
       filename: string
       mimeType: string
       kind: AttachmentKind
+      bytes: Uint8Array
+      blobURL: string
     }
   | {
       tempID: string
-      status: 'ready'
+      source: 'url'
       filename: string
       mimeType: string
       kind: AttachmentKind
       itemURL: string
       byteSize: number
-    }
-  | {
-      tempID: string
-      status: 'error'
-      filename: string
-      mimeType: string
-      kind: AttachmentKind
-      error: string
     }
 
 function kindForMime(mimeType: string): AttachmentKind {
@@ -103,10 +97,7 @@ export function Compose({ channels }: { channels: OwnedChannel[] }) {
   const trimmed = body.trim()
   const remaining = NOTE_CHAR_LIMIT - body.length
   const overLimit = remaining < 0
-  const hasReadyAttachments = attachments.some((a) => a.status === 'ready')
-  const anyUploading = attachments.some((a) => a.status === 'uploading')
-  const canSubmit =
-    !overLimit && !anyUploading && (!!trimmed || hasReadyAttachments)
+  const canSubmit = !overLimit && (!!trimmed || attachments.length > 0)
   const handleForAvatar = atprotoHandle ?? ''
 
   function attachArmedItem() {
@@ -115,7 +106,7 @@ export function Compose({ channels }: { channels: OwnedChannel[] }) {
       ...prev,
       {
         tempID: newTempID(),
-        status: 'ready',
+        source: 'url',
         filename: armedItem.item.filename ?? armedItem.item.title ?? 'item',
         mimeType: armedItem.item.mimeType,
         kind: kindForMime(armedItem.item.mimeType),
@@ -128,52 +119,33 @@ export function Compose({ channels }: { channels: OwnedChannel[] }) {
   }
 
   async function attachFile(file: File) {
-    if (!sdk) {
-      addToast('Sign in first')
-      return
-    }
-    const tempID = newTempID()
     const filename = file.name || 'file'
     const mimeType = file.type || 'application/octet-stream'
     const kind = kindForMime(mimeType)
+    const buffer = await file.arrayBuffer()
+    const bytes = new Uint8Array(buffer)
+    const blobURL = URL.createObjectURL(file)
     setAttachments((prev) => [
       ...prev,
-      { tempID, status: 'uploading', filename, mimeType, kind },
+      {
+        tempID: newTempID(),
+        source: 'bytes',
+        filename,
+        mimeType,
+        kind,
+        bytes,
+        blobURL,
+      },
     ])
     if (!expanded) setExpanded(true)
-    try {
-      const buffer = await file.arrayBuffer()
-      const bytes = new Uint8Array(buffer)
-      const uploaded = await uploadItem(sdk, bytes)
-      setAttachments((prev) =>
-        prev.map((a) =>
-          a.tempID === tempID
-            ? {
-                tempID,
-                status: 'ready',
-                filename,
-                mimeType,
-                kind,
-                itemURL: uploaded.itemURL,
-                byteSize: uploaded.byteSize,
-              }
-            : a,
-        ),
-      )
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : 'Upload failed'
-      setAttachments((prev) =>
-        prev.map((a) =>
-          a.tempID === tempID
-            ? { tempID, status: 'error', filename, mimeType, kind, error: msg }
-            : a,
-        ),
-      )
-    }
   }
 
   function removeAttachment(tempID: string) {
-    setAttachments((prev) => prev.filter((a) => a.tempID !== tempID))
+    setAttachments((prev) => {
+      const target = prev.find((a) => a.tempID === tempID)
+      if (target?.source === 'bytes') URL.revokeObjectURL(target.blobURL)
+      return prev.filter((a) => a.tempID !== tempID)
+    })
   }
 
   function isAttachZoneInteractive(target: EventTarget | null): boolean {
@@ -241,23 +213,38 @@ export function Compose({ channels }: { channels: OwnedChannel[] }) {
       return
     }
     setError(null)
-    const attachmentURLs = attachments
-      .filter((a): a is Extract<AttachmentDraft, { status: 'ready' }> =>
-        a.status === 'ready',
-      )
-      .map((a) => a.itemURL)
+    const attachmentSources: AttachmentSource[] = attachments.map((a) =>
+      a.source === 'url'
+        ? { kind: 'url', url: a.itemURL }
+        : {
+            kind: 'bytes',
+            bytes: a.bytes,
+            mimeType: a.mimeType,
+            filename: a.filename,
+          },
+    )
+    // sdk.upload rejects 0-byte uploads (verified day-0). For attachment-only
+    // posts, encode a single space so the body object is valid; the renderer
+    // reads summary (which stays as the empty trimmed string).
+    const bodyBytes = trimmed
+      ? new TextEncoder().encode(trimmed)
+      : new Uint8Array([0x20])
     enqueue({
       payload: {
         type: 'text',
         title: '',
         summary: trimmed,
         mimeType: 'text/markdown',
-        bytes: new TextEncoder().encode(trimmed),
-        attachments: attachmentURLs.length > 0 ? attachmentURLs : undefined,
+        bytes: bodyBytes,
+        attachmentSources:
+          attachmentSources.length > 0 ? attachmentSources : undefined,
       },
       channelIDs: [channel.channelID],
     })
     addToast('Queued for publish')
+    for (const a of attachments) {
+      if (a.source === 'bytes') URL.revokeObjectURL(a.blobURL)
+    }
     setBody('')
     setAttachments([])
     setExpanded(false)
@@ -373,20 +360,24 @@ export function Compose({ channels }: { channels: OwnedChannel[] }) {
                 : 'max-h-7 overflow-hidden'
             }`}
           />
-
-          {attachments.length > 0 && (
-            <div className="flex flex-wrap gap-2 mt-3">
-              {attachments.map((a) => (
-                <AttachmentChip
-                  key={a.tempID}
-                  attachment={a}
-                  onRemove={() => removeAttachment(a.tempID)}
-                />
-              ))}
-            </div>
-          )}
         </div>
       </div>
+
+      {attachments.length > 0 && (
+        <div
+          className={`mt-3 grid gap-2 ${
+            attachments.length === 1 ? 'grid-cols-1' : 'grid-cols-2'
+          }`}
+        >
+          {attachments.map((a) => (
+            <AttachmentChip
+              key={a.tempID}
+              attachment={a}
+              onRemove={() => removeAttachment(a.tempID)}
+            />
+          ))}
+        </div>
+      )}
 
       <div
         aria-hidden={!expanded}
@@ -441,7 +432,6 @@ function AttachmentChip({
     <div
       data-attach-chip="true"
       className="relative group bg-neutral-50 border border-neutral-200 rounded-lg overflow-hidden"
-      style={{ width: 'calc(50% - 0.25rem)' }}
     >
       <button
         type="button"
@@ -452,125 +442,100 @@ function AttachmentChip({
         <X className="size-3.5" aria-hidden />
       </button>
 
-      {attachment.status === 'uploading' && (
-        <div className="flex items-center gap-2 p-3">
-          <Loader2 className="size-4 text-neutral-500 animate-spin" aria-hidden />
-          <span className="text-xs text-neutral-700 truncate">
-            {attachment.filename}
-          </span>
-        </div>
-      )}
-
-      {attachment.status === 'error' && (
-        <div className="p-3 space-y-1">
-          <p className="text-xs text-red-600 font-medium">Upload failed</p>
-          <p className="text-xs text-neutral-600 truncate">
-            {attachment.filename}
-          </p>
-          <p className="text-xs text-neutral-500 wrap-break-word">
-            {attachment.error}
-          </p>
-        </div>
-      )}
-
-      {attachment.status === 'ready' && (
-        <ReadyChipBody attachment={attachment} />
+      {attachment.source === 'bytes' ? (
+        <BytesChipBody attachment={attachment} />
+      ) : (
+        <UrlChipBody attachment={attachment} />
       )}
     </div>
   )
 }
 
-function ReadyChipBody({
+function BytesChipBody({
   attachment,
 }: {
-  attachment: Extract<AttachmentDraft, { status: 'ready' }>
+  attachment: Extract<AttachmentDraft, { source: 'bytes' }>
 }) {
-  if (attachment.kind === 'image') {
-    return <ImageChipPreview itemURL={attachment.itemURL} mimeType={attachment.mimeType} alt={attachment.filename} />
+  return (
+    <MediaPreview
+      previewURL={attachment.blobURL}
+      kind={attachment.kind}
+      filename={attachment.filename}
+      byteSize={attachment.bytes.length}
+    />
+  )
+}
+
+function UrlChipBody({
+  attachment,
+}: {
+  attachment: Extract<AttachmentDraft, { source: 'url' }>
+}) {
+  const { url } = useItemBlobURL(attachment.itemURL, attachment.mimeType)
+  return (
+    <MediaPreview
+      previewURL={url}
+      kind={attachment.kind}
+      filename={attachment.filename}
+      byteSize={attachment.byteSize}
+    />
+  )
+}
+
+function MediaPreview({
+  previewURL,
+  kind,
+  filename,
+  byteSize,
+}: {
+  previewURL: string | null
+  kind: AttachmentKind
+  filename: string
+  byteSize: number
+}) {
+  if (kind === 'image') {
+    if (!previewURL) {
+      return <div className="w-full h-48 bg-neutral-100 animate-pulse" />
+    }
+    return (
+      <img
+        src={previewURL}
+        alt={filename}
+        className="block w-full h-auto max-h-96 object-contain bg-neutral-100"
+      />
+    )
   }
-  if (attachment.kind === 'audio') {
-    return <AudioChipPreview itemURL={attachment.itemURL} mimeType={attachment.mimeType} filename={attachment.filename} />
+  if (kind === 'audio') {
+    return (
+      <div className="p-3 space-y-1.5">
+        <p className="text-xs text-neutral-700 truncate">{filename}</p>
+        {previewURL ? (
+          <audio src={previewURL} controls className="w-full" />
+        ) : (
+          <div className="h-8 bg-neutral-100 rounded animate-pulse" />
+        )}
+      </div>
+    )
   }
-  if (attachment.kind === 'video') {
-    return <VideoChipPreview itemURL={attachment.itemURL} mimeType={attachment.mimeType} />
+  if (kind === 'video') {
+    if (!previewURL) {
+      return <div className="w-full h-48 bg-neutral-100 animate-pulse" />
+    }
+    return (
+      <video
+        src={previewURL}
+        controls
+        className="block w-full h-auto max-h-96 object-contain bg-black"
+      />
+    )
   }
   return (
     <div className="flex items-center gap-2 p-3">
       <FileText className="size-5 text-neutral-500 shrink-0" aria-hidden />
       <div className="min-w-0 flex-1">
-        <p className="text-xs text-neutral-900 truncate">
-          {attachment.filename}
-        </p>
-        <p className="text-xs text-neutral-500">
-          {formatBytes(attachment.byteSize)}
-        </p>
+        <p className="text-xs text-neutral-900 truncate">{filename}</p>
+        <p className="text-xs text-neutral-500">{formatBytes(byteSize)}</p>
       </div>
     </div>
-  )
-}
-
-function ImageChipPreview({
-  itemURL,
-  mimeType,
-  alt,
-}: {
-  itemURL: string
-  mimeType: string
-  alt: string
-}) {
-  const { url } = useItemBlobURL(itemURL, mimeType)
-  if (!url) {
-    return (
-      <div className="w-full h-32 bg-neutral-100 animate-pulse" />
-    )
-  }
-  return (
-    <img
-      src={url}
-      alt={alt}
-      className="block w-full h-32 object-cover bg-neutral-100"
-    />
-  )
-}
-
-function AudioChipPreview({
-  itemURL,
-  mimeType,
-  filename,
-}: {
-  itemURL: string
-  mimeType: string
-  filename: string
-}) {
-  const { url } = useItemBlobURL(itemURL, mimeType)
-  return (
-    <div className="p-3 space-y-1.5">
-      <p className="text-xs text-neutral-700 truncate">{filename}</p>
-      {url ? (
-        <audio src={url} controls className="w-full" />
-      ) : (
-        <div className="h-8 bg-neutral-100 rounded animate-pulse" />
-      )}
-    </div>
-  )
-}
-
-function VideoChipPreview({
-  itemURL,
-  mimeType,
-}: {
-  itemURL: string
-  mimeType: string
-}) {
-  const { url } = useItemBlobURL(itemURL, mimeType)
-  if (!url) {
-    return <div className="w-full h-32 bg-neutral-100 animate-pulse" />
-  }
-  return (
-    <video
-      src={url}
-      controls
-      className="block w-full h-32 object-contain bg-black"
-    />
   )
 }
