@@ -37,6 +37,7 @@ export type ItemPayload = {
   bytes: Uint8Array
   durationMs?: number
   filename?: string
+  attachments?: string[]
 }
 
 export async function createChannel(
@@ -162,6 +163,7 @@ export function buildItemRef(
     byteSize: uploaded.byteSize,
     durationMs: payload.durationMs,
     filename: payload.filename,
+    attachments: payload.attachments,
   }
 }
 

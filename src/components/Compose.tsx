@@ -1,12 +1,60 @@
-import { Check } from 'lucide-react'
+import { Check, FileText, Loader2, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
+import { uploadItem } from '../core/sia'
 import { NOTE_CHAR_LIMIT } from '../lib/constants'
+import { useItemBlobURL } from '../lib/useItemBytes'
 import { type OwnedChannel, useAuthStore } from '../stores/auth'
 import { useComposeStore } from '../stores/compose'
 import { useFeedStore } from '../stores/feed'
 import { useToastStore } from '../stores/toast'
 import { useUploadQueueStore } from '../stores/uploadQueue'
 import { ChannelAvatar } from './ChannelAvatar'
+
+type AttachmentKind = 'image' | 'audio' | 'video' | 'file'
+
+type AttachmentDraft =
+  | {
+      tempID: string
+      status: 'uploading'
+      filename: string
+      mimeType: string
+      kind: AttachmentKind
+    }
+  | {
+      tempID: string
+      status: 'ready'
+      filename: string
+      mimeType: string
+      kind: AttachmentKind
+      itemURL: string
+      byteSize: number
+    }
+  | {
+      tempID: string
+      status: 'error'
+      filename: string
+      mimeType: string
+      kind: AttachmentKind
+      error: string
+    }
+
+function kindForMime(mimeType: string): AttachmentKind {
+  if (mimeType.startsWith('image/')) return 'image'
+  if (mimeType.startsWith('audio/')) return 'audio'
+  if (mimeType.startsWith('video/')) return 'video'
+  return 'file'
+}
+
+function newTempID(): string {
+  return `att-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+}
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
+  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`
+  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`
+}
 
 export function Compose({ channels }: { channels: OwnedChannel[] }) {
   const sdk = useAuthStore((s) => s.sdk)
@@ -23,6 +71,8 @@ export function Compose({ channels }: { channels: OwnedChannel[] }) {
   const [error, setError] = useState<string | null>(null)
   const [expanded, setExpanded] = useState(false)
   const [voiceOpen, setVoiceOpen] = useState(false)
+  const [attachments, setAttachments] = useState<AttachmentDraft[]>([])
+  const [isDragging, setIsDragging] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const voiceWrapperRef = useRef<HTMLDivElement | null>(null)
 
@@ -53,39 +103,134 @@ export function Compose({ channels }: { channels: OwnedChannel[] }) {
   const trimmed = body.trim()
   const remaining = NOTE_CHAR_LIMIT - body.length
   const overLimit = remaining < 0
-  const canSubmit = !!trimmed && !overLimit
+  const hasReadyAttachments = attachments.some((a) => a.status === 'ready')
+  const anyUploading = attachments.some((a) => a.status === 'uploading')
+  const canSubmit =
+    !overLimit && !anyUploading && (!!trimmed || hasReadyAttachments)
   const handleForAvatar = atprotoHandle ?? ''
 
-  function insertArmedPinLink(ta: HTMLTextAreaElement) {
+  function attachArmedItem() {
     if (!armedItem) return
-    const pos = ta.selectionStart ?? body.length
-    const link = armedItem.item.itemURL
-    const next = body.slice(0, pos) + link + body.slice(ta.selectionEnd ?? pos)
-    setBody(next)
+    setAttachments((prev) => [
+      ...prev,
+      {
+        tempID: newTempID(),
+        status: 'ready',
+        filename: armedItem.item.filename ?? armedItem.item.title ?? 'item',
+        mimeType: armedItem.item.mimeType,
+        kind: kindForMime(armedItem.item.mimeType),
+        itemURL: armedItem.item.itemURL,
+        byteSize: armedItem.item.byteSize,
+      },
+    ])
     disarm()
-    requestAnimationFrame(() => {
-      ta.focus()
-      const caret = pos + link.length
-      ta.setSelectionRange(caret, caret)
-    })
-  }
-
-  function handleClick(e: React.MouseEvent<HTMLTextAreaElement>) {
     if (!expanded) setExpanded(true)
-    if (armedItem) insertArmedPinLink(e.currentTarget)
   }
 
-  function handlePaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
+  async function attachFile(file: File) {
+    if (!sdk) {
+      addToast('Sign in first')
+      return
+    }
+    const tempID = newTempID()
+    const filename = file.name || 'file'
+    const mimeType = file.type || 'application/octet-stream'
+    const kind = kindForMime(mimeType)
+    setAttachments((prev) => [
+      ...prev,
+      { tempID, status: 'uploading', filename, mimeType, kind },
+    ])
+    if (!expanded) setExpanded(true)
+    try {
+      const buffer = await file.arrayBuffer()
+      const bytes = new Uint8Array(buffer)
+      const uploaded = await uploadItem(sdk, bytes)
+      setAttachments((prev) =>
+        prev.map((a) =>
+          a.tempID === tempID
+            ? {
+                tempID,
+                status: 'ready',
+                filename,
+                mimeType,
+                kind,
+                itemURL: uploaded.itemURL,
+                byteSize: uploaded.byteSize,
+              }
+            : a,
+        ),
+      )
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Upload failed'
+      setAttachments((prev) =>
+        prev.map((a) =>
+          a.tempID === tempID
+            ? { tempID, status: 'error', filename, mimeType, kind, error: msg }
+            : a,
+        ),
+      )
+    }
+  }
+
+  function removeAttachment(tempID: string) {
+    setAttachments((prev) => prev.filter((a) => a.tempID !== tempID))
+  }
+
+  function isAttachZoneInteractive(target: EventTarget | null): boolean {
+    if (!(target instanceof Element)) return true
+    return !!target.closest(
+      'button, a, select, [role="menuitem"], input, [data-attach-chip]',
+    )
+  }
+
+  function handleAttachZoneClick(e: React.MouseEvent<HTMLDivElement>) {
+    if (!armedItem) {
+      if (!expanded) setExpanded(true)
+      return
+    }
+    if (isAttachZoneInteractive(e.target)) return
+    attachArmedItem()
+  }
+
+  function handleTextareaPaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
     if (!armedItem) return
     e.preventDefault()
-    if (!expanded) setExpanded(true)
-    insertArmedPinLink(e.currentTarget)
+    attachArmedItem()
   }
 
   function handleFormBlur(e: React.FocusEvent<HTMLFormElement>) {
-    // Don't collapse when focus moves inside the form (Publish button, voice popover).
     if (e.currentTarget.contains(e.relatedTarget)) return
-    if (!body.trim() && !armedItem) setExpanded(false)
+    if (!body.trim() && attachments.length === 0 && !armedItem) {
+      setExpanded(false)
+    }
+  }
+
+  function isAcceptedDrag(e: React.DragEvent): boolean {
+    return e.dataTransfer.types.includes('Files')
+  }
+
+  function handleDragEnter(e: React.DragEvent) {
+    if (!isAcceptedDrag(e)) return
+    e.preventDefault()
+    setIsDragging(true)
+  }
+
+  function handleDragOver(e: React.DragEvent) {
+    if (!isAcceptedDrag(e)) return
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'copy'
+  }
+
+  function handleDragLeave(e: React.DragEvent) {
+    if (e.currentTarget === e.target) setIsDragging(false)
+  }
+
+  function handleDrop(e: React.DragEvent) {
+    e.preventDefault()
+    setIsDragging(false)
+    const files = Array.from(e.dataTransfer.files)
+    if (files.length === 0) return
+    for (const file of files) attachFile(file)
   }
 
   function handleSubmit(e: React.FormEvent) {
@@ -96,6 +241,11 @@ export function Compose({ channels }: { channels: OwnedChannel[] }) {
       return
     }
     setError(null)
+    const attachmentURLs = attachments
+      .filter((a): a is Extract<AttachmentDraft, { status: 'ready' }> =>
+        a.status === 'ready',
+      )
+      .map((a) => a.itemURL)
     enqueue({
       payload: {
         type: 'text',
@@ -103,11 +253,13 @@ export function Compose({ channels }: { channels: OwnedChannel[] }) {
         summary: trimmed,
         mimeType: 'text/markdown',
         bytes: new TextEncoder().encode(trimmed),
+        attachments: attachmentURLs.length > 0 ? attachmentURLs : undefined,
       },
       channelIDs: [channel.channelID],
     })
     addToast('Queued for publish')
     setBody('')
+    setAttachments([])
     setExpanded(false)
   }
 
@@ -115,9 +267,25 @@ export function Compose({ channels }: { channels: OwnedChannel[] }) {
     <form
       onSubmit={handleSubmit}
       onBlur={handleFormBlur}
+      onDragEnter={handleDragEnter}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
       data-compose-area="true"
-      className="bg-white border border-neutral-200 rounded-lg p-3"
+      className={`relative bg-white border rounded-lg p-3 transition-colors ${
+        isDragging
+          ? 'border-green-600 ring-2 ring-green-600/30'
+          : 'border-neutral-200'
+      }`}
     >
+      {isDragging && (
+        <div className="absolute inset-0 z-10 rounded-lg bg-green-50/90 flex items-center justify-center pointer-events-none">
+          <p className="text-sm font-medium text-green-700">
+            Drop to attach
+          </p>
+        </div>
+      )}
+
       <div className="flex items-start gap-3">
         <div ref={voiceWrapperRef} className="relative shrink-0">
           {multiVoice ? (
@@ -186,21 +354,38 @@ export function Compose({ channels }: { channels: OwnedChannel[] }) {
           )}
         </div>
 
-        <textarea
-          ref={textareaRef}
-          value={body}
-          onChange={(e) => setBody(e.target.value)}
-          onClick={handleClick}
-          onPaste={handlePaste}
-          onFocus={() => setExpanded(true)}
-          rows={3}
-          placeholder="What are you thinking about?"
-          className={`flex-1 min-w-0 mt-1.5 bg-transparent text-lg text-black placeholder-neutral-400 focus:outline-none resize-none border-0 p-0 transition-[max-height] duration-300 ease-out ${
-            expanded
-              ? 'max-h-80 overflow-y-auto'
-              : 'max-h-7 overflow-hidden'
-          }`}
-        />
+        {/* biome-ignore lint/a11y/useKeyWithClickEvents: textarea inside handles keyboard */}
+        <div
+          className="flex-1 min-w-0"
+          onClick={handleAttachZoneClick}
+        >
+          <textarea
+            ref={textareaRef}
+            value={body}
+            onChange={(e) => setBody(e.target.value)}
+            onPaste={handleTextareaPaste}
+            onFocus={() => setExpanded(true)}
+            rows={3}
+            placeholder="What are you thinking about?"
+            className={`block w-full mt-1.5 bg-transparent text-lg text-black placeholder-neutral-400 focus:outline-none resize-none border-0 p-0 transition-[max-height] duration-300 ease-out ${
+              expanded
+                ? 'max-h-80 overflow-y-auto'
+                : 'max-h-7 overflow-hidden'
+            }`}
+          />
+
+          {attachments.length > 0 && (
+            <div className="flex flex-wrap gap-2 mt-3">
+              {attachments.map((a) => (
+                <AttachmentChip
+                  key={a.tempID}
+                  attachment={a}
+                  onRemove={() => removeAttachment(a.tempID)}
+                />
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
       <div
@@ -242,5 +427,150 @@ export function Compose({ channels }: { channels: OwnedChannel[] }) {
         </div>
       </div>
     </form>
+  )
+}
+
+function AttachmentChip({
+  attachment,
+  onRemove,
+}: {
+  attachment: AttachmentDraft
+  onRemove: () => void
+}) {
+  return (
+    <div
+      data-attach-chip="true"
+      className="relative group bg-neutral-50 border border-neutral-200 rounded-lg overflow-hidden"
+      style={{ width: 'calc(50% - 0.25rem)' }}
+    >
+      <button
+        type="button"
+        onClick={onRemove}
+        aria-label={`Remove ${attachment.filename}`}
+        className="absolute top-1 right-1 z-10 size-6 flex items-center justify-center rounded-full bg-black/60 text-white hover:bg-black/80 cursor-pointer"
+      >
+        <X className="size-3.5" aria-hidden />
+      </button>
+
+      {attachment.status === 'uploading' && (
+        <div className="flex items-center gap-2 p-3">
+          <Loader2 className="size-4 text-neutral-500 animate-spin" aria-hidden />
+          <span className="text-xs text-neutral-700 truncate">
+            {attachment.filename}
+          </span>
+        </div>
+      )}
+
+      {attachment.status === 'error' && (
+        <div className="p-3 space-y-1">
+          <p className="text-xs text-red-600 font-medium">Upload failed</p>
+          <p className="text-xs text-neutral-600 truncate">
+            {attachment.filename}
+          </p>
+          <p className="text-xs text-neutral-500 wrap-break-word">
+            {attachment.error}
+          </p>
+        </div>
+      )}
+
+      {attachment.status === 'ready' && (
+        <ReadyChipBody attachment={attachment} />
+      )}
+    </div>
+  )
+}
+
+function ReadyChipBody({
+  attachment,
+}: {
+  attachment: Extract<AttachmentDraft, { status: 'ready' }>
+}) {
+  if (attachment.kind === 'image') {
+    return <ImageChipPreview itemURL={attachment.itemURL} mimeType={attachment.mimeType} alt={attachment.filename} />
+  }
+  if (attachment.kind === 'audio') {
+    return <AudioChipPreview itemURL={attachment.itemURL} mimeType={attachment.mimeType} filename={attachment.filename} />
+  }
+  if (attachment.kind === 'video') {
+    return <VideoChipPreview itemURL={attachment.itemURL} mimeType={attachment.mimeType} />
+  }
+  return (
+    <div className="flex items-center gap-2 p-3">
+      <FileText className="size-5 text-neutral-500 shrink-0" aria-hidden />
+      <div className="min-w-0 flex-1">
+        <p className="text-xs text-neutral-900 truncate">
+          {attachment.filename}
+        </p>
+        <p className="text-xs text-neutral-500">
+          {formatBytes(attachment.byteSize)}
+        </p>
+      </div>
+    </div>
+  )
+}
+
+function ImageChipPreview({
+  itemURL,
+  mimeType,
+  alt,
+}: {
+  itemURL: string
+  mimeType: string
+  alt: string
+}) {
+  const { url } = useItemBlobURL(itemURL, mimeType)
+  if (!url) {
+    return (
+      <div className="w-full h-32 bg-neutral-100 animate-pulse" />
+    )
+  }
+  return (
+    <img
+      src={url}
+      alt={alt}
+      className="block w-full h-32 object-cover bg-neutral-100"
+    />
+  )
+}
+
+function AudioChipPreview({
+  itemURL,
+  mimeType,
+  filename,
+}: {
+  itemURL: string
+  mimeType: string
+  filename: string
+}) {
+  const { url } = useItemBlobURL(itemURL, mimeType)
+  return (
+    <div className="p-3 space-y-1.5">
+      <p className="text-xs text-neutral-700 truncate">{filename}</p>
+      {url ? (
+        <audio src={url} controls className="w-full" />
+      ) : (
+        <div className="h-8 bg-neutral-100 rounded animate-pulse" />
+      )}
+    </div>
+  )
+}
+
+function VideoChipPreview({
+  itemURL,
+  mimeType,
+}: {
+  itemURL: string
+  mimeType: string
+}) {
+  const { url } = useItemBlobURL(itemURL, mimeType)
+  if (!url) {
+    return <div className="w-full h-32 bg-neutral-100 animate-pulse" />
+  }
+  return (
+    <video
+      src={url}
+      controls
+      className="block w-full h-32 object-contain bg-black"
+    />
   )
 }

@@ -14,6 +14,7 @@ export type ItemRef = {
   byteSize: number
   durationMs?: number
   filename?: string
+  attachments?: string[]
 }
 
 export type ChannelCover = {
