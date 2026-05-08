@@ -284,15 +284,15 @@ export function PinSidebar({
               className="size-3.5 text-neutral-500"
               aria-hidden="true"
             />
-            <h2 className="text-xs font-semibold tracking-wide uppercase text-neutral-500">
-              My Storage
-            </h2>
             {repackRunning && (
               <Box
                 className="size-3.5 text-neutral-500 animate-fade-in"
                 aria-label="Repacking storage"
               />
             )}
+            <h2 className="text-xs font-semibold tracking-wide uppercase text-neutral-500">
+              My Storage
+            </h2>
           </div>
           <div className="space-y-2">
             <div
