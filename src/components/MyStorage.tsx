@@ -6,8 +6,9 @@ import { useFeedStore } from '../stores/feed'
 import { LIBRARY_CHANNEL } from '../lib/pinUpload'
 import { type PinnedItemRef, usePinStore } from '../stores/pin'
 import { useToastStore } from '../stores/toast'
+import { useUploadQueueStore } from '../stores/uploadQueue'
 import { ChannelAvatar } from './ChannelAvatar'
-import { formatBytes } from './AttachmentMedia'
+import { formatBytes, kindForMime } from './AttachmentMedia'
 import { ItemTile } from './ItemTile'
 import type { TileChannel, TileSource } from './ItemTile'
 import { PIN_ITEM_DRAG_TYPE } from './PinSidebar'
@@ -40,8 +41,10 @@ export function MyStorage({
   const isPinning = usePinStore((s) => s.isPinning)
   const unpin = usePinStore((s) => s.unpin)
   const addToast = useToastStore((s) => s.addToast)
+  const enqueue = useUploadQueueStore((s) => s.enqueue)
 
   const [selectedChannel, setSelectedChannel] = useState<string | null>(null)
+  const [isDragging, setIsDragging] = useState(false)
 
   const myChannelIDSet = useMemo(
     () => new Set(myChannels.map((c) => c.channelID)),
@@ -131,12 +134,85 @@ export function MyStorage({
     }
   }
 
+  function isFileDrag(e: React.DragEvent): boolean {
+    // OS-file drag (always advertises 'Files'); in-app item drags advertise
+    // PIN_ITEM_DRAG_TYPE and shouldn't trigger the intake overlay.
+    return e.dataTransfer.types.includes('Files')
+  }
+
+  function handleDragEnter(e: React.DragEvent) {
+    if (!isFileDrag(e)) return
+    e.preventDefault()
+    setIsDragging(true)
+  }
+
+  function handleDragOver(e: React.DragEvent) {
+    if (!isFileDrag(e)) return
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'copy'
+  }
+
+  function handleDragLeave(e: React.DragEvent) {
+    if (e.currentTarget === e.target) setIsDragging(false)
+  }
+
+  async function intakeFile(file: File) {
+    const buf = await file.arrayBuffer()
+    const bytes = new Uint8Array(buf)
+    const mime = file.type || 'application/octet-stream'
+    const type = kindForMime(mime)
+    const baseTitle = file.name.replace(/\.[^/.]+$/, '') || file.name
+    enqueue({
+      payload: {
+        type,
+        title: baseTitle,
+        mimeType: mime,
+        bytes,
+        filename: file.name,
+      },
+      channelIDs: [],
+      destination: 'library',
+    })
+  }
+
+  async function handleDrop(e: React.DragEvent) {
+    e.preventDefault()
+    setIsDragging(false)
+    const files = Array.from(e.dataTransfer.files)
+    if (files.length === 0) return
+    for (const file of files) {
+      await intakeFile(file)
+    }
+    addToast(
+      files.length === 1
+        ? `Pinning "${files[0].name}"`
+        : `Pinning ${files.length} files`,
+    )
+  }
+
   return (
     <div className="flex-1 p-6">
       <div className="max-w-7xl mx-auto flex flex-col lg:flex-row lg:items-start gap-6">
         {sidebar}
         <div className="flex-1 min-w-0">
-          <div className="bg-white border border-neutral-200 rounded-lg p-5 space-y-5">
+          <div
+            onDragEnter={handleDragEnter}
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
+            className={`relative bg-white border rounded-lg p-5 space-y-5 transition-colors ${
+              isDragging
+                ? 'border-green-600 ring-2 ring-green-600/30'
+                : 'border-neutral-200'
+            }`}
+          >
+            {isDragging && (
+              <div className="absolute inset-0 z-10 rounded-lg bg-green-50/90 flex items-center justify-center pointer-events-none">
+                <p className="text-sm font-medium text-green-700">
+                  Drop to add to your library
+                </p>
+              </div>
+            )}
             <div className="flex items-start justify-between gap-4">
               <h1 className="text-2xl font-semibold text-neutral-900">
                 My Storage
