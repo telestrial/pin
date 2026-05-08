@@ -12,6 +12,7 @@ import { formatBytes, kindForMime } from './AttachmentMedia'
 import { ItemTile } from './ItemTile'
 import type { TileChannel, TileSource } from './ItemTile'
 import { PIN_ITEM_DRAG_TYPE } from './PinSidebar'
+import { SlabInspector } from './SlabInspector'
 
 type TileEntry = {
   item: ItemRef
@@ -365,6 +366,13 @@ export function MyStorage({
                 })}
               </div>
             )}
+
+            {/* Inspection view — debug-shape, not final UX. Surfaces the
+                actual slab landscape so we can see what the repacker sees
+                and what's left as orphans. Remove when packing is settled. */}
+            <div className="pt-5 border-t border-neutral-200">
+              <SlabInspector />
+            </div>
           </div>
         </div>
         {rightSidebar}
