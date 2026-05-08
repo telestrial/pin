@@ -32,10 +32,13 @@ function displayTitle(task: UploadTask): string {
 
 export function useUploadRunner() {
   const sdk = useAuthStore((s) => s.sdk)
-  const agent = useAuthStore((s) => s.atprotoAgent)
 
   useEffect(() => {
-    if (!sdk || !agent) return
+    // Library uploads (destination: 'library') only need the Sia SDK —
+    // no atproto manifest write. Channel uploads need an agent too,
+    // checked inside runOne so a missing agent fails just that task
+    // instead of silently parking the whole queue.
+    if (!sdk) return
     let running = false
 
     const processNext = async () => {
@@ -70,6 +73,15 @@ export function useUploadRunner() {
 
       if (task.destination === 'channel' && channels.length === 0) {
         queue.setState(task.id, 'failed', 'Channel no longer exists')
+        return
+      }
+
+      if (task.destination === 'channel' && !auth.atprotoAgent) {
+        queue.setState(
+          task.id,
+          'failed',
+          'Sign in to Bluesky to publish to a channel',
+        )
         return
       }
 
@@ -140,6 +152,8 @@ export function useUploadRunner() {
         if (task.destination === 'library') {
           await pin.pin(sdk, { item: itemRef, channel: LIBRARY_CHANNEL })
         } else {
+          // Non-null per the agent guard above for channel destinations.
+          const agent = auth.atprotoAgent!
           for (const ch of channels) {
             await appendItemToChannel(agent, ch, itemRef)
             const sub = auth.subscriptions.find(
@@ -178,5 +192,5 @@ export function useUploadRunner() {
     processNext()
 
     return unsub
-  }, [sdk, agent])
+  }, [sdk])
 }
