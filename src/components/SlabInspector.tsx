@@ -43,8 +43,10 @@ function shortID(id: string): string {
 
 export function SlabInspector() {
   const sdk = useAuthStore((s) => s.sdk)
+  const settingsObjectID = useAuthStore((s) => s.settingsObjectID)
   const myChannels = useAuthStore((s) => s.myChannels)
   const feedEntries = useFeedStore((s) => s.entries)
+  const manifests = useFeedStore((s) => s.manifests)
   const pinned = usePinStore((s) => s.pinned)
 
   const [slabs, setSlabs] = useState<SlabGroup[] | null>(null)
@@ -83,9 +85,47 @@ export function SlabInspector() {
 
     ;(async () => {
       try {
+        // Resolve cover-art object IDs (manifest stores URL only) and the
+        // settings object so the inspector covers everything pinned in
+        // your scope. Without this the bytes are real but invisible —
+        // nothing can sneak by accumulating.
+        const extras: { id: string; label: string }[] = []
+        if (settingsObjectID) {
+          extras.push({ id: settingsObjectID, label: 'Settings' })
+        }
+        await Promise.all(
+          myChannels.map(async (channel) => {
+            const manifest = manifests[channel.channelID]
+            if (!manifest?.coverArt) return
+            try {
+              const obj = await sdk.sharedObject(manifest.coverArt.itemURL)
+              extras.push({
+                id: obj.id(),
+                label: `${channel.name} · cover`,
+              })
+            } catch (e) {
+              console.warn(
+                `slab inspector: cover resolve failed for ${channel.channelID}:`,
+                e,
+              )
+            }
+          }),
+        )
+
+        const allCandidates = [...candidates, ...extras].filter(
+          (() => {
+            const seen = new Set<string>()
+            return (x: { id: string }) => {
+              if (seen.has(x.id)) return false
+              seen.add(x.id)
+              return true
+            }
+          })(),
+        )
+
         const groups = new Map<string, SlabGroup>()
         await Promise.all(
-          candidates.map(async ({ id, label }) => {
+          allCandidates.map(async ({ id, label }) => {
             try {
               const obj = await sdk.object(id)
               const objSlabs = obj.slabs()
@@ -131,7 +171,7 @@ export function SlabInspector() {
     return () => {
       cancelled = true
     }
-  }, [sdk, candidates, refreshTick])
+  }, [sdk, candidates, refreshTick, myChannels, manifests, settingsObjectID])
 
   if (!sdk) return null
 
