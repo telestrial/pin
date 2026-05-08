@@ -1,3 +1,4 @@
+import type { Sdk } from '@siafoundation/sia-storage'
 import { useEffect } from 'react'
 import { fetchAccountSnapshot } from '../core/pin'
 import { runRepackBatch, type ScopeRef } from '../core/repack'
@@ -14,7 +15,13 @@ import { useRepackStore } from '../stores/repack'
 // (they have IDs from publish), library + external pins come from
 // pinStore. Subscribed-but-not-pinned items in feedStore aren't in your
 // scope and don't appear here.
-function buildScope(): ScopeRef[] {
+//
+// Cover art lives outside manifest.items in the manifest itself, so it
+// has to be resolved via sharedObject(url) → id() — the manifest doesn't
+// store the cover's object ID directly. Without this step, cover-art
+// slabs are invisible to the repacker and stay in their own dedicated
+// 40 MiB slabs forever.
+async function buildScope(sdk: Sdk): Promise<ScopeRef[]> {
   const auth = useAuthStore.getState()
   const feed = useFeedStore.getState()
   const pin = usePinStore.getState()
@@ -38,6 +45,30 @@ function buildScope(): ScopeRef[] {
       channelKey,
     })
   }
+
+  // Cover art per owned channel. SDK call per cover (one per channel),
+  // bounded by myChannels.length — small in practice.
+  await Promise.all(
+    auth.myChannels.map(async (channel) => {
+      const manifest = feed.manifests[channel.channelID]
+      if (!manifest?.coverArt) return
+      try {
+        const obj = await sdk.sharedObject(manifest.coverArt.itemURL)
+        scope.push({
+          source: 'channel',
+          objectID: obj.id(),
+          itemURL: manifest.coverArt.itemURL,
+          channelID: channel.channelID,
+          channelKey: channel.channelKey,
+        })
+      } catch (e) {
+        console.warn(
+          `repack: failed to resolve cover art for ${channel.channelID}:`,
+          e,
+        )
+      }
+    }),
+  )
 
   for (const p of pin.pinned) {
     if (!p.objectID) continue
@@ -83,7 +114,7 @@ export function useRepackRunner() {
         // there's nothing worth doing.
         while (!stopped) {
           const auth = useAuthStore.getState()
-          const scope = buildScope()
+          const scope = await buildScope(sdk)
           if (scope.length === 0) break
 
           let result
