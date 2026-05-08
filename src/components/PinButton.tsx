@@ -83,7 +83,7 @@ export function PinButton({ input }: { input: PinInput }) {
       title={title}
       aria-pressed={isActive}
       className={`p-1 transition-colors disabled:opacity-50 hover:text-green-600 ${
-        isActive ? 'text-green-600/60' : 'text-neutral-400'
+        isActive ? 'text-green-600' : 'text-neutral-400'
       }`}
     >
       {busy ? (
