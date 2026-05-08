@@ -11,6 +11,7 @@ import {
   type UploadTaskState,
   useUploadQueueStore,
 } from '../stores/uploadQueue'
+import { useRepackStore } from '../stores/repack'
 import { ChannelAvatar } from './ChannelAvatar'
 import { PinIcon } from './PinIcon'
 
@@ -92,6 +93,7 @@ export function PinSidebar({
   const armedItem = useComposeStore((s) => s.armedItem)
   const toggleArm = useComposeStore((s) => s.toggle)
   const disarm = useComposeStore((s) => s.disarm)
+  const repackRunning = useRepackStore((s) => s.running)
   // Rows that have been click-pinned-off — opacity transitions to 0 over
   // FADE_MS, then we call unpin. Re-clicking the pin icon during that window
   // cancels the timeout and restores opacity (clean undo).
@@ -285,6 +287,16 @@ export function PinSidebar({
             <h2 className="text-xs font-semibold tracking-wide uppercase text-neutral-500">
               My Storage
             </h2>
+            {repackRunning && (
+              <span
+                className="relative flex h-1.5 w-1.5"
+                title="Tidying storage…"
+                aria-label="Repacking storage"
+              >
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-500 opacity-75" />
+                <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-green-600" />
+              </span>
+            )}
           </div>
           <div className="space-y-2">
             <div
