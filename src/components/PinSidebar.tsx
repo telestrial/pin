@@ -1,4 +1,4 @@
-import { CheckCircle2, HardDrive, RotateCw, Search, X } from 'lucide-react'
+import { CheckCircle2, HardDrive, RotateCw, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { type PinnedItemRef, usePinStore } from '../stores/pin'
 import type { ItemRef } from '../core/types'
@@ -92,7 +92,6 @@ export function PinSidebar({
   const armedItem = useComposeStore((s) => s.armedItem)
   const toggleArm = useComposeStore((s) => s.toggle)
   const disarm = useComposeStore((s) => s.disarm)
-  const [query, setQuery] = useState('')
   // Rows that have been click-pinned-off — opacity transitions to 0 over
   // FADE_MS, then we call unpin. Re-clicking the pin icon during that window
   // cancels the timeout and restores opacity (clean undo).
@@ -149,28 +148,13 @@ export function PinSidebar({
     [myChannels],
   )
 
-  const ownItems = useMemo<LibraryEntry[]>(() => {
-    return feedEntries
-      .filter((e) => myChannelIDSet.has(e.channel.channelID))
-      .map((e) => ({
-        item: e.item,
-        channel: {
-          channelID: e.channel.channelID,
-          name: e.channel.name,
-          authorHandle: e.channel.authorHandle,
-        },
-        isOwn: true,
-      }))
-  }, [feedEntries, myChannelIDSet])
-
-  const ownItemURLSet = useMemo(
-    () => new Set(ownItems.map((e) => e.item.itemURL)),
-    [ownItems],
-  )
-
-  const externalPins = useMemo<LibraryEntry[]>(() => {
+  // "Last 5 things you pinned" — most recent external pins. Library items
+  // (LIBRARY_CHANNEL) ride along since they're also things you pinned.
+  // Own-channel items are excluded — those are managed in the channel UX.
+  const RECENT_LIMIT = 5
+  const recentPins = useMemo<LibraryEntry[]>(() => {
     return pinned
-      .filter((p) => !ownItemURLSet.has(p.item.itemURL))
+      .filter((p) => !myChannelIDSet.has(p.channel.channelID))
       .map((p) => ({
         item: p.item,
         channel: p.channel,
@@ -178,32 +162,10 @@ export function PinSidebar({
         pinnedAt: p.pinnedAt,
       }))
       .sort((a, b) => (b.pinnedAt ?? '').localeCompare(a.pinnedAt ?? ''))
-  }, [pinned, ownItemURLSet])
+      .slice(0, RECENT_LIMIT)
+  }, [pinned, myChannelIDSet])
 
-  const q = query.trim().toLowerCase()
-
-  function matchesQuery(e: LibraryEntry): boolean {
-    const fields = [
-      itemTitle(e.item),
-      e.item.title,
-      e.item.summary ?? '',
-      e.item.filename ?? '',
-      e.channel.name,
-      e.channel.authorHandle,
-      itemTypeLabel(e.item),
-    ]
-    return fields.some((f) => f.toLowerCase().includes(q))
-  }
-
-  const displayList: LibraryEntry[] = q
-    ? [...externalPins, ...ownItems]
-        .filter(matchesQuery)
-        .sort((a, b) =>
-          (b.pinnedAt ?? b.item.publishedAt).localeCompare(
-            a.pinnedAt ?? a.item.publishedAt,
-          ),
-        )
-    : externalPins
+  const displayList = recentPins
 
   const pct =
     account && account.maxPinnedData > 0
@@ -478,25 +440,12 @@ export function PinSidebar({
       )}
 
       <section className="-mx-3 -mb-3 border-t border-neutral-200">
-        <div className="relative">
-          <Search
-            className="absolute left-3 top-1/2 -translate-y-1/2 size-3 text-neutral-400 pointer-events-none"
-            aria-hidden="true"
-          />
-          <input
-            type="text"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search"
-            aria-label="Search your library"
-            className="w-full pl-7 pr-2 py-2 text-xs bg-white border-0 border-b border-neutral-200 focus:outline-none focus:border-green-600 placeholder-neutral-400"
-          />
-        </div>
+        <h2 className="text-xs font-semibold tracking-wide uppercase text-neutral-500 px-3 pt-3 pb-1">
+          Recent pins
+        </h2>
         {displayList.length === 0 ? (
           <p className="text-xs text-neutral-500 px-3 py-2">
-            {q
-              ? 'No matches.'
-              : 'Pin items from other channels to keep them here.'}
+            Pin items from other channels to keep them here.
           </p>
         ) : (
           <ul aria-label="Library items">
