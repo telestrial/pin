@@ -531,7 +531,7 @@ export function PinSidebar({
                             ? `Re-pin ${itemTitle(entry.item)}`
                             : `Unpin ${itemTitle(entry.item)}`
                         }
-                        className="shrink-0 self-center p-1 rounded text-green-600 hover:text-green-700 hover:bg-green-50 cursor-pointer disabled:opacity-50"
+                        className="shrink-0 self-center p-1 rounded text-green-400 hover:text-green-700 hover:bg-green-50 cursor-pointer disabled:opacity-50"
                       >
                         {busy ? (
                           <span className="block size-5 border-2 border-neutral-300 border-t-neutral-600 rounded-full animate-spin" />

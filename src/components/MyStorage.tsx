@@ -1,5 +1,5 @@
 import { X } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import type { ItemRef } from '../core/types'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
@@ -45,6 +45,14 @@ export function MyStorage({
 
   const [selectedChannel, setSelectedChannel] = useState<string | null>(null)
   const [isDragging, setIsDragging] = useState(false)
+  // Click-pin → fade tile to opacity-0 over FADE_MS, then commit unpin.
+  // Click again during fade cancels the timeout and restores opacity —
+  // matches PinSidebar's row pattern verbatim.
+  const FADE_MS = 1500
+  const [removingURLs, setRemovingURLs] = useState<Set<string>>(new Set())
+  const removeTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(
+    new Map(),
+  )
 
   const myChannelIDSet = useMemo(
     () => new Set(myChannels.map((c) => c.channelID)),
@@ -112,12 +120,47 @@ export function MyStorage({
 
   const tiles = selectedChannel ? channelEntries : flatEntries
 
-  async function handleDelete(entry: TileEntry) {
-    if (!sdk || !entry.objectID) return
-    try {
-      await unpin(sdk, entry.item.itemURL)
-    } catch (err) {
-      addToast(err instanceof Error ? err.message : 'Unpin failed')
+  function startRemove(url: string) {
+    setRemovingURLs((prev) => {
+      const next = new Set(prev)
+      next.add(url)
+      return next
+    })
+    const id = setTimeout(async () => {
+      removeTimers.current.delete(url)
+      if (!sdk) return
+      try {
+        await unpin(sdk, url)
+      } catch (err) {
+        setRemovingURLs((prev) => {
+          const next = new Set(prev)
+          next.delete(url)
+          return next
+        })
+        addToast(err instanceof Error ? err.message : 'Unpin failed')
+      }
+    }, FADE_MS)
+    removeTimers.current.set(url, id)
+  }
+
+  function cancelRemove(url: string) {
+    const id = removeTimers.current.get(url)
+    if (id !== undefined) {
+      clearTimeout(id)
+      removeTimers.current.delete(url)
+    }
+    setRemovingURLs((prev) => {
+      const next = new Set(prev)
+      next.delete(url)
+      return next
+    })
+  }
+
+  function handleUnpinClick(url: string) {
+    if (removingURLs.has(url)) {
+      cancelRemove(url)
+    } else {
+      startRemove(url)
     }
   }
 
@@ -289,34 +332,37 @@ export function MyStorage({
               </p>
             ) : (
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
-                {tiles.map((entry) => (
-                  <ItemTile
-                    key={entry.item.itemURL}
-                    item={entry.item}
-                    channel={entry.channel}
-                    source={entry.source}
-                    onOpen={() =>
-                      onItemClick({
-                        item: entry.item,
-                        channel: entry.channel,
-                        objectID: entry.objectID ?? '',
-                        pinnedAt: entry.pinnedAt ?? '',
-                      })
-                    }
-                    onDelete={
-                      entry.source === 'own' ||
-                      !entry.objectID ||
-                      isPinning(entry.item.itemURL)
-                        ? undefined
-                        : () => handleDelete(entry)
-                    }
-                    onDragStart={
-                      entry.item.type === 'text'
-                        ? undefined
-                        : buildDragHandler(entry)
-                    }
-                  />
-                ))}
+                {tiles.map((entry) => {
+                  const url = entry.item.itemURL
+                  const canUnpin =
+                    entry.source !== 'own' && !!entry.objectID
+                  return (
+                    <ItemTile
+                      key={url}
+                      item={entry.item}
+                      channel={entry.channel}
+                      source={entry.source}
+                      removing={removingURLs.has(url)}
+                      busy={isPinning(url)}
+                      onOpen={() =>
+                        onItemClick({
+                          item: entry.item,
+                          channel: entry.channel,
+                          objectID: entry.objectID ?? '',
+                          pinnedAt: entry.pinnedAt ?? '',
+                        })
+                      }
+                      onUnpin={
+                        canUnpin ? () => handleUnpinClick(url) : undefined
+                      }
+                      onDragStart={
+                        entry.item.type === 'text'
+                          ? undefined
+                          : buildDragHandler(entry)
+                      }
+                    />
+                  )
+                })}
               </div>
             )}
           </div>

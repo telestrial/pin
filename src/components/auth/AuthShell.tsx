@@ -24,7 +24,7 @@ export function AuthShell({
         >
           <PinIcon
             className={`transition-colors duration-500 ${
-              ready ? 'text-green-600' : 'text-neutral-400'
+              ready ? 'text-green-400' : 'text-neutral-400'
             }`}
             fill="currentColor"
           />

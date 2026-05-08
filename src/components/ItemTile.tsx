@@ -1,14 +1,8 @@
-import {
-  AppWindow,
-  FileText,
-  Music,
-  Play,
-  Quote,
-  X,
-} from 'lucide-react'
+import { AppWindow, FileText, Music, Play, Quote } from 'lucide-react'
 import type { ItemRef } from '../core/types'
 import { formatBytes } from './AttachmentMedia'
 import { useItemBlobURL } from '../lib/useItemBytes'
+import { PinIcon } from './PinIcon'
 
 export type TileSource = 'external' | 'library' | 'own'
 
@@ -102,22 +96,32 @@ export function ItemTile({
   channel,
   source,
   onOpen,
-  onDelete,
+  onUnpin,
   onDragStart,
+  removing = false,
+  busy = false,
 }: {
   item: ItemRef
   channel: TileChannel
   source: TileSource
   onOpen?: () => void
-  onDelete?: () => void
+  onUnpin?: () => void
   onDragStart?: (e: React.DragEvent) => void
+  removing?: boolean
+  busy?: boolean
 }) {
   const title = itemTitle(item)
   const channelLabel =
     source === 'library' ? 'Library' : channel.name || channel.authorHandle
 
   return (
-    <div className="group relative bg-white border border-neutral-200 rounded-lg overflow-hidden hover:border-neutral-300 transition-colors">
+    <div
+      className={`group relative bg-white border rounded-lg overflow-hidden transition-opacity duration-1500 ${
+        removing
+          ? 'opacity-0 border-neutral-200'
+          : 'opacity-100 border-neutral-200 hover:border-neutral-300'
+      }`}
+    >
       <button
         type="button"
         onClick={onOpen}
@@ -147,18 +151,24 @@ export function ItemTile({
           </div>
         </div>
       </button>
-      {onDelete && (
+      {onUnpin && (
         <button
           type="button"
           onClick={(e) => {
             e.stopPropagation()
-            onDelete()
+            onUnpin()
           }}
-          title="Unpin"
-          aria-label={`Unpin ${title}`}
-          className="absolute top-1.5 right-1.5 inline-flex items-center justify-center size-6 rounded-full bg-black/55 hover:bg-black/75 text-white opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity cursor-pointer"
+          disabled={busy}
+          title={removing ? 'Click to undo' : 'Unpin'}
+          aria-label={
+            removing ? `Re-pin ${title}` : `Unpin ${title}`
+          }
+          className="absolute top-1.5 right-1.5 inline-flex items-center justify-center size-7 rounded-full bg-white/80 backdrop-blur-sm text-green-400 hover:text-green-700 hover:bg-white opacity-0 group-hover:opacity-100 focus:opacity-100 transition-[opacity,color,background-color] cursor-pointer disabled:opacity-50"
         >
-          <X className="size-3.5" aria-hidden="true" />
+          <PinIcon
+            className={removing ? 'size-4' : 'size-4 fill-current'}
+            aria-hidden="true"
+          />
         </button>
       )}
     </div>
