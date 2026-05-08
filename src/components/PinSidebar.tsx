@@ -284,15 +284,6 @@ export function PinSidebar({
               className="size-3.5 text-neutral-500"
               aria-hidden="true"
             />
-            {/* Always rendered to reserve layout space — opacity toggles
-                so the heading doesn't shift when packing starts/stops. */}
-            <Box
-              className={`size-3.5 text-neutral-500 transition-opacity duration-300 ${
-                repackRunning ? 'opacity-100' : 'opacity-0'
-              }`}
-              aria-hidden={!repackRunning}
-              aria-label={repackRunning ? 'Repacking storage' : undefined}
-            />
             <h2 className="text-xs font-semibold tracking-wide uppercase text-neutral-500">
               My Storage
             </h2>
@@ -312,9 +303,22 @@ export function PinSidebar({
               />
             </div>
             {account ? (
-              <div className="flex items-baseline justify-between text-xs">
-                <span className="text-neutral-900 font-medium">
-                  {formatBytes(account.pinnedData)}
+              <div className="flex items-center justify-between text-xs">
+                <span className="flex items-center gap-1.5">
+                  <span className="text-neutral-900 font-medium">
+                    {formatBytes(account.pinnedData)}
+                  </span>
+                  {/* Always rendered to reserve layout space — opacity toggles
+                      so the size number doesn't shift when packing starts. */}
+                  <Box
+                    className={`size-3.5 text-neutral-500 transition-opacity duration-300 ${
+                      repackRunning ? 'opacity-100' : 'opacity-0'
+                    }`}
+                    aria-hidden={!repackRunning}
+                    aria-label={
+                      repackRunning ? 'Repacking storage' : undefined
+                    }
+                  />
                 </span>
                 <span className="text-neutral-500">
                   of {formatBytes(account.maxPinnedData)}
