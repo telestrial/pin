@@ -283,7 +283,7 @@ export function PinSidebar({
               aria-hidden="true"
             />
             <h2 className="text-xs font-semibold tracking-wide uppercase text-neutral-500">
-              Your storage
+              My Storage
             </h2>
           </div>
           <div className="space-y-2">

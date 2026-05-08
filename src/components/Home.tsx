@@ -515,7 +515,9 @@ export function Home() {
     const backLabel =
       view.returnTo.kind === 'viewing-channel'
         ? `Back to ${channel.name}`
-        : 'Back to feed'
+        : view.returnTo.kind === 'storage'
+          ? 'Back to My Storage'
+          : 'Back to feed'
     const readerProps = {
       item,
       channelName: channel.name,
