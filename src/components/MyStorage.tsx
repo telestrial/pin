@@ -315,7 +315,7 @@ export function MyStorage({
                             active ? 'text-white/70' : 'text-neutral-500'
                           }
                         >
-                          {itemCount}
+                          {formatBytes(bytes)}
                         </span>
                       </button>
                     )
