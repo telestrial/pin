@@ -163,7 +163,7 @@ export function ItemTile({
           aria-label={
             removing ? `Re-pin ${title}` : `Unpin ${title}`
           }
-          className="absolute top-1.5 right-1.5 inline-flex items-center justify-center size-7 rounded-full bg-white/80 backdrop-blur-sm text-green-400 hover:text-green-700 hover:bg-white opacity-0 group-hover:opacity-100 focus:opacity-100 transition-[opacity,color,background-color] cursor-pointer disabled:opacity-50"
+          className="absolute top-1.5 right-1.5 inline-flex items-center justify-center size-7 rounded-full bg-white/80 backdrop-blur-sm text-green-600/60 hover:text-green-600 hover:bg-white opacity-0 group-hover:opacity-100 focus:opacity-100 transition-[opacity,color,background-color] cursor-pointer disabled:opacity-50"
         >
           <PinIcon
             className={removing ? 'size-4' : 'size-4 fill-current'}

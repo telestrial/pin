@@ -82,14 +82,19 @@ export function PinButton({ input }: { input: PinInput }) {
       disabled={busy || !sdk}
       title={title}
       aria-pressed={isActive}
-      className="p-1 transition-colors disabled:opacity-50 text-green-400 hover:text-green-700"
+      className={`p-1 transition-colors disabled:opacity-50 hover:text-green-600 ${
+        isActive ? 'text-green-600/60' : 'text-neutral-400'
+      }`}
     >
       {busy ? (
         <span className="block size-5">
           <span className="block size-5 border-2 border-neutral-300 border-t-neutral-600 rounded-full animate-spin" />
         </span>
       ) : (
-        <PinIcon fill="currentColor" aria-hidden="true" />
+        <PinIcon
+          fill={isActive ? 'currentColor' : 'none'}
+          aria-hidden="true"
+        />
       )}
     </button>
   )
