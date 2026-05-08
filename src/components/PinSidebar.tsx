@@ -1,4 +1,4 @@
-import { CheckCircle2, HardDrive, RotateCw, X } from 'lucide-react'
+import { Boxes, CheckCircle2, HardDrive, RotateCw, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { type PinnedItemRef, usePinStore } from '../stores/pin'
 import type { ItemRef } from '../core/types'
@@ -288,14 +288,10 @@ export function PinSidebar({
               My Storage
             </h2>
             {repackRunning && (
-              <span
-                className="relative flex h-1.5 w-1.5"
-                title="Tidying storage…"
+              <Boxes
+                className="size-3.5 text-neutral-500 animate-fade-in"
                 aria-label="Repacking storage"
-              >
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-500 opacity-75" />
-                <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-green-600" />
-              </span>
+              />
             )}
           </div>
           <div className="space-y-2">
