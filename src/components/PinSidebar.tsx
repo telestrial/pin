@@ -93,7 +93,7 @@ export function PinSidebar({
   const armedItem = useComposeStore((s) => s.armedItem)
   const toggleArm = useComposeStore((s) => s.toggle)
   const disarm = useComposeStore((s) => s.disarm)
-  const repackRunning = useRepackStore((s) => s.running)
+  const repackRunning = useRepackStore((s) => s.running || s.sweeping)
   // Rows that have been click-pinned-off — opacity transitions to 0 over
   // FADE_MS, then we call unpin. Re-clicking the pin icon during that window
   // cancels the timeout and restores opacity (clean undo).

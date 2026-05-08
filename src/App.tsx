@@ -6,6 +6,7 @@ import { Toasts } from './components/Toast'
 import { bootOauth } from './lib/atprotoClient'
 import './lib/debug'
 import { useJetstream } from './lib/useJetstream'
+import { useOrphanSweep } from './lib/useOrphanSweep'
 import { useRepackRunner } from './lib/useRepackRunner'
 import { useSettingsSync } from './lib/useSettingsSync'
 import { useUploadRunner } from './lib/useUploadRunner'
@@ -21,6 +22,7 @@ export default function App() {
   useJetstream()
   useUploadRunner()
   useRepackRunner()
+  useOrphanSweep()
   useSettingsSync()
 
   // While a pinned item is armed, mark the body so a global CSS rule
