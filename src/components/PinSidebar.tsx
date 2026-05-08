@@ -68,10 +68,12 @@ function taskStateLabel(state: UploadTaskState): string {
 export function PinSidebar({
   onItemClick,
   onChannelClick,
+  onStorageClick,
   activeChannelID,
 }: {
   onItemClick?: (ref: PinnedItemRef) => void
   onChannelClick?: (authorHandle: string, channelID: string) => void
+  onStorageClick?: () => void
   activeChannelID?: string
 }) {
   const sdk = useAuthStore((s) => s.sdk)
@@ -293,39 +295,62 @@ export function PinSidebar({
 
   return (
     <aside className="w-full lg:w-64 lg:ml-auto shrink-0 border border-neutral-200 rounded-lg bg-white p-3 space-y-5">
-      <section className="space-y-2">
-        <div className="flex items-center gap-2 px-1">
-          <HardDrive className="size-3.5 text-neutral-500" aria-hidden="true" />
-          <h2 className="text-xs font-semibold tracking-wide uppercase text-neutral-500">
-            Your storage
-          </h2>
-        </div>
-        <div className="px-1 space-y-2">
-          <div
-            className="h-1.5 rounded-full bg-neutral-100 overflow-hidden"
-            title={
-              account
-                ? `${formatBytes(account.pinnedSize)} encoded on the network`
-                : undefined
-            }
-          >
-            <div
-              className="h-full bg-green-600 transition-[width] duration-300"
-              style={{ width: `${pct}%` }}
+      <section>
+        {/* biome-ignore lint/a11y/useSemanticElements: clickable region wraps a heading + progress bar; a button element would nest a heading inside an interactive control */}
+        <div
+          role={onStorageClick ? 'button' : undefined}
+          tabIndex={onStorageClick ? 0 : undefined}
+          onClick={onStorageClick}
+          onKeyDown={
+            onStorageClick
+              ? (e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    onStorageClick()
+                  }
+                }
+              : undefined
+          }
+          className={`-mx-1 px-2 py-1.5 rounded-md space-y-2 transition-colors ${
+            onStorageClick ? 'cursor-pointer hover:bg-neutral-50' : ''
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            <HardDrive
+              className="size-3.5 text-neutral-500"
+              aria-hidden="true"
             />
+            <h2 className="text-xs font-semibold tracking-wide uppercase text-neutral-500">
+              Your storage
+            </h2>
           </div>
-          {account ? (
-            <div className="flex items-baseline justify-between text-xs">
-              <span className="text-neutral-900 font-medium">
-                {formatBytes(account.pinnedData)}
-              </span>
-              <span className="text-neutral-500">
-                of {formatBytes(account.maxPinnedData)}
-              </span>
+          <div className="space-y-2">
+            <div
+              className="h-1.5 rounded-full bg-neutral-100 overflow-hidden"
+              title={
+                account
+                  ? `${formatBytes(account.pinnedSize)} encoded on the network`
+                  : undefined
+              }
+            >
+              <div
+                className="h-full bg-green-600 transition-[width] duration-300"
+                style={{ width: `${pct}%` }}
+              />
             </div>
-          ) : (
-            <p className="text-xs text-neutral-500">Loading…</p>
-          )}
+            {account ? (
+              <div className="flex items-baseline justify-between text-xs">
+                <span className="text-neutral-900 font-medium">
+                  {formatBytes(account.pinnedData)}
+                </span>
+                <span className="text-neutral-500">
+                  of {formatBytes(account.maxPinnedData)}
+                </span>
+              </div>
+            ) : (
+              <p className="text-xs text-neutral-500">Loading…</p>
+            )}
+          </div>
         </div>
       </section>
 

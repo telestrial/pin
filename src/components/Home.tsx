@@ -19,6 +19,7 @@ import { EditPost } from './EditPost'
 import type { TypeFilter } from './FilterPills'
 import { FormCard } from './FormCard'
 import { HomeFeed } from './HomeFeed'
+import { MyStorage } from './MyStorage'
 import { ReadApp } from './ReadApp'
 import { ReadAudio } from './ReadAudio'
 import { ReadFile } from './ReadFile'
@@ -67,6 +68,7 @@ type View =
       returnTo: View
     }
   | { kind: 'bluesky-login'; resumeTo: View; cancelTo: View }
+  | { kind: 'storage'; returnTo: View }
 
 export function Home() {
   const [view, setView] = useState<View>({ kind: 'idle', filter: 'all' })
@@ -140,6 +142,7 @@ export function Home() {
             filter: 'all',
           })
         }
+        onStorageClick={() => setView({ kind: 'storage', returnTo: view })}
         activeChannelID={activeChannelID}
       />
     )
@@ -154,6 +157,17 @@ export function Home() {
         onCancel={() => setView(view.cancelTo)}
         sidebar={renderSidebar()}
         rightSidebar={renderPinSidebar()}
+      />
+    )
+  }
+
+  if (view.kind === 'storage') {
+    const returnTo = view.returnTo
+    return (
+      <MyStorage
+        sidebar={renderSidebar()}
+        rightSidebar={renderPinSidebar()}
+        onClose={() => setView(returnTo)}
       />
     )
   }
@@ -356,6 +370,9 @@ export function Home() {
                 filter: 'all',
               })
             }
+            onStorageClick={() =>
+              setView({ kind: 'storage', returnTo: channelView })
+            }
             activeChannelID={view.channelID}
           />
         }
@@ -480,6 +497,9 @@ export function Home() {
             channelID,
             filter: 'all',
           })
+        }
+        onStorageClick={() =>
+          setView({ kind: 'storage', returnTo: readingView })
         }
         activeChannelID={channel.channelID}
       />
@@ -694,6 +714,9 @@ export function Home() {
               channelID,
               filter: 'all',
             })
+          }
+          onStorageClick={() =>
+            setView({ kind: 'storage', returnTo: idleView })
           }
         />
       </div>
