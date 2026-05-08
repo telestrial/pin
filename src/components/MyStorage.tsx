@@ -1,21 +1,142 @@
 import { X } from 'lucide-react'
-import { SlabInspector } from './SlabInspector'
+import { useMemo, useState } from 'react'
+import type { ItemRef } from '../core/types'
+import { useAuthStore } from '../stores/auth'
+import { useFeedStore } from '../stores/feed'
+import { LIBRARY_CHANNEL } from '../lib/pinUpload'
+import { type PinnedItemRef, usePinStore } from '../stores/pin'
+import { useToastStore } from '../stores/toast'
+import { ChannelAvatar } from './ChannelAvatar'
+import { formatBytes } from './AttachmentMedia'
+import { ItemTile } from './ItemTile'
+import type { TileChannel, TileSource } from './ItemTile'
+import { PIN_ITEM_DRAG_TYPE } from './PinSidebar'
+
+type TileEntry = {
+  item: ItemRef
+  channel: TileChannel
+  source: TileSource
+  objectID?: string
+  pinnedAt?: string
+}
 
 export function MyStorage({
   sidebar,
   rightSidebar,
   onClose,
+  onItemClick,
 }: {
   sidebar?: React.ReactNode
   rightSidebar?: React.ReactNode
   onClose: () => void
+  onItemClick: (ref: PinnedItemRef) => void
 }) {
+  const sdk = useAuthStore((s) => s.sdk)
+  const myChannels = useAuthStore((s) => s.myChannels)
+  const subscriptions = useAuthStore((s) => s.subscriptions)
+  const feedEntries = useFeedStore((s) => s.entries)
+  const manifests = useFeedStore((s) => s.manifests)
+  const pinned = usePinStore((s) => s.pinned)
+  const isPinning = usePinStore((s) => s.isPinning)
+  const unpin = usePinStore((s) => s.unpin)
+  const addToast = useToastStore((s) => s.addToast)
+
+  const [selectedChannel, setSelectedChannel] = useState<string | null>(null)
+
+  const myChannelIDSet = useMemo(
+    () => new Set(myChannels.map((c) => c.channelID)),
+    [myChannels],
+  )
+
+  const ownedChannelStrip = useMemo(() => {
+    return myChannels
+      .map((c) => {
+        const items = feedEntries.filter(
+          (e) => e.channel.channelID === c.channelID,
+        )
+        const bytes = items.reduce((sum, e) => sum + e.item.byteSize, 0)
+        const sub = subscriptions.find((s) => s.channelID === c.channelID)
+        return {
+          channel: c,
+          itemCount: items.length,
+          bytes,
+          authorHandle: sub?.authorHandle ?? '',
+          coverArt: manifests[c.channelID]?.coverArt,
+        }
+      })
+      .sort((a, b) => b.bytes - a.bytes)
+  }, [myChannels, feedEntries, subscriptions, manifests])
+
+  // Flat entries — external pins + library items, no own-channel items.
+  // Per the rule we settled: own-channel items live "in the channel"; you
+  // reach them by selecting that channel chip, not as flat tiles.
+  const flatEntries = useMemo<TileEntry[]>(() => {
+    return pinned
+      .filter((p) => !myChannelIDSet.has(p.channel.channelID))
+      .map((p) => ({
+        item: p.item,
+        channel: p.channel,
+        source: p.channel.channelID === LIBRARY_CHANNEL.channelID
+          ? ('library' as const)
+          : ('external' as const),
+        objectID: p.objectID,
+        pinnedAt: p.pinnedAt,
+      }))
+      .sort((a, b) =>
+        (b.pinnedAt ?? b.item.publishedAt).localeCompare(
+          a.pinnedAt ?? a.item.publishedAt,
+        ),
+      )
+  }, [pinned, myChannelIDSet])
+
+  // Channel-filtered view: items in a single owned channel, in publish order.
+  const channelEntries = useMemo<TileEntry[]>(() => {
+    if (!selectedChannel) return []
+    const sub = subscriptions.find((s) => s.channelID === selectedChannel)
+    return feedEntries
+      .filter((e) => e.channel.channelID === selectedChannel)
+      .map((e) => ({
+        item: e.item,
+        channel: {
+          authorHandle: sub?.authorHandle ?? '',
+          channelID: e.channel.channelID,
+          name: e.channel.name,
+        },
+        source: 'own' as const,
+      }))
+      .sort((a, b) => b.item.publishedAt.localeCompare(a.item.publishedAt))
+  }, [feedEntries, selectedChannel, subscriptions])
+
+  const tiles = selectedChannel ? channelEntries : flatEntries
+
+  async function handleDelete(entry: TileEntry) {
+    if (!sdk || !entry.objectID) return
+    try {
+      await unpin(sdk, entry.item.itemURL)
+    } catch (err) {
+      addToast(err instanceof Error ? err.message : 'Unpin failed')
+    }
+  }
+
+  function buildDragHandler(entry: TileEntry) {
+    return (e: React.DragEvent) => {
+      const payload: PinnedItemRef = {
+        item: entry.item,
+        channel: entry.channel,
+        objectID: entry.objectID ?? '',
+        pinnedAt: entry.pinnedAt ?? '',
+      }
+      e.dataTransfer.effectAllowed = 'copy'
+      e.dataTransfer.setData(PIN_ITEM_DRAG_TYPE, JSON.stringify(payload))
+    }
+  }
+
   return (
     <div className="flex-1 p-6">
       <div className="max-w-7xl mx-auto flex flex-col lg:flex-row lg:items-start gap-6">
         {sidebar}
         <div className="flex-1 min-w-0">
-          <div className="bg-white border border-neutral-200 rounded-lg p-5 space-y-6">
+          <div className="bg-white border border-neutral-200 rounded-lg p-5 space-y-5">
             <div className="flex items-start justify-between gap-4">
               <h1 className="text-2xl font-semibold text-neutral-900">
                 My Storage
@@ -29,7 +150,99 @@ export function MyStorage({
                 <X className="size-5" aria-hidden="true" />
               </button>
             </div>
-            <SlabInspector />
+
+            {ownedChannelStrip.length > 0 && (
+              <div className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1">
+                <button
+                  type="button"
+                  onClick={() => setSelectedChannel(null)}
+                  className={`shrink-0 px-3 py-1.5 rounded-full text-xs font-medium transition-colors cursor-pointer ${
+                    selectedChannel === null
+                      ? 'bg-neutral-900 text-white'
+                      : 'bg-neutral-100 text-neutral-700 hover:bg-neutral-200'
+                  }`}
+                >
+                  All
+                </button>
+                {ownedChannelStrip.map(
+                  ({ channel, itemCount, bytes, authorHandle, coverArt }) => {
+                    const active = selectedChannel === channel.channelID
+                    return (
+                      <button
+                        type="button"
+                        key={channel.channelID}
+                        onClick={() => setSelectedChannel(channel.channelID)}
+                        className={`shrink-0 inline-flex items-center gap-2 pl-1.5 pr-3 py-1 rounded-full text-xs transition-colors cursor-pointer ${
+                          active
+                            ? 'bg-neutral-900 text-white'
+                            : 'bg-neutral-100 text-neutral-700 hover:bg-neutral-200'
+                        }`}
+                        title={`${itemCount} item${
+                          itemCount === 1 ? '' : 's'
+                        } · ${formatBytes(bytes)}`}
+                      >
+                        <ChannelAvatar
+                          channelID={channel.channelID}
+                          channelName={channel.name}
+                          authorHandle={authorHandle}
+                          coverArt={coverArt}
+                          size="sm"
+                        />
+                        <span className="font-medium truncate max-w-32">
+                          {channel.name}
+                        </span>
+                        <span
+                          className={
+                            active ? 'text-white/70' : 'text-neutral-500'
+                          }
+                        >
+                          {itemCount}
+                        </span>
+                      </button>
+                    )
+                  },
+                )}
+              </div>
+            )}
+
+            {tiles.length === 0 ? (
+              <p className="text-sm text-neutral-500 py-8 text-center">
+                {selectedChannel
+                  ? 'This channel has no items yet.'
+                  : 'Pin items to keep them here.'}
+              </p>
+            ) : (
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+                {tiles.map((entry) => (
+                  <ItemTile
+                    key={entry.item.itemURL}
+                    item={entry.item}
+                    channel={entry.channel}
+                    source={entry.source}
+                    onOpen={() =>
+                      onItemClick({
+                        item: entry.item,
+                        channel: entry.channel,
+                        objectID: entry.objectID ?? '',
+                        pinnedAt: entry.pinnedAt ?? '',
+                      })
+                    }
+                    onDelete={
+                      entry.source === 'own' ||
+                      !entry.objectID ||
+                      isPinning(entry.item.itemURL)
+                        ? undefined
+                        : () => handleDelete(entry)
+                    }
+                    onDragStart={
+                      entry.item.type === 'text'
+                        ? undefined
+                        : buildDragHandler(entry)
+                    }
+                  />
+                ))}
+              </div>
+            )}
           </div>
         </div>
         {rightSidebar}

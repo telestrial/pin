@@ -163,11 +163,19 @@ export function Home() {
 
   if (view.kind === 'storage') {
     const returnTo = view.returnTo
+    const storageView = view
     return (
       <MyStorage
         sidebar={renderSidebar()}
         rightSidebar={renderPinSidebar()}
         onClose={() => setView(returnTo)}
+        onItemClick={(ref) =>
+          setView({
+            kind: 'reading',
+            entry: { item: ref.item, channel: ref.channel },
+            returnTo: storageView,
+          })
+        }
       />
     )
   }
