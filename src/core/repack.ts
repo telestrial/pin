@@ -258,6 +258,16 @@ export async function runRepackBatch(
     }
   }
 
+  // The indexer doesn't auto-drop empty slabs — without this call, every
+  // batch is a net +40 MiB (new packed slab) instead of the intended
+  // −(N−1) × 40 MiB reclaim. pruneSlabs releases all slabs in our scope
+  // that no live object references.
+  try {
+    await sdk.pruneSlabs()
+  } catch (e) {
+    console.warn('repack: pruneSlabs failed:', e)
+  }
+
   return {
     reclaimedSlabs: batch.length,
     oldObjectIDs,
