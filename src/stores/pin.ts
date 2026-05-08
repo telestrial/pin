@@ -32,6 +32,17 @@ type PinState = {
   refreshAccount: (sdk: Sdk) => Promise<void>
   isPinned: (itemURL: string) => boolean
   isPinning: (itemURL: string) => boolean
+  // Used by the repack runner: swap the underlying object identity for one
+  // or more pinned entries when their bytes get re-uploaded into a packed
+  // slab. The user-visible "I pinned this" relationship is preserved; only
+  // the internal ID + URL change.
+  replaceMany: (
+    replacements: Array<{
+      oldObjectID: string
+      newObjectID: string
+      newURL: string
+    }>,
+  ) => void
   reset: () => void
 }
 
@@ -102,6 +113,25 @@ export const usePinStore = create<PinState>()(
       isPinned: (itemURL) =>
         get().pinned.some((p) => p.item.itemURL === itemURL),
       isPinning: (itemURL) => get().pinning.has(itemURL),
+      replaceMany: (replacements) => {
+        if (replacements.length === 0) return
+        const byOldID = new Map(replacements.map((r) => [r.oldObjectID, r]))
+        set((s) => ({
+          pinned: s.pinned.map((p) => {
+            const r = byOldID.get(p.objectID)
+            if (!r) return p
+            return {
+              ...p,
+              objectID: r.newObjectID,
+              item: {
+                ...p.item,
+                id: r.newObjectID,
+                itemURL: r.newURL,
+              },
+            }
+          }),
+        }))
+      },
       reset: () =>
         set({ pinned: [], account: null, pinning: new Set<string>() }),
     }),
