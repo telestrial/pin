@@ -284,12 +284,15 @@ export function PinSidebar({
               className="size-3.5 text-neutral-500"
               aria-hidden="true"
             />
-            {repackRunning && (
-              <Box
-                className="size-3.5 text-neutral-500 animate-fade-in"
-                aria-label="Repacking storage"
-              />
-            )}
+            {/* Always rendered to reserve layout space — opacity toggles
+                so the heading doesn't shift when packing starts/stops. */}
+            <Box
+              className={`size-3.5 text-neutral-500 transition-opacity duration-300 ${
+                repackRunning ? 'opacity-100' : 'opacity-0'
+              }`}
+              aria-hidden={!repackRunning}
+              aria-label={repackRunning ? 'Repacking storage' : undefined}
+            />
             <h2 className="text-xs font-semibold tracking-wide uppercase text-neutral-500">
               My Storage
             </h2>
