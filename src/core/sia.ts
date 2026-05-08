@@ -27,6 +27,36 @@ export async function uploadItem(
   }
 }
 
+// Bin-pack multiple objects into shared slabs. Each input gets its own
+// PinnedObject + share URL out (callers can address them independently),
+// but they share underlying slab capacity — so a post + 3 attachments
+// that all fit in one 40 MiB slab consumes 1 slab worth of pinnedData
+// instead of 4. Returns UploadedItems in the same order as inputs.
+export async function uploadItemsPacked(
+  sdk: Sdk,
+  items: Uint8Array[],
+  onShard?: () => void,
+): Promise<UploadedItem[]> {
+  const packed = sdk.uploadPacked(
+    onShard ? { onShardUploaded: () => onShard() } : undefined,
+  )
+  for (const bytes of items) {
+    await packed.add(new Blob([bytes as BlobPart]).stream())
+  }
+  const objects = await packed.finalize()
+  const results: UploadedItem[] = []
+  for (let i = 0; i < objects.length; i++) {
+    const obj = objects[i]
+    await sdk.pinObject(obj)
+    results.push({
+      id: obj.id(),
+      itemURL: sdk.shareObject(obj, FAR_FUTURE),
+      byteSize: items[i].length,
+    })
+  }
+  return results
+}
+
 export async function downloadItem(
   sdk: Sdk,
   itemURL: string,

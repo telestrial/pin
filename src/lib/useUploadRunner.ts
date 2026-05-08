@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { appendItemToChannel, buildItemRef } from '../core/channels'
-import { uploadItem } from '../core/sia'
+import { uploadItemsPacked } from '../core/sia'
 import type { AttachmentRef } from '../core/types'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
@@ -14,10 +14,12 @@ import { LIBRARY_CHANNEL } from './pinUpload'
 
 const SUCCESS_AUTO_REMOVE_MS = 4000
 
-function expectedShardCount(byteSize: number): number {
-  const slabDataBytes = 10 * 4 * 1024 * 1024
-  const slabs = Math.max(1, Math.ceil(byteSize / slabDataBytes))
-  return slabs * 30
+const SLAB_DATA_BYTES = 10 * 4 * 1024 * 1024 // 10 data shards × 4 MiB each
+const SHARDS_PER_SLAB = 30 // 10 data + 20 parity
+
+function expectedShardCountForTotal(totalBytes: number): number {
+  const slabs = Math.max(1, Math.ceil(totalBytes / SLAB_DATA_BYTES))
+  return slabs * SHARDS_PER_SLAB
 }
 
 function displayTitle(task: UploadTask): string {
@@ -74,19 +76,18 @@ export function useUploadRunner() {
       queue.setState(task.id, 'uploading', undefined)
 
       try {
-        // Sequential upload: each attachment-with-bytes, then body. Parallel
-        // would be faster for multi-file posts but adds bookkeeping (per-source
-        // progress, error aggregation); revisit when a real "this felt slow"
-        // moment shows up.
+        // Eager packing: collect every byte source for this task (attachments
+        // with kind='bytes' + body) and bin-pack them through a single
+        // PackedUpload. A post + 3 image attachments that fit in one 40 MiB
+        // slab now consumes one slab of pinnedData instead of four. URL-shape
+        // attachments (already-uploaded library items) stay as-is.
         const sources = task.payload.attachmentSources ?? []
-        const allByteSizes = [
-          ...sources.flatMap((s) => (s.kind === 'bytes' ? [s.bytes.length] : [])),
-          task.payload.bytes.length,
+        const bytesToUpload: Uint8Array[] = [
+          ...sources.flatMap((s) => (s.kind === 'bytes' ? [s.bytes] : [])),
+          task.payload.bytes,
         ]
-        const totalExpected = allByteSizes.reduce(
-          (acc, n) => acc + expectedShardCount(n),
-          0,
-        )
+        const totalBytes = bytesToUpload.reduce((acc, b) => acc + b.length, 0)
+        const totalExpected = expectedShardCountForTotal(totalBytes)
         let count = 0
         const onShard = () => {
           count += 1
@@ -94,7 +95,16 @@ export function useUploadRunner() {
           useUploadQueueStore.getState().setProgress(task.id, pct)
         }
 
+        const uploadedItems = await uploadItemsPacked(
+          sdk,
+          bytesToUpload,
+          onShard,
+        )
+
+        // Map results back to attachmentRefs in the original sources order;
+        // URL-shape attachments interleave with the freshly-packed ones.
         const attachmentRefs: AttachmentRef[] = []
+        let bytesIdx = 0
         for (const src of sources) {
           if (src.kind === 'url') {
             attachmentRefs.push({
@@ -104,17 +114,18 @@ export function useUploadRunner() {
               byteSize: src.byteSize,
             })
           } else {
-            const a = await uploadItem(sdk, src.bytes, onShard)
+            const u = uploadedItems[bytesIdx++]
             attachmentRefs.push({
-              url: a.itemURL,
+              url: u.itemURL,
               mimeType: src.mimeType,
               filename: src.filename,
               byteSize: src.bytes.length,
             })
           }
         }
-
-        const uploaded = await uploadItem(sdk, task.payload.bytes, onShard)
+        // The body was added last to the packed upload, so it's at the
+        // tail of uploadedItems.
+        const uploaded = uploadedItems[bytesIdx]
 
         queue.setState(task.id, 'publishing', undefined)
         useUploadQueueStore.getState().setProgress(task.id, 97)
