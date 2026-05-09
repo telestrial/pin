@@ -1,6 +1,6 @@
 import { AppWindow, FileText, Music, Play, Quote } from 'lucide-react'
 import type { ItemRef } from '../core/types'
-import { formatBytes } from './AttachmentMedia'
+import { formatBytes } from '../lib/format'
 import { useItemBlobURL } from '../lib/useItemBytes'
 import { PinIcon } from './PinIcon'
 

@@ -1,5 +1,6 @@
 import { FileText } from 'lucide-react'
 import type { AttachmentRef } from '../core/types'
+import { formatBytes } from '../lib/format'
 import { useItemBlobURL } from '../lib/useItemBytes'
 
 export type AttachmentKind = 'image' | 'audio' | 'video' | 'file'
@@ -9,13 +10,6 @@ export function kindForMime(mimeType: string): AttachmentKind {
   if (mimeType.startsWith('audio/')) return 'audio'
   if (mimeType.startsWith('video/')) return 'video'
   return 'file'
-}
-
-export function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
-  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`
-  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`
 }
 
 export function MediaPreview({

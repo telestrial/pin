@@ -4,6 +4,7 @@ import type { FeedEntry } from '../core/feed'
 import type { ItemRef } from '../core/types'
 import { installAppBridge } from '../lib/appBridge'
 import { APP_SANDBOX } from '../lib/constants'
+import { formatBytes } from '../lib/format'
 import { renderMarkdown } from '../lib/markdown'
 import { formatAbsolute, formatRelativeShort } from '../lib/time'
 import { useItemBlobURL, useItemBytes } from '../lib/useItemBytes'
@@ -19,13 +20,6 @@ import {
   type TypeFilter,
 } from './FilterPills'
 import { PinButton } from './PinButton'
-
-function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
-  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`
-  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`
-}
 
 export function HomeFeed({
   filter,
