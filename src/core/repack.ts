@@ -214,16 +214,37 @@ export async function runRepackBatch(
     // Repack is housekeeping, not republish — chronology stays put.
     // contentHash is computed from plaintext bytes so it equals the
     // existing hash for already-tagged items; legacy items without a
-    // hash get one backfilled here as a free side effect of repack.
+    // hash (or attachment without an objectID) get them backfilled
+    // here as a free side effect of having the bytes in hand.
     const updatedItems = manifest.items.map((item) => {
-      const r = replacementsByURL.get(item.itemURL)
-      if (!r) return item
-      return {
-        ...item,
-        id: r.id,
-        itemURL: r.url,
-        contentHash: r.contentHash,
+      let next = item
+      const bodyR = replacementsByURL.get(item.itemURL)
+      if (bodyR) {
+        next = {
+          ...next,
+          id: bodyR.id,
+          itemURL: bodyR.url,
+          contentHash: bodyR.contentHash,
+        }
       }
+      if (next.attachments && next.attachments.length > 0) {
+        let attachmentsChanged = false
+        const newAttachments = next.attachments.map((att) => {
+          const r = replacementsByURL.get(att.url)
+          if (!r) return att
+          attachmentsChanged = true
+          return {
+            ...att,
+            url: r.url,
+            contentHash: r.contentHash,
+            objectID: r.id,
+          }
+        })
+        if (attachmentsChanged) {
+          next = { ...next, attachments: newAttachments }
+        }
+      }
+      return next
     })
 
     let coverArt = manifest.coverArt
