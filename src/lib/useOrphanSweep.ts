@@ -1,5 +1,6 @@
 import type { Sdk } from '@siafoundation/sia-storage'
 import { useEffect } from 'react'
+import { resolveCoverArtIDs } from '../core/coverArt'
 import { sweepOrphans } from '../core/orphanSweep'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
@@ -38,26 +39,18 @@ async function buildKnownIDs(sdk: Sdk): Promise<{
   // so resolve via sharedObject(url).id(). If ANY cover-art resolution
   // fails, we bail on the sweep entirely — incomplete known set is too
   // risky to proceed with destructive deletes.
-  let coverResolutionOK = true
-  await Promise.all(
-    auth.myChannels.map(async (channel) => {
-      const manifest = feed.manifests[channel.channelID]
-      if (!manifest?.coverArt) return
-      try {
-        const obj = await sdk.sharedObject(manifest.coverArt.itemURL)
-        ids.add(obj.id())
-      } catch (e) {
-        console.warn(
-          `sweep: cover-art resolution failed for ${channel.channelID}, bailing:`,
-          e,
-        )
-        coverResolutionOK = false
-      }
-    }),
-  )
-
-  if (!coverResolutionOK) {
+  const covers = await resolveCoverArtIDs(sdk, auth.myChannels, feed.manifests)
+  if (covers.failed.length > 0) {
+    for (const f of covers.failed) {
+      console.warn(
+        `sweep: cover-art resolution failed for ${f.channelID}, bailing:`,
+        f.error,
+      )
+    }
     return { ok: false, ids }
+  }
+  for (const cover of covers.resolved.values()) {
+    ids.add(cover.objectID)
   }
 
   // pinStore — library + external pins

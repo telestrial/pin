@@ -1,5 +1,6 @@
 import type { Sdk } from '@siafoundation/sia-storage'
 import { useEffect } from 'react'
+import { resolveCoverArtIDs } from '../core/coverArt'
 import { runRepackBatch, type ScopeRef } from '../core/repack'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
@@ -45,29 +46,26 @@ async function buildScope(sdk: Sdk): Promise<ScopeRef[]> {
     })
   }
 
-  // Cover art per owned channel. SDK call per cover (one per channel),
-  // bounded by myChannels.length — small in practice.
-  await Promise.all(
-    auth.myChannels.map(async (channel) => {
-      const manifest = feed.manifests[channel.channelID]
-      if (!manifest?.coverArt) return
-      try {
-        const obj = await sdk.sharedObject(manifest.coverArt.itemURL)
-        scope.push({
-          source: 'channel',
-          objectID: obj.id(),
-          itemURL: manifest.coverArt.itemURL,
-          channelID: channel.channelID,
-          channelKey: channel.channelKey,
-        })
-      } catch (e) {
-        console.warn(
-          `repack: failed to resolve cover art for ${channel.channelID}:`,
-          e,
-        )
-      }
-    }),
-  )
+  // Cover art per owned channel — resolution failures are best-effort,
+  // missing covers just don't get repacked this pass.
+  const covers = await resolveCoverArtIDs(sdk, auth.myChannels, feed.manifests)
+  for (const f of covers.failed) {
+    console.warn(
+      `repack: failed to resolve cover art for ${f.channelID}:`,
+      f.error,
+    )
+  }
+  for (const channel of auth.myChannels) {
+    const cover = covers.resolved.get(channel.channelID)
+    if (!cover) continue
+    scope.push({
+      source: 'channel',
+      objectID: cover.objectID,
+      itemURL: cover.itemURL,
+      channelID: channel.channelID,
+      channelKey: channel.channelKey,
+    })
+  }
 
   for (const p of pin.pinned) {
     if (!p.objectID) continue

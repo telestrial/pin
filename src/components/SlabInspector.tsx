@@ -1,5 +1,6 @@
 import { RotateCw } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
+import { resolveCoverArtIDs } from '../core/coverArt'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
 import { usePinStore } from '../stores/pin'
@@ -93,24 +94,21 @@ export function SlabInspector() {
         if (settingsObjectID) {
           extras.push({ id: settingsObjectID, label: 'Settings' })
         }
-        await Promise.all(
-          myChannels.map(async (channel) => {
-            const manifest = manifests[channel.channelID]
-            if (!manifest?.coverArt) return
-            try {
-              const obj = await sdk.sharedObject(manifest.coverArt.itemURL)
-              extras.push({
-                id: obj.id(),
-                label: `${channel.name} · cover`,
-              })
-            } catch (e) {
-              console.warn(
-                `slab inspector: cover resolve failed for ${channel.channelID}:`,
-                e,
-              )
-            }
-          }),
-        )
+        const covers = await resolveCoverArtIDs(sdk, myChannels, manifests)
+        for (const f of covers.failed) {
+          console.warn(
+            `slab inspector: cover resolve failed for ${f.channelID}:`,
+            f.error,
+          )
+        }
+        for (const channel of myChannels) {
+          const cover = covers.resolved.get(channel.channelID)
+          if (!cover) continue
+          extras.push({
+            id: cover.objectID,
+            label: `${channel.name} · cover`,
+          })
+        }
 
         const allCandidates = [...candidates, ...extras].filter(
           (() => {
