@@ -1,9 +1,8 @@
-import { useEffect, useState } from 'react'
-import { downloadItemBytes } from '../core/channels'
+import { useMemo } from 'react'
 import type { ItemRef } from '../core/types'
 import { renderMarkdown } from '../lib/markdown'
 import { formatAbsolute, formatRelative } from '../lib/time'
-import { useAuthStore } from '../stores/auth'
+import { useItemBytes } from '../lib/useItemBytes'
 import type { PinInput } from '../stores/pin'
 import { PinButton } from './PinButton'
 
@@ -26,29 +25,11 @@ export function ReadText({
   pinInput: PinInput
   onEdit?: () => void
 }) {
-  const sdk = useAuthStore((s) => s.sdk)
-  const [html, setHtml] = useState<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
-
-  useEffect(() => {
-    if (!sdk) return
-    let cancelled = false
-    setHtml(null)
-    setError(null)
-    downloadItemBytes(sdk, item.itemURL)
-      .then((bytes) => {
-        if (cancelled) return
-        const text = new TextDecoder().decode(bytes)
-        setHtml(renderMarkdown(text))
-      })
-      .catch((e) => {
-        if (cancelled) return
-        setError(e instanceof Error ? e.message : 'Failed to load item')
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [sdk, item.itemURL])
+  const { bytes, error } = useItemBytes(item.itemURL, item.contentHash)
+  const html = useMemo(
+    () => (bytes ? renderMarkdown(new TextDecoder().decode(bytes)) : null),
+    [bytes],
+  )
 
   return (
     <div className="flex-1 p-6">

@@ -1,9 +1,8 @@
-import { useEffect, useRef, useState } from 'react'
-import { downloadItemBytes } from '../core/channels'
+import { useEffect, useMemo, useRef } from 'react'
 import type { ItemRef } from '../core/types'
 import { installAppBridge } from '../lib/appBridge'
 import { APP_SANDBOX } from '../lib/constants'
-import { useAuthStore } from '../stores/auth'
+import { useItemBytes } from '../lib/useItemBytes'
 import type { PinInput } from '../stores/pin'
 import { PinButton } from './PinButton'
 
@@ -26,29 +25,12 @@ export function ReadApp({
   pinInput: PinInput
   onEdit?: () => void
 }) {
-  const sdk = useAuthStore((s) => s.sdk)
   const iframeRef = useRef<HTMLIFrameElement>(null)
-  const [html, setHtml] = useState<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
-
-  useEffect(() => {
-    if (!sdk) return
-    let cancelled = false
-    setHtml(null)
-    setError(null)
-    downloadItemBytes(sdk, item.itemURL)
-      .then((bytes) => {
-        if (cancelled) return
-        setHtml(new TextDecoder().decode(bytes))
-      })
-      .catch((e) => {
-        if (cancelled) return
-        setError(e instanceof Error ? e.message : 'Failed to load app')
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [sdk, item.itemURL])
+  const { bytes, error } = useItemBytes(item.itemURL, item.contentHash)
+  const html = useMemo(
+    () => (bytes ? new TextDecoder().decode(bytes) : null),
+    [bytes],
+  )
 
   useEffect(() => {
     return installAppBridge(() => iframeRef.current, item.id)

@@ -1,7 +1,5 @@
-import { useEffect, useState } from 'react'
-import { downloadItemBytes } from '../core/channels'
 import type { ItemRef } from '../core/types'
-import { useAuthStore } from '../stores/auth'
+import { useItemBlobURL } from '../lib/useItemBytes'
 import type { PinInput } from '../stores/pin'
 import { PinButton } from './PinButton'
 
@@ -22,32 +20,11 @@ export function ReadVideo({
   rightSidebar: React.ReactNode
   pinInput: PinInput
 }) {
-  const sdk = useAuthStore((s) => s.sdk)
-  const [videoURL, setVideoURL] = useState<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
-
-  useEffect(() => {
-    if (!sdk) return
-    let cancelled = false
-    let createdURL: string | null = null
-    setVideoURL(null)
-    setError(null)
-    downloadItemBytes(sdk, item.itemURL)
-      .then((bytes) => {
-        if (cancelled) return
-        const blob = new Blob([bytes as BlobPart], { type: item.mimeType })
-        createdURL = URL.createObjectURL(blob)
-        setVideoURL(createdURL)
-      })
-      .catch((e) => {
-        if (cancelled) return
-        setError(e instanceof Error ? e.message : 'Failed to load video')
-      })
-    return () => {
-      cancelled = true
-      if (createdURL) URL.revokeObjectURL(createdURL)
-    }
-  }, [sdk, item.itemURL, item.mimeType])
+  const { url: videoURL, error } = useItemBlobURL(
+    item.itemURL,
+    item.mimeType,
+    item.contentHash,
+  )
 
   return (
     <div className="flex-1 p-6">
