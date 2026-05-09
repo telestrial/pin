@@ -478,7 +478,7 @@ export function PinSidebar({
               const removing = removingURLs.has(url)
               const entering = enteringURLs.has(url)
               return (
-                <li key={url}>
+                <li key={entry.item.contentHash ?? url}>
                   {/* biome-ignore lint/a11y/useSemanticElements: row contains nested interactive buttons (title link, unpin pin) so a button element would nest interactives */}
                   <div
                     role="button"

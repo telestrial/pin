@@ -188,7 +188,7 @@ export function HomeFeed({
         <ul className="divide-y divide-neutral-200/80">
           {displayedEntries.map((entry) => (
             <FeedRow
-              key={entry.item.id}
+              key={entry.item.contentHash ?? entry.item.id}
               entry={entry}
               onItemClick={onItemClick}
               onChannelClick={onChannelClick}
