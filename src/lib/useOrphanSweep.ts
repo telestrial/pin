@@ -29,10 +29,23 @@ async function buildKnownIDs(sdk: Sdk): Promise<{
 
   const myChannelIDSet = new Set(auth.myChannels.map((c) => c.channelID))
 
-  // Channel manifest items
+  // Channel manifest items + their attachments. Both are independently
+  // pinned in our scope; missing either from the known set classifies
+  // the bytes as orphan and the sweep would delete them.
+  const attachmentURLsToResolve: string[] = []
   for (const entry of feed.entries) {
     if (!myChannelIDSet.has(entry.channel.channelID)) continue
     if (entry.item.id) ids.add(entry.item.id)
+    if (!entry.item.attachments) continue
+    for (const att of entry.item.attachments) {
+      if (att.objectID) {
+        ids.add(att.objectID)
+      } else {
+        // Legacy attachment without stored objectID — resolve via
+        // sharedObject. Repack will backfill objectID on its next pass.
+        attachmentURLsToResolve.push(att.url)
+      }
+    }
   }
 
   // Cover art per owned channel — manifest only stores the share URL,
@@ -51,6 +64,28 @@ async function buildKnownIDs(sdk: Sdk): Promise<{
   }
   for (const cover of covers.resolved.values()) {
     ids.add(cover.objectID)
+  }
+
+  // Same bail-on-failure semantics as cover art for legacy attachment
+  // resolution. After contentHash/objectID backfill via repack this
+  // path goes quiet for everything that's been touched.
+  let attachmentResolutionOK = true
+  await Promise.all(
+    attachmentURLsToResolve.map(async (url) => {
+      try {
+        const obj = await sdk.sharedObject(url)
+        ids.add(obj.id())
+      } catch (e) {
+        console.warn(
+          `sweep: attachment resolution failed for ${url}, bailing:`,
+          e,
+        )
+        attachmentResolutionOK = false
+      }
+    }),
+  )
+  if (!attachmentResolutionOK) {
+    return { ok: false, ids }
   }
 
   // pinStore — library + external pins
