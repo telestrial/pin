@@ -34,6 +34,7 @@ type AttachmentDraft =
       url: string
       byteSize: number
       contentHash?: string
+      objectID?: string
     }
 
 function newTempID(): string {
@@ -103,6 +104,11 @@ export function Compose({ channels }: { channels: OwnedChannel[] }) {
         url: armedItem.item.itemURL,
         byteSize: armedItem.item.byteSize,
         contentHash: armedItem.item.contentHash,
+        // armedItem.objectID is the user's pin (PinnedItemRef.objectID),
+        // which is the right scope-local object ID for the attachment.
+        // armedItem.item.id may be the original publisher's id for items
+        // pinned from other channels, so prefer the PinnedItemRef field.
+        objectID: armedItem.objectID,
       },
     ])
     disarm()
@@ -213,6 +219,7 @@ export function Compose({ channels }: { channels: OwnedChannel[] }) {
             filename: a.filename,
             byteSize: a.byteSize,
             contentHash: a.contentHash,
+            objectID: a.objectID,
           }
         : {
             kind: 'bytes',

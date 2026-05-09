@@ -12,6 +12,12 @@ export type AttachmentRef = {
   // back-compat with manifests written before this field existed; legacy
   // items still resolve via url.
   contentHash?: string
+  // The publisher's Sia object ID. Each attachment is its own pinned
+  // object; the orphan sweep needs this to keep the bytes alive in the
+  // publisher's known set, and the repack runner uses it as the scope
+  // ref. Optional for back-compat — legacy attachments resolve via
+  // sharedObject(url).id().
+  objectID?: string
 }
 
 export type ItemRef = {

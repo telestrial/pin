@@ -39,8 +39,10 @@ export type AttachmentSource =
       byteSize: number
       // Carried through from the source ItemRef when re-attaching an
       // already-uploaded library item; lets the resulting AttachmentRef
-      // keep a stable cache key even though we never re-fetch the bytes.
+      // keep a stable cache key and a known objectID even though we
+      // never re-fetch the bytes.
       contentHash?: string
+      objectID?: string
     }
   | { kind: 'bytes'; bytes: Uint8Array; mimeType: string; filename: string }
 

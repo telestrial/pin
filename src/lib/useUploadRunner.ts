@@ -125,6 +125,7 @@ export function useUploadRunner() {
               filename: src.filename,
               byteSize: src.byteSize,
               contentHash: src.contentHash,
+              objectID: src.objectID,
             })
           } else {
             const u = uploadedItems[bytesIdx++]
@@ -134,6 +135,7 @@ export function useUploadRunner() {
               filename: src.filename,
               byteSize: src.bytes.length,
               contentHash: u.contentHash,
+              objectID: u.id,
             })
           }
         }
