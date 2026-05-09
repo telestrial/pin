@@ -24,12 +24,26 @@ import { useUploadQueueStore } from '../stores/uploadQueue'
 const SETTLE_DELAY_MS = 5000
 const TAG = '[legacy attachment backfill]'
 
+// SDK error message for "this URL has no live object in our scope".
+// String match is fragile but pragmatic — when matched, it's a definite
+// dead reference that we can clean up. Any other error is treated as
+// transient (left in place for next session to retry).
+function isObjectNotFound(reason: unknown): boolean {
+  const msg = reason instanceof Error ? reason.message : String(reason)
+  return msg.includes('object not found')
+}
+
 async function backfillChannel(
   sdk: Sdk,
   agent: Agent,
   channel: OwnedChannel,
   manifest: ChannelManifest,
-): Promise<{ scanned: number; resolved: number; written: boolean }> {
+): Promise<{
+  scanned: number
+  resolved: number
+  removed: number
+  written: boolean
+}> {
   type Pending = { itemIdx: number; attIdx: number; url: string }
   const pending: Pending[] = []
   manifest.items.forEach((item, itemIdx) => {
@@ -43,7 +57,7 @@ async function backfillChannel(
   })
 
   if (pending.length === 0) {
-    return { scanned: 0, resolved: 0, written: false }
+    return { scanned: 0, resolved: 0, removed: 0, written: false }
   }
 
   const settled = await Promise.allSettled(
@@ -53,27 +67,56 @@ async function backfillChannel(
     }),
   )
 
-  // Build patched manifest. Use shallow-copied attachments arrays so
-  // the original manifest object stays untouched.
-  const newItems = manifest.items.map((it) =>
-    it.attachments ? { ...it, attachments: [...it.attachments] } : it,
-  )
-  let resolved = 0
-  for (const s of settled) {
-    if (s.status !== 'fulfilled') {
-      console.warn(`${TAG}   resolution failed:`, s.reason)
-      continue
+  // Categorize: resolved → backfill objectID; dead → drop the
+  // attachment from item.attachments; other failures → leave alone.
+  const resolutions = new Map<string, string>()
+  const deadRefs = new Set<string>()
+  for (let i = 0; i < settled.length; i++) {
+    const s = settled[i]
+    const p = pending[i]
+    const key = `${p.itemIdx}-${p.attIdx}`
+    if (s.status === 'fulfilled') {
+      resolutions.set(key, s.value.objectID)
+    } else if (isObjectNotFound(s.reason)) {
+      deadRefs.add(key)
+      console.warn(
+        `${TAG}   dead ref in "${channel.name}" item ${p.itemIdx}, attachment ${p.attIdx}: ${p.url}`,
+      )
+    } else {
+      console.warn(
+        `${TAG}   resolution failed in "${channel.name}" item ${p.itemIdx}, attachment ${p.attIdx}:`,
+        s.reason,
+      )
     }
-    const { itemIdx, attIdx, objectID } = s.value
-    const item = newItems[itemIdx]
-    if (!item.attachments) continue
-    item.attachments[attIdx] = { ...item.attachments[attIdx], objectID }
-    resolved++
   }
 
-  if (resolved === 0) {
-    return { scanned: pending.length, resolved: 0, written: false }
+  if (resolutions.size === 0 && deadRefs.size === 0) {
+    return { scanned: pending.length, resolved: 0, removed: 0, written: false }
   }
+
+  // Build patched manifest. For each item: drop dead-ref attachments,
+  // patch resolved objectIDs onto the rest.
+  const newItems = manifest.items.map((item, itemIdx) => {
+    if (!item.attachments) return item
+    let mutated = false
+    const newAttachments: typeof item.attachments = []
+    item.attachments.forEach((att, attIdx) => {
+      const key = `${itemIdx}-${attIdx}`
+      if (deadRefs.has(key)) {
+        mutated = true
+        return // drop
+      }
+      const newID = resolutions.get(key)
+      if (newID) {
+        mutated = true
+        newAttachments.push({ ...att, objectID: newID })
+      } else {
+        newAttachments.push(att)
+      }
+    })
+    if (!mutated) return item
+    return { ...item, attachments: newAttachments }
+  })
 
   const updated: ChannelManifest = {
     ...manifest,
@@ -87,7 +130,12 @@ async function backfillChannel(
   const ciphertext = await encryptForChannel(keyBytes, JSON.stringify(updated))
   await putChannelRecord(agent, channel.channelID, ciphertext)
 
-  return { scanned: pending.length, resolved, written: true }
+  return {
+    scanned: pending.length,
+    resolved: resolutions.size,
+    removed: deadRefs.size,
+    written: true,
+  }
 }
 
 export function useLegacyAttachmentBackfill() {
@@ -118,7 +166,13 @@ export function useLegacyAttachmentBackfill() {
 
       let totalScanned = 0
       let totalResolved = 0
-      const written: { name: string; resolved: number; scanned: number }[] = []
+      let totalRemoved = 0
+      const written: {
+        name: string
+        resolved: number
+        removed: number
+        scanned: number
+      }[] = []
 
       for (const channel of auth.myChannels) {
         const manifest = feed.manifests[channel.channelID]
@@ -129,10 +183,12 @@ export function useLegacyAttachmentBackfill() {
           if (cancelled) return
           totalScanned += result.scanned
           totalResolved += result.resolved
+          totalRemoved += result.removed
           if (result.written) {
             written.push({
               name: channel.name,
               resolved: result.resolved,
+              removed: result.removed,
               scanned: result.scanned,
             })
           }
@@ -152,20 +208,22 @@ export function useLegacyAttachmentBackfill() {
       }
 
       console.log(
-        `${TAG} scanned ${totalScanned} legacy attachments, backfilled ${totalResolved}`,
+        `${TAG} scanned ${totalScanned}, backfilled ${totalResolved}, removed ${totalRemoved} dead refs`,
       )
       for (const w of written) {
-        console.log(
-          `${TAG}   "${w.name}": ${w.resolved}/${w.scanned} resolved`,
-        )
+        const parts: string[] = []
+        if (w.resolved > 0) parts.push(`${w.resolved} resolved`)
+        if (w.removed > 0) parts.push(`${w.removed} removed`)
+        console.log(`${TAG}   "${w.name}": ${parts.join(', ')} of ${w.scanned}`)
       }
-      if (totalResolved === totalScanned) {
+      const handled = totalResolved + totalRemoved
+      if (handled === totalScanned) {
         console.log(
           `${TAG} done. Refresh — you should see "nothing to do" — then remove the import + call from App.tsx.`,
         )
       } else {
         console.warn(
-          `${TAG} ${totalScanned - totalResolved} attachments could not be resolved this pass; will retry next session.`,
+          `${TAG} ${totalScanned - handled} attachments could not be handled this pass; will retry next session.`,
         )
       }
     }
