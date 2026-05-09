@@ -27,23 +27,51 @@ async function buildScope(sdk: Sdk): Promise<ScopeRef[]> {
   const pin = usePinStore.getState()
 
   const scope: ScopeRef[] = []
+  // Dedup by objectID across every source — an attachment may also be
+  // in pinStore as a library entry (same bytes, same Sia object), and
+  // we never want to feed the same object into uploadItemsPacked twice.
+  const seenIDs = new Set<string>()
+  const push = (ref: ScopeRef) => {
+    if (seenIDs.has(ref.objectID)) return
+    seenIDs.add(ref.objectID)
+    scope.push(ref)
+  }
+
   const myChannelIDSet = new Set(auth.myChannels.map((c) => c.channelID))
   const channelKeyByID = new Map(
     auth.myChannels.map((c) => [c.channelID, c.channelKey]),
   )
 
+  // Channel item bodies + attachments (when attachment.objectID is
+  // stored from upload time). Legacy attachments without a stored
+  // objectID will pick one up on their next sweep / repack pass via
+  // sharedObject; we'd rather skip them this pass than pay N
+  // round-trips per scope build (this fires on every pin event).
   for (const entry of feed.entries) {
     if (!myChannelIDSet.has(entry.channel.channelID)) continue
     const channelKey = channelKeyByID.get(entry.channel.channelID)
     if (!channelKey) continue
-    if (!entry.item.id || !entry.item.itemURL) continue
-    scope.push({
-      source: 'channel',
-      objectID: entry.item.id,
-      itemURL: entry.item.itemURL,
-      channelID: entry.channel.channelID,
-      channelKey,
-    })
+    if (entry.item.id && entry.item.itemURL) {
+      push({
+        source: 'channel',
+        objectID: entry.item.id,
+        itemURL: entry.item.itemURL,
+        channelID: entry.channel.channelID,
+        channelKey,
+      })
+    }
+    if (entry.item.attachments) {
+      for (const att of entry.item.attachments) {
+        if (!att.objectID) continue
+        push({
+          source: 'channel',
+          objectID: att.objectID,
+          itemURL: att.url,
+          channelID: entry.channel.channelID,
+          channelKey,
+        })
+      }
+    }
   }
 
   // Cover art per owned channel — resolution failures are best-effort,
@@ -58,7 +86,7 @@ async function buildScope(sdk: Sdk): Promise<ScopeRef[]> {
   for (const channel of auth.myChannels) {
     const cover = covers.resolved.get(channel.channelID)
     if (!cover) continue
-    scope.push({
+    push({
       source: 'channel',
       objectID: cover.objectID,
       itemURL: cover.itemURL,
@@ -71,13 +99,13 @@ async function buildScope(sdk: Sdk): Promise<ScopeRef[]> {
     if (!p.objectID) continue
     if (myChannelIDSet.has(p.channel.channelID)) continue
     if (p.channel.channelID === LIBRARY_CHANNEL.channelID) {
-      scope.push({
+      push({
         source: 'library',
         objectID: p.objectID,
         itemURL: p.item.itemURL,
       })
     } else {
-      scope.push({
+      push({
         source: 'external',
         objectID: p.objectID,
         itemURL: p.item.itemURL,
