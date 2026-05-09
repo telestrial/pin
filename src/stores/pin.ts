@@ -41,6 +41,7 @@ type PinState = {
       oldObjectID: string
       newObjectID: string
       newURL: string
+      newContentHash: string
     }>,
   ) => void
   reset: () => void
@@ -127,6 +128,7 @@ export const usePinStore = create<PinState>()(
                 ...p.item,
                 id: r.newObjectID,
                 itemURL: r.newURL,
+                contentHash: r.newContentHash,
               },
             }
           }),

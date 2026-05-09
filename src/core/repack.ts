@@ -58,6 +58,7 @@ export type RepackBatchResult = {
     oldObjectID: string
     newObjectID: string
     newURL: string
+    newContentHash: string
   }>
   affectedChannelIDs: string[]
 }
@@ -162,11 +163,17 @@ export async function runRepackBatch(
   const uploaded = await uploadItemsPacked(sdk, allBytes)
 
   // Build mapping: old object → new object.
-  type Mapping = { oldRef: ScopeRef; newID: string; newURL: string }
+  type Mapping = {
+    oldRef: ScopeRef
+    newID: string
+    newURL: string
+    newContentHash: string
+  }
   const mappings: Mapping[] = filteredRefs.map((r, i) => ({
     oldRef: r,
     newID: uploaded[i].id,
     newURL: uploaded[i].itemURL,
+    newContentHash: uploaded[i].contentHash,
   }))
 
   // Manifest swaps, grouped by channel so each channel's manifest is
@@ -193,27 +200,42 @@ export async function runRepackBatch(
 
     const replacementsByURL = new Map<
       string,
-      { url: string; id: string }
+      { url: string; id: string; contentHash: string }
     >()
     for (const m of channelMappings) {
       replacementsByURL.set(m.oldRef.itemURL, {
         url: m.newURL,
         id: m.newID,
+        contentHash: m.newContentHash,
       })
     }
 
     // Rewrite item entries in place, preserving each item's publishedAt.
     // Repack is housekeeping, not republish — chronology stays put.
+    // contentHash is computed from plaintext bytes so it equals the
+    // existing hash for already-tagged items; legacy items without a
+    // hash get one backfilled here as a free side effect of repack.
     const updatedItems = manifest.items.map((item) => {
       const r = replacementsByURL.get(item.itemURL)
       if (!r) return item
-      return { ...item, id: r.id, itemURL: r.url }
+      return {
+        ...item,
+        id: r.id,
+        itemURL: r.url,
+        contentHash: r.contentHash,
+      }
     })
 
     let coverArt = manifest.coverArt
     if (coverArt) {
       const r = replacementsByURL.get(coverArt.itemURL)
-      if (r) coverArt = { ...coverArt, itemURL: r.url }
+      if (r) {
+        coverArt = {
+          ...coverArt,
+          itemURL: r.url,
+          contentHash: r.contentHash,
+        }
+      }
     }
 
     const updated: ChannelManifest = {
@@ -244,6 +266,7 @@ export async function runRepackBatch(
       oldObjectID: m.oldRef.objectID,
       newObjectID: m.newID,
       newURL: m.newURL,
+      newContentHash: m.newContentHash,
     }))
 
   // Delete old bytes. Subscribers who pinned own-channel items keep their
