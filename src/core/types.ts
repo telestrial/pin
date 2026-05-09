@@ -8,6 +8,10 @@ export type AttachmentRef = {
   mimeType: string
   filename?: string
   byteSize: number
+  // CIDv1 (raw codec, SHA-256) of the plaintext bytes. Optional for
+  // back-compat with manifests written before this field existed; legacy
+  // items still resolve via url.
+  contentHash?: string
 }
 
 export type ItemRef = {
@@ -22,11 +26,16 @@ export type ItemRef = {
   durationMs?: number
   filename?: string
   attachments?: AttachmentRef[]
+  // See AttachmentRef.contentHash. Stable across repack (which rewrites
+  // id + itemURL but preserves plaintext bytes) and across encryption
+  // regime changes.
+  contentHash?: string
 }
 
 export type ChannelCover = {
   itemURL: string
   mimeType: string
+  contentHash?: string
 }
 
 export type ChannelManifest = {
