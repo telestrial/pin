@@ -114,6 +114,19 @@ export function connectJetstream(
     }
   }
 
+  // Detach all callbacks before closing so the browser doesn't fire a
+  // synthetic error event on a CONNECTING socket we're tearing down. Without
+  // this, React StrictMode's dev-only double-mount logs a "WebSocket is
+  // closed before the connection is established" + jetstream error on every
+  // boot.
+  function detachAndClose(socket: WebSocket) {
+    socket.onclose = null
+    socket.onerror = null
+    socket.onmessage = null
+    socket.onopen = null
+    socket.close()
+  }
+
   function close() {
     closed = true
     if (reconnectTimeout) {
@@ -121,9 +134,7 @@ export function connectJetstream(
       reconnectTimeout = null
     }
     if (ws) {
-      const old = ws
-      old.onclose = null
-      old.close()
+      detachAndClose(ws)
       ws = null
     }
   }
@@ -136,9 +147,7 @@ export function connectJetstream(
     // Tear down the existing socket without triggering the backoff reconnect,
     // then immediately reconnect with the new filter.
     if (ws) {
-      const old = ws
-      old.onclose = null
-      old.close()
+      detachAndClose(ws)
       ws = null
     }
     if (reconnectTimeout) {

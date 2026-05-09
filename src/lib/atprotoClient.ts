@@ -4,6 +4,7 @@ import {
   type OAuthSession,
   buildAtprotoLoopbackClientId,
 } from '@atproto/oauth-client-browser'
+import { useAuthStore } from '../stores/auth'
 
 const CLIENT_METADATA_URL = 'https://pin-liard.vercel.app/client-metadata.json'
 
@@ -44,6 +45,18 @@ async function doBoot(): Promise<OAuthBootResult> {
   if (!result) return null
   const session = result.session
   const agent = new Agent(session)
+
+  // If the auth store already has a cached handle for this DID (persisted
+  // from a prior session), reuse it and skip the network round-trip
+  // entirely. Otherwise fall through to getProfile, accepting that with
+  // the narrow OAuth scope ("atproto repo:dev.sia.pin.channel ...") the
+  // call returns 403 — handle stays null in that case and the cache is
+  // preserved by setATProtoIdentity's null-coalesce.
+  const cached = useAuthStore.getState()
+  if (cached.atprotoDID === session.did && cached.atprotoHandle) {
+    return { session, agent, did: session.did, handle: cached.atprotoHandle }
+  }
+
   let handle: string | null = null
   try {
     const profile = await agent.getProfile({ actor: session.did })

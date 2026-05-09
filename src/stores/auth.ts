@@ -129,7 +129,15 @@ export const useAuthStore = create<AuthState>()(
           ),
         })),
       setATProtoIdentity: (atprotoAgent, atprotoDID, atprotoHandle) =>
-        set({ atprotoAgent, atprotoDID, atprotoHandle }),
+        // Don't overwrite an already-cached handle with null. The OAuth
+        // scope doesn't permit app.bsky.actor.getProfile, so doBoot can
+        // legitimately resolve handle=null on a returning session — that
+        // shouldn't trash the persisted display value from the prior boot.
+        set((s) => ({
+          atprotoAgent,
+          atprotoDID,
+          atprotoHandle: atprotoHandle ?? s.atprotoHandle,
+        })),
       setFeedSortOrder: (feedSortOrder) => set({ feedSortOrder }),
       hydrateSettings: (myChannels, subscriptions, objectID) =>
         set({
