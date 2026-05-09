@@ -10,6 +10,13 @@ import {
 import type { ItemRef } from '../core/types'
 import { APP_KEY } from '../lib/constants'
 
+// At-most-one-in-flight account refresh. Coalesces bursts (e.g.
+// loop-until-clean repack with N batches, each calling refreshAccount)
+// into at most one follow-up round-trip after the current one settles —
+// so N batches produce 1 or 2 sdk.account() calls instead of N.
+let accountRefreshInFlight: Promise<void> | null = null
+let accountRefreshPending: Sdk | null = null
+
 export type PinnedItemRef = {
   item: ItemRef
   channel: {
@@ -69,9 +76,7 @@ export const usePinStore = create<PinState>()(
           const next = new Set(get().pinning)
           next.delete(url)
           set((s) => ({ pinned: [...s.pinned, ref], pinning: next }))
-          fetchAccountSnapshot(sdk)
-            .then((account) => set({ account }))
-            .catch(() => {})
+          get().refreshAccount(sdk)
         } catch (e) {
           const next = new Set(get().pinning)
           next.delete(url)
@@ -93,9 +98,7 @@ export const usePinStore = create<PinState>()(
             pinned: s.pinned.filter((p) => p.item.itemURL !== itemURL),
             pinning: next,
           }))
-          fetchAccountSnapshot(sdk)
-            .then((account) => set({ account }))
-            .catch(() => {})
+          get().refreshAccount(sdk)
         } catch (e) {
           const next = new Set(get().pinning)
           next.delete(itemURL)
@@ -104,12 +107,24 @@ export const usePinStore = create<PinState>()(
         }
       },
       refreshAccount: async (sdk) => {
-        try {
-          const account = await fetchAccountSnapshot(sdk)
-          set({ account })
-        } catch {
-          // best-effort
+        if (accountRefreshInFlight) {
+          accountRefreshPending = sdk
+          return accountRefreshInFlight
         }
+        accountRefreshInFlight = (async () => {
+          try {
+            const account = await fetchAccountSnapshot(sdk)
+            set({ account })
+          } catch {
+            // best-effort
+          } finally {
+            accountRefreshInFlight = null
+            const next = accountRefreshPending
+            accountRefreshPending = null
+            if (next) get().refreshAccount(next)
+          }
+        })()
+        return accountRefreshInFlight
       },
       isPinned: (itemURL) =>
         get().pinned.some((p) => p.item.itemURL === itemURL),
