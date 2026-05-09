@@ -1,5 +1,5 @@
 import { X } from 'lucide-react'
-import { useMemo, useRef, useState } from 'react'
+import { useMemo, useState } from 'react'
 import type { ItemRef } from '../core/types'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
@@ -10,6 +10,7 @@ import { useUploadQueueStore } from '../stores/uploadQueue'
 import { ChannelAvatar } from './ChannelAvatar'
 import { kindForMime } from './AttachmentMedia'
 import { formatBytes } from '../lib/format'
+import { useFadeCancelUnpin } from '../lib/useFadeCancelUnpin'
 import { ItemTile } from './ItemTile'
 import type { TileChannel, TileSource } from './ItemTile'
 import { PIN_ITEM_DRAG_TYPE } from './PinSidebar'
@@ -34,27 +35,21 @@ export function MyStorage({
   onClose: () => void
   onItemClick: (ref: PinnedItemRef) => void
 }) {
-  const sdk = useAuthStore((s) => s.sdk)
   const myChannels = useAuthStore((s) => s.myChannels)
   const subscriptions = useAuthStore((s) => s.subscriptions)
   const feedEntries = useFeedStore((s) => s.entries)
   const manifests = useFeedStore((s) => s.manifests)
   const pinned = usePinStore((s) => s.pinned)
   const isPinning = usePinStore((s) => s.isPinning)
-  const unpin = usePinStore((s) => s.unpin)
   const addToast = useToastStore((s) => s.addToast)
   const enqueue = useUploadQueueStore((s) => s.enqueue)
 
   const [selectedChannel, setSelectedChannel] = useState<string | null>(null)
   const [isDragging, setIsDragging] = useState(false)
-  // Click-pin → fade tile to opacity-0 over FADE_MS, then commit unpin.
-  // Click again during fade cancels the timeout and restores opacity —
-  // matches PinSidebar's row pattern verbatim.
   const FADE_MS = 1500
-  const [removingURLs, setRemovingURLs] = useState<Set<string>>(new Set())
-  const removeTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(
-    new Map(),
-  )
+  const { removingURLs, toggle: toggleTilePinFade } = useFadeCancelUnpin({
+    fadeMs: FADE_MS,
+  })
 
   const myChannelIDSet = useMemo(
     () => new Set(myChannels.map((c) => c.channelID)),
@@ -122,48 +117,8 @@ export function MyStorage({
 
   const tiles = selectedChannel ? channelEntries : flatEntries
 
-  function startRemove(url: string) {
-    setRemovingURLs((prev) => {
-      const next = new Set(prev)
-      next.add(url)
-      return next
-    })
-    const id = setTimeout(async () => {
-      removeTimers.current.delete(url)
-      if (!sdk) return
-      try {
-        await unpin(sdk, url)
-      } catch (err) {
-        setRemovingURLs((prev) => {
-          const next = new Set(prev)
-          next.delete(url)
-          return next
-        })
-        addToast(err instanceof Error ? err.message : 'Unpin failed')
-      }
-    }, FADE_MS)
-    removeTimers.current.set(url, id)
-  }
-
-  function cancelRemove(url: string) {
-    const id = removeTimers.current.get(url)
-    if (id !== undefined) {
-      clearTimeout(id)
-      removeTimers.current.delete(url)
-    }
-    setRemovingURLs((prev) => {
-      const next = new Set(prev)
-      next.delete(url)
-      return next
-    })
-  }
-
   function handleUnpinClick(url: string) {
-    if (removingURLs.has(url)) {
-      cancelRemove(url)
-    } else {
-      startRemove(url)
-    }
+    toggleTilePinFade(url)
   }
 
   function buildDragHandler(entry: TileEntry) {

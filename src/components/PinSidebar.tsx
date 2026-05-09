@@ -5,7 +5,6 @@ import type { ItemRef } from '../core/types'
 import { useAuthStore } from '../stores/auth'
 import { useComposeStore } from '../stores/compose'
 import { useFeedStore } from '../stores/feed'
-import { useToastStore } from '../stores/toast'
 import {
   type UploadTask,
   type UploadTaskState,
@@ -13,6 +12,7 @@ import {
 } from '../stores/uploadQueue'
 import { useRepackStore } from '../stores/repack'
 import { formatBytes } from '../lib/format'
+import { useFadeCancelUnpin } from '../lib/useFadeCancelUnpin'
 import { ChannelAvatar } from './ChannelAvatar'
 import { PinIcon } from './PinIcon'
 
@@ -77,8 +77,6 @@ export function PinSidebar({
   const account = usePinStore((s) => s.account)
   const pinned = usePinStore((s) => s.pinned)
   const isPinning = usePinStore((s) => s.isPinning)
-  const unpin = usePinStore((s) => s.unpin)
-  const addToast = useToastStore((s) => s.addToast)
   const tasks = useUploadQueueStore((s) => s.tasks)
   const retryTask = useUploadQueueStore((s) => s.retry)
   const removeTask = useUploadQueueStore((s) => s.remove)
@@ -88,13 +86,13 @@ export function PinSidebar({
   const toggleArm = useComposeStore((s) => s.toggle)
   const disarm = useComposeStore((s) => s.disarm)
   const repackRunning = useRepackStore((s) => s.running || s.sweeping)
-  // Rows that have been click-pinned-off — opacity transitions to 0 over
-  // FADE_MS, then we call unpin. Re-clicking the pin icon during that window
-  // cancels the timeout and restores opacity (clean undo).
-  const [removingURLs, setRemovingURLs] = useState<Set<string>>(new Set())
-  const removeTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(
-    new Map(),
-  )
+  // Click-pin → opacity transitions to 0 over FADE_MS, then unpin commits.
+  // Re-click during the fade cancels (clean undo). Shared with MyStorage's
+  // tile pin via the hook.
+  const FADE_MS = 1500
+  const { removingURLs, toggle: togglePinFade } = useFadeCancelUnpin({
+    fadeMs: FADE_MS,
+  })
   // Rows that have just appeared since the last render — `animate-pin-enter`
   // class drives a CSS keyframe fade-in over the same FADE_MS as removal.
   // knownURLsRef is the set of URLs already settled; initializedRef gates
@@ -168,8 +166,6 @@ export function PinSidebar({
       ? Math.min(100, (account.pinnedData / account.maxPinnedData) * 100)
       : 0
 
-  const FADE_MS = 1500
-
   // Detect rows that just appeared in displayList — apply the
   // animate-pin-enter class for FADE_MS so they fade in symmetrically
   // with the click-to-unpin fade-out. The first render is special-cased:
@@ -205,50 +201,9 @@ export function PinSidebar({
     return () => clearTimeout(id)
   }, [displayList])
 
-  function startRemove(url: string) {
-    setRemovingURLs((prev) => {
-      const next = new Set(prev)
-      next.add(url)
-      return next
-    })
-    const id = setTimeout(async () => {
-      removeTimers.current.delete(url)
-      if (!sdk) return
-      try {
-        await unpin(sdk, url)
-      } catch (err) {
-        // Restore opacity on failure so the user can retry.
-        setRemovingURLs((prev) => {
-          const next = new Set(prev)
-          next.delete(url)
-          return next
-        })
-        addToast(err instanceof Error ? err.message : 'Unpin failed')
-      }
-    }, FADE_MS)
-    removeTimers.current.set(url, id)
-  }
-
-  function cancelRemove(url: string) {
-    const id = removeTimers.current.get(url)
-    if (id !== undefined) {
-      clearTimeout(id)
-      removeTimers.current.delete(url)
-    }
-    setRemovingURLs((prev) => {
-      const next = new Set(prev)
-      next.delete(url)
-      return next
-    })
-  }
-
   function handlePinIconClick(e: React.MouseEvent, url: string) {
     e.stopPropagation()
-    if (removingURLs.has(url)) {
-      cancelRemove(url)
-    } else {
-      startRemove(url)
-    }
+    togglePinFade(url)
   }
 
   return (
