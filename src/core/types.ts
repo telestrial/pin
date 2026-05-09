@@ -20,6 +20,20 @@ export type AttachmentRef = {
   objectID?: string
 }
 
+// Pre-AttachmentRef-shape posts (slice 1, before url/mimeType were
+// guaranteed) can arrive in manifests as bare strings or objects
+// missing required fields. Anything that walks attachments has to
+// gate on this — otherwise sharedObject(undefined) crashes the WASM
+// bridge and the renderer / sweep / repack all bail.
+export function isValidAttachment(a: unknown): a is AttachmentRef {
+  return (
+    typeof a === 'object' &&
+    a !== null &&
+    typeof (a as { url?: unknown }).url === 'string' &&
+    typeof (a as { mimeType?: unknown }).mimeType === 'string'
+  )
+}
+
 export type ItemRef = {
   id: string
   itemURL: string

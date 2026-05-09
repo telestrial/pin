@@ -3,7 +3,7 @@ import type { Sdk } from '@siafoundation/sia-storage'
 import { useEffect } from 'react'
 import { putChannelRecord } from '../core/atproto'
 import { channelKeyFromBase64, encryptForChannel } from '../core/crypto'
-import type { ChannelManifest } from '../core/types'
+import { type ChannelManifest, isValidAttachment } from '../core/types'
 import { type OwnedChannel, useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
 import { useUploadQueueStore } from '../stores/uploadQueue'
@@ -35,6 +35,9 @@ async function backfillChannel(
   manifest.items.forEach((item, itemIdx) => {
     if (!item.attachments) return
     item.attachments.forEach((att, attIdx) => {
+      // Skip pre-schema malformed entries — they can't be resolved
+      // because there's no URL to resolve from.
+      if (!isValidAttachment(att)) return
       if (!att.objectID) pending.push({ itemIdx, attIdx, url: att.url })
     })
   })

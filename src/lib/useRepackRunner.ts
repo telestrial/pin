@@ -2,6 +2,7 @@ import type { Sdk } from '@siafoundation/sia-storage'
 import { useEffect } from 'react'
 import { resolveCoverArtIDs } from '../core/coverArt'
 import { runRepackBatch, type ScopeRef } from '../core/repack'
+import { isValidAttachment } from '../core/types'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
 import { LIBRARY_CHANNEL } from './pinUpload'
@@ -62,6 +63,7 @@ async function buildScope(sdk: Sdk): Promise<ScopeRef[]> {
     }
     if (entry.item.attachments) {
       for (const att of entry.item.attachments) {
+        if (!isValidAttachment(att)) continue
         if (!att.objectID) continue
         push({
           source: 'channel',

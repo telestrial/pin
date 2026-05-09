@@ -2,6 +2,7 @@ import type { Sdk } from '@siafoundation/sia-storage'
 import { useEffect } from 'react'
 import { resolveCoverArtIDs } from '../core/coverArt'
 import { sweepOrphans } from '../core/orphanSweep'
+import { isValidAttachment } from '../core/types'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
 import { usePinStore } from '../stores/pin'
@@ -38,6 +39,9 @@ async function buildKnownIDs(sdk: Sdk): Promise<{
     if (entry.item.id) ids.add(entry.item.id)
     if (!entry.item.attachments) continue
     for (const att of entry.item.attachments) {
+      // Pre-schema malformed entries can be missing url/mimeType —
+      // skip them so we don't crash the WASM bridge with undefined.
+      if (!isValidAttachment(att)) continue
       if (att.objectID) {
         ids.add(att.objectID)
       } else {
@@ -66,27 +70,23 @@ async function buildKnownIDs(sdk: Sdk): Promise<{
     ids.add(cover.objectID)
   }
 
-  // Same bail-on-failure semantics as cover art for legacy attachment
-  // resolution. After contentHash/objectID backfill via repack this
-  // path goes quiet for everything that's been touched.
-  let attachmentResolutionOK = true
+  // Resolve legacy attachments. Per-attachment failures are logged and
+  // skipped, NOT a hard bail like cover art — if sharedObject returns
+  // "object not found" for an attachment URL, the bytes simply aren't
+  // pinned in our scope, so they won't appear in objectEvents either
+  // and the sweep has nothing to do with them. After repack backfills
+  // attachment.objectID this path goes quiet for everything that's
+  // passed through repack.
   await Promise.all(
     attachmentURLsToResolve.map(async (url) => {
       try {
         const obj = await sdk.sharedObject(url)
         ids.add(obj.id())
       } catch (e) {
-        console.warn(
-          `sweep: attachment resolution failed for ${url}, bailing:`,
-          e,
-        )
-        attachmentResolutionOK = false
+        console.warn(`sweep: skipping attachment ${url}:`, e)
       }
     }),
   )
-  if (!attachmentResolutionOK) {
-    return { ok: false, ids }
-  }
 
   // pinStore — library + external pins
   for (const p of pin.pinned) {

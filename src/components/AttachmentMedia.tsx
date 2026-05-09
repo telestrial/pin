@@ -1,5 +1,5 @@
 import { FileText } from 'lucide-react'
-import type { AttachmentRef } from '../core/types'
+import { type AttachmentRef, isValidAttachment } from '../core/types'
 import { formatBytes } from '../lib/format'
 import { useItemBlobURL } from '../lib/useItemBytes'
 
@@ -98,12 +98,7 @@ export function AttachmentGrid({
   // Drop malformed entries — pre-AttachmentRef-schema posts (slice 1's URL-only
   // shape) would arrive as bare strings here. Render nothing rather than crash;
   // the user can republish if they want them rendered.
-  const valid = attachments.filter(
-    (a): a is AttachmentRef =>
-      typeof a === 'object' &&
-      a !== null &&
-      typeof (a as { mimeType?: unknown }).mimeType === 'string',
-  )
+  const valid = attachments.filter(isValidAttachment)
   if (valid.length === 0) return null
   const showAll = valid.length <= DISPLAY_CAP
   const visible = showAll ? valid : valid.slice(0, DISPLAY_CAP - 1)
