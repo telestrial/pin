@@ -37,6 +37,10 @@ export type AttachmentSource =
       mimeType: string
       filename?: string
       byteSize: number
+      // Carried through from the source ItemRef when re-attaching an
+      // already-uploaded library item; lets the resulting AttachmentRef
+      // keep a stable cache key even though we never re-fetch the bytes.
+      contentHash?: string
     }
   | { kind: 'bytes'; bytes: Uint8Array; mimeType: string; filename: string }
 
@@ -71,7 +75,11 @@ export async function createChannel(
   let coverArt: ChannelManifest['coverArt']
   if (args.coverImage) {
     const uploaded = await uploadItem(sdk, args.coverImage.bytes)
-    coverArt = { itemURL: uploaded.itemURL, mimeType: args.coverImage.mimeType }
+    coverArt = {
+      itemURL: uploaded.itemURL,
+      mimeType: args.coverImage.mimeType,
+      contentHash: uploaded.contentHash,
+    }
   }
 
   const manifest: ChannelManifest = {
@@ -125,6 +133,7 @@ export async function editChannel(
     coverArt = {
       itemURL: uploaded.itemURL,
       mimeType: patch.coverImage.mimeType,
+      contentHash: uploaded.contentHash,
     }
   }
 
@@ -161,7 +170,12 @@ export async function fetchChannel(
 }
 
 export function buildItemRef(
-  uploaded: { id: string; itemURL: string; byteSize: number },
+  uploaded: {
+    id: string
+    itemURL: string
+    byteSize: number
+    contentHash: string
+  },
   payload: ItemPayload,
 ): ItemRef {
   return {
@@ -176,6 +190,7 @@ export function buildItemRef(
     durationMs: payload.durationMs,
     filename: payload.filename,
     attachments: payload.attachments,
+    contentHash: uploaded.contentHash,
   }
 }
 

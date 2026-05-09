@@ -124,6 +124,7 @@ export function useUploadRunner() {
               mimeType: src.mimeType,
               filename: src.filename,
               byteSize: src.byteSize,
+              contentHash: src.contentHash,
             })
           } else {
             const u = uploadedItems[bytesIdx++]
@@ -132,6 +133,7 @@ export function useUploadRunner() {
               mimeType: src.mimeType,
               filename: src.filename,
               byteSize: src.bytes.length,
+              contentHash: u.contentHash,
             })
           }
         }

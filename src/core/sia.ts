@@ -1,4 +1,5 @@
 import { PinnedObject, type Sdk } from '@siafoundation/sia-storage'
+import { computeContentHash } from './contentHash'
 
 // Year-9999 makes item share URLs effectively permanent (verified by Day-0 probe 2).
 export const FAR_FUTURE = new Date('9999-12-31T00:00:00Z')
@@ -7,6 +8,9 @@ export type UploadedItem = {
   id: string
   itemURL: string
   byteSize: number
+  // CIDv1 of the plaintext bytes — same input → same hash regardless of
+  // re-encryption, so caches keyed on this survive repack URL swaps.
+  contentHash: string
 }
 
 export async function uploadItem(
@@ -14,16 +18,22 @@ export async function uploadItem(
   bytes: Uint8Array,
   onShard?: () => void,
 ): Promise<UploadedItem> {
-  const obj = await sdk.upload(
-    new PinnedObject(),
-    new Blob([bytes as BlobPart]).stream(),
-    onShard ? { onShardUploaded: () => onShard() } : undefined,
-  )
+  // Hash in parallel with the upload — both are reading the same bytes,
+  // there's no dependency between them.
+  const [obj, contentHash] = await Promise.all([
+    sdk.upload(
+      new PinnedObject(),
+      new Blob([bytes as BlobPart]).stream(),
+      onShard ? { onShardUploaded: () => onShard() } : undefined,
+    ),
+    computeContentHash(bytes),
+  ])
   await sdk.pinObject(obj)
   return {
     id: obj.id(),
     itemURL: sdk.shareObject(obj, FAR_FUTURE),
     byteSize: bytes.length,
+    contentHash,
   }
 }
 
@@ -37,6 +47,9 @@ export async function uploadItemsPacked(
   items: Uint8Array[],
   onShard?: () => void,
 ): Promise<UploadedItem[]> {
+  // Kick off all hashes in parallel with the packed upload below.
+  const hashPromises = items.map((b) => computeContentHash(b))
+
   const packed = sdk.uploadPacked(
     onShard ? { onShardUploaded: () => onShard() } : undefined,
   )
@@ -44,6 +57,8 @@ export async function uploadItemsPacked(
     await packed.add(new Blob([bytes as BlobPart]).stream())
   }
   const objects = await packed.finalize()
+  const hashes = await Promise.all(hashPromises)
+
   const results: UploadedItem[] = []
   for (let i = 0; i < objects.length; i++) {
     const obj = objects[i]
@@ -52,6 +67,7 @@ export async function uploadItemsPacked(
       id: obj.id(),
       itemURL: sdk.shareObject(obj, FAR_FUTURE),
       byteSize: items[i].length,
+      contentHash: hashes[i],
     })
   }
   return results

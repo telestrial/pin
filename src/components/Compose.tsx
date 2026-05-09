@@ -33,6 +33,7 @@ type AttachmentDraft =
       kind: AttachmentKind
       url: string
       byteSize: number
+      contentHash?: string
     }
 
 function newTempID(): string {
@@ -101,6 +102,7 @@ export function Compose({ channels }: { channels: OwnedChannel[] }) {
         kind: kindForMime(armedItem.item.mimeType),
         url: armedItem.item.itemURL,
         byteSize: armedItem.item.byteSize,
+        contentHash: armedItem.item.contentHash,
       },
     ])
     disarm()
@@ -210,6 +212,7 @@ export function Compose({ channels }: { channels: OwnedChannel[] }) {
             mimeType: a.mimeType,
             filename: a.filename,
             byteSize: a.byteSize,
+            contentHash: a.contentHash,
           }
         : {
             kind: 'bytes',
