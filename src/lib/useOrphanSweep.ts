@@ -1,7 +1,6 @@
 import type { Sdk } from '@siafoundation/sia-storage'
 import { useEffect } from 'react'
 import { sweepOrphans } from '../core/orphanSweep'
-import { fetchAccountSnapshot } from '../core/pin'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
 import { usePinStore } from '../stores/pin'
@@ -110,9 +109,7 @@ export function useOrphanSweep() {
         if (cancelled) return
 
         if (result.orphansDeleted > 0) {
-          fetchAccountSnapshot(sdk)
-            .then((account) => usePinStore.setState({ account }))
-            .catch(() => {})
+          usePinStore.getState().refreshAccount(sdk)
 
           useToastStore
             .getState()

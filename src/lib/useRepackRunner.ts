@@ -1,6 +1,5 @@
 import type { Sdk } from '@siafoundation/sia-storage'
 import { useEffect } from 'react'
-import { fetchAccountSnapshot } from '../core/pin'
 import { runRepackBatch, type ScopeRef } from '../core/repack'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
@@ -143,9 +142,7 @@ export function useRepackRunner() {
 
           // Refresh account snapshot so the storage bar reflects the
           // freed pinnedData.
-          fetchAccountSnapshot(sdk)
-            .then((account) => usePinStore.setState({ account }))
-            .catch(() => {})
+          usePinStore.getState().refreshAccount(sdk)
 
           useToastStore
             .getState()

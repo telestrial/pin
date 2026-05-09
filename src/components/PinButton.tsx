@@ -1,6 +1,5 @@
 import { useState } from 'react'
 import { deletePublishedItem } from '../core/channels'
-import { fetchAccountSnapshot } from '../core/pin'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
 import { type PinInput, usePinStore } from '../stores/pin'
@@ -44,9 +43,7 @@ export function PinButton({ input }: { input: PinInput }) {
           (s) => s.channelID === ownedChannel.channelID,
         )
         if (sub) await refreshChannel(sub)
-        fetchAccountSnapshot(sdk)
-          .then((account) => usePinStore.setState({ account }))
-          .catch(() => {})
+        usePinStore.getState().refreshAccount(sdk)
         addToast('Item retracted')
       } catch (err) {
         addToast(err instanceof Error ? err.message : 'Delete failed')

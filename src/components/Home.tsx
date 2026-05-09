@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { unpinChannel } from '../core/channels'
 import type { FeedEntry } from '../core/feed'
-import { fetchAccountSnapshot } from '../core/pin'
 import type { ItemRef } from '../core/types'
 import { type OwnedChannel, useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
@@ -301,9 +300,7 @@ export function Home() {
         useAuthStore.getState().removeMyChannel(owned.channelID)
         useAuthStore.getState().removeSubscription(owned.channelID)
         useFeedStore.getState().removeChannel(owned.channelID)
-        fetchAccountSnapshot(sdk)
-          .then((account) => usePinStore.setState({ account }))
-          .catch(() => {})
+        usePinStore.getState().refreshAccount(sdk)
         addToast(`Unpinned “${owned.name}”`)
         setView({ kind: 'idle', filter: 'all' })
       } catch (err) {
