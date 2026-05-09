@@ -320,7 +320,11 @@ function CoverPreview({
 }
 
 function ExistingCover({ cover }: { cover: ChannelCover }) {
-  const { url } = useItemBlobURL(cover.itemURL, cover.mimeType)
+  const { url } = useItemBlobURL(
+    cover.itemURL,
+    cover.mimeType,
+    cover.contentHash,
+  )
   if (!url) {
     return (
       <div className="size-16 rounded-full bg-neutral-100 border border-neutral-200 shrink-0 animate-pulse" />

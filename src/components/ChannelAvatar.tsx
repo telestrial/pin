@@ -49,7 +49,11 @@ function CoverImage({
   authorHandle: string
   size: 'sm' | 'md' | 'lg'
 }) {
-  const { url, error } = useItemBlobURL(coverArt.itemURL, coverArt.mimeType)
+  const { url, error } = useItemBlobURL(
+    coverArt.itemURL,
+    coverArt.mimeType,
+    coverArt.contentHash,
+  )
   const sizeClass =
     size === 'lg' ? 'size-16' : size === 'sm' ? 'size-7' : 'size-10'
 

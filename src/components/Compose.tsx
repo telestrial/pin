@@ -469,7 +469,11 @@ function UrlChipBody({
 }: {
   attachment: Extract<AttachmentDraft, { source: 'url' }>
 }) {
-  const { url } = useItemBlobURL(attachment.url, attachment.mimeType)
+  const { url } = useItemBlobURL(
+    attachment.url,
+    attachment.mimeType,
+    attachment.contentHash,
+  )
   return (
     <MediaPreview
       previewURL={url}

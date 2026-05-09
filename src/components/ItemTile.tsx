@@ -20,7 +20,11 @@ function itemTitle(item: ItemRef): string {
 }
 
 function ImageVisual({ item }: { item: ItemRef }) {
-  const { url } = useItemBlobURL(item.itemURL, item.mimeType)
+  const { url } = useItemBlobURL(
+    item.itemURL,
+    item.mimeType,
+    item.contentHash,
+  )
   if (!url) {
     return <div className="w-full h-full bg-neutral-100 animate-pulse" />
   }

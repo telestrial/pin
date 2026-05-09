@@ -77,7 +77,11 @@ export function MediaPreview({
 }
 
 function AttachmentTile({ attachment }: { attachment: AttachmentRef }) {
-  const { url } = useItemBlobURL(attachment.url, attachment.mimeType)
+  const { url } = useItemBlobURL(
+    attachment.url,
+    attachment.mimeType,
+    attachment.contentHash,
+  )
   return (
     <div className="bg-neutral-50 border border-neutral-200 rounded-lg overflow-hidden">
       <MediaPreview

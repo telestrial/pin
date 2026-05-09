@@ -221,7 +221,11 @@ function PostBody({ item }: { item: ItemRef }) {
 }
 
 function ImageBody({ item }: { item: ItemRef }) {
-  const { url, error } = useItemBlobURL(item.itemURL, item.mimeType)
+  const { url, error } = useItemBlobURL(
+    item.itemURL,
+    item.mimeType,
+    item.contentHash,
+  )
   if (error) return <p className="text-xs text-red-600">{error}</p>
   if (!url)
     return (
@@ -237,7 +241,11 @@ function ImageBody({ item }: { item: ItemRef }) {
 }
 
 function AudioBody({ item }: { item: ItemRef }) {
-  const { url, error } = useItemBlobURL(item.itemURL, item.mimeType)
+  const { url, error } = useItemBlobURL(
+    item.itemURL,
+    item.mimeType,
+    item.contentHash,
+  )
   if (error) return <p className="text-xs text-red-600">{error}</p>
   if (!url)
     return <div className="w-full h-14 bg-neutral-100 rounded animate-pulse" />
@@ -254,7 +262,11 @@ function AudioBody({ item }: { item: ItemRef }) {
 }
 
 function VideoBody({ item }: { item: ItemRef }) {
-  const { url, error } = useItemBlobURL(item.itemURL, item.mimeType)
+  const { url, error } = useItemBlobURL(
+    item.itemURL,
+    item.mimeType,
+    item.contentHash,
+  )
   if (error) return <p className="text-xs text-red-600">{error}</p>
   if (!url)
     return (
@@ -274,7 +286,7 @@ function VideoBody({ item }: { item: ItemRef }) {
 
 function AppBody({ item }: { item: ItemRef }) {
   const iframeRef = useRef<HTMLIFrameElement>(null)
-  const { bytes, error } = useItemBytes(item.itemURL)
+  const { bytes, error } = useItemBytes(item.itemURL, item.contentHash)
   const html = useMemo(
     () => (bytes ? new TextDecoder().decode(bytes) : null),
     [bytes],

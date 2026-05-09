@@ -30,7 +30,11 @@ export function EditImage({
   const refreshChannel = useFeedStore((s) => s.refreshChannel)
   const addToast = useToastStore((s) => s.addToast)
 
-  const { url: currentURL } = useItemBlobURL(item.itemURL, item.mimeType)
+  const { url: currentURL } = useItemBlobURL(
+    item.itemURL,
+    item.mimeType,
+    item.contentHash,
+  )
 
   const [title, setTitle] = useState(item.title)
   const [newFile, setNewFile] = useState<File | null>(null)
