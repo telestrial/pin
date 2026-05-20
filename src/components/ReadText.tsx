@@ -4,6 +4,7 @@ import { renderMarkdown } from '../lib/markdown'
 import { formatAbsolute, formatRelative } from '../lib/time'
 import { useItemBytes } from '../lib/useItemBytes'
 import type { PinInput } from '../stores/pin'
+import { AttachmentGrid } from './AttachmentMedia'
 import { PinButton } from './PinButton'
 
 export function ReadText({
@@ -82,6 +83,10 @@ export function ReadText({
               // biome-ignore lint/security/noDangerouslySetInnerHtml: HTML is sanitized via DOMPurify
               dangerouslySetInnerHTML={{ __html: html }}
             />
+          )}
+
+          {item.attachments && item.attachments.length > 0 && (
+            <AttachmentGrid attachments={item.attachments} />
           )}
 
           <footer className="pt-2 text-xs text-neutral-500">

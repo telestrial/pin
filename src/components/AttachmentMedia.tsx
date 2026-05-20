@@ -44,7 +44,12 @@ export function MediaPreview({
       <div className="p-3 space-y-1.5">
         <p className="text-xs text-neutral-700 truncate">{filename}</p>
         {previewURL ? (
-          <audio src={previewURL} controls className="w-full" />
+          <audio
+            src={previewURL}
+            controls
+            onClick={(e) => e.stopPropagation()}
+            className="w-full"
+          />
         ) : (
           <div className="h-8 bg-neutral-100 rounded animate-pulse" />
         )}
@@ -59,6 +64,7 @@ export function MediaPreview({
       <video
         src={previewURL}
         controls
+        onClick={(e) => e.stopPropagation()}
         className="block w-full h-auto max-h-96 object-contain bg-black"
       />
     )
