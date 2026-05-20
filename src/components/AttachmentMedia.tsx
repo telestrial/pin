@@ -1,14 +1,18 @@
-import { FileText } from 'lucide-react'
+import { AppWindow, FileText } from 'lucide-react'
+import { useEffect, useMemo, useRef } from 'react'
 import { type AttachmentRef, isValidAttachment } from '../core/types'
+import { installAppBridge } from '../lib/appBridge'
+import { APP_SANDBOX } from '../lib/constants'
 import { formatBytes } from '../lib/format'
-import { useItemBlobURL } from '../lib/useItemBytes'
+import { useItemBlobURL, useItemBytes } from '../lib/useItemBytes'
 
-export type AttachmentKind = 'image' | 'audio' | 'video' | 'file'
+export type AttachmentKind = 'image' | 'audio' | 'video' | 'app' | 'file'
 
 export function kindForMime(mimeType: string): AttachmentKind {
   if (mimeType.startsWith('image/')) return 'image'
   if (mimeType.startsWith('audio/')) return 'audio'
   if (mimeType.startsWith('video/')) return 'video'
+  if (mimeType === 'text/html') return 'app'
   return 'file'
 }
 
@@ -59,6 +63,22 @@ export function MediaPreview({
       />
     )
   }
+  if (kind === 'app') {
+    // Composer chip preview is intentionally static — the live sandboxed render
+    // is the published behavior (AppAttachment below). Avoids running an
+    // unfinished post's app in the chip with no stable appID yet.
+    return (
+      <div className="flex items-center gap-2 p-3">
+        <AppWindow className="size-5 text-neutral-500 shrink-0" aria-hidden />
+        <div className="min-w-0 flex-1">
+          <p className="text-xs text-neutral-900 truncate">{filename}</p>
+          <p className="text-xs text-neutral-500">
+            App · {formatBytes(byteSize)}
+          </p>
+        </div>
+      </div>
+    )
+  }
   return (
     <div className="flex items-center gap-2 p-3">
       <FileText className="size-5 text-neutral-500 shrink-0" aria-hidden />
@@ -70,20 +90,70 @@ export function MediaPreview({
   )
 }
 
-function AttachmentTile({ attachment }: { attachment: AttachmentRef }) {
+function MediaAttachment({
+  attachment,
+  kind,
+}: {
+  attachment: AttachmentRef
+  kind: AttachmentKind
+}) {
   const { url } = useItemBlobURL(
     attachment.url,
     attachment.mimeType,
     attachment.contentHash,
   )
   return (
+    <MediaPreview
+      previewURL={url}
+      kind={kind}
+      filename={attachment.filename ?? 'item'}
+      byteSize={attachment.byteSize}
+    />
+  )
+}
+
+function AppAttachment({ attachment }: { attachment: AttachmentRef }) {
+  const iframeRef = useRef<HTMLIFrameElement>(null)
+  const { bytes, error } = useItemBytes(attachment.url, attachment.contentHash)
+  const html = useMemo(
+    () => (bytes ? new TextDecoder().decode(bytes) : null),
+    [bytes],
+  )
+
+  // Scope app state by the bytes' identity. objectID is stable across repack
+  // URL swaps; contentHash is stable across encryption regime changes too;
+  // url is the last resort for legacy refs lacking both.
+  const appID = attachment.objectID ?? attachment.contentHash ?? attachment.url
+
+  useEffect(() => {
+    return installAppBridge(() => iframeRef.current, appID)
+  }, [appID])
+
+  if (error) return <p className="p-3 text-xs text-red-600">{error}</p>
+  if (!html) {
+    return <div className="w-full aspect-4/3 bg-neutral-100 animate-pulse" />
+  }
+  return (
+    <iframe
+      ref={iframeRef}
+      title={attachment.filename ?? 'app'}
+      srcDoc={html}
+      sandbox={APP_SANDBOX}
+      allow="fullscreen"
+      className="block w-full aspect-4/3 bg-white"
+    />
+  )
+}
+
+function AttachmentTile({ attachment }: { attachment: AttachmentRef }) {
+  const kind = kindForMime(attachment.mimeType)
+  return (
     <div className="bg-neutral-50 border border-neutral-200 rounded-lg overflow-hidden">
-      <MediaPreview
-        previewURL={url}
-        kind={kindForMime(attachment.mimeType)}
-        filename={attachment.filename ?? 'item'}
-        byteSize={attachment.byteSize}
-      />
+      {kind === 'app' ? (
+        <AppAttachment attachment={attachment} />
+      ) : (
+        <MediaAttachment attachment={attachment} kind={kind} />
+      )}
     </div>
   )
 }
