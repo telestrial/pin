@@ -15,7 +15,6 @@ import { EditApp } from './EditApp'
 import { EditChannel } from './EditChannel'
 import { EditImage } from './EditImage'
 import { EditPost } from './EditPost'
-import type { TypeFilter } from './FilterPills'
 import { FormCard } from './FormCard'
 import { HomeFeed } from './HomeFeed'
 import { MyStorage } from './MyStorage'
@@ -30,7 +29,7 @@ import { Sidebar } from './Sidebar'
 import { SubscribeToChannel } from './SubscribeToChannel'
 
 type View =
-  | { kind: 'idle'; filter: TypeFilter }
+  | { kind: 'idle' }
   | { kind: 'creating' }
   | { kind: 'created'; subscribeURL: string; name: string }
   | { kind: 'subscribing' }
@@ -39,7 +38,6 @@ type View =
       kind: 'viewing-channel'
       authorHandle: string
       channelID: string
-      filter: TypeFilter
     }
   | {
       kind: 'editing-channel'
@@ -70,7 +68,7 @@ type View =
   | { kind: 'storage'; returnTo: View }
 
 export function Home() {
-  const [view, setView] = useState<View>({ kind: 'idle', filter: 'all' })
+  const [view, setView] = useState<View>({ kind: 'idle' })
   const subscriptions = useAuthStore((s) => s.subscriptions)
   const myChannels = useAuthStore((s) => s.myChannels)
   const atprotoAgent = useAuthStore((s) => s.atprotoAgent)
@@ -97,7 +95,7 @@ export function Home() {
   function gotoBlueskyLogin() {
     setView({
       kind: 'bluesky-login',
-      resumeTo: { kind: 'idle', filter: 'all' },
+      resumeTo: { kind: 'idle' },
       cancelTo: view,
     })
   }
@@ -105,7 +103,7 @@ export function Home() {
   function renderSidebar(activeChannelID?: string, activeHome = false) {
     return (
       <Sidebar
-        onHome={() => setView({ kind: 'idle', filter: 'all' })}
+        onHome={() => setView({ kind: 'idle' })}
         onCreate={gotoCreating}
         onSubscribe={() => setView({ kind: 'subscribing' })}
         onSeeAll={() => setView({ kind: 'channels' })}
@@ -114,7 +112,6 @@ export function Home() {
             kind: 'viewing-channel',
             authorHandle,
             channelID,
-            filter: 'all',
           })
         }
         activeHome={activeHome}
@@ -130,7 +127,7 @@ export function Home() {
           setView({
             kind: 'reading',
             entry: { item: ref.item, channel: ref.channel },
-            returnTo: { kind: 'idle', filter: 'all' },
+            returnTo: { kind: 'idle' },
           })
         }
         onChannelClick={(authorHandle, channelID) =>
@@ -138,7 +135,6 @@ export function Home() {
             kind: 'viewing-channel',
             authorHandle,
             channelID,
-            filter: 'all',
           })
         }
         onStorageClick={() => setView({ kind: 'storage', returnTo: view })}
@@ -182,7 +178,7 @@ export function Home() {
   if (view.kind === 'creating') {
     return (
       <CreateChannel
-        onCancel={() => setView({ kind: 'idle', filter: 'all' })}
+        onCancel={() => setView({ kind: 'idle' })}
         onCreated={(subscribeURL, name) =>
           setView({ kind: 'created', subscribeURL, name })
         }
@@ -220,7 +216,7 @@ export function Home() {
             </button>
             <button
               type="button"
-              onClick={() => setView({ kind: 'idle', filter: 'all' })}
+              onClick={() => setView({ kind: 'idle' })}
               className="px-4 py-2.5 bg-neutral-100 hover:bg-neutral-200 text-neutral-900 text-sm font-medium rounded-lg transition-colors"
             >
               Done
@@ -234,8 +230,8 @@ export function Home() {
   if (view.kind === 'subscribing') {
     return (
       <SubscribeToChannel
-        onCancel={() => setView({ kind: 'idle', filter: 'all' })}
-        onSubscribed={() => setView({ kind: 'idle', filter: 'all' })}
+        onCancel={() => setView({ kind: 'idle' })}
+        onSubscribed={() => setView({ kind: 'idle' })}
         sidebar={renderSidebar()}
         rightSidebar={renderPinSidebar()}
       />
@@ -245,13 +241,12 @@ export function Home() {
   if (view.kind === 'channels') {
     return (
       <ChannelsView
-        onCancel={() => setView({ kind: 'idle', filter: 'all' })}
+        onCancel={() => setView({ kind: 'idle' })}
         onChannelClick={(authorHandle, channelID) =>
           setView({
             kind: 'viewing-channel',
             authorHandle,
             channelID,
-            filter: 'all',
           })
         }
         onUnsubscribe={(channelID, name) => {
@@ -302,7 +297,7 @@ export function Home() {
         useFeedStore.getState().removeChannel(owned.channelID)
         usePinStore.getState().refreshAccount(sdk)
         addToast(`Unpinned “${owned.name}”`)
-        setView({ kind: 'idle', filter: 'all' })
+        setView({ kind: 'idle' })
       } catch (err) {
         addToast(err instanceof Error ? err.message : 'Failed to unpin channel')
       }
@@ -311,8 +306,6 @@ export function Home() {
       <ChannelView
         authorHandle={view.authorHandle}
         channelID={view.channelID}
-        filter={view.filter}
-        onFilterChange={(filter) => setView({ ...channelView, filter })}
         onItemClick={(entry) =>
           setView({ kind: 'reading', entry, returnTo: channelView })
         }
@@ -321,10 +314,9 @@ export function Home() {
             kind: 'viewing-channel',
             authorHandle,
             channelID,
-            filter: 'all',
           })
         }
-        onHome={() => setView({ kind: 'idle', filter: 'all' })}
+        onHome={() => setView({ kind: 'idle' })}
         onCreate={gotoCreating}
         onSubscribe={() => setView({ kind: 'subscribing' })}
         onSeeAll={() => setView({ kind: 'channels' })}
@@ -352,11 +344,11 @@ export function Home() {
                 useAuthStore.getState().removeSubscription(view.channelID)
                 useFeedStore.getState().removeChannel(view.channelID)
                 addToast('Unsubscribed')
-                setView({ kind: 'idle', filter: 'all' })
+                setView({ kind: 'idle' })
               }
             : undefined
         }
-        onBack={() => setView({ kind: 'idle', filter: 'all' })}
+        onBack={() => setView({ kind: 'idle' })}
         composerSlot={channelComposerSlot}
         rightSidebar={
           <PinSidebar
@@ -372,7 +364,6 @@ export function Home() {
                 kind: 'viewing-channel',
                 authorHandle,
                 channelID,
-                filter: 'all',
               })
             }
             onStorageClick={() =>
@@ -500,7 +491,6 @@ export function Home() {
             kind: 'viewing-channel',
             authorHandle,
             channelID,
-            filter: 'all',
           })
         }
         onStorageClick={() =>
@@ -673,7 +663,7 @@ export function Home() {
     <div className="flex-1 p-6">
       <div className="max-w-7xl mx-auto flex flex-col lg:flex-row lg:items-start gap-6">
         <Sidebar
-          onHome={() => setView({ kind: 'idle', filter: 'all' })}
+          onHome={() => setView({ kind: 'idle' })}
           onCreate={gotoCreating}
           onSubscribe={() => setView({ kind: 'subscribing' })}
           onSeeAll={() => setView({ kind: 'channels' })}
@@ -682,7 +672,6 @@ export function Home() {
               kind: 'viewing-channel',
               authorHandle,
               channelID,
-              filter: 'all',
             })
           }
           activeHome={true}
@@ -690,8 +679,6 @@ export function Home() {
         <div className="flex-1 space-y-6 min-w-0">
           {composerSlot}
           <HomeFeed
-            filter={idleView.filter}
-            onFilterChange={(filter) => setView({ ...idleView, filter })}
             onItemClick={(entry) =>
               setView({ kind: 'reading', entry, returnTo: idleView })
             }
@@ -700,7 +687,6 @@ export function Home() {
                 kind: 'viewing-channel',
                 authorHandle,
                 channelID,
-                filter: 'all',
               })
             }
             onErrorClick={() => setView({ kind: 'channels' })}
@@ -719,7 +705,6 @@ export function Home() {
               kind: 'viewing-channel',
               authorHandle,
               channelID,
-              filter: 'all',
             })
           }
           onStorageClick={() =>

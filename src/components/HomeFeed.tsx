@@ -7,24 +7,13 @@ import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
 import { AttachmentGrid } from './AttachmentMedia'
 import { ChannelAvatar } from './ChannelAvatar'
-import {
-  availableFiltersFor,
-  entryFilter,
-  FILTER_LABEL,
-  FilterPills,
-  type TypeFilter,
-} from './FilterPills'
 import { PinButton } from './PinButton'
 
 export function HomeFeed({
-  filter,
-  onFilterChange,
   onItemClick,
   onChannelClick,
   onErrorClick,
 }: {
-  filter: TypeFilter
-  onFilterChange: (filter: TypeFilter) => void
   onItemClick: (entry: FeedEntry) => void
   onChannelClick: (authorHandle: string, channelID: string) => void
   onErrorClick?: () => void
@@ -51,16 +40,6 @@ export function HomeFeed({
       return sortOrder === 'oldest' ? cmp : -cmp
     })
   }, [entries, sortOrder])
-
-  const availableFilters = useMemo(
-    () => availableFiltersFor(sortedEntries),
-    [sortedEntries],
-  )
-
-  const displayedEntries = useMemo(() => {
-    if (filter === 'all') return sortedEntries
-    return sortedEntries.filter((e) => entryFilter(e) === filter)
-  }, [sortedEntries, filter])
 
   const toolbar = (
     <div className="flex items-center justify-between gap-3">
@@ -132,11 +111,6 @@ export function HomeFeed({
 
   return (
     <div className="border border-neutral-200 rounded-lg bg-white p-4 space-y-4">
-      <FilterPills
-        available={availableFilters}
-        filter={filter}
-        onFilterChange={onFilterChange}
-      />
       {toolbar}
       {errors.length > 0 && (
         <button
@@ -167,15 +141,13 @@ export function HomeFeed({
         </button>
       )}
 
-      {displayedEntries.length === 0 ? (
+      {sortedEntries.length === 0 ? (
         <p className="text-neutral-500 text-sm">
-          {filter === 'all'
-            ? 'No items yet from your subscriptions.'
-            : `No ${FILTER_LABEL[filter].toLowerCase()} yet.`}
+          No items yet from your subscriptions.
         </p>
       ) : (
         <ul className="divide-y divide-neutral-200/80">
-          {displayedEntries.map((entry) => (
+          {sortedEntries.map((entry) => (
             <FeedRow
               key={entry.item.contentHash ?? entry.item.id}
               entry={entry}

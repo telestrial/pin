@@ -4,21 +4,12 @@ import { renderMarkdown } from '../lib/markdown'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
 import { ChannelAvatar } from './ChannelAvatar'
-import {
-  availableFiltersFor,
-  entryFilter,
-  FILTER_LABEL,
-  FilterPills,
-  type TypeFilter,
-} from './FilterPills'
 import { FeedRow } from './HomeFeed'
 import { Sidebar } from './Sidebar'
 
 export function ChannelView({
   authorHandle,
   channelID,
-  filter,
-  onFilterChange,
   onItemClick,
   onChannelClick,
   onHome,
@@ -34,8 +25,6 @@ export function ChannelView({
 }: {
   authorHandle: string
   channelID: string
-  filter: TypeFilter
-  onFilterChange: (filter: TypeFilter) => void
   onItemClick: (entry: FeedEntry) => void
   onChannelClick: (authorHandle: string, channelID: string) => void
   onHome: () => void
@@ -81,16 +70,6 @@ export function ChannelView({
     })
     return filtered
   }, [entries, authorHandle, channelID, sortOrder])
-
-  const availableFilters = useMemo(
-    () => availableFiltersFor(channelEntries),
-    [channelEntries],
-  )
-
-  const displayedEntries = useMemo(() => {
-    if (filter === 'all') return channelEntries
-    return channelEntries.filter((e) => entryFilter(e) === filter)
-  }, [channelEntries, filter])
 
   const channelName =
     manifest?.name ??
@@ -186,11 +165,6 @@ export function ChannelView({
           {composerSlot}
 
           <div className="border border-neutral-200 rounded-lg bg-white p-4 space-y-4">
-            <FilterPills
-              available={availableFilters}
-              filter={filter}
-              onFilterChange={onFilterChange}
-            />
             <div className="flex items-center justify-between gap-3">
               <div
                 className="flex gap-0.5 bg-neutral-100 rounded-md p-0.5"
@@ -248,15 +222,11 @@ export function ChannelView({
               </div>
             </div>
 
-            {displayedEntries.length === 0 ? (
-              <p className="text-neutral-500 text-sm">
-                {filter === 'all'
-                  ? 'No items yet.'
-                  : `No ${FILTER_LABEL[filter].toLowerCase()} yet.`}
-              </p>
+            {channelEntries.length === 0 ? (
+              <p className="text-neutral-500 text-sm">No items yet.</p>
             ) : (
               <ul className="divide-y divide-neutral-200/80">
-                {displayedEntries.map((entry) => (
+                {channelEntries.map((entry) => (
                   <FeedRow
                     key={entry.item.contentHash ?? entry.item.id}
                     entry={entry}
