@@ -50,6 +50,11 @@ export type ItemRef = {
   // id + itemURL but preserves plaintext bytes) and across encryption
   // regime changes.
   contentHash?: string
+  // ISO 8601 timestamp of the most recent edit. Absent on original
+  // publishes; set by editPost. publishedAt is preserved across edits
+  // so chronology doesn't change; editedAt is the honest signal that
+  // the post drifted from what readers may have pinned.
+  editedAt?: string
 }
 
 export type ChannelCover = {
