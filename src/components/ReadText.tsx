@@ -65,6 +65,12 @@ export function ReadText({
                 {channelName}
               </span>{' '}
               · {formatRelative(item.publishedAt)}
+              {item.editedAt && (
+                <span title={`Edited ${formatAbsolute(item.editedAt)}`}>
+                  {' · edited '}
+                  {formatRelative(item.editedAt)}
+                </span>
+              )}
             </p>
             {item.title && (
               <p className="text-base font-semibold text-neutral-900 wrap-break-word">
@@ -91,6 +97,12 @@ export function ReadText({
 
           <footer className="pt-2 text-xs text-neutral-500">
             {formatAbsolute(item.publishedAt)}
+            {item.editedAt && (
+              <>
+                {' · edited '}
+                {formatAbsolute(item.editedAt)}
+              </>
+            )}
           </footer>
         </article>
         {rightSidebar}

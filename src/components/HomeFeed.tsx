@@ -251,6 +251,12 @@ export function FeedRow({
                   title={formatAbsolute(item.publishedAt)}
                 >
                   {formatRelativeShort(item.publishedAt)}
+                  {item.editedAt && (
+                    <span title={`Edited ${formatAbsolute(item.editedAt)}`}>
+                      {' · edited '}
+                      {formatRelativeShort(item.editedAt)}
+                    </span>
+                  )}
                 </p>
                 <PinButton
                   input={{
