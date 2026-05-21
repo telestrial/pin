@@ -264,6 +264,7 @@ export async function editItem(
   channel: { channelID: string; channelKey: string },
   oldItemID: string,
   payload: ItemPayload,
+  removedAttachmentObjectIDs?: string[],
 ): Promise<{ manifest: ChannelManifest; item: ItemRef }> {
   const did = agent.assertDid
 
@@ -282,6 +283,10 @@ export async function editItem(
     // Preserve the original publishedAt so the post keeps its position
     // in chronological order. Edit ≠ republish.
     publishedAt: oldItem.publishedAt,
+    // Honest signal that the post changed since publish. Reader-side
+    // drift detection composes on contentHash; editedAt is what the
+    // UI surfaces.
+    editedAt: new Date().toISOString(),
   }
 
   const updatedItems = [...current.items]
@@ -306,6 +311,12 @@ export async function editItem(
 
   // Drop old bytes best-effort; subscribers who pinned keep their snapshot.
   sdk.deleteObject(oldItemID).catch(() => {})
+
+  // Drop removed-attachment bytes best-effort. Subscribers who pinned
+  // those attachments keep their snapshots too.
+  for (const id of removedAttachmentObjectIDs ?? []) {
+    sdk.deleteObject(id).catch(() => {})
+  }
 
   return { manifest: updated, item: newItem }
 }
