@@ -263,7 +263,7 @@ export async function editItem(
   agent: Agent,
   channel: { channelID: string; channelKey: string },
   oldItemID: string,
-  payload: ItemPayload,
+  newItem: ItemRef,
   removedAttachmentObjectIDs?: string[],
 ): Promise<{ manifest: ChannelManifest; item: ItemRef }> {
   const did = agent.assertDid
@@ -277,20 +277,12 @@ export async function editItem(
   if (oldIndex === -1) throw new Error('Item not found in channel')
   const oldItem = current.items[oldIndex]
 
-  const uploaded = await uploadItem(sdk, payload.bytes)
-  const newItem: ItemRef = {
-    ...buildItemRef(uploaded, payload),
-    // Preserve the original publishedAt so the post keeps its position
-    // in chronological order. Edit ≠ republish.
-    publishedAt: oldItem.publishedAt,
-    // Honest signal that the post changed since publish. Reader-side
-    // drift detection composes on contentHash; editedAt is what the
-    // UI surfaces.
-    editedAt: new Date().toISOString(),
-  }
+  // Preserve original publishedAt — chronology doesn't change on edit.
+  // Caller is responsible for stamping editedAt on the incoming ItemRef.
+  const finalItem: ItemRef = { ...newItem, publishedAt: oldItem.publishedAt }
 
   const updatedItems = [...current.items]
-  updatedItems[oldIndex] = newItem
+  updatedItems[oldIndex] = finalItem
 
   const updated: ChannelManifest = {
     ...current,
@@ -300,14 +292,7 @@ export async function editItem(
 
   const keyBytes = channelKeyFromBase64(channel.channelKey)
   const ciphertext = await encryptForChannel(keyBytes, JSON.stringify(updated))
-  try {
-    await putChannelRecord(agent, channel.channelID, ciphertext)
-  } catch (e) {
-    // Manifest write failed — roll back the new upload so we don't leave
-    // an orphan pinned object in the user's storage.
-    sdk.deleteObject(uploaded.id).catch(() => {})
-    throw e
-  }
+  await putChannelRecord(agent, channel.channelID, ciphertext)
 
   // Drop old bytes best-effort; subscribers who pinned keep their snapshot.
   sdk.deleteObject(oldItemID).catch(() => {})
@@ -318,7 +303,7 @@ export async function editItem(
     sdk.deleteObject(id).catch(() => {})
   }
 
-  return { manifest: updated, item: newItem }
+  return { manifest: updated, item: finalItem }
 }
 
 export async function editItemMetadata(

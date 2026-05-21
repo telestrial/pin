@@ -1,6 +1,7 @@
 import { Check, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import type { AttachmentSource } from '../core/channels'
+import { isValidAttachment, type ItemRef } from '../core/types'
 import { NOTE_CHAR_LIMIT } from '../lib/constants'
 import { useItemBlobURL } from '../lib/useItemBytes'
 import { type OwnedChannel, useAuthStore } from '../stores/auth'
@@ -14,6 +15,12 @@ import {
   MediaPreview,
 } from './AttachmentMedia'
 import { ChannelAvatar } from './ChannelAvatar'
+
+export type ComposeEditMode = {
+  item: ItemRef
+  channelID: string
+  onCancel: () => void
+}
 
 type AttachmentDraft =
   | {
@@ -41,7 +48,13 @@ function newTempID(): string {
   return `att-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
 }
 
-export function Compose({ channels }: { channels: OwnedChannel[] }) {
+export function Compose({
+  channels,
+  editing,
+}: {
+  channels: OwnedChannel[]
+  editing?: ComposeEditMode
+}) {
   const sdk = useAuthStore((s) => s.sdk)
   const agent = useAuthStore((s) => s.atprotoAgent)
   const atprotoHandle = useAuthStore((s) => s.atprotoHandle)
@@ -51,19 +64,52 @@ export function Compose({ channels }: { channels: OwnedChannel[] }) {
   const disarm = useComposeStore((s) => s.disarm)
   const manifests = useFeedStore((s) => s.manifests)
 
-  const [selectedID, setSelectedID] = useState(channels[0]?.channelID ?? '')
-  const [body, setBody] = useState('')
+  const [selectedID, setSelectedID] = useState(
+    editing?.channelID ?? channels[0]?.channelID ?? '',
+  )
+  const [body, setBody] = useState(editing?.item.summary ?? '')
   const [error, setError] = useState<string | null>(null)
-  const [expanded, setExpanded] = useState(false)
+  const [expanded, setExpanded] = useState(!!editing)
   const [voiceOpen, setVoiceOpen] = useState(false)
-  const [attachments, setAttachments] = useState<AttachmentDraft[]>([])
+  const [attachments, setAttachments] = useState<AttachmentDraft[]>(() => {
+    if (!editing?.item.attachments) return []
+    return editing.item.attachments.filter(isValidAttachment).map((a) => ({
+      tempID: newTempID(),
+      source: 'url' as const,
+      filename: a.filename ?? 'attachment',
+      mimeType: a.mimeType,
+      kind: kindForMime(a.mimeType),
+      url: a.url,
+      byteSize: a.byteSize,
+      contentHash: a.contentHash,
+      objectID: a.objectID,
+    }))
+  })
+  const [removedOriginalObjectIDs, setRemovedOriginalObjectIDs] = useState<
+    string[]
+  >([])
+  // Set of objectIDs from the original attachments at edit-mount time.
+  // Captures who was already there so we can distinguish "removed an
+  // original" (needs cleanup) from "removed a chip I just added" (no
+  // cleanup; we never published it). Legacy attachments lacking
+  // objectID can't be tracked here — orphan sweep is the safety net.
+  const [originalAttachmentObjectIDs] = useState<Set<string>>(() => {
+    if (!editing?.item.attachments) return new Set()
+    return new Set(
+      editing.item.attachments
+        .filter(isValidAttachment)
+        .map((a) => a.objectID)
+        .filter((id): id is string => !!id),
+    )
+  })
   const [isDragging, setIsDragging] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const voiceWrapperRef = useRef<HTMLDivElement | null>(null)
 
   const channel =
     channels.find((c) => c.channelID === selectedID) ?? channels[0]
-  const multiVoice = channels.length > 1
+  // Voice is locked when editing — the post is bound to its channel.
+  const multiVoice = !editing && channels.length > 1
 
   useEffect(() => {
     if (!voiceOpen) return
@@ -141,6 +187,15 @@ export function Compose({ channels }: { channels: OwnedChannel[] }) {
     setAttachments((prev) => {
       const target = prev.find((a) => a.tempID === tempID)
       if (target?.source === 'bytes') URL.revokeObjectURL(target.blobURL)
+      if (
+        target?.source === 'url' &&
+        target.objectID &&
+        originalAttachmentObjectIDs.has(target.objectID)
+      ) {
+        setRemovedOriginalObjectIDs((r) =>
+          r.includes(target.objectID!) ? r : [...r, target.objectID!],
+        )
+      }
       return prev.filter((a) => a.tempID !== tempID)
     })
   }
@@ -245,14 +300,27 @@ export function Compose({ channels }: { channels: OwnedChannel[] }) {
           attachmentSources.length > 0 ? attachmentSources : undefined,
       },
       channelIDs: [channel.channelID],
+      editingItemID: editing?.item.id,
+      removedAttachmentObjectIDs: editing ? removedOriginalObjectIDs : undefined,
     })
-    addToast('Queued for publish')
+    addToast(editing ? 'Queued for save' : 'Queued for publish')
     for (const a of attachments) {
       if (a.source === 'bytes') URL.revokeObjectURL(a.blobURL)
     }
-    setBody('')
-    setAttachments([])
-    setExpanded(false)
+    if (editing) {
+      editing.onCancel()
+    } else {
+      setBody('')
+      setAttachments([])
+      setExpanded(false)
+    }
+  }
+
+  function handleCancel() {
+    for (const a of attachments) {
+      if (a.source === 'bytes') URL.revokeObjectURL(a.blobURL)
+    }
+    editing?.onCancel()
   }
 
   return (
@@ -411,13 +479,22 @@ export function Compose({ channels }: { channels: OwnedChannel[] }) {
             >
               {remaining}
             </span>
+            {editing && (
+              <button
+                type="button"
+                onClick={handleCancel}
+                className="px-4 py-1.5 bg-neutral-100 hover:bg-neutral-200 text-neutral-700 text-sm font-medium rounded-md transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+            )}
             <button
               type="submit"
               disabled={!canSubmit}
               tabIndex={expanded ? 0 : -1}
               className="px-4 py-1.5 bg-green-600 hover:bg-green-700 disabled:bg-neutral-200 disabled:text-neutral-400 text-white text-sm font-medium rounded-md transition-colors"
             >
-              Publish
+              {editing ? 'Save' : 'Publish'}
             </button>
           </div>
         </div>

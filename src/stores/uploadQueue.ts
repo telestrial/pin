@@ -21,6 +21,13 @@ export type UploadTask = {
   payload: ItemPayload
   channelIDs: string[]
   destination: UploadDestination
+  // When set on a 'channel' task, the runner replaces the item with
+  // this ID in the target channel instead of appending a new one.
+  // publishedAt is preserved from the original; editedAt is stamped.
+  editingItemID?: string
+  // Attachment objectIDs that existed on the item but were removed in
+  // the edit. Best-effort deleted after the manifest swap succeeds.
+  removedAttachmentObjectIDs?: string[]
 }
 
 type UploadQueueState = {
@@ -29,6 +36,8 @@ type UploadQueueState = {
     payload: ItemPayload
     channelIDs: string[]
     destination?: UploadDestination
+    editingItemID?: string
+    removedAttachmentObjectIDs?: string[]
   }) => string
   retry: (id: string) => void
   remove: (id: string) => void
@@ -43,7 +52,13 @@ function newId(): string {
 
 export const useUploadQueueStore = create<UploadQueueState>()((set) => ({
   tasks: [],
-  enqueue: ({ payload, channelIDs, destination = 'channel' }) => {
+  enqueue: ({
+    payload,
+    channelIDs,
+    destination = 'channel',
+    editingItemID,
+    removedAttachmentObjectIDs,
+  }) => {
     const id = newId()
     const task: UploadTask = {
       id,
@@ -53,6 +68,8 @@ export const useUploadQueueStore = create<UploadQueueState>()((set) => ({
       payload,
       channelIDs,
       destination,
+      editingItemID,
+      removedAttachmentObjectIDs,
     }
     set((s) => ({ tasks: [...s.tasks, task] }))
     return id

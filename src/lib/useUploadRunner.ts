@@ -1,7 +1,11 @@
 import { useEffect } from 'react'
-import { appendItemToChannel, buildItemRef } from '../core/channels'
+import {
+  appendItemToChannel,
+  buildItemRef,
+  editItem,
+} from '../core/channels'
 import { uploadItemsPacked } from '../core/sia'
-import type { AttachmentRef } from '../core/types'
+import type { AttachmentRef, ItemRef } from '../core/types'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
 import { usePinStore } from '../stores/pin'
@@ -159,7 +163,24 @@ export function useUploadRunner() {
           // Non-null per the agent guard above for channel destinations.
           const agent = auth.atprotoAgent!
           for (const ch of channels) {
-            await appendItemToChannel(agent, ch, itemRef)
+            if (task.editingItemID) {
+              // editItem preserves publishedAt from the original; the
+              // caller stamps editedAt on the pre-built ItemRef.
+              const editedItem: ItemRef = {
+                ...itemRef,
+                editedAt: new Date().toISOString(),
+              }
+              await editItem(
+                sdk,
+                agent,
+                ch,
+                task.editingItemID,
+                editedItem,
+                task.removedAttachmentObjectIDs,
+              )
+            } else {
+              await appendItemToChannel(agent, ch, itemRef)
+            }
             const sub = auth.subscriptions.find(
               (s) => s.channelID === ch.channelID,
             )
@@ -172,7 +193,9 @@ export function useUploadRunner() {
         toast.addToast(
           task.destination === 'library'
             ? `Pinned “${displayTitle(task)}”`
-            : `Published “${displayTitle(task)}”`,
+            : task.editingItemID
+              ? `Saved “${displayTitle(task)}”`
+              : `Published “${displayTitle(task)}”`,
         )
 
         setTimeout(() => {
@@ -184,7 +207,9 @@ export function useUploadRunner() {
         toast.addToast(
           task.destination === 'library'
             ? `Pin failed: ${msg}`
-            : `Publish failed: ${msg}`,
+            : task.editingItemID
+              ? `Save failed: ${msg}`
+              : `Publish failed: ${msg}`,
         )
       }
     }
