@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { unpinChannel } from '../core/channels'
 import type { FeedEntry } from '../core/feed'
+import type { ItemRef } from '../core/types'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
 import { usePinStore } from '../stores/pin'
@@ -39,6 +40,12 @@ type View =
       kind: 'editing-channel'
       channelID: string
       channelKey: string
+      returnTo: View
+    }
+  | {
+      kind: 'editing-post'
+      item: ItemRef
+      channelID: string
       returnTo: View
     }
   | { kind: 'reading'; entry: FeedEntry; returnTo: View }
@@ -371,6 +378,34 @@ export function Home() {
     )
   }
 
+  if (view.kind === 'editing-post') {
+    const returnTo = view.returnTo
+    const owned = myChannels.find((c) => c.channelID === view.channelID)
+    if (!owned) {
+      // Channel no longer owned (unpinned mid-flow) — bail back.
+      setView(returnTo)
+      return null
+    }
+    return (
+      <div className="flex-1 p-6">
+        <div className="max-w-7xl mx-auto flex flex-col lg:flex-row lg:items-start gap-6">
+          {renderSidebar(view.channelID)}
+          <div className="flex-1 min-w-0">
+            <Compose
+              channels={[owned]}
+              editing={{
+                item: view.item,
+                channelID: view.channelID,
+                onCancel: () => setView(returnTo),
+              }}
+            />
+          </div>
+          {renderPinSidebar(view.channelID)}
+        </div>
+      </div>
+    )
+  }
+
   if (view.kind === 'reading') {
     const { item, channel } = view.entry
     const returnTo = view.returnTo
@@ -408,6 +443,26 @@ export function Home() {
         : view.returnTo.kind === 'storage'
           ? 'Back to My Storage'
           : 'Back to feed'
+    const ownedForEdit = myChannels.find(
+      (c) => c.channelID === channel.channelID,
+    )
+    // Edit is owner-only and post-only (channels are post-only; non-text
+    // legacy items wouldn't go through the same machinery).
+    const onEdit =
+      ownedForEdit && item.type === 'text'
+        ? () => {
+            if (!useAuthStore.getState().atprotoAgent) {
+              gotoBlueskyLogin()
+              return
+            }
+            setView({
+              kind: 'editing-post',
+              item,
+              channelID: channel.channelID,
+              returnTo: readingView,
+            })
+          }
+        : undefined
     const readerProps = {
       item,
       channelName: channel.name,
@@ -423,6 +478,7 @@ export function Home() {
           name: channel.name,
         },
       },
+      onEdit,
     }
     if (item.type === 'image') return <ReadImage {...readerProps} />
     if (item.type === 'audio') return <ReadAudio {...readerProps} />
