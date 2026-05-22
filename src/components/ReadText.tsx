@@ -1,9 +1,10 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import type { ItemRef } from '../core/types'
 import { renderMarkdown } from '../lib/markdown'
 import { formatAbsolute, formatRelative } from '../lib/time'
 import { useItemBytes } from '../lib/useItemBytes'
-import type { PinInput } from '../stores/pin'
+import { usePinState } from '../lib/usePinState'
+import { type PinInput, usePinStore } from '../stores/pin'
 import { AttachmentGrid } from './AttachmentMedia'
 import { PinButton } from './PinButton'
 
@@ -26,7 +27,30 @@ export function ReadText({
   pinInput: PinInput
   onEdit?: () => void
 }) {
-  const { bytes, error } = useItemBytes(item.itemURL, item.contentHash)
+  const channelID = pinInput.channel.channelID
+  const pinState = usePinState(item, channelID)
+  const pinned = usePinStore((s) => s.pinned)
+  // Drift means: contentHash on the rendered item differs from the
+  // pinned snapshot. The toggle swaps between channel-current
+  // (default) and the user's pinned bytes — different itemURL,
+  // different contentHash, different attachments, possibly different
+  // editedAt (yours has none if your pin pre-dates any edit).
+  const driftedPin =
+    pinState === 'edited'
+      ? pinned.find(
+          (p) =>
+            p.channel.channelID === channelID &&
+            p.item.publishedAt === item.publishedAt,
+        )
+      : undefined
+  const [viewYours, setViewYours] = useState(false)
+  const showYours = viewYours && !!driftedPin
+  const displayItem = showYours && driftedPin ? driftedPin.item : item
+
+  const { bytes, error } = useItemBytes(
+    displayItem.itemURL,
+    displayItem.contentHash,
+  )
   const html = useMemo(
     () => (bytes ? renderMarkdown(new TextDecoder().decode(bytes)) : null),
     [bytes],
@@ -64,17 +88,44 @@ export function ReadText({
               <span className="font-medium text-neutral-900">
                 {channelName}
               </span>{' '}
-              · {formatRelative(item.publishedAt)}
-              {item.editedAt && (
-                <span title={`Edited ${formatAbsolute(item.editedAt)}`}>
+              · {formatRelative(displayItem.publishedAt)}
+              {displayItem.editedAt && (
+                <span title={`Edited ${formatAbsolute(displayItem.editedAt)}`}>
                   {' · edited '}
-                  {formatRelative(item.editedAt)}
+                  {formatRelative(displayItem.editedAt)}
                 </span>
               )}
             </p>
-            {item.title && (
+            {displayItem.title && (
               <p className="text-base font-semibold text-neutral-900 wrap-break-word">
-                {item.title}
+                {displayItem.title}
+              </p>
+            )}
+            {driftedPin && (
+              <p className="text-sm text-neutral-500 flex items-center gap-2 flex-wrap">
+                {showYours ? (
+                  <>
+                    <span>Showing your pinned version.</span>
+                    <button
+                      type="button"
+                      onClick={() => setViewYours(false)}
+                      className="px-2 py-0.5 text-xs font-medium text-neutral-700 hover:text-neutral-900 bg-neutral-100 hover:bg-neutral-200 rounded-full transition-colors cursor-pointer"
+                    >
+                      View current
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <span>You pinned an earlier version.</span>
+                    <button
+                      type="button"
+                      onClick={() => setViewYours(true)}
+                      className="px-2 py-0.5 text-xs font-medium text-neutral-700 hover:text-neutral-900 bg-neutral-100 hover:bg-neutral-200 rounded-full transition-colors cursor-pointer"
+                    >
+                      View yours
+                    </button>
+                  </>
+                )}
               </p>
             )}
           </header>
@@ -91,16 +142,16 @@ export function ReadText({
             />
           )}
 
-          {item.attachments && item.attachments.length > 0 && (
-            <AttachmentGrid attachments={item.attachments} />
+          {displayItem.attachments && displayItem.attachments.length > 0 && (
+            <AttachmentGrid attachments={displayItem.attachments} />
           )}
 
           <footer className="pt-2 text-xs text-neutral-500">
-            {formatAbsolute(item.publishedAt)}
-            {item.editedAt && (
+            {formatAbsolute(displayItem.publishedAt)}
+            {displayItem.editedAt && (
               <>
                 {' · edited '}
-                {formatAbsolute(item.editedAt)}
+                {formatAbsolute(displayItem.editedAt)}
               </>
             )}
           </footer>
