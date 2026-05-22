@@ -4,6 +4,8 @@ import { renderMarkdown } from '../lib/markdown'
 import { formatAbsolute, formatRelative } from '../lib/time'
 import { useItemBytes } from '../lib/useItemBytes'
 import { usePinState } from '../lib/usePinState'
+import { useAuthStore } from '../stores/auth'
+import { useFeedStore } from '../stores/feed'
 import { type PinInput, usePinStore } from '../stores/pin'
 import { AttachmentGrid } from './AttachmentMedia'
 import { PinButton } from './PinButton'
@@ -30,22 +32,36 @@ export function ReadText({
   const channelID = pinInput.channel.channelID
   const pinState = usePinState(item, channelID)
   const pinned = usePinStore((s) => s.pinned)
-  // Drift means: contentHash on the rendered item differs from the
-  // pinned snapshot. The toggle swaps between channel-current
-  // (default) and the user's pinned bytes — different itemURL,
-  // different contentHash, different attachments, possibly different
-  // editedAt (yours has none if your pin pre-dates any edit).
-  const driftedPin =
-    pinState === 'edited'
-      ? pinned.find(
-          (p) =>
-            p.channel.channelID === channelID &&
-            p.item.publishedAt === item.publishedAt,
-        )
-      : undefined
+  const subscriptions = useAuthStore((s) => s.subscriptions)
+  const entries = useFeedStore((s) => s.entries)
+  // Look up the user's pin on this logical post. Used for both drift
+  // (different contentHash) and retraction detection.
+  const pinForThis = pinned.find(
+    (p) =>
+      p.channel.channelID === channelID &&
+      p.item.publishedAt === item.publishedAt,
+  )
+  // Retraction: user has a pin, they subscribe to the channel (so the
+  // manifest is in their feedStore), and the item is no longer in the
+  // current entries — author dropped it via deletePublishedItem.
+  // When retracted, the only available bytes are the pinned snapshot;
+  // the channel-current that ReadText would normally render doesn't
+  // exist anymore.
+  const isSubscribed = subscriptions.some((s) => s.channelID === channelID)
+  const inCurrentEntries = entries.some(
+    (e) =>
+      e.channel.channelID === channelID &&
+      e.item.publishedAt === item.publishedAt,
+  )
+  const isRetracted = !!pinForThis && isSubscribed && !inCurrentEntries
+  // Drift: pin's contentHash differs from rendered item's contentHash.
+  // Toggle swaps the rendered version. Retraction forces yours-view
+  // unconditionally (no current to switch to).
+  const driftedPin = pinState === 'edited' ? pinForThis : undefined
   const [viewYours, setViewYours] = useState(false)
-  const showYours = viewYours && !!driftedPin
-  const displayItem = showYours && driftedPin ? driftedPin.item : item
+  const showYours = isRetracted || (viewYours && !!driftedPin)
+  const displayItem =
+    showYours && pinForThis ? pinForThis.item : item
 
   const { bytes, error } = useItemBytes(
     displayItem.itemURL,
@@ -101,32 +117,39 @@ export function ReadText({
                 {displayItem.title}
               </p>
             )}
-            {driftedPin && (
-              <p className="text-sm text-neutral-500 flex items-center gap-2 flex-wrap">
-                {showYours ? (
-                  <>
-                    <span>Showing your pinned version.</span>
-                    <button
-                      type="button"
-                      onClick={() => setViewYours(false)}
-                      className="px-2 py-0.5 text-xs font-medium text-neutral-700 hover:text-neutral-900 bg-neutral-100 hover:bg-neutral-200 rounded-full transition-colors cursor-pointer"
-                    >
-                      View current
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    <span>You pinned an earlier version.</span>
-                    <button
-                      type="button"
-                      onClick={() => setViewYours(true)}
-                      className="px-2 py-0.5 text-xs font-medium text-neutral-700 hover:text-neutral-900 bg-neutral-100 hover:bg-neutral-200 rounded-full transition-colors cursor-pointer"
-                    >
-                      View yours
-                    </button>
-                  </>
-                )}
+            {isRetracted ? (
+              <p className="text-sm italic text-neutral-500">
+                This post was retracted by the author. You're viewing
+                your pinned copy.
               </p>
+            ) : (
+              driftedPin && (
+                <p className="text-sm text-neutral-500 flex items-center gap-2 flex-wrap">
+                  {showYours ? (
+                    <>
+                      <span>Showing your pinned version.</span>
+                      <button
+                        type="button"
+                        onClick={() => setViewYours(false)}
+                        className="px-2 py-0.5 text-xs font-medium text-neutral-700 hover:text-neutral-900 bg-neutral-100 hover:bg-neutral-200 rounded-full transition-colors cursor-pointer"
+                      >
+                        View current
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <span>You pinned an earlier version.</span>
+                      <button
+                        type="button"
+                        onClick={() => setViewYours(true)}
+                        className="px-2 py-0.5 text-xs font-medium text-neutral-700 hover:text-neutral-900 bg-neutral-100 hover:bg-neutral-200 rounded-full transition-colors cursor-pointer"
+                      >
+                        View yours
+                      </button>
+                    </>
+                  )}
+                </p>
+              )
             )}
           </header>
 
