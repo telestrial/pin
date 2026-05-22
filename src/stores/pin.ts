@@ -62,12 +62,33 @@ export const usePinStore = create<PinState>()(
       pinning: new Set<string>(),
       pin: async (sdk, input) => {
         const url = input.item.itemURL
+        // Drift case: an existing pin matches the same logical post
+        // (same channelID + publishedAt) but at a different itemURL
+        // because the author edited. Re-pinning swaps your v1 for
+        // v_current — single custody snapshot, updated. Library pins
+        // (channelID 'library') aren't channel-bound, so they skip
+        // this check and dedup purely by itemURL.
+        const isLibrary = input.channel.channelID === 'library'
+        const driftedFrom = isLibrary
+          ? undefined
+          : get().pinned.find(
+              (p) =>
+                p.channel.channelID === input.channel.channelID &&
+                p.item.publishedAt === input.item.publishedAt,
+            )
+        if (driftedFrom && driftedFrom.item.itemURL === url) return
         if (get().pinned.some((p) => p.item.itemURL === url)) return
         const pinning = new Set(get().pinning)
         pinning.add(url)
         set({ pinning })
         try {
+          // Pin new bytes first so a mid-operation failure can't
+          // leave the user un-pinned. Unpin of the old is
+          // best-effort — orphan sweep catches strays.
           const { objectID } = await pinItemBytes(sdk, url)
+          if (driftedFrom) {
+            unpinItemBytes(sdk, driftedFrom.objectID).catch(() => {})
+          }
           const ref: PinnedItemRef = {
             ...input,
             objectID,
@@ -75,7 +96,12 @@ export const usePinStore = create<PinState>()(
           }
           const next = new Set(get().pinning)
           next.delete(url)
-          set((s) => ({ pinned: [...s.pinned, ref], pinning: next }))
+          set((s) => ({
+            pinned: driftedFrom
+              ? s.pinned.map((p) => (p === driftedFrom ? ref : p))
+              : [...s.pinned, ref],
+            pinning: next,
+          }))
           get().refreshAccount(sdk)
         } catch (e) {
           const next = new Set(get().pinning)
