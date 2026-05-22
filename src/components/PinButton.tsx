@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { deletePublishedItem } from '../core/channels'
+import { usePinState } from '../lib/usePinState'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
 import { type PinInput, usePinStore } from '../stores/pin'
@@ -17,6 +18,7 @@ export function PinButton({ input }: { input: PinInput }) {
   const unpin = usePinStore((s) => s.unpin)
   const addToast = useToastStore((s) => s.addToast)
   const refreshChannel = useFeedStore((s) => s.refreshChannel)
+  const pinState = usePinState(input.item, input.channel.channelID)
 
   const [deleting, setDeleting] = useState(false)
 
@@ -24,7 +26,6 @@ export function PinButton({ input }: { input: PinInput }) {
     (c) => c.channelID === input.channel.channelID,
   )
   const isOwned = !!ownedChannel
-  const isActive = isOwned || isPinned
   const busy = isPinning || deleting
 
   const handleClick = async (e: React.MouseEvent) => {
@@ -68,9 +69,22 @@ export function PinButton({ input }: { input: PinInput }) {
 
   const title = isOwned
     ? 'Retract from your channel and storage'
-    : isPinned
-      ? 'Unpin from your storage'
-      : 'Pin to your storage'
+    : pinState === 'edited'
+      ? 'Update your pinned copy to the current version'
+      : pinState === 'pinned'
+        ? 'Unpin from your storage'
+        : 'Pin to your storage'
+
+  // Color delegation: state-aware PinIcon uses currentColor for stroke
+  // and fill, so the parent button controls color (and hover).
+  //  pinned   → text-green-600 (committed)
+  //  pinnable → text-neutral-400 hover:text-green-600 (hint at upgrade)
+  //  edited   → text-neutral-400 hover:text-green-600 (re-pin hint —
+  //             green dot stays as the persistent drift badge regardless)
+  const colorClass =
+    pinState === 'pinned'
+      ? 'text-green-600 hover:text-green-700'
+      : 'text-neutral-400 hover:text-green-600'
 
   return (
     <button
@@ -78,20 +92,15 @@ export function PinButton({ input }: { input: PinInput }) {
       onClick={handleClick}
       disabled={busy || !sdk}
       title={title}
-      aria-pressed={isActive}
-      className={`p-1 transition-colors disabled:opacity-50 hover:text-green-600 ${
-        isActive ? 'text-green-600' : 'text-neutral-400'
-      }`}
+      aria-pressed={pinState === 'pinned'}
+      className={`p-1 transition-colors disabled:opacity-50 ${colorClass}`}
     >
       {busy ? (
-        <span className="block size-5">
-          <span className="block size-5 border-2 border-neutral-300 border-t-neutral-600 rounded-full animate-spin" />
+        <span className="block size-6">
+          <span className="block size-6 border-2 border-neutral-300 border-t-neutral-600 rounded-full animate-spin" />
         </span>
       ) : (
-        <PinIcon
-          fill={isActive ? 'currentColor' : 'none'}
-          aria-hidden="true"
-        />
+        <PinIcon state={pinState} aria-hidden="true" />
       )}
     </button>
   )

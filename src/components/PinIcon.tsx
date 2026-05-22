@@ -10,15 +10,17 @@ import type { ComponentPropsWithoutRef } from 'react'
 //
 //  - State-aware (`state` prop set) — used in action affordances where
 //    the icon expresses a custody state on a specific item:
-//      'pinnable' → grey outlined pin (offered, no custody)
-//      'pinned'   → green-filled pin (this is yours)
-//      'edited'   → grey outlined pin + small green dot at top-right
-//                   (you don't own this rendered version, but you own a
+//      'pinnable' → outlined pin (offered, no custody)
+//      'pinned'   → filled pin (this is yours)
+//      'edited'   → outlined pin + small green dot at top-right (you
+//                   don't own this rendered version, but you own a
 //                   previous one — the dot is the "related custody"
 //                   modifier)
-//    State-aware rendering is fully determined by `state` — additional
-//    className / props on the lucide Pin are ignored to keep visuals
-//    consistent across surfaces.
+//    The pin glyph uses currentColor for stroke and fill so the parent
+//    button can drive color via text-color classes (e.g. text-neutral-400
+//    hover:text-green-600 on pinnable, text-green-600 on pinned). The
+//    edited-state dot is hardcoded green and doesn't follow currentColor
+//    — it's the persistent state badge.
 
 export type PinState = 'pinnable' | 'pinned' | 'edited'
 
@@ -34,19 +36,14 @@ export function PinIcon({ state, className = '', ...rest }: PinIconProps) {
     return <Pin className={`size-5 ${className}`} {...rest} />
   }
   if (state === 'pinnable') {
-    return <Pin className="size-6 text-neutral-400" strokeWidth={1} />
+    return <Pin className="size-6" strokeWidth={1} />
   }
   if (state === 'pinned') {
-    return (
-      <Pin
-        className="size-6 fill-green-600 text-green-600"
-        strokeWidth={1}
-      />
-    )
+    return <Pin className="size-6" strokeWidth={1} fill="currentColor" />
   }
   return (
     <span className="relative inline-flex">
-      <Pin className="size-6 text-neutral-400" strokeWidth={1} />
+      <Pin className="size-6" strokeWidth={1} />
       <span className="absolute -top-0.5 -right-0.5 size-2 rounded-full bg-green-600 border-2 border-white" />
     </span>
   )
