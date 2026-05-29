@@ -29,16 +29,19 @@ export type FeedFetchResult = {
   manifests: Record<string, ChannelManifest>
 }
 
+export type FetchChannel = (
+  authorHandleOrDID: string,
+  channelID: string,
+  channelKey: string,
+) => Promise<ChannelManifest>
+
 export async function buildHomeFeed(
   subscriptions: SubscriptionRef[],
+  fetcher: FetchChannel = fetchChannel,
 ): Promise<FeedFetchResult> {
   const settled = await Promise.allSettled(
     subscriptions.map((sub) =>
-      fetchChannel(
-        sub.authorDID || sub.authorHandle,
-        sub.channelID,
-        sub.channelKey,
-      ),
+      fetcher(sub.authorDID || sub.authorHandle, sub.channelID, sub.channelKey),
     ),
   )
 
