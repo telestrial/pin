@@ -1,7 +1,7 @@
 import type { PinState } from '../components/PinIcon'
 import type { ItemRef } from '../core/types'
 import { useAuthStore } from '../stores/auth'
-import { usePinStore } from '../stores/pin'
+import { type PinnedItemRef, usePinStore } from '../stores/pin'
 
 // Drift-aware pin state for a given item in a given channel.
 //
@@ -26,10 +26,14 @@ import { usePinStore } from '../stores/pin'
 // Drift surfaces only where channel state and your custody are
 // shown side-by-side: feed rows, channel page rows, Read pages.
 
-export function usePinState(item: ItemRef, channelID: string): PinState {
-  const myChannels = useAuthStore((s) => s.myChannels)
-  const pinned = usePinStore((s) => s.pinned)
-
+// Pure form of usePinState, exposed for testing and any caller that
+// already has both arrays in hand (avoids two extra store subscriptions).
+export function computePinState(
+  item: ItemRef,
+  channelID: string,
+  myChannels: readonly { channelID: string }[],
+  pinned: readonly PinnedItemRef[],
+): PinState {
   // Owned posts are always 'pinned' — the manifest is yours, the bytes
   // are in your Sia scope. Drift can't apply to your own posts: editing
   // creates the new version, there's no older snapshot of yours to
@@ -51,4 +55,10 @@ export function usePinState(item: ItemRef, channelID: string): PinState {
     return 'edited'
   }
   return 'pinned'
+}
+
+export function usePinState(item: ItemRef, channelID: string): PinState {
+  const myChannels = useAuthStore((s) => s.myChannels)
+  const pinned = usePinStore((s) => s.pinned)
+  return computePinState(item, channelID, myChannels, pinned)
 }
