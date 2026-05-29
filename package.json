@@ -8,7 +8,10 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "check": "biome check .",
-    "test": "vitest run",
+    "test": "bun run test:unit && bun run test:int && bun run test:e2e",
+    "test:unit": "vitest run --exclude='**/*.int.test.ts' --exclude='**/*.int.test.tsx'",
+    "test:int": "vitest run .int.test",
+    "test:e2e": "playwright test",
     "test:watch": "vitest",
     "test:ui": "vitest --ui"
   },
