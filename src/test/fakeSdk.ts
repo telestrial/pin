@@ -6,12 +6,10 @@
 // (sharedObject from B's URL called on A's sdk → mirror via pinObject)
 // work the way the real SDK does: share URLs are identity-agnostic.
 
+import type { FakeRecordStore } from './fakeAgent'
+
 const SLAB_BYTES = 40 * 1024 * 1024 // ~40 MiB, real Sia slab capacity
 const DEFAULT_MAX_PINNED = 5 * 1024 * 1024 * 1024 // 5 GiB
-
-// Forward-declared placeholder so FakeWorld can carry an ATProto record store
-// in a later phase. fakeAgent.ts will provide the real shape.
-export type FakeRecordStoreLike = unknown
 
 export class FakePinnedObject {
   private readonly _id: string
@@ -75,9 +73,9 @@ export class FakeWorld {
   readonly accountMax = new Map<string, number>()
   // Monotonic object ID counter — deterministic across a test run.
   private _objectCounter = 0
-  // ATProto universe — populated when an agent wraps this world.
-  // Tests don't need this directly; the agent reads/writes it.
-  records?: FakeRecordStoreLike
+  // ATProto universe — populated when the first FakeAgent attaches to
+  // this world. Tests don't need this directly; the agent reads/writes it.
+  records?: FakeRecordStore
 
   nextObjectID(): string {
     this._objectCounter++
