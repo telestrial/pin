@@ -5,8 +5,7 @@ const JETSTREAM_US_WEST = 'wss://jetstream2.us-west.bsky.network/subscribe'
 const RECONNECT_BASE_MS = 1000
 const RECONNECT_MAX_MS = 30000
 
-function pickJetstreamEndpoint(): string {
-  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone
+export function pickJetstreamEndpoint(tz: string): string {
   const westCoastTZs = new Set([
     'America/Los_Angeles',
     'America/Anchorage',
@@ -52,7 +51,9 @@ export function connectJetstream(
   let reconnectAttempts = 0
   let reconnectTimeout: ReturnType<typeof setTimeout> | null = null
 
-  const endpoint = pickJetstreamEndpoint()
+  const endpoint = pickJetstreamEndpoint(
+    Intl.DateTimeFormat().resolvedOptions().timeZone,
+  )
 
   function buildURL(): string {
     const params = new URLSearchParams()
