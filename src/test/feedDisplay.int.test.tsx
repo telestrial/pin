@@ -29,40 +29,15 @@ vi.mock(
   async () => (await import('./fakeModules')).fakeSiaStorageModule(),
 )
 
-import {
-  appendItemToChannel,
-  buildItemRef,
-  createChannel,
-} from '../core/channels'
-import { uploadItem } from '../core/sia'
 import type { SubscriptionRef } from '../core/types'
 import { HomeFeed } from '../components/HomeFeed'
 import {
+  authorCreateChannel,
   createFakeApp,
-  type FakeAccount,
   mountAs,
+  publishTextPost,
   resetAllStores,
 } from './setupFakeApp'
-
-async function publishTextPost(
-  author: FakeAccount,
-  channel: { channelID: string; channelKey: string },
-  body: string,
-): Promise<void> {
-  const sdk = author.sdk as unknown as Parameters<typeof uploadItem>[0]
-  const agent = author.agent as unknown as Parameters<
-    typeof appendItemToChannel
-  >[0]
-  const uploaded = await uploadItem(sdk, new TextEncoder().encode(body))
-  const item = buildItemRef(uploaded, {
-    type: 'text',
-    title: '',
-    summary: body,
-    mimeType: 'text/markdown',
-    bytes: new TextEncoder().encode(body),
-  })
-  await appendItemToChannel(agent, channel, item)
-}
 
 describe('integration: subscriber feed display', () => {
   beforeEach(() => {
@@ -83,12 +58,10 @@ describe('integration: subscriber feed display', () => {
     // Alice creates a channel and publishes a post — through the real
     // production code paths (core/channels + core/sia), now backed by
     // FakeSdk + FakeAgent.
-    const channel = await createChannel(
-      alice.sdk as unknown as Parameters<typeof createChannel>[0],
-      alice.agent as unknown as Parameters<typeof createChannel>[1],
-      alice.handle,
-      { name: "Alice's voice", description: 'Things worth keeping' },
-    )
+    const channel = await authorCreateChannel(alice, {
+      name: "Alice's voice",
+      description: 'Things worth keeping',
+    })
 
     await publishTextPost(
       alice,

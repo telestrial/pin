@@ -14,7 +14,15 @@ import { useFeedStore } from '../stores/feed'
 import { usePinStore } from '../stores/pin'
 import { useToastStore } from '../stores/toast'
 import { useUploadQueueStore } from '../stores/uploadQueue'
-import type { SubscriptionRef } from '../core/types'
+import {
+  appendItemToChannel,
+  buildItemRef,
+  type CreatedChannel,
+  createChannel,
+  editItem,
+} from '../core/channels'
+import { uploadItem } from '../core/sia'
+import type { ItemRef, SubscriptionRef } from '../core/types'
 
 export type FakeAccount = {
   sdk: FakeSdk
@@ -60,6 +68,68 @@ export function resetAllStores(): void {
   // so the next test starts genuinely clean.
   localStorage.clear()
   setCurrentWorld(null)
+}
+
+// Convenience: author publishes a text post through real core/channels
+// + core/sia code paths. Used for setup phases of integration tests.
+export async function publishTextPost(
+  author: FakeAccount,
+  channel: { channelID: string; channelKey: string },
+  body: string,
+): Promise<ItemRef> {
+  const sdk = author.sdk as unknown as Sdk
+  const agent = author.agent as unknown as Agent
+  const bytes = new TextEncoder().encode(body)
+  const uploaded = await uploadItem(sdk, bytes)
+  const item = buildItemRef(uploaded, {
+    type: 'text',
+    title: '',
+    summary: body,
+    mimeType: 'text/markdown',
+    bytes,
+  })
+  await appendItemToChannel(agent, channel, item)
+  return item
+}
+
+// Convenience: author edits an existing text post in place. Uploads new
+// bytes, swaps the manifest entry (preserving publishedAt), and stamps
+// editedAt. Mirrors what useUploadRunner does in production.
+export async function editTextPost(
+  author: FakeAccount,
+  channel: { channelID: string; channelKey: string },
+  oldItemID: string,
+  newBody: string,
+): Promise<ItemRef> {
+  const sdk = author.sdk as unknown as Sdk
+  const agent = author.agent as unknown as Agent
+  const bytes = new TextEncoder().encode(newBody)
+  const uploaded = await uploadItem(sdk, bytes)
+  const newItem: ItemRef = {
+    ...buildItemRef(uploaded, {
+      type: 'text',
+      title: '',
+      summary: newBody,
+      mimeType: 'text/markdown',
+      bytes,
+    }),
+    editedAt: new Date().toISOString(),
+  }
+  const result = await editItem(sdk, agent, channel, oldItemID, newItem)
+  return result.item
+}
+
+// Convenience: author creates a channel and returns the canonical handle.
+export async function authorCreateChannel(
+  author: FakeAccount,
+  args: { name: string; description?: string } = { name: 'Channel' },
+): Promise<CreatedChannel> {
+  return createChannel(
+    author.sdk as unknown as Sdk,
+    author.agent as unknown as Agent,
+    author.handle,
+    { name: args.name, description: args.description ?? '' },
+  )
 }
 
 export function mountAs(
