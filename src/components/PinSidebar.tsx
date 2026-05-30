@@ -10,7 +10,7 @@ import {
   type UploadTaskState,
   useUploadQueueStore,
 } from '../stores/uploadQueue'
-import { useRepackStore } from '../stores/repack'
+import { useStorageActivityStore } from '../stores/storageActivity'
 import { formatBytes } from '../lib/format'
 import { useFadeCancelUnpin } from '../lib/useFadeCancelUnpin'
 import { ChannelAvatar } from './ChannelAvatar'
@@ -85,7 +85,9 @@ export function PinSidebar({
   const armedItem = useComposeStore((s) => s.armedItem)
   const toggleArm = useComposeStore((s) => s.toggle)
   const disarm = useComposeStore((s) => s.disarm)
-  const repackRunning = useRepackStore((s) => s.running || s.sweeping)
+  const storageActive = useStorageActivityStore(
+    (s) => s.running || s.sweeping || s.savingSettings,
+  )
   // Click-pin → opacity transitions to 0 over FADE_MS, then unpin commits.
   // Re-click during the fade cancels (clean undo). Shared with MyStorage's
   // tile pin via the hook.
@@ -261,12 +263,10 @@ export function PinSidebar({
                       so the size number doesn't shift when packing starts. */}
                   <Box
                     className={`size-3.5 text-neutral-500 transition-opacity duration-300 ${
-                      repackRunning ? 'opacity-100' : 'opacity-0'
+                      storageActive ? 'opacity-100' : 'opacity-0'
                     }`}
-                    aria-hidden={!repackRunning}
-                    aria-label={
-                      repackRunning ? 'Repacking storage' : undefined
-                    }
+                    aria-hidden={!storageActive}
+                    aria-label={storageActive ? 'Saving to Sia' : undefined}
                   />
                 </span>
                 <span className="text-neutral-500">

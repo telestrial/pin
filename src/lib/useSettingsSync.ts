@@ -6,6 +6,7 @@ import {
   saveSettings,
 } from '../core/settings'
 import { useAuthStore } from '../stores/auth'
+import { useStorageActivityStore } from '../stores/storageActivity'
 
 const SAVE_DEBOUNCE_MS = 1500
 
@@ -95,6 +96,7 @@ export function useSettingsSync() {
       lastSerialized = serialized
 
       saving = true
+      useStorageActivityStore.getState().setSavingSettings(true)
       try {
         const settings: DispatchSettings = {
           version: SETTINGS_VERSION,
@@ -108,6 +110,7 @@ export function useSettingsSync() {
         console.warn('Settings save failed:', e)
       } finally {
         saving = false
+        useStorageActivityStore.getState().setSavingSettings(false)
         if (pending) {
           pending = false
           schedule()

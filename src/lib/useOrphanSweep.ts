@@ -6,7 +6,7 @@ import { isValidAttachment } from '../core/types'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
 import { usePinStore } from '../stores/pin'
-import { useRepackStore } from '../stores/repack'
+import { useStorageActivityStore } from '../stores/storageActivity'
 import { useToastStore } from '../stores/toast'
 import { useUploadQueueStore } from '../stores/uploadQueue'
 
@@ -126,7 +126,7 @@ export function useOrphanSweep() {
       )
       if (auth.myChannels.length > 0 && !allManifestsLoaded) return
 
-      useRepackStore.getState().setSweeping(true)
+      useStorageActivityStore.getState().setSweeping(true)
       try {
         if (!sdk) return
         const { ok, ids } = await buildKnownIDs(sdk)
@@ -150,7 +150,7 @@ export function useOrphanSweep() {
       } catch (e) {
         console.warn('sweep: failed:', e)
       } finally {
-        if (!cancelled) useRepackStore.getState().setSweeping(false)
+        if (!cancelled) useStorageActivityStore.getState().setSweeping(false)
       }
     }
 

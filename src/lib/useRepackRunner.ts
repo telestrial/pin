@@ -9,7 +9,7 @@ import { LIBRARY_CHANNEL } from './pinUpload'
 import { usePinStore } from '../stores/pin'
 import { useToastStore } from '../stores/toast'
 import { useUploadQueueStore } from '../stores/uploadQueue'
-import { useRepackStore } from '../stores/repack'
+import { useStorageActivityStore } from '../stores/storageActivity'
 
 // Build the "what's pinned in your scope right now" snapshot the repack
 // core needs to evaluate slabs. Own-channel items come from feedStore
@@ -134,7 +134,7 @@ export function useRepackRunner() {
         return
       }
       running = true
-      useRepackStore.getState().setRunning(true)
+      useStorageActivityStore.getState().setRunning(true)
 
       try {
         // Loop-until-clean: keep packing batches until pickBatch decides
@@ -180,7 +180,7 @@ export function useRepackRunner() {
         }
       } finally {
         running = false
-        useRepackStore.getState().setRunning(false)
+        useStorageActivityStore.getState().setRunning(false)
         if (queued) {
           queued = false
           tick()
