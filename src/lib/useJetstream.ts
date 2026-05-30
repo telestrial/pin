@@ -7,9 +7,13 @@ export function useJetstream() {
   const subscriptions = useAuthStore((s) => s.subscriptions)
 
   useEffect(() => {
-    const dids = subscriptions
-      .map((s) => s.authorDID)
-      .filter((d): d is string => !!d)
+    const dids = [
+      ...new Set(
+        subscriptions
+          .map((s) => s.authorDID)
+          .filter((d): d is string => !!d),
+      ),
+    ]
     if (dids.length === 0) return
 
     let isFirstConnect = true
