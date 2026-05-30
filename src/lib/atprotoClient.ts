@@ -1,4 +1,4 @@
-import { Agent } from '@atproto/api'
+import { Agent, AtpAgent } from '@atproto/api'
 import {
   BrowserOAuthClient,
   type OAuthSession,
@@ -48,10 +48,12 @@ async function doBoot(): Promise<OAuthBootResult> {
 
   // If the auth store already has a cached handle for this DID (persisted
   // from a prior session), reuse it and skip the network round-trip
-  // entirely. Otherwise fall through to getProfile, accepting that with
-  // the narrow OAuth scope ("atproto repo:dev.sia.pin.channel ...") the
-  // call returns 403 — handle stays null in that case and the cache is
-  // preserved by setATProtoIdentity's null-coalesce.
+  // entirely. Otherwise resolve via describeRepo — an unauthenticated repo
+  // endpoint that returns { handle, did, didDoc, ... } for any DID. We used
+  // to call agent.getProfile here, but that 403s under our narrow OAuth
+  // scope (atproto repo:dev.sia.pin.channel) since app.bsky.actor.profile
+  // isn't granted. describeRepo only needs the public PDS endpoint, so it
+  // works without any scope.
   const cached = useAuthStore.getState()
   if (cached.atprotoDID === session.did && cached.atprotoHandle) {
     return { session, agent, did: session.did, handle: cached.atprotoHandle }
@@ -59,11 +61,14 @@ async function doBoot(): Promise<OAuthBootResult> {
 
   let handle: string | null = null
   try {
-    const profile = await agent.getProfile({ actor: session.did })
-    handle = profile.data.handle
+    const unauthed = new AtpAgent({ service: 'https://bsky.social' })
+    const result = await unauthed.com.atproto.repo.describeRepo({
+      repo: session.did,
+    })
+    handle = result.data.handle
   } catch {
-    // getProfile failed — handle stays null. Subscribe URLs and the handle
-    // display will be missing until next boot, but auth itself works.
+    // describeRepo failed — handle stays null. Subscribe URLs and the
+    // handle display will be missing until next boot, but auth itself works.
   }
   return { session, agent, did: session.did, handle }
 }
