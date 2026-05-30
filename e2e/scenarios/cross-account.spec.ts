@@ -113,12 +113,25 @@ test('alice publishes a post; bob subscribes via URL and sees it', async ({
 // Drives alice's "Unpin channel" UI to retract the run's channel. The
 // production unpinChannel path walks every item via deleteObject, deletes
 // the manifest record, and calls pruneSlabs — same housekeeping a real
-// retract performs. Goto('/') first because cleanup may fire mid-flow if
-// an upstream assertion failed and we can't assume which view alice is on.
+// retract performs.
 async function cleanupAliceChannel(page: Page, channelName: string) {
-  await page.goto('/')
-  await page
-    .locator('ul[aria-label="Your channels"]')
+  // Operate from wherever alice's last test action left her — typically
+  // home with sidebar mounted. We intentionally don't page.goto('/')
+  // because the auth helper's addInitScript reseeds myChannels=[] on
+  // every fresh document load, racing the settings-sync that has to
+  // repopulate from Sia before the sidebar entry appears.
+  //
+  // Two "Your channels" lists exist on home — Sidebar (left) and
+  // PinSidebar (right). Scope structurally via Sidebar's unique "Home"
+  // button rather than DOM order. Then narrow to the "Your channels"
+  // UL inside it, because owners auto-subscribe to their own channels
+  // and the same channel name appears in Sidebar's "Subscribed
+  // channels" list too.
+  const sidebar = page.locator('aside').filter({
+    has: page.getByRole('button', { name: 'Home', exact: true }),
+  })
+  const yourChannels = sidebar.locator('ul[aria-label="Your channels"]')
+  await yourChannels
     .getByRole('button', { name: channelName })
     .click({ timeout: 30_000 })
   // window.prompt() is a native browser dialog in Playwright — accept
@@ -126,7 +139,7 @@ async function cleanupAliceChannel(page: Page, channelName: string) {
   // prompt picks up the response.
   page.once('dialog', (dialog) => dialog.accept('DELETE'))
   await page.getByRole('button', { name: 'Unpin channel' }).click()
-  await expect(
-    page.locator('ul[aria-label="Your channels"]').getByText(channelName),
-  ).toBeHidden({ timeout: 60_000 })
+  await expect(yourChannels.getByText(channelName)).toBeHidden({
+    timeout: 60_000,
+  })
 }
