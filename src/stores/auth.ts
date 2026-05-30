@@ -41,6 +41,7 @@ type AuthState = {
   feedSortOrder: FeedSortOrder
   settingsObjectID: string | null
   settingsLoaded: boolean
+  settingsDirty: boolean
   setSdk: (sdk: Sdk) => void
   setStep: (step: AuthStep) => void
   setError: (error: string | null) => void
@@ -67,6 +68,7 @@ type AuthState = {
   ) => void
   setSettingsObjectID: (id: string) => void
   setSettingsLoaded: (loaded: boolean) => void
+  setSettingsDirty: (dirty: boolean) => void
   reset: () => void
 }
 
@@ -87,6 +89,7 @@ export const useAuthStore = create<AuthState>()(
       feedSortOrder: 'newest',
       settingsObjectID: null,
       settingsLoaded: false,
+      settingsDirty: false,
       setSdk: (sdk) => set({ sdk, step: 'connected', error: null }),
       setStep: (step) => set({ step, error: null }),
       setError: (error) => set({ error }),
@@ -152,6 +155,7 @@ export const useAuthStore = create<AuthState>()(
         }),
       setSettingsObjectID: (settingsObjectID) => set({ settingsObjectID }),
       setSettingsLoaded: (settingsLoaded) => set({ settingsLoaded }),
+      setSettingsDirty: (settingsDirty) => set({ settingsDirty }),
       reset: () => {
         useFeedStore.getState().reset()
         usePinStore.getState().reset()
@@ -169,6 +173,7 @@ export const useAuthStore = create<AuthState>()(
           atprotoHandle: null,
           settingsObjectID: null,
           settingsLoaded: false,
+          settingsDirty: false,
         })
       },
     }),
@@ -183,6 +188,7 @@ export const useAuthStore = create<AuthState>()(
         atprotoHandle: state.atprotoHandle,
         feedSortOrder: state.feedSortOrder,
         settingsObjectID: state.settingsObjectID,
+        settingsDirty: state.settingsDirty,
       }),
     },
   ),

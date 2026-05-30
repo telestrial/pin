@@ -40,17 +40,27 @@ export function useSettingsSync() {
         const result = await loadSettings(sdk)
         if (cancelled) return
         if (result) {
-          // Server-side settings win on first hydrate after a fresh origin.
-          // Local zustand snapshot may be empty (new origin) or stale (old
-          // device that hadn't seen recent edits) — either way, Sia is the
-          // source of truth across origins.
-          useAuthStore
-            .getState()
-            .hydrateSettings(
-              result.settings.myChannels,
-              result.settings.subscriptions,
-              result.objectID,
-            )
+          if (useAuthStore.getState().settingsDirty) {
+            // localStorage has mutations that didn't make it to Sia last
+            // session (tab closed during the debounce or mid-upload). Local
+            // is fresher than Sia by definition — don't overwrite. Capture
+            // the objectID so the next save deletes the prior; Phase 2's
+            // needsPush path will fire the save.
+            useAuthStore.getState().setSettingsObjectID(result.objectID)
+            useAuthStore.getState().setSettingsLoaded(true)
+          } else {
+            // Server-side settings win on first hydrate after a fresh origin.
+            // Local zustand snapshot may be empty (new origin) or stale (old
+            // device that hadn't seen recent edits) — either way, Sia is the
+            // source of truth across origins.
+            useAuthStore
+              .getState()
+              .hydrateSettings(
+                result.settings.myChannels,
+                result.settings.subscriptions,
+                result.objectID,
+              )
+          }
         } else {
           // No settings object yet. Proceed with whatever's in localStorage;
           // first user mutation will create the settings object.
@@ -85,7 +95,11 @@ export function useSettingsSync() {
       initialState.settingsObjectID === null &&
       (initialState.myChannels.length > 0 ||
         initialState.subscriptions.length > 0)
-    let lastSerialized = needsMigration
+    // needsPush covers both: pre-feature migration AND a dirty bit carried
+    // over from a prior session that didn't get to commit. Both want the
+    // same thing — fire a save against current local state at startup.
+    const needsPush = needsMigration || initialState.settingsDirty
+    let lastSerialized = needsPush
       ? '__migrate__'
       : serialize(initialState.myChannels, initialState.subscriptions)
 
@@ -106,8 +120,18 @@ export function useSettingsSync() {
         }
         const newID = await saveSettings(sdk, settings, state.settingsObjectID)
         useAuthStore.getState().setSettingsObjectID(newID)
+        // Caught up — but only if nothing else changed during the upload.
+        // If state drifted (a mutation while we were uploading), the next
+        // runSave will clear dirty when it catches up.
+        const after = useAuthStore.getState()
+        if (
+          serialize(after.myChannels, after.subscriptions) === lastSerialized
+        ) {
+          useAuthStore.getState().setSettingsDirty(false)
+        }
       } catch (e) {
         console.warn('Settings save failed:', e)
+        // Leave dirty=true; next mutation or next boot retries.
       } finally {
         saving = false
         useStorageActivityStore.getState().setSavingSettings(false)
@@ -119,6 +143,11 @@ export function useSettingsSync() {
     }
 
     const schedule = () => {
+      // Mark dirty as soon as we know a save is needed — even before the
+      // debounce fires. If the user closes the tab inside the debounce
+      // window or mid-upload, the dirty bit survives in localStorage and
+      // next boot re-pushes local state to Sia instead of overwriting it.
+      useAuthStore.getState().setSettingsDirty(true)
       if (timer) clearTimeout(timer)
       timer = setTimeout(() => {
         timer = null
@@ -140,7 +169,7 @@ export function useSettingsSync() {
       schedule()
     })
 
-    if (needsMigration) schedule()
+    if (needsPush) schedule()
 
     activeFlush = async () => {
       // Cancel any debounced timer; we want to flush NOW.
