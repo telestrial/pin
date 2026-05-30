@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { getOauthClient } from '../lib/atprotoClient'
+import { useAuthStore } from '../stores/auth'
 import { FormCard } from './FormCard'
 
 export function BlueskyLoginScreen({
@@ -15,6 +16,7 @@ export function BlueskyLoginScreen({
   sidebar?: React.ReactNode
   rightSidebar?: React.ReactNode
 }) {
+  const setATProtoHandle = useAuthStore((s) => s.setATProtoHandle)
   const [handle, setHandle] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -27,6 +29,11 @@ export function BlueskyLoginScreen({
     setError(null)
     try {
       const client = await getOauthClient()
+      // Persist the user-typed handle before the OAuth redirect. Under our
+      // narrow scope, getProfile 403s on the callback so doBoot can't
+      // resolve a handle — without this seed, atprotoHandle would stay null
+      // through the user's first session and CreateChannel would reject.
+      setATProtoHandle(trimmed)
       // signIn() redirects the page to the user's PDS. Execution effectively
       // ends here for this load — the browser navigates away. After
       // authorization, the user comes back to the redirect_uri and the boot

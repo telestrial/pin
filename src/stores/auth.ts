@@ -58,6 +58,7 @@ type AuthState = {
     did: string | null,
     handle: string | null,
   ) => void
+  setATProtoHandle: (handle: string) => void
   setFeedSortOrder: (order: FeedSortOrder) => void
   hydrateSettings: (
     myChannels: OwnedChannel[],
@@ -132,12 +133,15 @@ export const useAuthStore = create<AuthState>()(
         // Don't overwrite an already-cached handle with null. The OAuth
         // scope doesn't permit app.bsky.actor.getProfile, so doBoot can
         // legitimately resolve handle=null on a returning session — that
-        // shouldn't trash the persisted display value from the prior boot.
+        // shouldn't trash the persisted display value from the prior boot,
+        // nor a handle pre-seeded by BlueskyOnboardingScreen before the
+        // sign-in redirect.
         set((s) => ({
           atprotoAgent,
           atprotoDID,
           atprotoHandle: atprotoHandle ?? s.atprotoHandle,
         })),
+      setATProtoHandle: (atprotoHandle) => set({ atprotoHandle }),
       setFeedSortOrder: (feedSortOrder) => set({ feedSortOrder }),
       hydrateSettings: (myChannels, subscriptions, objectID) =>
         set({

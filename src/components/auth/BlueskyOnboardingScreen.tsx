@@ -13,6 +13,7 @@ export function BlueskyOnboardingScreen({
   onCancel: () => void
 }) {
   const setError = useAuthStore((s) => s.setError)
+  const setATProtoHandle = useAuthStore((s) => s.setATProtoHandle)
   const [handle, setHandle] = useState('')
   const [submitting, setSubmitting] = useState(false)
 
@@ -24,6 +25,11 @@ export function BlueskyOnboardingScreen({
     setError(null)
     try {
       const client = await getOauthClient()
+      // Persist the user-typed handle before the OAuth redirect. Under our
+      // narrow scope, getProfile 403s on the callback so doBoot can't
+      // resolve a handle — without this seed, atprotoHandle would stay null
+      // through the user's first session and CreateChannel would reject.
+      setATProtoHandle(trimmed)
       // signIn() redirects the page out. Execution effectively ends here.
       await client.signIn(trimmed)
     } catch (e) {
