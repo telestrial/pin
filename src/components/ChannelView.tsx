@@ -228,7 +228,7 @@ export function ChannelView({
               <ul className="divide-y divide-neutral-200/80">
                 {channelEntries.map((entry) => (
                   <FeedRow
-                    key={entry.item.contentHash ?? entry.item.id}
+                    key={`${entry.channel.channelID}:${entry.item.publishedAt}`}
                     entry={entry}
                     onItemClick={onItemClick}
                     onChannelClick={onChannelClick}

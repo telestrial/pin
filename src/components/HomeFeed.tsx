@@ -149,7 +149,13 @@ export function HomeFeed({
         <ul className="divide-y divide-neutral-200/80">
           {sortedEntries.map((entry) => (
             <FeedRow
-              key={entry.item.contentHash ?? entry.item.id}
+              // Logical row identity, not byte identity: contentHash collides
+              // for empty-body posts (all encode to the same 0x20 placeholder)
+              // and would even collide same-channel for two attachment-only
+              // posts. (channelID, publishedAt) is the pair the rest of the
+              // system already uses as logical-post identity — preserved by
+              // editItem across edits and by repack across URL swaps.
+              key={`${entry.channel.channelID}:${entry.item.publishedAt}`}
               entry={entry}
               onItemClick={onItemClick}
               onChannelClick={onChannelClick}

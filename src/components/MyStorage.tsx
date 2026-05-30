@@ -295,7 +295,7 @@ export function MyStorage({
                     entry.source !== 'own' && !!entry.objectID
                   return (
                     <ItemTile
-                      key={entry.item.contentHash ?? url}
+                      key={`${entry.channel.channelID}:${entry.item.publishedAt}`}
                       item={entry.item}
                       channel={entry.channel}
                       source={entry.source}
