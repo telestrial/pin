@@ -10,7 +10,7 @@
 // Auth happens per-test via signInAccount() (~5s each). See
 // e2e/authHelper.ts for why we're not using storageState fixtures.
 
-import { expect, test } from '@playwright/test'
+import { expect, type Page, test } from '@playwright/test'
 import { loadAccount, signInAccount } from '../authHelper'
 
 test('alice publishes a post; bob subscribes via URL and sees it', async ({
@@ -35,58 +35,98 @@ test('alice publishes a post; bob subscribes via URL and sees it', async ({
     ctx.on('weberror', (e) => console.log(`[${label} weberror]`, e.error()))
   }
 
-  const alice = await signInAccount(aliceContext, loadAccount('alice'))
-  const bob = await signInAccount(bobContext, loadAccount('bob'))
+  // Hoisted so the finally block can clean up whatever this run created,
+  // even if an assertion in the middle fails partway through.
+  let alice: Page | undefined
+  let channelName: string | undefined
 
-  // -- Alice creates a channel --
+  try {
+    alice = await signInAccount(aliceContext, loadAccount('alice'))
+    const bob = await signInAccount(bobContext, loadAccount('bob'))
 
-  // Sidebar button — always present once Sia is connected; welcome
-  // "Create a channel" only renders for fresh empty-feed accounts and
-  // alice may have accumulated state from prior runs.
-  await alice.getByRole('button', { name: '+ Create a channel' }).click()
+    // -- Alice creates a channel --
 
-  const channelName = `e2e test ${Date.now()}`
-  await alice.getByPlaceholder(/e\.g\. John Williams/i).fill(channelName)
-  await alice.getByRole('button', { name: /Create channel/i }).click()
+    // Sidebar button — always present once Sia is connected; welcome
+    // "Create a channel" only renders for fresh empty-feed accounts and
+    // alice may have accumulated state from prior runs.
+    await alice.getByRole('button', { name: '+ Create a channel' }).click()
 
-  await expect(
-    alice.getByRole('heading', { name: /Channel created/i }),
-  ).toBeVisible({ timeout: 60_000 })
+    channelName = `e2e test ${Date.now()}`
+    await alice.getByPlaceholder(/e\.g\. John Williams/i).fill(channelName)
+    await alice.getByRole('button', { name: /Create channel/i }).click()
 
-  await alice.getByRole('button', { name: /Copy subscribe URL/i }).click()
-  const subscribeURL = await alice.evaluate(() =>
-    navigator.clipboard.readText(),
-  )
-  expect(subscribeURL).toMatch(/^pin:\/\//)
+    await expect(
+      alice.getByRole('heading', { name: /Channel created/i }),
+    ).toBeVisible({ timeout: 60_000 })
 
-  await alice.getByRole('button', { name: /^Done$/ }).click()
+    await alice.getByRole('button', { name: /Copy subscribe URL/i }).click()
+    const subscribeURL = await alice.evaluate(() =>
+      navigator.clipboard.readText(),
+    )
+    expect(subscribeURL).toMatch(/^pin:\/\//)
 
-  // -- Alice publishes a post --
+    await alice.getByRole('button', { name: /^Done$/ }).click()
 
-  const postBody = `Hello from alice — ${Date.now()}`
-  await alice.getByPlaceholder(/What are you thinking about/i).fill(postBody)
-  await alice.getByRole('button', { name: /^Publish$/ }).click()
+    // -- Alice publishes a post --
 
-  await expect(alice.getByText(postBody)).toBeVisible({ timeout: 90_000 })
+    const postBody = `Hello from alice — ${Date.now()}`
+    await alice.getByPlaceholder(/What are you thinking about/i).fill(postBody)
+    await alice.getByRole('button', { name: /^Publish$/ }).click()
 
-  // -- Bob subscribes via URL --
+    await expect(alice.getByText(postBody)).toBeVisible({ timeout: 90_000 })
 
-  await bob.getByRole('button', { name: '+ Subscribe' }).click()
+    // -- Bob subscribes via URL --
 
-  await expect(
-    bob.getByRole('heading', { name: /Subscribe to a channel/i }),
-  ).toBeVisible()
-  await bob.getByPlaceholder(/pin:\/\//i).fill(subscribeURL)
-  // Two "Subscribe" buttons exist (sidebar + form submit); the form
-  // submit is the exact "Subscribe", the sidebar is "+ Subscribe".
-  await bob.getByRole('button', { name: 'Subscribe', exact: true }).click()
+    await bob.getByRole('button', { name: '+ Subscribe' }).click()
 
-  // Bob's feed populates via the encrypted ATProto record fetch + Sia bytes.
-  await expect(bob.getByText(postBody)).toBeVisible({ timeout: 90_000 })
-  // Channel name appears in two places (sidebar subscribed-channels entry
-  // AND feed-row channel header); .first() picks whichever resolves.
-  await expect(bob.getByText(channelName).first()).toBeVisible()
+    await expect(
+      bob.getByRole('heading', { name: /Subscribe to a channel/i }),
+    ).toBeVisible()
+    await bob.getByPlaceholder(/pin:\/\//i).fill(subscribeURL)
+    // Two "Subscribe" buttons exist (sidebar + form submit); the form
+    // submit is the exact "Subscribe", the sidebar is "+ Subscribe".
+    await bob.getByRole('button', { name: 'Subscribe', exact: true }).click()
 
-  await aliceContext.close()
-  await bobContext.close()
+    // Bob's feed populates via the encrypted ATProto record fetch + Sia bytes.
+    await expect(bob.getByText(postBody)).toBeVisible({ timeout: 90_000 })
+    // Channel name appears in two places (sidebar subscribed-channels entry
+    // AND feed-row channel header); .first() picks whichever resolves.
+    await expect(bob.getByText(channelName).first()).toBeVisible()
+  } finally {
+    // Retract alice's channel so the next run starts clean. Cleanup runs
+    // even when assertions fail, so e2e never leaves leftover ATProto
+    // records or Sia bytes accumulating in alice's account. Wrapped in
+    // its own try so cleanup failures don't mask the original test
+    // failure they followed.
+    if (alice && channelName) {
+      try {
+        await cleanupAliceChannel(alice, channelName)
+      } catch (e) {
+        console.warn('[alice channel cleanup] failed:', e)
+      }
+    }
+    await aliceContext.close()
+    await bobContext.close()
+  }
 })
+
+// Drives alice's "Unpin channel" UI to retract the run's channel. The
+// production unpinChannel path walks every item via deleteObject, deletes
+// the manifest record, and calls pruneSlabs — same housekeeping a real
+// retract performs. Goto('/') first because cleanup may fire mid-flow if
+// an upstream assertion failed and we can't assume which view alice is on.
+async function cleanupAliceChannel(page: Page, channelName: string) {
+  await page.goto('/')
+  await page
+    .locator('ul[aria-label="Your channels"]')
+    .getByRole('button', { name: channelName })
+    .click({ timeout: 30_000 })
+  // window.prompt() is a native browser dialog in Playwright — accept
+  // with the required typed DELETE before clicking, so the click's
+  // prompt picks up the response.
+  page.once('dialog', (dialog) => dialog.accept('DELETE'))
+  await page.getByRole('button', { name: 'Unpin channel' }).click()
+  await expect(
+    page.locator('ul[aria-label="Your channels"]').getByText(channelName),
+  ).toBeHidden({ timeout: 60_000 })
+}
