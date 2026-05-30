@@ -2,10 +2,11 @@ import { defineConfig, devices } from '@playwright/test'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-// Load secrets from .env.test (gitignored) if present. Bun loads .env files
-// automatically when launched via `bun run`, but Playwright workers under
-// Node need explicit loading. ~10 lines beats a dotenv dependency.
-const envPath = join(import.meta.dirname, '.env.test')
+// Load secrets from e2e/.env.test (gitignored) if present. Bun loads
+// .env files automatically when launched via `bun run`, but Playwright
+// workers under Node need explicit loading. ~10 lines beats a dotenv
+// dependency.
+const envPath = join(import.meta.dirname, 'e2e', '.env.test')
 if (existsSync(envPath)) {
   const lines = readFileSync(envPath, 'utf8').split('\n')
   for (const line of lines) {
@@ -20,31 +21,25 @@ if (existsSync(envPath)) {
 }
 
 export default defineConfig({
-  testDir: './e2e',
+  testDir: './e2e/scenarios',
   fullyParallel: false,
   reporter: 'list',
+  timeout: 5 * 60 * 1000, // 5 min per test — real Sia + real bsky OAuth.
   webServer: {
     command: 'bun run preview --port 4173',
     port: 4173,
     reuseExistingServer: !process.env.CI,
   },
   use: {
-    // OAuth callback URIs are bound to 127.0.0.1 (RFC 8252 forbids
-    // localhost); the test app must reach the same origin.
+    // OAuth callback URIs are bound to 127.0.0.1 (RFC 8252 — localhost
+    // is forbidden); the test app must reach the same origin.
     baseURL: 'http://127.0.0.1:4173',
     trace: 'on-first-retry',
   },
   projects: [
     {
-      name: 'setup',
-      testMatch: /.*\.setup\.ts/,
-      use: { ...devices['Desktop Chrome'] },
-    },
-    {
       name: 'chromium',
-      testMatch: /scenarios\/.*\.spec\.ts/,
       use: { ...devices['Desktop Chrome'] },
-      dependencies: ['setup'],
     },
   ],
 })

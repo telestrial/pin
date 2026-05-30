@@ -63,13 +63,21 @@ clear error — re-run the manual capture step above and try again.
 
 ## Architecture
 
-- `auth.setup.ts` — Playwright "setup" project. Runs once per
-  invocation. Drives the Bluesky OAuth flow with real credentials;
-  seeds the Sia AppKey via `addInitScript` so the app's restore path
-  takes over without touching the sia.storage portal.
-- `scenarios/*.spec.ts` — Happy-path tests. Load fixtures via
-  `browser.newContext({ storageState })`; two contexts for cross-account
-  flows (alice's session in one, bob's in another).
+- `authHelper.ts` — `signInAccount(context, account)`. Seeds the
+  Sia AppKey via `addInitScript`, drives the real bsky.social OAuth
+  flow with the credentials in `.env.test`. Called per-test for each
+  account that needs auth.
+- `scenarios/*.spec.ts` — Happy-path tests. Create fresh browser
+  contexts, call `signInAccount` for each, run the scenario.
+
+We previously tried Playwright's setup-project + `storageState`
+fixture pattern to amortize auth across tests. It failed: the
+`@atproto/oauth-client-browser` session getter wraps an IndexedDB
+store with an in-memory CachedGetter, and restoring just the
+IndexedDB doesn't restore the cache. The first stale-token refresh
+after restore reads from IndexedDB, gets nothing matching the
+in-memory key, and the lib throws "The session was deleted by
+another process". Auth-per-test trades ~5s/test for reliability.
 
 ## Brittleness, deliberately
 
