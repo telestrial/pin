@@ -178,6 +178,20 @@ If an author retracts a post, subscribers' pinned copies persist. The Read page 
 
 Identity, deliberately: a post is matched to its prior version by the preserved `publishedAt` on the same channel, not via a separate persistent identifier. No `logicalID` primitive — that would let share URLs silently follow author edits, shifting power against the "what you share is what you share" trust contract. Records, not logical posts.
 
+## Tests
+
+Three-tier pyramid. `bun run test` runs all three; each tier also has its own command.
+
+| Tier | Command | Speed | Backed by |
+|---|---|---|---|
+| Unit | `bun run test:unit` | ~3s | No SDK at all. Pure-logic tests for `core/*`: crypto, content-hash, jetstream endpoint-picker, feed collation, pin-state transitions. Vitest + jsdom. |
+| Integration | `bun run test:int` | ~3s | In-memory fakes — `FakeSdk`, `FakeAgent`, `FakeRecordStore`, `connectFakeJetstream`. Drives the real React components ([HomeFeed](src/components/HomeFeed.tsx), [PinButton](src/components/PinButton.tsx), etc.) through the upload / pin / drift / retract flows. Two simulated accounts in one Node process; cross-account custody is testable in milliseconds. |
+| E2E | `bun run test:e2e` | ~50s | Real Sia hosts + real bsky.social, driven by Playwright Chrome against the built `dist/` (preview server). One happy-path test: alice creates a channel and publishes; bob subscribes via URL and sees it. |
+
+The shape is **fake-vs-real by layer**, not by test. Unit has no SDK; integration runs against fakes for speed and determinism; e2e runs against the real network in a tiny tier (~3-5 tests). The e2e tier's job is to be **the reconciliation point for the fake-SDK contract** — if the fakes drift from real Sia / ATProto behavior, that test fails and we fix the fakes. The integration tier can grow into the hundreds confidently; the e2e tier stays small.
+
+E2E auth is real, with credentials in a gitignored `e2e/.env.test`. The Sia side uses a one-time-captured AppKey hex; the Bluesky side scrapes the bsky.social OAuth UI deliberately — when their UI changes, the test fails loudly as signal. Per-account setup is documented in [e2e/README.md](e2e/README.md).
+
 ## Roadmap
 
 - **Per-recipient access control + revocation.** Pin currently treats subscribe URLs as universal access — anyone with the URL has equal read, same model as Sia's `shareObject`. The plan: per-subscriber NaCl box envelopes via a separate ATProto record collection, with key rotation on removal.
