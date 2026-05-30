@@ -56,7 +56,7 @@ Pin uses [`@siafoundation/sia-storage`](https://www.npmjs.com/package/@siafounda
 | `sdk.account()` | The storage card at the top of the right sidebar — `pinnedData / maxPinnedData`, refreshed on every pin / unpin / retract / repack / orphan-sweep |
 | `sdk.appKey().publicKey()` | Recorded inside the encrypted channel manifest as the technical author identity |
 
-ATProto handles the channel-record layer: [`@atproto/oauth-client-browser`](https://www.npmjs.com/package/@atproto/oauth-client-browser) for the user sign-in (standards OAuth handoff — Pin never sees their password), [`@atproto/api`](https://www.npmjs.com/package/@atproto/api) for the resulting Agent's `com.atproto.repo.putRecord` / `getRecord` / `listRecords` / `deleteRecord` calls. The OAuth scope is narrow — `repo:dev.sia.pin.channel` plus delete-only on the legacy `dev.sia.dispatch.channel` — so the auth screen at bsky.social grants access only to the lexicons Pin actually touches, never to the user's profile / posts / likes / follows. JetStream WS subscription handles live updates without polling. Together with Sia, ATProto covers the two halves Sia explicitly does not aim to solve on its own — naming and mutability of multi-user-readable state.
+ATProto handles the channel-record layer: [`@atproto/oauth-client-browser`](https://www.npmjs.com/package/@atproto/oauth-client-browser) for the user sign-in (standards OAuth handoff — Pin never sees their password), [`@atproto/api`](https://www.npmjs.com/package/@atproto/api) for the resulting Agent's `com.atproto.repo.putRecord` / `getRecord` / `listRecords` / `deleteRecord` calls. The OAuth scope is narrow — `repo:dev.sia.pin.channel` only — so the auth screen at bsky.social grants access only to the lexicon Pin actually touches, never to the user's profile / posts / likes / follows. JetStream WS subscription handles live updates without polling. Together with Sia, ATProto covers the two halves Sia explicitly does not aim to solve on its own — naming and mutability of multi-user-readable state.
 
 ## Architecture
 
@@ -64,7 +64,7 @@ ATProto handles the channel-record layer: [`@atproto/oauth-client-browser`](http
 Item bytes (per item)              Channel state (per channel)
         │                                   │
    Sia object                          ATProto record under
-   (encrypted via                      dev.sia.pin.channel†
+   (encrypted via                      dev.sia.pin.channel
     per-object URL                     (publicly readable; body is
     fragment key)                       AES-GCM-256 ciphertext)
         │                                   │
@@ -74,8 +74,6 @@ Item bytes (per item)              Channel state (per channel)
                                   rkey = base32(sha256(K)).slice(0,16)
                                   K lives only in the subscribe URL fragment
 ```
-
-† Writes go to `dev.sia.pin.channel`. Reads (and the JetStream subscription) also check the legacy `dev.sia.dispatch.channel` collection so pre-rename channels keep resolving. Channels migrate to the new lexicon on their next publish; channels that nobody publishes to stay readable in legacy forever.
 
 - **Channel ATProto record** body is *only* `{ $type, encryptedManifest }`. No client-controlled metadata fields.
 - **Channel ID** (the rkey) is derived from `K`, not stored as a separate field. Listing an author's collection reveals only opaque rkeys.

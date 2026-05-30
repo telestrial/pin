@@ -7,7 +7,7 @@
 // record store. When alice's FakeAgent writes a record, bob's app sees
 // a JetStream commit fire — same shape, no actual network involved.
 
-import { ALL_CHANNEL_LEXICONS } from '../core/atproto'
+import { CHANNEL_LEXICON } from '../core/atproto'
 import type { FakeRecordStore, RecordEvent } from './fakeAgent'
 
 export type CommitEvent = {
@@ -27,8 +27,6 @@ export type JetstreamConn = {
   update(dids: string[]): void
 }
 
-const COLLECTIONS = new Set<string>(ALL_CHANNEL_LEXICONS)
-
 export function connectFakeJetstream(
   store: FakeRecordStore,
   initialDids: string[],
@@ -43,7 +41,7 @@ export function connectFakeJetstream(
     listeners.onConnected?.()
     unsubscribe = store.subscribe((e: RecordEvent) => {
       if (!dids.has(e.did)) return
-      if (!COLLECTIONS.has(e.collection)) return
+      if (e.collection !== CHANNEL_LEXICON) return
       listeners.onCommit({
         did: e.did,
         rkey: e.rkey,

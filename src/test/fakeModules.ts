@@ -104,12 +104,9 @@ export function fakeAtprotoApiModule() {
 // core/jetstream replacement
 // ---------------------------------------------------------------------------
 
-// Local copy of the channel lexicons so this module doesn't import core/atproto
+// Local copy of the channel lexicon so this module doesn't import core/atproto
 // (which would re-trigger the @atproto/api mock factory mid-resolution).
-const CHANNEL_COLLECTIONS = new Set([
-  'dev.sia.pin.channel',
-  'dev.sia.dispatch.channel',
-])
+const CHANNEL_COLLECTION = 'dev.sia.pin.channel'
 
 type JetstreamListeners = {
   onCommit: (e: { did: string; rkey: string; operation: string }) => void
@@ -135,7 +132,7 @@ export function fakeJetstreamModule() {
         listeners.onConnected?.()
         unsubscribe = store!.subscribe((e) => {
           if (!dids.has(e.did)) return
-          if (!CHANNEL_COLLECTIONS.has(e.collection)) return
+          if (e.collection !== CHANNEL_COLLECTION) return
           listeners.onCommit({
             did: e.did,
             rkey: e.rkey,

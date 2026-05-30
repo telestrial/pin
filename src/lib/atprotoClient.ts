@@ -94,13 +94,10 @@ async function createClient(): Promise<BrowserOAuthClient> {
     const port = window.location.port ? `:${window.location.port}` : ''
     const redirectURI = `http://${hostname}${port}/`
     // Narrow scope: just enough to write/delete records in the lexicon Pin
-    // owns, plus delete-only on the legacy dev.sia.dispatch.channel for
-    // retraction of pre-rename channels. atproto is the required base
-    // scope. The auth screen shows users exactly these — no profile/posts/
-    // likes/follows surface they'd otherwise be granting under
-    // transition:generic.
-    const scope =
-      'atproto repo:dev.sia.pin.channel repo:dev.sia.dispatch.channel?action=delete'
+    // owns. atproto is the required base scope. The auth screen shows users
+    // exactly these — no profile/posts/likes/follows surface they'd otherwise
+    // be granting under transition:generic.
+    const scope = 'atproto repo:dev.sia.pin.channel'
     const clientId = buildAtprotoLoopbackClientId({
       scope,
       redirect_uris: [redirectURI],

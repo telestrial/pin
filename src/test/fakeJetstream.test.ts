@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { CHANNEL_LEXICON, LEGACY_CHANNEL_LEXICON } from '../core/atproto'
+import { CHANNEL_LEXICON } from '../core/atproto'
 import { FakeAgent } from './fakeAgent'
 import { connectFakeJetstream, type CommitEvent } from './fakeJetstream'
 import { createFakeWorld } from './fakeSdk'
@@ -74,27 +74,6 @@ describe('connectFakeJetstream', () => {
     })
     expect(events).toHaveLength(1)
     expect(events[0].rkey).toBe('r2')
-  })
-
-  it('fires for both the current and the legacy channel lexicons', async () => {
-    const { store, alice } = setup()
-    const events: CommitEvent[] = []
-    connectFakeJetstream(store, [ALICE], {
-      onCommit: (e) => events.push(e),
-    })
-    await alice.com.atproto.repo.putRecord({
-      repo: ALICE,
-      collection: CHANNEL_LEXICON,
-      rkey: 'a',
-      record: {},
-    })
-    await alice.com.atproto.repo.putRecord({
-      repo: ALICE,
-      collection: LEGACY_CHANNEL_LEXICON,
-      rkey: 'b',
-      record: {},
-    })
-    expect(events).toHaveLength(2)
   })
 
   it('does not fire for unrelated collections (e.g. app.bsky.feed.post)', async () => {
