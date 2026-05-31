@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
+import type { SearchResult, SyntheticGraph } from './socialGraph'
 import {
   buildGraph,
+  LARGE_GRAPH,
+  MEDIUM_GRAPH,
   reachableChannels,
   search,
   STANDARD_GRAPH,
@@ -127,29 +130,64 @@ describe('search', () => {
 
 // Tripwire, not a benchmark. The point isn't to verify search is fast —
 // the point is to fail loudly if search becomes pathologically slow as
-// the graph fixture or the reach rule grows. Today's STANDARD_GRAPH +
-// R0 returns in sub-millisecond; 2000ms is ~6 orders of magnitude of
-// headroom, generous enough to survive CI variance, JIT warmup, GC
-// pauses. When this trips, something is wrong; the budget should not
-// be raised to make it pass.
+// graph fixtures or reach rules grow. Today's R0 returns sub-millisecond
+// at every scale below; 2000ms is generous headroom against CI variance,
+// JIT warmup, GC pauses. When any tripwire trips, something is wrong;
+// the budget should not be raised to make it pass.
 //
-// As we add reach rules (R1 citation-walk, R2 vouch-graph, etc.) and
-// scale the standard graph, add one tripwire per rule. Don't merge
-// them into one assertion — different rules have different complexity
-// profiles and deserve independent budgets.
-describe('search performance (tripwire)', () => {
-  it('R0 + STANDARD_GRAPH returns within 2 seconds', () => {
-    const aliceDID = 'did:test:alice'
+// One case per graph scale so each scale gets its own independent budget
+// — different sizes have different intrinsic costs and a merged
+// assertion would hide which scale regressed. As we add reach rules
+// (R1 citation-walk, R2 vouch-graph), each new rule gets its own
+// `it.each` block alongside this one.
+type TripwireCase = {
+  name: string
+  graph: SyntheticGraph
+  viewerDID: string
+  query: string
+  // Optional per-case correctness check beyond `results.length > 0`. For
+  // STANDARD we can assert specific provenance; for scaled graphs with
+  // random topologies, the universal-query `post` is the strongest
+  // assertion that doesn't couple to PRNG state.
+  extraAssert?: (results: SearchResult[]) => void
+}
+
+const TRIPWIRE_CASES: TripwireCase[] = [
+  {
+    name: 'STANDARD_GRAPH (~5 users)',
+    graph: STANDARD_GRAPH,
+    viewerDID: 'did:test:alice',
+    query: 'cats',
+    extraAssert: (r) => {
+      // 'cats' lives only in bob/pets; alice subscribes. All results
+      // must trace back to bob.
+      expect(r.every((x) => x.channel.ownerHandle === 'bob')).toBe(true)
+    },
+  },
+  {
+    name: 'MEDIUM_GRAPH (~50 users, +1 OOM)',
+    graph: MEDIUM_GRAPH,
+    viewerDID: 'did:test:user0',
+    query: 'post',
+  },
+  {
+    name: 'LARGE_GRAPH (~500 users, +2 OOM)',
+    graph: LARGE_GRAPH,
+    viewerDID: 'did:test:user0',
+    query: 'post',
+  },
+]
+
+describe('R0 search performance (tripwire)', () => {
+  it.each(TRIPWIRE_CASES)('$name returns within 2 seconds', (c) => {
     const start = performance.now()
-    const results = search(aliceDID, 'cats', STANDARD_GRAPH)
+    const results = search(c.viewerDID, c.query, c.graph)
     const elapsedMs = performance.now() - start
 
     // Correctness gate — a perf check that doesn't also assert the
-    // right answer is a perf check that's silently passing on broken
-    // code. cats is in bob/pets only; alice subscribes; result must
-    // be non-empty and all from bob.
+    // right answer is a perf check silently passing on broken code.
     expect(results.length).toBeGreaterThan(0)
-    expect(results.every((r) => r.channel.ownerHandle === 'bob')).toBe(true)
+    c.extraAssert?.(results)
 
     expect(elapsedMs).toBeLessThan(2000)
   })

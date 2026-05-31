@@ -236,6 +236,87 @@ export function search(
   return results
 }
 
+// Deterministic PRNG so scaled graphs reproduce across runs. mulberry32
+// — small, fast, sufficient for fixture generation (not crypto).
+function mulberry32(seed: number): () => number {
+  let s = seed
+  return () => {
+    s = (s + 0x6d2b79f5) | 0
+    let t = Math.imul(s ^ (s >>> 15), 1 | s)
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+}
+
+// Body template uses "Post about <keyword>..." so every item contains the
+// literal "post" regardless of which keyword landed. Tests can use "post"
+// as a universal query whose reach is mathematically known
+// (subscriptionsPerUser × itemsPerChannel for a successfully-subscribed
+// viewer), or pick a specific keyword for partial-reach assertions.
+const KEYWORD_POOL = ['cats', 'rust', 'coffee', 'music', 'running']
+
+export type ScaledGraphSpec = {
+  userCount: number
+  channelsPerUser: number
+  itemsPerChannel: number
+  subscriptionsPerUser: number
+  seed: number
+}
+
+// Generator for scaled graphs above STANDARD_GRAPH. Users named user0..userN,
+// channels ch0..chM. Subscriptions are uniform random (no power-law yet —
+// that's a later fixture concern). Self-subscriptions and duplicate
+// (user, channel) pairs are skipped via a bounded retry loop; viewers
+// may end up with slightly fewer than spec.subscriptionsPerUser subs in
+// dense small graphs, but the variance is negligible at the scales used
+// for tripwires.
+export function buildScaledGraph(spec: ScaledGraphSpec): SyntheticGraph {
+  const rand = mulberry32(spec.seed)
+  const builder = buildGraph()
+
+  for (let i = 0; i < spec.userCount; i++) {
+    builder.addUser(`user${i}`)
+  }
+  for (let i = 0; i < spec.userCount; i++) {
+    for (let c = 0; c < spec.channelsPerUser; c++) {
+      builder.addChannel(`user${i}`, `ch${c}`)
+    }
+  }
+  for (let i = 0; i < spec.userCount; i++) {
+    for (let c = 0; c < spec.channelsPerUser; c++) {
+      for (let it = 0; it < spec.itemsPerChannel; it++) {
+        const keyword =
+          KEYWORD_POOL[Math.floor(rand() * KEYWORD_POOL.length)]!
+        builder.publish(
+          `user${i}`,
+          `ch${c}`,
+          `Post about ${keyword} number ${it}.`,
+        )
+      }
+    }
+  }
+  for (let i = 0; i < spec.userCount; i++) {
+    const claimed = new Set<string>()
+    const maxAttempts = spec.subscriptionsPerUser * 5
+    let attempts = 0
+    while (
+      claimed.size < spec.subscriptionsPerUser &&
+      attempts < maxAttempts
+    ) {
+      attempts++
+      const targetUser = Math.floor(rand() * spec.userCount)
+      if (targetUser === i) continue
+      const targetChannel = Math.floor(rand() * spec.channelsPerUser)
+      const key = `${targetUser}:${targetChannel}`
+      if (claimed.has(key)) continue
+      claimed.add(key)
+      builder.subscribe(`user${i}`, `user${targetUser}`, `ch${targetChannel}`)
+    }
+  }
+
+  return builder.build()
+}
+
 // Standard fixture. Five users, content seeded with predictable keywords
 // (cats, rust, coffee) so test assertions stay legible. Subscription
 // topology produces useful cases: alice sees pets+rust (not coffee, not
@@ -284,3 +365,23 @@ export const STANDARD_GRAPH: SyntheticGraph = buildGraph()
   .subscribe('dan', 'carol', 'rust')
 
   .build()
+
+// +1 order of magnitude above STANDARD_GRAPH (5 users → 50). 1000 items
+// total across 100 channels; user0 has 5 subs → ~50 reachable items.
+export const MEDIUM_GRAPH: SyntheticGraph = buildScaledGraph({
+  userCount: 50,
+  channelsPerUser: 2,
+  itemsPerChannel: 10,
+  subscriptionsPerUser: 5,
+  seed: 42,
+})
+
+// +2 orders of magnitude above STANDARD_GRAPH (5 → 500). 10,000 items
+// total across 1000 channels; user0 has 10 subs → ~100 reachable items.
+export const LARGE_GRAPH: SyntheticGraph = buildScaledGraph({
+  userCount: 500,
+  channelsPerUser: 2,
+  itemsPerChannel: 10,
+  subscriptionsPerUser: 10,
+  seed: 42,
+})
