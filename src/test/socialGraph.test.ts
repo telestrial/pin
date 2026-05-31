@@ -125,6 +125,36 @@ describe('search', () => {
   })
 })
 
+// Tripwire, not a benchmark. The point isn't to verify search is fast —
+// the point is to fail loudly if search becomes pathologically slow as
+// the graph fixture or the reach rule grows. Today's STANDARD_GRAPH +
+// R0 returns in sub-millisecond; 2000ms is ~6 orders of magnitude of
+// headroom, generous enough to survive CI variance, JIT warmup, GC
+// pauses. When this trips, something is wrong; the budget should not
+// be raised to make it pass.
+//
+// As we add reach rules (R1 citation-walk, R2 vouch-graph, etc.) and
+// scale the standard graph, add one tripwire per rule. Don't merge
+// them into one assertion — different rules have different complexity
+// profiles and deserve independent budgets.
+describe('search performance (tripwire)', () => {
+  it('R0 + STANDARD_GRAPH returns within 2 seconds', () => {
+    const aliceDID = 'did:test:alice'
+    const start = performance.now()
+    const results = search(aliceDID, 'cats', STANDARD_GRAPH)
+    const elapsedMs = performance.now() - start
+
+    // Correctness gate — a perf check that doesn't also assert the
+    // right answer is a perf check that's silently passing on broken
+    // code. cats is in bob/pets only; alice subscribes; result must
+    // be non-empty and all from bob.
+    expect(results.length).toBeGreaterThan(0)
+    expect(results.every((r) => r.channel.ownerHandle === 'bob')).toBe(true)
+
+    expect(elapsedMs).toBeLessThan(2000)
+  })
+})
+
 describe('buildGraph builder', () => {
   it('throws on duplicate user', () => {
     expect(() => buildGraph().addUser('a').addUser('a').build()).toThrow()
