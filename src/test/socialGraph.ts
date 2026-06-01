@@ -385,3 +385,18 @@ export const LARGE_GRAPH: SyntheticGraph = buildScaledGraph({
   subscriptionsPerUser: 10,
   seed: 42,
 })
+
+// +3 orders of magnitude above STANDARD_GRAPH (5 → 10000) on the pure-OOM
+// ladder. ~200,000 items across 20,000 channels; user0 has 10 subs →
+// ~100 reachable items (R0 reach is bounded by subs, not total network).
+// Module-load cost is ~1 second — the rung where fixture-as-code starts
+// being noticeable but is still acceptable. Past this, build cost crosses
+// into "need lazy or sharded generation" territory; that's a future
+// concern, not today's.
+export const HUGE_GRAPH: SyntheticGraph = buildScaledGraph({
+  userCount: 10_000,
+  channelsPerUser: 2,
+  itemsPerChannel: 10,
+  subscriptionsPerUser: 10,
+  seed: 42,
+})

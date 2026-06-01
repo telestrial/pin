@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { SearchResult, SyntheticGraph } from './socialGraph'
 import {
   buildGraph,
+  HUGE_GRAPH,
   LARGE_GRAPH,
   MEDIUM_GRAPH,
   reachableChannels,
@@ -173,6 +174,12 @@ const TRIPWIRE_CASES: TripwireCase[] = [
   {
     name: 'LARGE_GRAPH (~500 users, +2 OOM)',
     graph: LARGE_GRAPH,
+    viewerDID: 'did:test:user0',
+    query: 'post',
+  },
+  {
+    name: 'HUGE_GRAPH (~10K users, +3 OOM)',
+    graph: HUGE_GRAPH,
     viewerDID: 'did:test:user0',
     query: 'post',
   },
