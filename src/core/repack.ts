@@ -275,7 +275,12 @@ export async function runRepackBatch(
       keyBytes,
       JSON.stringify(updated),
     )
-    await putChannelRecord(agent, channelID, ciphertext)
+    await putChannelRecord(
+      agent,
+      channelID,
+      ciphertext,
+      updated.visibility === 'public' ? channelKey : undefined,
+    )
     affectedChannelIDs.push(channelID)
   }
 

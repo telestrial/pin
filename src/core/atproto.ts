@@ -7,6 +7,12 @@ const DEFAULT_SERVICE = 'https://bsky.social'
 export type ChannelRecord = {
   $type: typeof CHANNEL_LEXICON
   encryptedManifest: string // base64 of (1-byte version || 12-byte IV || AES-GCM ciphertext)
+  // base64 K, present only on public channels. Public = discovery is
+  // intended, so K is published alongside the ciphertext (the same K that
+  // would otherwise only live in the subscribe URL fragment). Readers
+  // without K can fetch the record, read K here, and decrypt the manifest.
+  // Obscure channels omit this field — only subscribe-URL holders decrypt.
+  key?: string
 }
 
 // The authenticated agent is now constructed by the caller from an OAuthSession.
@@ -15,11 +21,13 @@ export async function putChannelRecord(
   agent: Agent,
   channelID: string,
   encryptedManifest: string,
+  publicKey?: string,
 ): Promise<{ uri: string; cid: string }> {
   const did = agent.assertDid
   const record: ChannelRecord = {
     $type: CHANNEL_LEXICON,
     encryptedManifest,
+    ...(publicKey !== undefined && { key: publicKey }),
   }
   const result = await agent.com.atproto.repo.putRecord({
     repo: did,

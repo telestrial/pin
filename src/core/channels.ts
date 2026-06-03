@@ -103,7 +103,12 @@ export async function createChannel(
   }
 
   const ciphertext = await encryptForChannel(keyBytes, JSON.stringify(manifest))
-  await putChannelRecord(agent, channelID, ciphertext)
+  await putChannelRecord(
+    agent,
+    channelID,
+    ciphertext,
+    manifest.visibility === 'public' ? channelKey : undefined,
+  )
 
   return {
     channelID,
@@ -156,18 +161,33 @@ export async function editChannel(
 
   const keyBytes = channelKeyFromBase64(channel.channelKey)
   const ciphertext = await encryptForChannel(keyBytes, JSON.stringify(updated))
-  await putChannelRecord(agent, channel.channelID, ciphertext)
+  await putChannelRecord(
+    agent,
+    channel.channelID,
+    ciphertext,
+    updated.visibility === 'public' ? channel.channelKey : undefined,
+  )
 
   return updated
 }
 
+// channelKey is optional: for public channels, K is embedded in the
+// record body itself so a caller that doesn't have K (e.g. a directory
+// page walking a follow list) can still decrypt. For obscure channels,
+// callers must supply K — otherwise we have no way to read the manifest.
 export async function fetchChannel(
   authorHandleOrDID: string,
   channelID: string,
-  channelKey: string,
+  channelKey?: string,
 ): Promise<ChannelManifest> {
   const record = await getChannelRecord(authorHandleOrDID, channelID)
-  const keyBytes = channelKeyFromBase64(channelKey)
+  const keyB64 = channelKey ?? record.key
+  if (!keyB64) {
+    throw new Error(
+      'Channel is obscure (no key in record) and no channel key supplied',
+    )
+  }
+  const keyBytes = channelKeyFromBase64(keyB64)
   const plaintext = await decryptForChannel(keyBytes, record.encryptedManifest)
   const parsed = JSON.parse(plaintext)
   if (parsed?.version !== CHANNEL_MANIFEST_VERSION) {
@@ -258,7 +278,12 @@ export async function deletePublishedItem(
 
   const keyBytes = channelKeyFromBase64(channel.channelKey)
   const ciphertext = await encryptForChannel(keyBytes, JSON.stringify(updated))
-  await putChannelRecord(agent, channel.channelID, ciphertext)
+  await putChannelRecord(
+    agent,
+    channel.channelID,
+    ciphertext,
+    updated.visibility === 'public' ? channel.channelKey : undefined,
+  )
 
   await sdk.deleteObject(itemID)
 
@@ -299,7 +324,12 @@ export async function editItem(
 
   const keyBytes = channelKeyFromBase64(channel.channelKey)
   const ciphertext = await encryptForChannel(keyBytes, JSON.stringify(updated))
-  await putChannelRecord(agent, channel.channelID, ciphertext)
+  await putChannelRecord(
+    agent,
+    channel.channelID,
+    ciphertext,
+    updated.visibility === 'public' ? channel.channelKey : undefined,
+  )
 
   // Drop old bytes best-effort; subscribers who pinned keep their snapshot.
   sdk.deleteObject(oldItemID).catch(() => {})
@@ -334,7 +364,12 @@ export async function appendItemToChannel(
 
   const keyBytes = channelKeyFromBase64(channel.channelKey)
   const ciphertext = await encryptForChannel(keyBytes, JSON.stringify(updated))
-  await putChannelRecord(agent, channel.channelID, ciphertext)
+  await putChannelRecord(
+    agent,
+    channel.channelID,
+    ciphertext,
+    updated.visibility === 'public' ? channel.channelKey : undefined,
+  )
 
   return updated
 }
