@@ -1,5 +1,7 @@
 import { useEffect } from 'react'
+import { Route, Routes } from 'react-router-dom'
 import { AuthFlow } from './components/auth/AuthFlow'
+import { HandleDirectory } from './components/HandleDirectory'
 import { Home } from './components/Home'
 import { Navbar } from './components/Navbar'
 import { Toasts } from './components/Toast'
@@ -82,7 +84,15 @@ export default function App() {
     <div className="min-h-screen flex flex-col">
       <Navbar />
       <div className="flex-1 flex flex-col">
-        {step === 'connected' ? <Home /> : <AuthFlow />}
+        {step === 'connected' ? (
+          <Routes>
+            <Route path="/" element={<Home />} />
+            <Route path="/@:handle" element={<HandleDirectory />} />
+            <Route path="*" element={<Home />} />
+          </Routes>
+        ) : (
+          <AuthFlow />
+        )}
       </div>
       <Toasts />
     </div>
