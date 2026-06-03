@@ -6,6 +6,7 @@ import { getProfileRecord, type ProfileRecord } from '../core/profile'
 import type { ChannelManifest } from '../core/types'
 import { useItemBlobURL } from '../lib/useItemBytes'
 import { useAuthStore } from '../stores/auth'
+import { useFeedStore } from '../stores/feed'
 import { ChannelAvatar } from './ChannelAvatar'
 
 type ChannelEntry = {
@@ -89,37 +90,49 @@ export function HandleDirectory({
       ])
 
       // Resolve each follow's subject → channel manifest + author handle.
-      // Sequential to keep the request burst small for a first cut; could
-      // parallelize later. Obscure channels in the follow list (which the
-      // Follow UI gates against, so this is mostly belt-and-suspenders)
-      // will fail fetchChannel with no record.key + no caller key, and we
-      // silently drop them.
-      const channels: ChannelEntry[] = []
-      for (const f of follows) {
+      // Both lookups parallel within a follow (no dependency between them)
+      // and across follows (the outer Promise.all). For follows pointing
+      // at channels the user is also subscribed to, feedStore.manifests
+      // already has the decrypted manifest (JetStream keeps it fresh) —
+      // skip the fetchChannel round-trip in that case. Obscure channels
+      // in the follow list (which the Follow UI gates against, so mostly
+      // belt-and-suspenders) fail fetchChannel; we drop them silently.
+      const parsedFollows = follows.flatMap((f) => {
         const parsed = parseChannelAtURI(f.record.subject)
-        if (!parsed) continue
-        try {
-          const manifest = await fetchChannel(parsed.authorDID, parsed.channelID)
-          let authorHandle = ''
+        return parsed ? [parsed] : []
+      })
+      const cachedManifests = useFeedStore.getState().manifests
+      const channelResults = await Promise.all(
+        parsedFollows.map(async (parsed) => {
           try {
-            const r = await unauthed.com.atproto.repo.describeRepo({
-              repo: parsed.authorDID,
-            })
-            authorHandle = r.data.handle
+            const cached = cachedManifests[parsed.channelID]
+            // Only trust the cache when the cached manifest's authoring
+            // DID matches the follow's subject; the channelID alone isn't
+            // globally namespaced (it's derived from K).
+            const cacheHit =
+              cached && cached.authorATProtoDID === parsed.authorDID
+            const [manifest, handleResp] = await Promise.all([
+              cacheHit
+                ? Promise.resolve(cached)
+                : fetchChannel(parsed.authorDID, parsed.channelID),
+              unauthed.com.atproto.repo
+                .describeRepo({ repo: parsed.authorDID })
+                .catch(() => null),
+            ])
+            return {
+              authorDID: parsed.authorDID,
+              authorHandle: handleResp?.data.handle ?? '',
+              channelID: parsed.channelID,
+              manifest,
+            } as ChannelEntry
           } catch {
-            // Best-effort; row still renders with empty handle.
+            return null
           }
-          channels.push({
-            authorDID: parsed.authorDID,
-            authorHandle,
-            channelID: parsed.channelID,
-            manifest,
-          })
-        } catch {
-          // Skip unreadable channels (obscure without K, network failures,
-          // etc.). Don't break the whole page over one bad row.
-        }
-      }
+        }),
+      )
+      const channels = channelResults.filter(
+        (c): c is ChannelEntry => c !== null,
+      )
 
       const ownChannels = channels.filter((c) => c.authorDID === did)
       const followedChannels = channels.filter((c) => c.authorDID !== did)
