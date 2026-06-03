@@ -1,6 +1,6 @@
 import { AtpAgent } from '@atproto/api'
 import { useEffect, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import { fetchChannel } from '../core/channels'
 import { listFollows, parseChannelAtURI } from '../core/follow'
 import { getProfileRecord, type ProfileRecord } from '../core/profile'
@@ -8,6 +8,26 @@ import type { ChannelManifest } from '../core/types'
 import { useItemBlobURL } from '../lib/useItemBytes'
 import { useAuthStore } from '../stores/auth'
 import { ChannelAvatar } from './ChannelAvatar'
+
+// React Router v7's path matcher requires a `/` before any `:param` or
+// `*` indicator, so a literal-prefix-plus-param route like `/@:handle`
+// fails to match — it's treated as the literal segment `@:handle`. To
+// preserve the Twitter/Bluesky-style `/@handle` URL aesthetic, App's
+// catch-all `*` route uses this helper to decide whether the captured
+// path is a handle URL. Exported so the routing logic stays
+// unit-testable without dragging the full component into the test.
+//
+// The catch-all gives us the path with no leading slash. A handle URL
+// is exactly "@<handle>" — single segment, nothing after. Deeper paths
+// (e.g. "@alice/posts") are left for Home to handle, since we don't
+// model nested handle routes (yet).
+export function handleFromCatchAllPath(path: string): string | null {
+  if (!path.startsWith('@')) return null
+  const rest = path.slice(1)
+  if (rest === '') return null
+  if (rest.includes('/')) return null
+  return rest
+}
 
 type ChannelEntry = {
   authorDID: string
@@ -28,16 +48,14 @@ type State =
     }
   | { kind: 'error'; message: string }
 
-export function HandleDirectory() {
-  const params = useParams<{ handle: string }>()
+export function HandleDirectory({ handle: rawHandle }: { handle: string }) {
   const navigate = useNavigate()
   const myHandle = useAuthStore((s) => s.atprotoHandle)
   const [state, setState] = useState<State>({ kind: 'loading' })
 
-  // Defensive normalize: route is /@:handle so `handle` is the bit after
-  // the leading @, but a user pasting /@@john would slip a second @ into
-  // the param. Strip leading @'s before any network call.
-  const handle = (params.handle ?? '').replace(/^@+/, '')
+  // Defensive normalize: routing path already strips the leading `@`,
+  // but a user pasting `/@@john` would leave a stray `@` on the front.
+  const handle = rawHandle.replace(/^@+/, '')
 
   useEffect(() => {
     let cancelled = false
