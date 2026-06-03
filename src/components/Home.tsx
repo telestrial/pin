@@ -131,7 +131,7 @@ export function Home() {
     )
   }
 
-  function renderPinSidebar(activeChannelID?: string) {
+  function renderPinSidebar() {
     return (
       <PinSidebar
         onItemClick={(ref) =>
@@ -141,15 +141,7 @@ export function Home() {
             returnTo: { kind: 'idle' },
           })
         }
-        onChannelClick={(authorHandle, channelID) =>
-          setView({
-            kind: 'viewing-channel',
-            authorHandle,
-            channelID,
-          })
-        }
         onStorageClick={() => setView({ kind: 'storage', returnTo: view })}
-        activeChannelID={activeChannelID}
       />
     )
   }
@@ -432,17 +424,9 @@ export function Home() {
                 returnTo: channelView,
               })
             }
-            onChannelClick={(authorHandle, channelID) =>
-              setView({
-                kind: 'viewing-channel',
-                authorHandle,
-                channelID,
-              })
-            }
             onStorageClick={() =>
               setView({ kind: 'storage', returnTo: channelView })
             }
-            activeChannelID={view.channelID}
           />
         }
       />
@@ -461,7 +445,7 @@ export function Home() {
           setView(returnTo)
         }}
         sidebar={renderSidebar(view.channelID)}
-        rightSidebar={renderPinSidebar(view.channelID)}
+        rightSidebar={renderPinSidebar()}
       />
     )
   }
@@ -488,7 +472,7 @@ export function Home() {
               }}
             />
           </div>
-          {renderPinSidebar(view.channelID)}
+          {renderPinSidebar()}
         </div>
       </div>
     )
@@ -512,17 +496,9 @@ export function Home() {
             returnTo: view.returnTo,
           })
         }
-        onChannelClick={(authorHandle, channelID) =>
-          setView({
-            kind: 'viewing-channel',
-            authorHandle,
-            channelID,
-          })
-        }
         onStorageClick={() =>
           setView({ kind: 'storage', returnTo: readingView })
         }
-        activeChannelID={channel.channelID}
       />
     )
     const backLabel =
@@ -704,13 +680,6 @@ export function Home() {
               kind: 'reading',
               entry: { item: ref.item, channel: ref.channel },
               returnTo: idleView,
-            })
-          }
-          onChannelClick={(authorHandle, channelID) =>
-            setView({
-              kind: 'viewing-channel',
-              authorHandle,
-              channelID,
             })
           }
           onStorageClick={() =>

@@ -4,7 +4,6 @@ import { type PinnedItemRef, usePinStore } from '../stores/pin'
 import type { ItemRef } from '../core/types'
 import { useAuthStore } from '../stores/auth'
 import { useComposeStore } from '../stores/compose'
-import { useFeedStore } from '../stores/feed'
 import {
   type UploadTask,
   type UploadTaskState,
@@ -13,7 +12,6 @@ import {
 import { useStorageActivityStore } from '../stores/storageActivity'
 import { formatBytes } from '../lib/format'
 import { useFadeCancelUnpin } from '../lib/useFadeCancelUnpin'
-import { ChannelAvatar } from './ChannelAvatar'
 import { PinIcon } from './PinIcon'
 
 function itemTitle(item: ItemRef): string {
@@ -62,26 +60,19 @@ function taskStateLabel(state: UploadTaskState): string {
 
 export function PinSidebar({
   onItemClick,
-  onChannelClick,
   onStorageClick,
-  activeChannelID,
 }: {
   onItemClick?: (ref: PinnedItemRef) => void
-  onChannelClick?: (authorHandle: string, channelID: string) => void
   onStorageClick?: () => void
-  activeChannelID?: string
 }) {
   const sdk = useAuthStore((s) => s.sdk)
   const myChannels = useAuthStore((s) => s.myChannels)
-  const subscriptions = useAuthStore((s) => s.subscriptions)
   const account = usePinStore((s) => s.account)
   const pinned = usePinStore((s) => s.pinned)
   const isPinning = usePinStore((s) => s.isPinning)
   const tasks = useUploadQueueStore((s) => s.tasks)
   const retryTask = useUploadQueueStore((s) => s.retry)
   const removeTask = useUploadQueueStore((s) => s.remove)
-  const feedEntries = useFeedStore((s) => s.entries)
-  const manifests = useFeedStore((s) => s.manifests)
   const armedItem = useComposeStore((s) => s.armedItem)
   const toggleArm = useComposeStore((s) => s.toggle)
   const disarm = useComposeStore((s) => s.disarm)
@@ -115,25 +106,6 @@ export function PinSidebar({
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [armedItem, disarm])
-
-  const ownedChannelStorage = useMemo(() => {
-    return myChannels
-      .map((c) => {
-        const items = feedEntries.filter(
-          (e) => e.channel.channelID === c.channelID,
-        )
-        const bytes = items.reduce((sum, e) => sum + e.item.byteSize, 0)
-        const sub = subscriptions.find((s) => s.channelID === c.channelID)
-        return {
-          channel: c,
-          bytes,
-          itemCount: items.length,
-          authorHandle: sub?.authorHandle ?? '',
-          coverArt: manifests[c.channelID]?.coverArt,
-        }
-      })
-      .sort((a, b) => b.bytes - a.bytes)
-  }, [myChannels, feedEntries, subscriptions, manifests])
 
   const inFlight = [...tasks].sort((a, b) =>
     b.createdAt.localeCompare(a.createdAt),
@@ -279,55 +251,6 @@ export function PinSidebar({
           </div>
         </div>
       </section>
-
-      {ownedChannelStorage.length > 0 && (
-        <section className="space-y-2">
-          <ul aria-label="Your channels">
-            {ownedChannelStorage.map(
-              ({ channel, bytes, itemCount, authorHandle, coverArt }) => {
-                const active = channel.channelID === activeChannelID
-                return (
-                  <li key={channel.channelID}>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        authorHandle &&
-                        onChannelClick?.(authorHandle, channel.channelID)
-                      }
-                      disabled={!onChannelClick || !authorHandle}
-                      className="w-full px-2 py-1.5 rounded transition-colors text-left flex items-start gap-2 enabled:hover:bg-neutral-50 enabled:cursor-pointer disabled:opacity-50"
-                    >
-                      <ChannelAvatar
-                        channelID={channel.channelID}
-                        channelName={channel.name}
-                        authorHandle={authorHandle}
-                        coverArt={coverArt}
-                        size="sm"
-                      />
-                      <div className="min-w-0 flex-1 space-y-0.5">
-                        <p className="text-xs font-medium text-neutral-900 truncate">
-                          {channel.name}
-                        </p>
-                        <p className="text-[10px] text-neutral-500 truncate">
-                          {itemCount === 0
-                            ? 'Empty'
-                            : `${itemCount} item${itemCount === 1 ? '' : 's'} · ${formatBytes(bytes)}`}
-                        </p>
-                      </div>
-                      {active && (
-                        <span
-                          aria-hidden="true"
-                          className="size-1.5 rounded-full bg-neutral-900 shrink-0 mt-2"
-                        />
-                      )}
-                    </button>
-                  </li>
-                )
-              },
-            )}
-          </ul>
-        </section>
-      )}
 
       {inFlight.length > 0 && (
         <section className="space-y-2">
