@@ -337,11 +337,16 @@ function ProfileHeader({
         )}
       </div>
       <div className="px-5 pb-5">
-        <div className="flex items-end gap-4 -mt-10">
-          <div className="rounded-full ring-4 ring-white shrink-0">
+        <div className="flex items-start gap-4">
+          {/* -mt-10 lives only on the avatar wrapper so the avatar pulls
+              up into the cover; the text column stays in normal flow
+              below the cover edge. Earlier the negative margin was on
+              the whole row, which dragged the name + handle up under
+              the cover too. */}
+          <div className="-mt-10 rounded-full ring-4 ring-white shrink-0">
             <ProfileAvatar profile={profile} handle={handle} />
           </div>
-          <div className="flex-1 min-w-0 flex items-start justify-between gap-3 pb-1">
+          <div className="flex-1 min-w-0 flex items-start justify-between gap-3 pt-3">
             <div className="min-w-0 space-y-0.5">
               <div className="text-lg font-semibold text-neutral-900 truncate">
                 {profile?.displayName || `@${handle}`}
