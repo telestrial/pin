@@ -135,9 +135,15 @@ export function PinSidebar({
 
   const displayList = recentPins
 
+  // rawContentBytes is the actual byte total across every pinned object in
+  // scope (computed by walking objectEvents + summing slab lengths), so it
+  // accounts for everything Sia is storing for the user — post bodies,
+  // attachments, channel covers, profile assets, settings — without any
+  // schema-field-summing guesswork. Slab-allocation vocabulary belongs in
+  // My Storage proper, not on this calm-sidebar surface.
   const pct =
     account && account.maxPinnedData > 0
-      ? Math.min(100, (account.pinnedData / account.maxPinnedData) * 100)
+      ? Math.min(100, (account.rawContentBytes / account.maxPinnedData) * 100)
       : 0
 
   // Detect rows that just appeared in displayList — apply the
@@ -212,14 +218,7 @@ export function PinSidebar({
             </h2>
           </div>
           <div className="space-y-2">
-            <div
-              className="h-1.5 rounded-full bg-neutral-100 overflow-hidden"
-              title={
-                account
-                  ? `${formatBytes(account.pinnedSize)} encoded on the network`
-                  : undefined
-              }
-            >
+            <div className="h-1.5 rounded-full bg-neutral-100 overflow-hidden">
               <div
                 className="h-full bg-green-600 transition-[width] duration-300"
                 style={{ width: `${pct}%` }}
@@ -229,7 +228,7 @@ export function PinSidebar({
               <div className="flex items-center justify-between text-xs">
                 <span className="flex items-center gap-1.5">
                   <span className="text-neutral-900 font-medium">
-                    {formatBytes(account.pinnedData)}
+                    {formatBytes(account.rawContentBytes)}
                   </span>
                   {/* Always rendered to reserve layout space — opacity toggles
                       so the size number doesn't shift when packing starts. */}

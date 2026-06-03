@@ -39,9 +39,25 @@ export class FakePinnedObject {
     return Math.max(1, Math.ceil(this._bytes.length / SLAB_BYTES)) * SLAB_BYTES * 3
   }
 
-  // Methods we don't model yet — call sites tolerate empty results.
-  slabs(): unknown[] {
-    return []
+  // Real SDK returns per-object slab inventory; entries' `length` field
+  // is the byte slice this object contributes to that slab. The fake
+  // stores each object as one slab with length = full byte count, which
+  // is enough for downstream sum-the-lengths consumers (e.g.
+  // fetchRawContentBytes). Bin-packing semantics aren't modeled here.
+  slabs(): Array<{
+    encryptionKey: string
+    offset: number
+    length: number
+    sectors: unknown[]
+  }> {
+    return [
+      {
+        encryptionKey: `slab-${this._id}`,
+        offset: 0,
+        length: this._bytes.length,
+        sectors: [],
+      },
+    ]
   }
 
   metadata(): Uint8Array {
@@ -205,8 +221,44 @@ export class FakeSdk {
   // the grow-on-demand intent is visible at call sites.
   async pruneSlabs(): Promise<void> {}
 
-  async objectEvents(): Promise<unknown[]> {
-    return []
+  // Emits one event per object currently in this account's scope, latest-
+  // first by createdAt. Caller's cursor / limit are honored so paginated
+  // walks (e.g. fetchRawContentBytes, sweepOrphans) terminate naturally.
+  async objectEvents(
+    cursor: { id: string; after: Date } | null,
+    limit: number,
+  ): Promise<
+    Array<{
+      id: string
+      updatedAt: Date
+      deleted: boolean
+      object: FakePinnedObject
+    }>
+  > {
+    const scope = this.world.scopeOf(this.accountID)
+    const all: Array<{
+      id: string
+      updatedAt: Date
+      deleted: boolean
+      object: FakePinnedObject
+    }> = []
+    for (const id of scope) {
+      const rec = this.world.objects.get(id)
+      if (!rec) continue
+      all.push({
+        id,
+        updatedAt: rec.createdAt,
+        deleted: false,
+        object: new FakePinnedObject(rec.id, rec.bytes, rec.createdAt),
+      })
+    }
+    all.sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())
+    let start = 0
+    if (cursor) {
+      const idx = all.findIndex((e) => e.id === cursor.id)
+      if (idx >= 0) start = idx + 1
+    }
+    return all.slice(start, start + limit)
   }
 
   async object(): Promise<FakePinnedObject> {
