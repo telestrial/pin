@@ -43,7 +43,7 @@ Pin uses [`@siafoundation/sia-storage`](https://www.npmjs.com/package/@siafounda
 | SDK call | Where it's used |
 | --- | --- |
 | `Sdk` instance per user | Every authenticated session ([core/sia.ts](src/core/sia.ts), AppKey approve flow from `create-sia-app`) |
-| `sdk.upload(new PinnedObject(), Blob.stream())` | Post body bytes, every attachment file on a post, channel cover art. The composer never blocks on upload — bytes get pushed to Sia by the background runner after Publish, then the manifest is written with the resolved URLs. |
+| `sdk.upload(new PinnedObject(), Blob.stream())` | Post body bytes, every attachment file on a post, channel cover art, profile avatar / cover image bytes. The composer never blocks on upload — bytes get pushed to Sia by the background runner after Publish, then the manifest is written with the resolved URLs. |
 | `sdk.pinObject(obj)` | Two uses: durability for items you publish (body and each attachment), and mirroring an item from another channel into your own storage when you pin it from the feed |
 | `sdk.shareObject(obj, validUntil)` | Per-item distribution URL with the per-object encryption key in the URL fragment; year-9999 expiries verified safe |
 | `sdk.sharedObject(url)` | Resolves a shared URL into a `PinnedObject` handle. Used before downloading (subscriber reads) and before mirroring (pinning a friend's item — `sharedObject` then `pinObject` adds the bytes to your indexer scope) |
@@ -56,7 +56,7 @@ Pin uses [`@siafoundation/sia-storage`](https://www.npmjs.com/package/@siafounda
 | `sdk.account()` | The storage card at the top of the right sidebar — `pinnedData / maxPinnedData`, refreshed on every pin / unpin / retract / repack / orphan-sweep |
 | `sdk.appKey().publicKey()` | Recorded inside the encrypted channel manifest as the technical author identity |
 
-ATProto handles the channel-record layer: [`@atproto/oauth-client-browser`](https://www.npmjs.com/package/@atproto/oauth-client-browser) for the user sign-in (standards OAuth handoff — Pin never sees their password), [`@atproto/api`](https://www.npmjs.com/package/@atproto/api) for the resulting Agent's `com.atproto.repo.putRecord` / `getRecord` / `listRecords` / `deleteRecord` calls. The OAuth scope is narrow — `repo:dev.sia.pin.channel` only — so the auth screen at bsky.social grants access only to the lexicon Pin actually touches, never to the user's profile / posts / likes / follows. JetStream WS subscription handles live updates without polling. Together with Sia, ATProto covers the two halves Sia explicitly does not aim to solve on its own — naming and mutability of multi-user-readable state.
+ATProto handles the naming layer: [`@atproto/oauth-client-browser`](https://www.npmjs.com/package/@atproto/oauth-client-browser) for the user sign-in (standards OAuth handoff — Pin never sees their password), [`@atproto/api`](https://www.npmjs.com/package/@atproto/api) for the resulting Agent's `com.atproto.repo.putRecord` / `getRecord` / `listRecords` / `deleteRecord` calls. The OAuth scope is narrow — `repo:dev.sia.pin.channel repo:dev.sia.pin.profile repo:dev.sia.pin.subscription` — so the auth screen at bsky.social grants access only to the three lexicons Pin actually writes to (channels, profile, public follows), never to `app.bsky.*` surfaces like the user's posts / likes / follows. JetStream WS subscription handles live updates without polling. Together with Sia, ATProto covers the two halves Sia explicitly does not aim to solve on its own — naming and mutability of multi-user-readable state.
 
 ## Architecture
 
@@ -75,10 +75,20 @@ Item bytes (per item)              Channel state (per channel)
                                   K lives only in the subscribe URL fragment
 ```
 
-- **Channel ATProto record** body is *only* `{ $type, encryptedManifest }`. No client-controlled metadata fields.
+- **Channel ATProto record** body is `{ $type, encryptedManifest, key? }`. For obscure channels (Watch-only — the historical default), `key` is omitted and only subscribe-URL holders can decrypt. For public channels (declared at creation), K is published alongside the ciphertext in `key`, so a reader walking another user's public follow list can fetch and decrypt the manifest without holding K locally.
 - **Channel ID** (the rkey) is derived from `K`, not stored as a separate field. Listing an author's collection reveals only opaque rkeys.
-- **Subscribe URL** is `pin://<authorHandle>#k=<base64-K>`. Sharing the URL = granting decrypt access. Without `K`, you can tell *that* the author publishes (via the rkey list) but nothing about *what*.
-- **Item URLs** (which themselves contain Sia's per-object encryption keys in their fragments) are stored *inside* the encrypted manifest, so without `K` you also can't fetch the item bytes meaningfully.
+- **Subscribe URL** is `pin://<authorHandle>#k=<base64-K>`. Sharing the URL = granting decrypt access. Without `K`, you can tell *that* the author publishes (via the rkey list) but nothing about *what* — for obscure channels. For public channels, the channel record itself carries K, so the URL fragment is convenience rather than the only path.
+- **Channel visibility** is `'obscure' | 'public'`, set at creation and sticky. Flipping public → obscure would orphan existing followers (the AT-URI in their follow records would suddenly stop resolving); flipping obscure → public would unilaterally give every channel-record reader the key they didn't have before. Both refused.
+- **Item URLs** (which themselves contain Sia's per-object encryption keys in their fragments) are stored *inside* the encrypted manifest, so reading items requires either holding K (obscure) or extracting K from the record body (public).
+
+**Identity layer.** A person's address is their handle on atproto (`john.bsky.social`, `johnwilliams.codes`, whatever) — universal, no Pin in the path. Pin builds on top:
+
+- **Profile record** at `at://<did>/dev.sia.pin.profile/self`, well-known rkey parallel to `app.bsky.actor.profile/self`. Body: optional `displayName`, `bio`, `avatarURL` (Sia share URL with per-object key in fragment), `coverURL`, plus `updatedAt`. Pure identity — no channel list, no follow list. Discoverability happens via separate follow records.
+- **Public follow records** under each follower's repo at `at://<follower-did>/dev.sia.pin.subscription/<rkey>` with body `{ subject: <channel AT-URI>, createdAt }`. Same stand-off pattern Bluesky uses for likes / follows / reposts — each follow is its own record, no central index. The rkey is `base32(sha256(subject))[:16]` so re-following is idempotent and unfollow is a single `deleteRecord` call without a list-then-find scan.
+- **Handle directory.** Clicking any `@handle` anywhere opens that handle's directory: profile header up top (avatar + cover + displayName + bio with @handle fallback), then two sections derived from the same public-follow walk — **Their voices** lists channels they publicly follow whose `authorDID` matches their own (the channel-as-voice claim of authorship), and **Following** lists everyone else they follow. Reached via in-app navigation; the directory is *how Pin renders any handle a user encounters in-app*, not a paste-this-URL surface.
+- **Watch vs Follow.** Subscribing via the `pin://<handle>#k=<K>` URL is Watch — purely local state, no record under your repo, works for both obscure and public channels. Clicking Follow on a public channel page additionally writes a `dev.sia.pin.subscription` record under your DID; that's the signal the directory page walks. Two psychological commitments, two real verbs.
+
+Pin's OAuth scope is correspondingly narrow — `repo:dev.sia.pin.channel repo:dev.sia.pin.profile repo:dev.sia.pin.subscription`. The auth screen at bsky.social grants access only to the lexicons Pin actually writes to. No `app.bsky.*` surface.
 
 **Performance layers — none of these are Sia, all of them shape how it feels.**
 
@@ -201,6 +211,9 @@ E2E auth is real, with credentials in a gitignored `e2e/.env.test`. The Sia side
 - **Persistent upload queue.** Tab close during a slow upload drops the pending bytes. The fix: store task bytes in IndexedDB by task UUID so the queue resumes across reload.
 - **Channel export / import (manifest portability).** A small JSON file containing `{ channelKey, channelID, manifest }` is the entire backup image of a channel. The plan: **Download manifest** + **Import manifest** affordances. Import walks every item URL and re-pins the bytes into the importer's indexer scope (mandatory because each AppKey is a distinct pinned-objects scope), then republishes the manifest under the importer's DID. Same-user import = clean migration (AppKey rotation, cross-device portability). Different-user import = fork, surfaced as an explicit verb with a `forkedFrom` provenance field. The framing: **`K` is custody capability, not authorship credential.**
 - **Parallel attachment uploads.** The runner currently uploads attachments sequentially (one shard stream at a time, in source order). Parallel would be faster for multi-file posts but adds bookkeeping (per-source progress, error aggregation). Earns its keep when a real "this felt slow" moment shows up.
+- **Follow the person, not just the channel.** Today Pin only has channel-follow (`dev.sia.pin.subscription` records with channel AT-URIs as subject). A `dev.sia.pin.handlefollow` primitive would let you follow a *person* by their DID — auto-tracking any new channels they later advertise on their profile. Two psychological commitments, two real verbs: "I want this voice's direct output" (channel-follow) and "I want this person's whole identity" (handle-follow).
+- **Channel types — Twitter-shape, Reddit-shape, more.** Every channel today is the calm-feed shape. The architecture composes with multiple experiences over the same substrate (Twitter-style likes / re-pins / quote-posts, Reddit-style topic threads with nested comments, others). When that ships, channels carry a `type` field and clients render per-type.
+- **Comments.** Stand-off pattern: a commenter writes a record to their own repo with subject = strong ref to the post + body = Sia URL pointing at the comment bytes. Records on atproto for discovery, bytes on Sia for content — symmetric with how Pin already handles channels.
 
 ## Run it locally
 
