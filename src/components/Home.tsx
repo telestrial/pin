@@ -53,7 +53,10 @@ type View =
   | { kind: 'reading'; entry: FeedEntry; returnTo: View }
   | { kind: 'bluesky-login'; resumeTo: View; cancelTo: View }
   | { kind: 'storage'; returnTo: View }
-  | { kind: 'handle-directory'; handle: string; returnTo: View }
+  // returnTo is OPTIONAL — sidebar's My Profile sets it undefined (primary
+  // nav, no Back), @handle clicks set it to the calling view (contextual
+  // nav, Back returns to that view).
+  | { kind: 'handle-directory'; handle: string; returnTo?: View }
   | { kind: 'editing-profile'; returnTo: View }
 
 export function Home() {
@@ -103,10 +106,11 @@ export function Home() {
         onProfile={
           atprotoHandle
             ? () =>
+                // Primary nav: no returnTo → no Back on the profile.
+                // The sidebar IS the way back.
                 setView({
                   kind: 'handle-directory',
                   handle: atprotoHandle,
-                  returnTo: view,
                 })
             : undefined
         }
@@ -188,7 +192,7 @@ export function Home() {
     return (
       <HandleDirectory
         handle={view.handle}
-        onBack={() => setView(returnTo)}
+        onBack={returnTo ? () => setView(returnTo) : undefined}
         onChannelClick={(authorHandle, channelID) =>
           setView({
             kind: 'viewing-channel',

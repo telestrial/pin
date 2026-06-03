@@ -37,7 +37,11 @@ export function HandleDirectory({
   rightSidebar,
 }: {
   handle: string
-  onBack: () => void
+  // Optional: present when the directory was reached contextually (a
+  // @handle click somewhere with a calling view to return to). Absent
+  // when reached as primary nav from the sidebar's My Profile — no
+  // Back affordance renders in that case.
+  onBack?: () => void
   onChannelClick: (authorHandle: string, channelID: string) => void
   onHandleClick: (handle: string) => void
   // Only wired when the directory belongs to the signed-in user. Home
@@ -147,7 +151,10 @@ export function HandleDirectory({
 
   const isSelf = myHandle === handle
 
-  const backButton = (
+  // Inline back pill, used by loading / not-found / error states (no
+  // cover banner there to overlay on). The loaded state renders its
+  // own Back overlay on top of the cover banner.
+  const inlineBackButton = onBack ? (
     <button
       type="button"
       onClick={onBack}
@@ -155,7 +162,7 @@ export function HandleDirectory({
     >
       Back
     </button>
-  )
+  ) : null
 
   return (
     <div className="flex-1 p-6">
@@ -164,7 +171,7 @@ export function HandleDirectory({
         <div className="flex-1 min-w-0 space-y-5">
           {state.kind === 'loading' && (
             <div className="bg-white border border-neutral-200 rounded-lg p-5 flex flex-col gap-4">
-              {backButton}
+              {inlineBackButton}
               <p className="text-center text-sm text-neutral-500">
                 Loading @{handle}…
               </p>
@@ -173,7 +180,7 @@ export function HandleDirectory({
 
           {state.kind === 'not-found' && (
             <div className="bg-white border border-neutral-200 rounded-lg p-5 flex flex-col gap-4">
-              {backButton}
+              {inlineBackButton}
               <div className="text-center space-y-2">
                 <h1 className="text-lg font-semibold text-neutral-900">
                   @{handle}
@@ -187,7 +194,7 @@ export function HandleDirectory({
 
           {state.kind === 'error' && (
             <div className="bg-white border border-neutral-200 rounded-lg p-5 flex flex-col gap-4">
-              {backButton}
+              {inlineBackButton}
               <div className="text-center space-y-2">
                 <h1 className="text-lg font-semibold text-neutral-900">
                   @{handle}
@@ -206,10 +213,10 @@ export function HandleDirectory({
               profile={state.profile}
               ownChannels={state.ownChannels}
               followedChannels={state.followedChannels}
+              onBack={onBack}
               onChannelClick={onChannelClick}
               onHandleClick={onHandleClick}
               onEditProfile={isSelf ? onEditProfile : undefined}
-              backButton={backButton}
             />
           )}
         </div>
@@ -225,20 +232,20 @@ function LoadedDirectory({
   profile,
   ownChannels,
   followedChannels,
+  onBack,
   onChannelClick,
   onHandleClick,
   onEditProfile,
-  backButton,
 }: {
   handle: string
   isSelf: boolean
   profile: ProfileRecord | null
   ownChannels: ChannelEntry[]
   followedChannels: ChannelEntry[]
+  onBack?: () => void
   onChannelClick: (authorHandle: string, channelID: string) => void
   onHandleClick: (handle: string) => void
   onEditProfile?: () => void
-  backButton: React.ReactNode
 }) {
   const isEmpty =
     !profile && ownChannels.length === 0 && followedChannels.length === 0
@@ -249,7 +256,7 @@ function LoadedDirectory({
         handle={handle}
         isSelf={isSelf}
         profile={profile}
-        backButton={backButton}
+        onBack={onBack}
         onEdit={onEditProfile}
       />
 
@@ -294,53 +301,74 @@ function ProfileHeader({
   handle,
   isSelf,
   profile,
-  backButton,
+  onBack,
   onEdit,
 }: {
   handle: string
   isSelf: boolean
   profile: ProfileRecord | null
-  backButton: React.ReactNode
+  onBack?: () => void
   onEdit?: () => void
 }) {
+  // Twitter/Bluesky-shape layout: cover banner at the top of the card
+  // (full-bleed thanks to the card's overflow-hidden), avatar overlapping
+  // the cover's bottom edge with a white ring, then identity row + Edit
+  // affordance, then bio. Back lives overlaid on the cover when present
+  // (no Back when reached via primary nav from the sidebar).
   return (
     <div className="bg-white border border-neutral-200 rounded-lg overflow-hidden">
-      <div className="px-5 pt-5 flex items-center justify-between gap-3">
-        {backButton}
-        {isSelf && onEdit && (
+      <div className="relative">
+        {profile?.coverURL ? (
+          <CoverBanner coverURL={profile.coverURL} contentHash={undefined} />
+        ) : (
+          // Always-on placeholder so the avatar's overlap has something to
+          // overlap. Subtle gradient reads more "intentional empty" than a
+          // flat neutral fill.
+          <div className="h-32 bg-linear-to-br from-neutral-100 to-neutral-200" />
+        )}
+        {onBack && (
           <button
             type="button"
-            onClick={onEdit}
-            className="inline-flex items-center px-2.5 py-1 text-xs font-medium text-neutral-600 hover:text-neutral-900 bg-neutral-100 hover:bg-neutral-200 rounded-full transition-colors cursor-pointer"
+            onClick={onBack}
+            className="absolute top-3 left-3 inline-flex items-center px-2.5 py-1 text-xs font-medium text-white bg-black/40 hover:bg-black/60 backdrop-blur-sm rounded-full transition-colors cursor-pointer"
           >
-            {profile ? 'Edit profile' : 'Set up profile'}
+            Back
           </button>
         )}
       </div>
-      {profile?.coverURL && (
-        <CoverBanner
-          coverURL={profile.coverURL}
-          contentHash={undefined}
-        />
-      )}
-      <div className="p-5 flex gap-4 items-start">
-        <ProfileAvatar profile={profile} handle={handle} />
-        <div className="flex-1 min-w-0 space-y-1">
-          <div className="text-lg font-semibold text-neutral-900 truncate">
-            {profile?.displayName || `@${handle}`}
+      <div className="px-5 pb-5">
+        <div className="flex items-end gap-4 -mt-10">
+          <div className="rounded-full ring-4 ring-white shrink-0">
+            <ProfileAvatar profile={profile} handle={handle} />
           </div>
-          <div className="text-sm text-neutral-500 truncate">@{handle}</div>
-          {profile?.bio && (
-            <p className="text-sm text-neutral-700 whitespace-pre-wrap pt-1">
-              {profile.bio}
-            </p>
-          )}
-          {isSelf && !profile && (
-            <p className="text-xs text-neutral-400 pt-1">
-              No Pin profile yet.
-            </p>
-          )}
+          <div className="flex-1 min-w-0 flex items-start justify-between gap-3 pb-1">
+            <div className="min-w-0 space-y-0.5">
+              <div className="text-lg font-semibold text-neutral-900 truncate">
+                {profile?.displayName || `@${handle}`}
+              </div>
+              <div className="text-sm text-neutral-500 truncate">
+                @{handle}
+              </div>
+            </div>
+            {isSelf && onEdit && (
+              <button
+                type="button"
+                onClick={onEdit}
+                className="shrink-0 inline-flex items-center px-2.5 py-1 text-xs font-medium text-neutral-600 hover:text-neutral-900 bg-neutral-100 hover:bg-neutral-200 rounded-full transition-colors cursor-pointer"
+              >
+                {profile ? 'Edit profile' : 'Set up profile'}
+              </button>
+            )}
+          </div>
         </div>
+        {profile?.bio && (
+          <p className="text-sm text-neutral-700 whitespace-pre-wrap pt-3">
+            {profile.bio}
+          </p>
+        )}
+        {isSelf && !profile && (
+          <p className="text-xs text-neutral-400 pt-3">No Pin profile yet.</p>
+        )}
       </div>
     </div>
   )
@@ -379,7 +407,7 @@ function AvatarImage({
     <img
       src={url}
       alt=""
-      className="size-16 shrink-0 rounded-full object-cover bg-neutral-100"
+      className="size-20 shrink-0 rounded-full object-cover bg-neutral-100"
     />
   )
 }
@@ -432,7 +460,7 @@ function HandleMark({ handle }: { handle: string }) {
     <div
       aria-hidden="true"
       style={{ backgroundColor: bg, color: fg }}
-      className="size-16 shrink-0 rounded-full flex items-center justify-center text-2xl font-semibold select-none"
+      className="size-20 shrink-0 rounded-full flex items-center justify-center text-2xl font-semibold select-none"
     >
       {letter}
     </div>
