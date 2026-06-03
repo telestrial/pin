@@ -4,6 +4,7 @@ import { renderMarkdown } from '../lib/markdown'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
 import { ChannelAvatar } from './ChannelAvatar'
+import { FollowButton } from './FollowButton'
 import { FeedRow } from './HomeFeed'
 import { Sidebar } from './Sidebar'
 
@@ -134,8 +135,20 @@ export function ChannelView({
                   {channelEntries.length === 1 ? '' : 's'}
                 </p>
               </div>
-              {(onEdit || onUnpin || onUnsubscribe) && (
-                <div className="shrink-0 flex flex-col gap-1.5">
+              {(onEdit ||
+                onUnpin ||
+                onUnsubscribe ||
+                (manifest?.visibility === 'public' &&
+                  manifest.authorATProtoDID)) && (
+                <div className="shrink-0 flex flex-col gap-1.5 items-end">
+                  {manifest?.visibility === 'public' &&
+                    manifest.authorATProtoDID && (
+                      <FollowButton
+                        channelAuthorDID={manifest.authorATProtoDID}
+                        channelID={channelID}
+                        channelName={channelName}
+                      />
+                    )}
                   {onEdit && (
                     <button
                       type="button"

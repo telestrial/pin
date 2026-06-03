@@ -66,6 +66,44 @@ export async function unfollow(
   })
 }
 
+// Does `followerDID` publicly follow this channel? Deterministic rkey
+// derivation means we can ask for the exact record directly — no list
+// scan. 404 = not following; other errors bubble.
+export async function isFollowing(
+  followerDID: string,
+  channelAuthorDID: string,
+  channelID: string,
+): Promise<boolean> {
+  const subject = channelAtURI(channelAuthorDID, channelID)
+  const rkey = await rkeyForSubject(subject)
+  const agent = new AtpAgent({ service: DEFAULT_SERVICE })
+  try {
+    await agent.com.atproto.repo.getRecord({
+      repo: followerDID,
+      collection: SUBSCRIPTION_LEXICON,
+      rkey,
+    })
+    return true
+  } catch (err) {
+    if (isRecordNotFoundError(err)) return false
+    throw err
+  }
+}
+
+function isRecordNotFoundError(err: unknown): boolean {
+  if (typeof err !== 'object' || err === null) return false
+  const e = err as { status?: number; error?: string; message?: string }
+  if (e.error === 'RecordNotFound') return true
+  if (
+    e.status === 400 &&
+    typeof e.message === 'string' &&
+    /could not locate|not found|recordnotfound/i.test(e.message)
+  ) {
+    return true
+  }
+  return false
+}
+
 // List every public follow under a given handle/DID. Unauthenticated —
 // these records are public by design (that's the whole point of Follow
 // vs the local-only Watch verb). Paginates until the cursor is exhausted.
