@@ -673,20 +673,7 @@ export function Home() {
   return (
     <div className="flex-1 p-6">
       <div className="max-w-7xl mx-auto flex flex-col lg:flex-row lg:items-start gap-6">
-        <Sidebar
-          onHome={() => setView({ kind: 'idle' })}
-          onCreate={gotoCreating}
-          onSubscribe={() => setView({ kind: 'subscribing' })}
-          onSeeAll={() => setView({ kind: 'channels' })}
-          onChannelClick={(authorHandle, channelID) =>
-            setView({
-              kind: 'viewing-channel',
-              authorHandle,
-              channelID,
-            })
-          }
-          activeHome={true}
-        />
+        {renderSidebar(undefined, true)}
         <div className="flex-1 space-y-6 min-w-0">
           {composerSlot}
           <HomeFeed
