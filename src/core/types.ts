@@ -63,6 +63,15 @@ export type ChannelCover = {
   contentHash?: string
 }
 
+// Whether a channel is publicly followable. Obscure channels are
+// Watch-only: subscribers save (handle, channelID, K) locally; nothing
+// public ties the follower to the channel. Public channels can be
+// followed via a dev.sia.pin.subscription stand-off record under the
+// follower's repo. Set at creation, sticky — a public channel can't
+// later be obscured because existing Follow records would become orphan
+// pointers, and going obscure means a new channel + migration.
+export type ChannelVisibility = 'obscure' | 'public'
+
 export type ChannelManifest = {
   version: typeof CHANNEL_MANIFEST_VERSION
   name: string
@@ -70,6 +79,9 @@ export type ChannelManifest = {
   authorPubkey: string
   authorATProtoDID: string
   publishedAt: string
+  // Absent on manifests written before this field existed; readers treat
+  // missing as 'obscure' (the safer default — Follow is opt-in).
+  visibility?: ChannelVisibility
   coverArt?: ChannelCover
   language?: string
   items: ItemRef[]

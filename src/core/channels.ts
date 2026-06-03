@@ -19,6 +19,7 @@ import {
   CHANNEL_MANIFEST_VERSION,
   type ChannelCover,
   type ChannelManifest,
+  type ChannelVisibility,
   type ItemRef,
   type ItemType,
 } from './types'
@@ -65,6 +66,11 @@ export async function createChannel(
   args: {
     name: string
     description: string
+    // Sticky-at-creation per the visibility design. Defaults to 'public'
+    // since starting fresh — every legacy channel was effectively obscure
+    // (no follow primitive existed) and the new shape leans toward
+    // discoverable-by-default for the Twitter-shape experience.
+    visibility?: ChannelVisibility
     coverImage?: { bytes: Uint8Array; mimeType: string }
   },
 ): Promise<CreatedChannel> {
@@ -91,6 +97,7 @@ export async function createChannel(
     authorPubkey: sdk.appKey().publicKey(),
     authorATProtoDID: did,
     publishedAt: new Date().toISOString(),
+    visibility: args.visibility ?? 'public',
     coverArt,
     items: [],
   }
