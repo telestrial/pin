@@ -340,10 +340,12 @@ function ProfileHeader({
         <div className="flex items-start gap-4">
           {/* -mt-10 lives only on the avatar wrapper so the avatar pulls
               up into the cover; the text column stays in normal flow
-              below the cover edge. Earlier the negative margin was on
-              the whole row, which dragged the name + handle up under
-              the cover too. */}
-          <div className="-mt-10 rounded-full ring-4 ring-white shrink-0">
+              below the cover edge. relative z-10 forces the avatar
+              onto a stacking layer above the cover so the overlap
+              portion paints on top of the cover image instead of
+              under it (the cover container's position:relative would
+              otherwise let it cover the avatar's top half). */}
+          <div className="relative z-10 -mt-10 rounded-full ring-4 ring-white shrink-0">
             <ProfileAvatar profile={profile} handle={handle} />
           </div>
           <div className="flex-1 min-w-0 flex items-start justify-between gap-3 pt-3">
