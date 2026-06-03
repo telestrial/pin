@@ -12,10 +12,12 @@ import { PinButton } from './PinButton'
 export function HomeFeed({
   onItemClick,
   onChannelClick,
+  onHandleClick,
   onErrorClick,
 }: {
   onItemClick: (entry: FeedEntry) => void
   onChannelClick: (authorHandle: string, channelID: string) => void
+  onHandleClick: (handle: string) => void
   onErrorClick?: () => void
 }) {
   const subscriptions = useAuthStore((s) => s.subscriptions)
@@ -159,6 +161,7 @@ export function HomeFeed({
               entry={entry}
               onItemClick={onItemClick}
               onChannelClick={onChannelClick}
+              onHandleClick={onHandleClick}
             />
           ))}
         </ul>
@@ -192,16 +195,23 @@ export function FeedRow({
   entry,
   onItemClick,
   onChannelClick,
+  onHandleClick,
 }: {
   entry: FeedEntry
   onItemClick: (entry: FeedEntry) => void
   onChannelClick: (authorHandle: string, channelID: string) => void
+  onHandleClick: (handle: string) => void
 }) {
   const { item, channel } = entry
 
   const handleChannelClick = (e: React.MouseEvent | React.KeyboardEvent) => {
     e.stopPropagation()
     onChannelClick(channel.authorHandle, channel.channelID)
+  }
+
+  const handleAuthorClick = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    onHandleClick(channel.authorHandle)
   }
 
   return (
@@ -245,7 +255,7 @@ export function FeedRow({
                 </button>
                 <button
                   type="button"
-                  onClick={handleChannelClick}
+                  onClick={handleAuthorClick}
                   className="block max-w-full text-xs text-neutral-500 truncate hover:underline cursor-pointer text-left"
                 >
                   @{channel.authorHandle}

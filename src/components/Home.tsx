@@ -164,10 +164,25 @@ export function Home() {
 
   if (view.kind === 'handle-directory') {
     const returnTo = view.returnTo
+    const directoryView = view
     return (
       <HandleDirectory
         handle={view.handle}
         onBack={() => setView(returnTo)}
+        onChannelClick={(authorHandle, channelID) =>
+          setView({
+            kind: 'viewing-channel',
+            authorHandle,
+            channelID,
+          })
+        }
+        onHandleClick={(handle) =>
+          setView({
+            kind: 'handle-directory',
+            handle,
+            returnTo: directoryView,
+          })
+        }
         sidebar={renderSidebar()}
         rightSidebar={renderPinSidebar()}
       />
@@ -313,6 +328,13 @@ export function Home() {
             kind: 'viewing-channel',
             authorHandle,
             channelID,
+          })
+        }
+        onHandleClick={(handle) =>
+          setView({
+            kind: 'handle-directory',
+            handle,
+            returnTo: channelView,
           })
         }
         onHome={() => setView({ kind: 'idle' })}
@@ -625,6 +647,13 @@ export function Home() {
                 kind: 'viewing-channel',
                 authorHandle,
                 channelID,
+              })
+            }
+            onHandleClick={(handle) =>
+              setView({
+                kind: 'handle-directory',
+                handle,
+                returnTo: idleView,
               })
             }
             onErrorClick={() => setView({ kind: 'channels' })}

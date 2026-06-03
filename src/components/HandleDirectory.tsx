@@ -30,11 +30,15 @@ type State =
 export function HandleDirectory({
   handle: rawHandle,
   onBack,
+  onChannelClick,
+  onHandleClick,
   sidebar,
   rightSidebar,
 }: {
   handle: string
   onBack: () => void
+  onChannelClick: (authorHandle: string, channelID: string) => void
+  onHandleClick: (handle: string) => void
   sidebar: React.ReactNode
   rightSidebar: React.ReactNode
 }) {
@@ -186,6 +190,8 @@ export function HandleDirectory({
               profile={state.profile}
               ownChannels={state.ownChannels}
               followedChannels={state.followedChannels}
+              onChannelClick={onChannelClick}
+              onHandleClick={onHandleClick}
             />
           )}
         </div>
@@ -201,12 +207,16 @@ function LoadedDirectory({
   profile,
   ownChannels,
   followedChannels,
+  onChannelClick,
+  onHandleClick,
 }: {
   handle: string
   isSelf: boolean
   profile: ProfileRecord | null
   ownChannels: ChannelEntry[]
   followedChannels: ChannelEntry[]
+  onChannelClick: (authorHandle: string, channelID: string) => void
+  onHandleClick: (handle: string) => void
 }) {
   const isEmpty =
     !profile && ownChannels.length === 0 && followedChannels.length === 0
@@ -228,6 +238,8 @@ function LoadedDirectory({
               key={`${c.authorDID}:${c.channelID}`}
               entry={c}
               showAuthor={false}
+              onChannelClick={onChannelClick}
+              onHandleClick={onHandleClick}
             />
           ))}
         </Section>
@@ -240,6 +252,8 @@ function LoadedDirectory({
               key={`${c.authorDID}:${c.channelID}`}
               entry={c}
               showAuthor
+              onChannelClick={onChannelClick}
+              onHandleClick={onHandleClick}
             />
           ))}
         </Section>
@@ -403,12 +417,34 @@ function Section({
 function ChannelRow({
   entry,
   showAuthor,
+  onChannelClick,
+  onHandleClick,
 }: {
   entry: ChannelEntry
   showAuthor: boolean
+  onChannelClick: (authorHandle: string, channelID: string) => void
+  onHandleClick: (handle: string) => void
 }) {
+  const onRowClick = () =>
+    onChannelClick(entry.authorHandle, entry.channelID)
+  const onAuthorClick = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    onHandleClick(entry.authorHandle)
+  }
   return (
-    <div className="p-3 flex gap-3 items-start">
+    // biome-ignore lint/a11y/useSemanticElements: row contains a nested @handle button, which would nest interactives inside a <button>
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={onRowClick}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          onRowClick()
+        }
+      }}
+      className="p-3 flex gap-3 items-start hover:bg-neutral-50 cursor-pointer transition-colors"
+    >
       <ChannelAvatar
         channelID={entry.channelID}
         channelName={entry.manifest.name}
@@ -421,9 +457,13 @@ function ChannelRow({
           {entry.manifest.name}
         </div>
         {showAuthor && entry.authorHandle && (
-          <div className="text-xs text-neutral-500 truncate">
+          <button
+            type="button"
+            onClick={onAuthorClick}
+            className="block max-w-full text-xs text-neutral-500 truncate hover:underline cursor-pointer text-left"
+          >
             @{entry.authorHandle}
-          </div>
+          </button>
         )}
         {entry.manifest.description && (
           <div className="text-sm text-neutral-700 truncate pt-0.5">

@@ -93,7 +93,7 @@ describe('integration: custody', () => {
   it("Bob pins Alice's post; bytes appear in bob's scope and pinStore", async () => {
     const { alice, bob, postBody } = await setupAlicePublishesBobSubscribes()
 
-    render(<HomeFeed onItemClick={() => {}} onChannelClick={() => {}} />)
+    render(<HomeFeed onItemClick={() => {}} onChannelClick={() => {}} onHandleClick={() => {}} />)
     await waitFor(() => {
       expect(screen.getByText(postBody)).toBeInTheDocument()
     })
@@ -141,7 +141,7 @@ describe('integration: custody', () => {
     const { alice, channel, sub, postItemID } =
       await setupAlicePublishesBobSubscribes()
 
-    render(<HomeFeed onItemClick={() => {}} onChannelClick={() => {}} />)
+    render(<HomeFeed onItemClick={() => {}} onChannelClick={() => {}} onHandleClick={() => {}} />)
     await waitFor(() =>
       expect(screen.getByText('hello from alice')).toBeInTheDocument(),
     )
@@ -186,7 +186,7 @@ describe('integration: custody', () => {
     const { alice, channel, sub, postItemID } =
       await setupAlicePublishesBobSubscribes()
 
-    render(<HomeFeed onItemClick={() => {}} onChannelClick={() => {}} />)
+    render(<HomeFeed onItemClick={() => {}} onChannelClick={() => {}} onHandleClick={() => {}} />)
     await waitFor(() =>
       expect(screen.getByText('hello from alice')).toBeInTheDocument(),
     )
@@ -228,7 +228,7 @@ describe('integration: custody', () => {
     const { alice, channel, sub, postItemID } =
       await setupAlicePublishesBobSubscribes()
 
-    render(<HomeFeed onItemClick={() => {}} onChannelClick={() => {}} />)
+    render(<HomeFeed onItemClick={() => {}} onChannelClick={() => {}} onHandleClick={() => {}} />)
     await waitFor(() =>
       expect(screen.getByText('hello from alice')).toBeInTheDocument(),
     )

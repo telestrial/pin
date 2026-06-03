@@ -12,6 +12,7 @@ export function ChannelView({
   channelID,
   onItemClick,
   onChannelClick,
+  onHandleClick,
   onHome,
   onCreate,
   onSubscribe,
@@ -27,6 +28,7 @@ export function ChannelView({
   channelID: string
   onItemClick: (entry: FeedEntry) => void
   onChannelClick: (authorHandle: string, channelID: string) => void
+  onHandleClick: (handle: string) => void
   onHome: () => void
   onCreate: () => void
   onSubscribe: () => void
@@ -111,9 +113,13 @@ export function ChannelView({
                 <h1 className="text-xl font-semibold text-neutral-900 truncate">
                   {channelName}
                 </h1>
-                <p className="text-sm text-neutral-500 truncate">
+                <button
+                  type="button"
+                  onClick={() => onHandleClick(authorHandle)}
+                  className="block max-w-full text-sm text-neutral-500 truncate hover:underline cursor-pointer text-left"
+                >
                   @{authorHandle}
-                </p>
+                </button>
                 {description && (
                   <div
                     className="markdown text-sm text-neutral-700 mt-2 wrap-break-word"
@@ -232,6 +238,7 @@ export function ChannelView({
                     entry={entry}
                     onItemClick={onItemClick}
                     onChannelClick={onChannelClick}
+                    onHandleClick={onHandleClick}
                   />
                 ))}
               </ul>

@@ -83,6 +83,7 @@ describe('integration: subscriber feed display', () => {
       <HomeFeed
         onItemClick={() => {}}
         onChannelClick={() => {}}
+        onHandleClick={() => {}}
       />,
     )
 
