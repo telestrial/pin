@@ -2,6 +2,7 @@ import type { Sdk } from '@siafoundation/sia-storage'
 import { useEffect } from 'react'
 import { resolveCoverArtIDs } from '../core/coverArt'
 import { sweepOrphans } from '../core/orphanSweep'
+import { getProfileRecord } from '../core/profile'
 import { isValidAttachment } from '../core/types'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
@@ -91,6 +92,34 @@ async function buildKnownIDs(sdk: Sdk): Promise<{
   // pinStore — library + external pins
   for (const p of pin.pinned) {
     if (p.objectID) ids.add(p.objectID)
+  }
+
+  // Profile avatar + cover (one record per user, rkey 'self'). Like
+  // cover art, these store share URLs in the record body — resolve to
+  // object IDs via sharedObject. Bail on any failure: deleting profile
+  // bytes by mistake would orphan the URLs in the profile record.
+  if (auth.atprotoDID) {
+    try {
+      const profile = await getProfileRecord(auth.atprotoDID)
+      const profileURLs = [profile?.avatarURL, profile?.coverURL].filter(
+        (u): u is string => typeof u === 'string',
+      )
+      for (const url of profileURLs) {
+        try {
+          const obj = await sdk.sharedObject(url)
+          ids.add(obj.id())
+        } catch (e) {
+          console.warn(
+            `sweep: profile-image resolution failed for ${url}, bailing:`,
+            e,
+          )
+          return { ok: false, ids }
+        }
+      }
+    } catch (e) {
+      console.warn('sweep: profile fetch failed, bailing:', e)
+      return { ok: false, ids }
+    }
   }
 
   return { ok: true, ids }
