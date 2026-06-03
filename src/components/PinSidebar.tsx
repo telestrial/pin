@@ -1,9 +1,10 @@
-import { Box, CheckCircle2, HardDrive, RotateCw, X } from 'lucide-react'
+import { Box, CheckCircle2, HardDrive, RotateCw, Search, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { type PinnedItemRef, usePinStore } from '../stores/pin'
 import type { ItemRef } from '../core/types'
 import { useAuthStore } from '../stores/auth'
 import { useComposeStore } from '../stores/compose'
+import { useFeedStore } from '../stores/feed'
 import {
   type UploadTask,
   type UploadTaskState,
@@ -73,12 +74,14 @@ export function PinSidebar({
   const tasks = useUploadQueueStore((s) => s.tasks)
   const retryTask = useUploadQueueStore((s) => s.retry)
   const removeTask = useUploadQueueStore((s) => s.remove)
+  const feedEntries = useFeedStore((s) => s.entries)
   const armedItem = useComposeStore((s) => s.armedItem)
   const toggleArm = useComposeStore((s) => s.toggle)
   const disarm = useComposeStore((s) => s.disarm)
   const storageActive = useStorageActivityStore(
     (s) => s.running || s.sweeping || s.savingSettings,
   )
+  const [query, setQuery] = useState('')
   // Click-pin → opacity transitions to 0 over FADE_MS, then unpin commits.
   // Re-click during the fade cancels (clean undo). Shared with MyStorage's
   // tile pin via the hook.
@@ -116,11 +119,12 @@ export function PinSidebar({
     [myChannels],
   )
 
-  // "Last 5 things you pinned" — most recent external pins. Library items
-  // (LIBRARY_CHANNEL) ride along since they're also things you pinned.
-  // Own-channel items are excluded — those are managed in the channel UX.
+  // External pins (everything you pinned outside your own channels —
+  // including LIBRARY_CHANNEL drops). Sorted newest-pinned first. The
+  // empty-query default shows the first RECENT_LIMIT of these; the
+  // search path uses the full unsliced list as one source.
   const RECENT_LIMIT = 5
-  const recentPins = useMemo<LibraryEntry[]>(() => {
+  const externalPins = useMemo<LibraryEntry[]>(() => {
     return pinned
       .filter((p) => !myChannelIDSet.has(p.channel.channelID))
       .map((p) => ({
@@ -130,10 +134,51 @@ export function PinSidebar({
         pinnedAt: p.pinnedAt,
       }))
       .sort((a, b) => (b.pinnedAt ?? '').localeCompare(a.pinnedAt ?? ''))
-      .slice(0, RECENT_LIMIT)
   }, [pinned, myChannelIDSet])
 
-  const displayList = recentPins
+  // Own-channel items — your own publishes pin under your AppKey too, but
+  // they don't appear in pinStore.pinned (that's the curated "I pinned
+  // this" list). feedStore.entries is the source for own-channel content.
+  const ownItems = useMemo<LibraryEntry[]>(() => {
+    return feedEntries
+      .filter((e) => myChannelIDSet.has(e.channel.channelID))
+      .map((e) => ({
+        item: e.item,
+        channel: {
+          channelID: e.channel.channelID,
+          name: e.channel.name,
+          authorHandle: e.channel.authorHandle,
+        },
+        isOwn: true,
+      }))
+  }, [feedEntries, myChannelIDSet])
+
+  const q = query.trim().toLowerCase()
+
+  // Empty query → recent external pins (5-item quick-access tail).
+  // Non-empty → case-insensitive substring match across title / summary /
+  // filename / channel name / author handle / type label, sorted newest
+  // first, union of own + external. Pure client-side; no debounce.
+  const displayList = useMemo<LibraryEntry[]>(() => {
+    if (!q) return externalPins.slice(0, RECENT_LIMIT)
+    function matches(e: LibraryEntry): boolean {
+      const fields = [
+        itemTitle(e.item),
+        e.item.title,
+        e.item.summary ?? '',
+        e.item.filename ?? '',
+        e.channel.name,
+        e.channel.authorHandle,
+        itemTypeLabel(e.item),
+      ]
+      return fields.some((f) => f.toLowerCase().includes(q))
+    }
+    return [...externalPins, ...ownItems].filter(matches).sort((a, b) =>
+      (b.pinnedAt ?? b.item.publishedAt).localeCompare(
+        a.pinnedAt ?? a.item.publishedAt,
+      ),
+    )
+  }, [q, externalPins, ownItems])
 
   // rawContentBytes is the actual byte total across every pinned object in
   // scope (computed by walking objectEvents + summing slab lengths), so it
@@ -325,13 +370,32 @@ export function PinSidebar({
         </section>
       )}
 
-      <section className="-mx-3 -mb-3 border-t border-neutral-200">
-        <h2 className="text-xs font-semibold tracking-wide uppercase text-neutral-500 px-3 pt-3 pb-1">
-          Recent pins
-        </h2>
+      <section className="-mx-3 -mb-3">
+        {/* Search input IS the divider between the storage card / in-flight
+            section above and the library list below — no separate top
+            border on the section; the input's own borders (top + bottom)
+            do the dividing work, with the field's height giving the
+            divider visual weight beyond a 1px line. Focus turns those
+            borders Pin-green. */}
+        <div className="relative">
+          <Search
+            className="absolute left-3 top-1/2 -translate-y-1/2 size-3 text-neutral-400 pointer-events-none"
+            aria-hidden="true"
+          />
+          <input
+            type="text"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search My Pins"
+            aria-label="Search My Pins"
+            className="w-full pl-7 pr-2 py-2 text-xs bg-white border-0 border-y border-neutral-200 focus:outline-none focus:border-green-600 placeholder-neutral-400"
+          />
+        </div>
         {displayList.length === 0 ? (
           <p className="text-xs text-neutral-500 px-3 py-2">
-            Pin items from other channels to keep them here.
+            {q
+              ? 'No matches.'
+              : 'Pin items from other channels to keep them here.'}
           </p>
         ) : (
           <ul aria-label="Library items">
