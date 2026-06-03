@@ -1,6 +1,5 @@
 import { AtpAgent } from '@atproto/api'
 import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
 import { fetchChannel } from '../core/channels'
 import { listFollows, parseChannelAtURI } from '../core/follow'
 import { getProfileRecord, type ProfileRecord } from '../core/profile'
@@ -8,26 +7,6 @@ import type { ChannelManifest } from '../core/types'
 import { useItemBlobURL } from '../lib/useItemBytes'
 import { useAuthStore } from '../stores/auth'
 import { ChannelAvatar } from './ChannelAvatar'
-
-// React Router v7's path matcher requires a `/` before any `:param` or
-// `*` indicator, so a literal-prefix-plus-param route like `/@:handle`
-// fails to match — it's treated as the literal segment `@:handle`. To
-// preserve the Twitter/Bluesky-style `/@handle` URL aesthetic, App's
-// catch-all `*` route uses this helper to decide whether the captured
-// path is a handle URL. Exported so the routing logic stays
-// unit-testable without dragging the full component into the test.
-//
-// The catch-all gives us the path with no leading slash. A handle URL
-// is exactly "@<handle>" — single segment, nothing after. Deeper paths
-// (e.g. "@alice/posts") are left for Home to handle, since we don't
-// model nested handle routes (yet).
-export function handleFromCatchAllPath(path: string): string | null {
-  if (!path.startsWith('@')) return null
-  const rest = path.slice(1)
-  if (rest === '') return null
-  if (rest.includes('/')) return null
-  return rest
-}
 
 type ChannelEntry = {
   authorDID: string
@@ -48,13 +27,22 @@ type State =
     }
   | { kind: 'error'; message: string }
 
-export function HandleDirectory({ handle: rawHandle }: { handle: string }) {
-  const navigate = useNavigate()
+export function HandleDirectory({
+  handle: rawHandle,
+  onBack,
+  sidebar,
+  rightSidebar,
+}: {
+  handle: string
+  onBack: () => void
+  sidebar: React.ReactNode
+  rightSidebar: React.ReactNode
+}) {
   const myHandle = useAuthStore((s) => s.atprotoHandle)
   const [state, setState] = useState<State>({ kind: 'loading' })
 
-  // Defensive normalize: routing path already strips the leading `@`,
-  // but a user pasting `/@@john` would leave a stray `@` on the front.
+  // Defensive normalize: callers should pass a bare handle, but a stray
+  // leading `@` (from a paste, say) shouldn't break the lookup.
   const handle = rawHandle.replace(/^@+/, '')
 
   useEffect(() => {
@@ -152,52 +140,56 @@ export function HandleDirectory({ handle: rawHandle }: { handle: string }) {
 
   return (
     <div className="flex-1 p-6">
-      <div className="max-w-2xl mx-auto space-y-4">
-        <button
-          type="button"
-          onClick={() => navigate('/')}
-          className="bg-neutral-100 hover:bg-neutral-200 rounded-full px-2.5 py-1 text-xs text-neutral-700 transition-colors"
-        >
-          Back to feed
-        </button>
+      <div className="max-w-7xl mx-auto flex flex-col lg:flex-row lg:items-start gap-6">
+        {sidebar}
+        <div className="flex-1 min-w-0 space-y-4">
+          <button
+            type="button"
+            onClick={onBack}
+            className="bg-neutral-100 hover:bg-neutral-200 rounded-full px-2.5 py-1 text-xs text-neutral-700 transition-colors"
+          >
+            Back
+          </button>
 
-        {state.kind === 'loading' && (
-          <div className="bg-white border border-neutral-200 rounded-lg p-8 text-center text-sm text-neutral-500">
-            Loading @{handle}…
-          </div>
-        )}
+          {state.kind === 'loading' && (
+            <div className="bg-white border border-neutral-200 rounded-lg p-8 text-center text-sm text-neutral-500">
+              Loading @{handle}…
+            </div>
+          )}
 
-        {state.kind === 'not-found' && (
-          <div className="bg-white border border-neutral-200 rounded-lg p-8 text-center space-y-2">
-            <h1 className="text-lg font-semibold text-neutral-900">
-              @{handle}
-            </h1>
-            <p className="text-sm text-neutral-500">
-              That handle doesn't resolve to an atproto identity.
-            </p>
-          </div>
-        )}
+          {state.kind === 'not-found' && (
+            <div className="bg-white border border-neutral-200 rounded-lg p-8 text-center space-y-2">
+              <h1 className="text-lg font-semibold text-neutral-900">
+                @{handle}
+              </h1>
+              <p className="text-sm text-neutral-500">
+                That handle doesn't resolve to an atproto identity.
+              </p>
+            </div>
+          )}
 
-        {state.kind === 'error' && (
-          <div className="bg-white border border-neutral-200 rounded-lg p-8 text-center space-y-2">
-            <h1 className="text-lg font-semibold text-neutral-900">
-              @{handle}
-            </h1>
-            <p className="text-sm text-red-600">
-              Failed to load: {state.message}
-            </p>
-          </div>
-        )}
+          {state.kind === 'error' && (
+            <div className="bg-white border border-neutral-200 rounded-lg p-8 text-center space-y-2">
+              <h1 className="text-lg font-semibold text-neutral-900">
+                @{handle}
+              </h1>
+              <p className="text-sm text-red-600">
+                Failed to load: {state.message}
+              </p>
+            </div>
+          )}
 
-        {state.kind === 'loaded' && (
-          <LoadedDirectory
-            handle={handle}
-            isSelf={isSelf}
-            profile={state.profile}
-            ownChannels={state.ownChannels}
-            followedChannels={state.followedChannels}
-          />
-        )}
+          {state.kind === 'loaded' && (
+            <LoadedDirectory
+              handle={handle}
+              isSelf={isSelf}
+              profile={state.profile}
+              ownChannels={state.ownChannels}
+              followedChannels={state.followedChannels}
+            />
+          )}
+        </div>
+        {rightSidebar}
       </div>
     </div>
   )

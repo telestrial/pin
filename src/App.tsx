@@ -1,10 +1,5 @@
 import { useEffect } from 'react'
-import { Route, Routes, useParams } from 'react-router-dom'
 import { AuthFlow } from './components/auth/AuthFlow'
-import {
-  HandleDirectory,
-  handleFromCatchAllPath,
-} from './components/HandleDirectory'
 import { Home } from './components/Home'
 import { Navbar } from './components/Navbar'
 import { Toasts } from './components/Toast'
@@ -87,28 +82,9 @@ export default function App() {
     <div className="min-h-screen flex flex-col">
       <Navbar />
       <div className="flex-1 flex flex-col">
-        {step === 'connected' ? (
-          <Routes>
-            <Route path="/" element={<Home />} />
-            <Route path="*" element={<HandleRouteResolver />} />
-          </Routes>
-        ) : (
-          <AuthFlow />
-        )}
+        {step === 'connected' ? <Home /> : <AuthFlow />}
       </div>
       <Toasts />
     </div>
   )
-}
-
-// React Router v7's matcher won't accept `/@:handle` as one segment
-// with a literal prefix + param — see handleFromCatchAllPath. Catch
-// everything via `*` and inspect the matched tail: handle URLs render
-// the directory page; anything else falls back to Home so the existing
-// nav surface is the answer to malformed paths.
-function HandleRouteResolver() {
-  const params = useParams()
-  const handle = handleFromCatchAllPath(params['*'] ?? '')
-  if (handle) return <HandleDirectory handle={handle} />
-  return <Home />
 }

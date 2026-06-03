@@ -13,6 +13,7 @@ import { Compose } from './Compose'
 import { CreateChannel } from './CreateChannel'
 import { EditChannel } from './EditChannel'
 import { FormCard } from './FormCard'
+import { HandleDirectory } from './HandleDirectory'
 import { HomeFeed } from './HomeFeed'
 import { MyStorage } from './MyStorage'
 import { ReadApp } from './ReadApp'
@@ -51,6 +52,7 @@ type View =
   | { kind: 'reading'; entry: FeedEntry; returnTo: View }
   | { kind: 'bluesky-login'; resumeTo: View; cancelTo: View }
   | { kind: 'storage'; returnTo: View }
+  | { kind: 'handle-directory'; handle: string; returnTo: View }
 
 export function Home() {
   const [view, setView] = useState<View>({ kind: 'idle' })
@@ -156,6 +158,18 @@ export function Home() {
             returnTo: storageView,
           })
         }
+      />
+    )
+  }
+
+  if (view.kind === 'handle-directory') {
+    const returnTo = view.returnTo
+    return (
+      <HandleDirectory
+        handle={view.handle}
+        onBack={() => setView(returnTo)}
+        sidebar={renderSidebar()}
+        rightSidebar={renderPinSidebar()}
       />
     )
   }
