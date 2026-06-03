@@ -7,7 +7,7 @@
     "https://pin-liard.vercel.app/",
     "https://pin-git-dev-telestrials-projects.vercel.app/"
   ],
-  "scope": "atproto repo:dev.sia.pin.channel",
+  "scope": "atproto repo:dev.sia.pin.channel repo:dev.sia.pin.profile repo:dev.sia.pin.subscription",
   "grant_types": ["authorization_code", "refresh_token"],
   "response_types": ["code"],
   "application_type": "web",

@@ -51,9 +51,9 @@ async function doBoot(): Promise<OAuthBootResult> {
   // entirely. Otherwise resolve via describeRepo — an unauthenticated repo
   // endpoint that returns { handle, did, didDoc, ... } for any DID. We used
   // to call agent.getProfile here, but that 403s under our narrow OAuth
-  // scope (atproto repo:dev.sia.pin.channel) since app.bsky.actor.profile
-  // isn't granted. describeRepo only needs the public PDS endpoint, so it
-  // works without any scope.
+  // scope (Pin only requests repo:dev.sia.pin.* lexicons) since
+  // app.bsky.actor.profile isn't granted. describeRepo only needs the
+  // public PDS endpoint, so it works without any scope.
   const cached = useAuthStore.getState()
   if (cached.atprotoDID === session.did && cached.atprotoHandle) {
     return { session, agent, did: session.did, handle: cached.atprotoHandle }
@@ -98,11 +98,13 @@ async function createClient(): Promise<BrowserOAuthClient> {
     // request asking for "transition:generic".
     const port = window.location.port ? `:${window.location.port}` : ''
     const redirectURI = `http://${hostname}${port}/`
-    // Narrow scope: just enough to write/delete records in the lexicon Pin
-    // owns. atproto is the required base scope. The auth screen shows users
+    // Narrow scope: just enough to write/delete records in the lexicons Pin
+    // owns (channel manifest + identity profile + public follow records).
+    // atproto is the required base scope. The auth screen shows users
     // exactly these — no profile/posts/likes/follows surface they'd otherwise
     // be granting under transition:generic.
-    const scope = 'atproto repo:dev.sia.pin.channel'
+    const scope =
+      'atproto repo:dev.sia.pin.channel repo:dev.sia.pin.profile repo:dev.sia.pin.subscription'
     const clientId = buildAtprotoLoopbackClientId({
       scope,
       redirect_uris: [redirectURI],
