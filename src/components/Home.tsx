@@ -12,6 +12,7 @@ import { ChannelView } from './ChannelView'
 import { Compose } from './Compose'
 import { CreateChannel } from './CreateChannel'
 import { EditChannel } from './EditChannel'
+import { EditProfile } from './EditProfile'
 import { FormCard } from './FormCard'
 import { HandleDirectory } from './HandleDirectory'
 import { HomeFeed } from './HomeFeed'
@@ -53,6 +54,7 @@ type View =
   | { kind: 'bluesky-login'; resumeTo: View; cancelTo: View }
   | { kind: 'storage'; returnTo: View }
   | { kind: 'handle-directory'; handle: string; returnTo: View }
+  | { kind: 'editing-profile'; returnTo: View }
 
 export function Home() {
   const [view, setView] = useState<View>({ kind: 'idle' })
@@ -183,6 +185,24 @@ export function Home() {
             returnTo: directoryView,
           })
         }
+        onEditProfile={() =>
+          setView({ kind: 'editing-profile', returnTo: directoryView })
+        }
+        sidebar={renderSidebar()}
+        rightSidebar={renderPinSidebar()}
+      />
+    )
+  }
+
+  if (view.kind === 'editing-profile') {
+    const returnTo = view.returnTo
+    return (
+      <EditProfile
+        onCancel={() => setView(returnTo)}
+        onSaved={() => {
+          addToast('Profile saved')
+          setView(returnTo)
+        }}
         sidebar={renderSidebar()}
         rightSidebar={renderPinSidebar()}
       />

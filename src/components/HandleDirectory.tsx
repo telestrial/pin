@@ -32,6 +32,7 @@ export function HandleDirectory({
   onBack,
   onChannelClick,
   onHandleClick,
+  onEditProfile,
   sidebar,
   rightSidebar,
 }: {
@@ -39,6 +40,10 @@ export function HandleDirectory({
   onBack: () => void
   onChannelClick: (authorHandle: string, channelID: string) => void
   onHandleClick: (handle: string) => void
+  // Only wired when the directory belongs to the signed-in user. Home
+  // skips passing this when isSelf would be false, so an undefined here
+  // is the signal to ProfileHeader to hide the Edit affordance.
+  onEditProfile?: () => void
   sidebar: React.ReactNode
   rightSidebar: React.ReactNode
 }) {
@@ -203,6 +208,7 @@ export function HandleDirectory({
               followedChannels={state.followedChannels}
               onChannelClick={onChannelClick}
               onHandleClick={onHandleClick}
+              onEditProfile={isSelf ? onEditProfile : undefined}
               backButton={backButton}
             />
           )}
@@ -221,6 +227,7 @@ function LoadedDirectory({
   followedChannels,
   onChannelClick,
   onHandleClick,
+  onEditProfile,
   backButton,
 }: {
   handle: string
@@ -230,6 +237,7 @@ function LoadedDirectory({
   followedChannels: ChannelEntry[]
   onChannelClick: (authorHandle: string, channelID: string) => void
   onHandleClick: (handle: string) => void
+  onEditProfile?: () => void
   backButton: React.ReactNode
 }) {
   const isEmpty =
@@ -242,6 +250,7 @@ function LoadedDirectory({
         isSelf={isSelf}
         profile={profile}
         backButton={backButton}
+        onEdit={onEditProfile}
       />
 
       {isEmpty && (
@@ -286,15 +295,28 @@ function ProfileHeader({
   isSelf,
   profile,
   backButton,
+  onEdit,
 }: {
   handle: string
   isSelf: boolean
   profile: ProfileRecord | null
   backButton: React.ReactNode
+  onEdit?: () => void
 }) {
   return (
     <div className="bg-white border border-neutral-200 rounded-lg overflow-hidden">
-      <div className="px-5 pt-5">{backButton}</div>
+      <div className="px-5 pt-5 flex items-center justify-between gap-3">
+        {backButton}
+        {isSelf && onEdit && (
+          <button
+            type="button"
+            onClick={onEdit}
+            className="inline-flex items-center px-2.5 py-1 text-xs font-medium text-neutral-600 hover:text-neutral-900 bg-neutral-100 hover:bg-neutral-200 rounded-full transition-colors cursor-pointer"
+          >
+            {profile ? 'Edit profile' : 'Set up profile'}
+          </button>
+        )}
+      </div>
       {profile?.coverURL && (
         <CoverBanner
           coverURL={profile.coverURL}
@@ -313,9 +335,9 @@ function ProfileHeader({
               {profile.bio}
             </p>
           )}
-          {isSelf && (
+          {isSelf && !profile && (
             <p className="text-xs text-neutral-400 pt-1">
-              {profile ? 'This is your profile.' : 'No Pin profile yet.'}
+              No Pin profile yet.
             </p>
           )}
         </div>
