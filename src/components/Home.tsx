@@ -392,10 +392,6 @@ export function Home() {
             returnTo: channelView,
           })
         }
-        onHome={() => setView({ kind: 'idle' })}
-        onCreate={gotoCreating}
-        onSubscribe={() => setView({ kind: 'subscribing' })}
-        onSeeAll={() => setView({ kind: 'channels' })}
         onEdit={
           owned
             ? () =>
@@ -426,6 +422,7 @@ export function Home() {
         }
         onBack={() => setView({ kind: 'idle' })}
         composerSlot={channelComposerSlot}
+        sidebar={renderSidebar(view.channelID)}
         rightSidebar={
           <PinSidebar
             onItemClick={(ref) =>

@@ -6,7 +6,6 @@ import { useFeedStore } from '../stores/feed'
 import { ChannelAvatar } from './ChannelAvatar'
 import { FollowButton } from './FollowButton'
 import { FeedRow } from './HomeFeed'
-import { Sidebar } from './Sidebar'
 
 export function ChannelView({
   authorHandle,
@@ -14,14 +13,11 @@ export function ChannelView({
   onItemClick,
   onChannelClick,
   onHandleClick,
-  onHome,
-  onCreate,
-  onSubscribe,
-  onSeeAll,
   onEdit,
   onUnpin,
   onUnsubscribe,
   onBack,
+  sidebar,
   rightSidebar,
   composerSlot,
 }: {
@@ -30,14 +26,11 @@ export function ChannelView({
   onItemClick: (entry: FeedEntry) => void
   onChannelClick: (authorHandle: string, channelID: string) => void
   onHandleClick: (handle: string) => void
-  onHome: () => void
-  onCreate: () => void
-  onSubscribe: () => void
-  onSeeAll: () => void
   onEdit?: () => void
   onUnpin?: () => void
   onUnsubscribe?: () => void
   onBack: () => void
+  sidebar: React.ReactNode
   rightSidebar: React.ReactNode
   composerSlot?: React.ReactNode
 }) {
@@ -85,14 +78,7 @@ export function ChannelView({
   return (
     <div className="flex-1 p-6">
       <div className="max-w-7xl mx-auto flex flex-col lg:flex-row lg:items-start gap-6">
-        <Sidebar
-          onHome={onHome}
-          onCreate={onCreate}
-          onSubscribe={onSubscribe}
-          onSeeAll={onSeeAll}
-          onChannelClick={onChannelClick}
-          activeChannelID={channelID}
-        />
+        {sidebar}
         <div className="flex-1 space-y-5 min-w-0">
           <div className="border border-neutral-200 rounded-lg bg-white p-5 space-y-4">
             <button
