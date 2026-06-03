@@ -29,8 +29,20 @@ export function channelKeyFromBase64(b64: string): Uint8Array {
 }
 
 export async function deriveChannelID(key: Uint8Array): Promise<string> {
+  return deriveAtRkey(key)
+}
+
+// Generic ATProto-rkey-safe deterministic identifier derivation from any
+// input bytes. base32(sha256(input))[:16] — 80 bits of entropy. Used by
+// channelID (input = K) and by the subscription stand-off records (input
+// = subject AT-URI) so re-following an already-followed channel rewrites
+// the same record (idempotent put) and unfollow is a single deleteRecord
+// call rather than a list-then-find scan.
+export async function deriveAtRkey(input: Uint8Array | string): Promise<string> {
+  const bytes =
+    typeof input === 'string' ? new TextEncoder().encode(input) : input
   const hash = new Uint8Array(
-    await crypto.subtle.digest('SHA-256', key as BufferSource),
+    await crypto.subtle.digest('SHA-256', bytes as BufferSource),
   )
   return base32Encode(hash.slice(0, CHANNEL_ID_HASH_BYTES))
 }
