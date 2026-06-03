@@ -1,6 +1,7 @@
 import { RotateCw } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { resolveCoverArtIDs } from '../core/coverArt'
+import { formatBytes } from '../lib/format'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
 import { usePinStore } from '../stores/pin'
@@ -23,13 +24,6 @@ type SlabGroup = {
   bytesUsed: number
   capacityBytes: number
   pieces: SlabPiece[]
-}
-
-function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
-  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`
-  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`
 }
 
 function shortKey(k: string): string {

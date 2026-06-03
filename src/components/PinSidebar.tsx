@@ -241,7 +241,7 @@ export function PinSidebar({
                   />
                 </span>
                 <span className="text-neutral-500">
-                  of {formatBytes(account.maxPinnedData)}
+                  {formatBytes(account.maxPinnedData)}
                 </span>
               </div>
             ) : (
