@@ -142,44 +142,55 @@ export function HandleDirectory({
 
   const isSelf = myHandle === handle
 
+  const backButton = (
+    <button
+      type="button"
+      onClick={onBack}
+      className="self-start inline-flex items-center px-2.5 py-1 text-xs font-medium text-neutral-600 hover:text-neutral-900 bg-neutral-100 hover:bg-neutral-200 rounded-full transition-colors cursor-pointer"
+    >
+      Back
+    </button>
+  )
+
   return (
     <div className="flex-1 p-6">
       <div className="max-w-7xl mx-auto flex flex-col lg:flex-row lg:items-start gap-6">
         {sidebar}
-        <div className="flex-1 min-w-0 space-y-4">
-          <button
-            type="button"
-            onClick={onBack}
-            className="bg-neutral-100 hover:bg-neutral-200 rounded-full px-2.5 py-1 text-xs text-neutral-700 transition-colors"
-          >
-            Back
-          </button>
-
+        <div className="flex-1 min-w-0 space-y-5">
           {state.kind === 'loading' && (
-            <div className="bg-white border border-neutral-200 rounded-lg p-8 text-center text-sm text-neutral-500">
-              Loading @{handle}…
+            <div className="bg-white border border-neutral-200 rounded-lg p-5 flex flex-col gap-4">
+              {backButton}
+              <p className="text-center text-sm text-neutral-500">
+                Loading @{handle}…
+              </p>
             </div>
           )}
 
           {state.kind === 'not-found' && (
-            <div className="bg-white border border-neutral-200 rounded-lg p-8 text-center space-y-2">
-              <h1 className="text-lg font-semibold text-neutral-900">
-                @{handle}
-              </h1>
-              <p className="text-sm text-neutral-500">
-                That handle doesn't resolve to an atproto identity.
-              </p>
+            <div className="bg-white border border-neutral-200 rounded-lg p-5 flex flex-col gap-4">
+              {backButton}
+              <div className="text-center space-y-2">
+                <h1 className="text-lg font-semibold text-neutral-900">
+                  @{handle}
+                </h1>
+                <p className="text-sm text-neutral-500">
+                  That handle doesn't resolve to an atproto identity.
+                </p>
+              </div>
             </div>
           )}
 
           {state.kind === 'error' && (
-            <div className="bg-white border border-neutral-200 rounded-lg p-8 text-center space-y-2">
-              <h1 className="text-lg font-semibold text-neutral-900">
-                @{handle}
-              </h1>
-              <p className="text-sm text-red-600">
-                Failed to load: {state.message}
-              </p>
+            <div className="bg-white border border-neutral-200 rounded-lg p-5 flex flex-col gap-4">
+              {backButton}
+              <div className="text-center space-y-2">
+                <h1 className="text-lg font-semibold text-neutral-900">
+                  @{handle}
+                </h1>
+                <p className="text-sm text-red-600">
+                  Failed to load: {state.message}
+                </p>
+              </div>
             </div>
           )}
 
@@ -192,6 +203,7 @@ export function HandleDirectory({
               followedChannels={state.followedChannels}
               onChannelClick={onChannelClick}
               onHandleClick={onHandleClick}
+              backButton={backButton}
             />
           )}
         </div>
@@ -209,6 +221,7 @@ function LoadedDirectory({
   followedChannels,
   onChannelClick,
   onHandleClick,
+  backButton,
 }: {
   handle: string
   isSelf: boolean
@@ -217,13 +230,19 @@ function LoadedDirectory({
   followedChannels: ChannelEntry[]
   onChannelClick: (authorHandle: string, channelID: string) => void
   onHandleClick: (handle: string) => void
+  backButton: React.ReactNode
 }) {
   const isEmpty =
     !profile && ownChannels.length === 0 && followedChannels.length === 0
 
   return (
-    <>
-      <ProfileHeader handle={handle} isSelf={isSelf} profile={profile} />
+    <div className="space-y-5">
+      <ProfileHeader
+        handle={handle}
+        isSelf={isSelf}
+        profile={profile}
+        backButton={backButton}
+      />
 
       {isEmpty && (
         <div className="bg-white border border-neutral-200 rounded-lg p-8 text-center text-sm text-neutral-500">
@@ -258,7 +277,7 @@ function LoadedDirectory({
           ))}
         </Section>
       )}
-    </>
+    </div>
   )
 }
 
@@ -266,13 +285,16 @@ function ProfileHeader({
   handle,
   isSelf,
   profile,
+  backButton,
 }: {
   handle: string
   isSelf: boolean
   profile: ProfileRecord | null
+  backButton: React.ReactNode
 }) {
   return (
     <div className="bg-white border border-neutral-200 rounded-lg overflow-hidden">
+      <div className="px-5 pt-5">{backButton}</div>
       {profile?.coverURL && (
         <CoverBanner
           coverURL={profile.coverURL}
