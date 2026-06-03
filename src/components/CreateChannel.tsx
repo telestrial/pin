@@ -1,5 +1,6 @@
 import { type ChangeEvent, useEffect, useState } from 'react'
 import { createChannel } from '../core/channels'
+import type { ChannelVisibility } from '../core/types'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
 import { FormCard } from './FormCard'
@@ -27,6 +28,7 @@ export function CreateChannel({
 
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
+  const [visibility, setVisibility] = useState<ChannelVisibility>('public')
   const [coverFile, setCoverFile] = useState<File | null>(null)
   const [coverPreviewURL, setCoverPreviewURL] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
@@ -82,6 +84,7 @@ export function CreateChannel({
       const result = await createChannel(sdk, agent, atprotoHandle, {
         name: trimmedName,
         description: description.trim(),
+        visibility,
         coverImage,
       })
       addMyChannel({
@@ -177,6 +180,33 @@ export function CreateChannel({
             />
           </div>
         </label>
+
+        <fieldset className="space-y-2">
+          <legend className="text-xs font-medium text-neutral-700 uppercase tracking-wider">
+            Visibility
+          </legend>
+          <VisibilityChoice
+            value="public"
+            label="Public"
+            description="Anyone who knows the handle can find and follow this channel. The encryption key is published in the channel record."
+            current={visibility}
+            disabled={submitting}
+            onChange={setVisibility}
+          />
+          <VisibilityChoice
+            value="obscure"
+            label="Obscure"
+            description="Only people you send the subscribe URL to can read it. The channel record exists publicly as ciphertext but nothing links it to your other channels."
+            current={visibility}
+            disabled={submitting}
+            onChange={setVisibility}
+          />
+          <p className="text-xs text-neutral-400 pt-1">
+            Set at creation — can't be changed later. (Going public would
+            require giving readers a key; going obscure would orphan
+            existing followers.)
+          </p>
+        </fieldset>
       </div>
 
       {error && <p className="text-red-600 text-sm wrap-break-word">{error}</p>}
@@ -198,5 +228,46 @@ export function CreateChannel({
       </button>
       </form>
     </FormCard>
+  )
+}
+
+function VisibilityChoice({
+  value,
+  label,
+  description,
+  current,
+  disabled,
+  onChange,
+}: {
+  value: ChannelVisibility
+  label: string
+  description: string
+  current: ChannelVisibility
+  disabled: boolean
+  onChange: (v: ChannelVisibility) => void
+}) {
+  const selected = current === value
+  return (
+    <label
+      className={`flex gap-3 items-start p-3 border rounded-lg cursor-pointer transition-colors ${
+        selected
+          ? 'border-green-600 bg-green-50/40'
+          : 'border-neutral-200 hover:border-neutral-300'
+      } ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
+    >
+      <input
+        type="radio"
+        name="visibility"
+        value={value}
+        checked={selected}
+        onChange={() => onChange(value)}
+        disabled={disabled}
+        className="mt-0.5 accent-green-600"
+      />
+      <div className="min-w-0 flex-1 space-y-0.5">
+        <div className="text-sm font-medium text-neutral-900">{label}</div>
+        <div className="text-xs text-neutral-600">{description}</div>
+      </div>
+    </label>
   )
 }
