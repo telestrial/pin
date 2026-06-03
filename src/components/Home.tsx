@@ -185,9 +185,22 @@ export function Home() {
             returnTo: directoryView,
           })
         }
-        onEditProfile={() =>
-          setView({ kind: 'editing-profile', returnTo: directoryView })
-        }
+        onEditProfile={() => {
+          // Profile edit writes a record under the user's DID — needs a
+          // live Bluesky session. Same gate pattern as gotoCreating: if
+          // the agent isn't live (scope-expansion re-consent pending,
+          // session not restored, etc.), route through bluesky-login
+          // first and resume to the edit view after sign-in.
+          if (useAuthStore.getState().atprotoAgent) {
+            setView({ kind: 'editing-profile', returnTo: directoryView })
+          } else {
+            setView({
+              kind: 'bluesky-login',
+              resumeTo: { kind: 'editing-profile', returnTo: directoryView },
+              cancelTo: directoryView,
+            })
+          }
+        }}
         sidebar={renderSidebar()}
         rightSidebar={renderPinSidebar()}
       />

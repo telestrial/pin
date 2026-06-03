@@ -140,7 +140,16 @@ export function EditProfile({
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    if (!agent || !sdk) return
+    if (!agent) {
+      setError(
+        'Bluesky session not active. Cancel and try again to sign in.',
+      )
+      return
+    }
+    if (!sdk) {
+      setError('Sia session not active. Reload and reconnect.')
+      return
+    }
     setSubmitting(true)
     setError(null)
     try {
