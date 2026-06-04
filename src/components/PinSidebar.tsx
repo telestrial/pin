@@ -391,6 +391,13 @@ export function PinSidebar({
             className="w-full pl-7 pr-2 py-2 text-xs bg-white border-0 border-y border-neutral-200 focus:outline-none focus:border-green-600 placeholder-neutral-400"
           />
         </div>
+        {/* Dynamic title labels what's below the input. The swap from
+            "Recent pins" → "Search results" is the feedback signal that
+            the list mode changed because of your typing; a static label
+            wouldn't earn its keep, but the state-change does. */}
+        <h2 className="text-xs font-semibold tracking-wide uppercase text-neutral-500 px-3 pt-3 pb-1">
+          {q ? 'Search results' : 'Recent pins'}
+        </h2>
         {displayList.length === 0 ? (
           <p className="text-xs text-neutral-500 px-3 py-2">
             {q
