@@ -7,12 +7,14 @@ import { FormCard } from './FormCard'
 export function ChannelsView({
   onCancel,
   onChannelClick,
+  onHandleClick,
   onUnsubscribe,
   sidebar,
   rightSidebar,
 }: {
   onCancel: () => void
   onChannelClick: (authorHandle: string, channelID: string) => void
+  onHandleClick: (handle: string) => void
   onUnsubscribe?: (channelID: string, name: string) => void
   sidebar?: React.ReactNode
   rightSidebar?: React.ReactNode
@@ -101,23 +103,29 @@ export function ChannelsView({
                     key={`${s.authorHandle}/${s.channelID}`}
                     className="py-3 flex items-center gap-3"
                   >
-                    <button
-                      type="button"
-                      onClick={() => onChannelClick(s.authorHandle, s.channelID)}
-                      className="min-w-0 flex-1 text-left hover:bg-neutral-50 -mx-2 px-2 py-1 rounded transition-colors cursor-pointer"
-                    >
-                      <p className="text-sm text-neutral-900 truncate">
+                    <div className="min-w-0 flex-1 space-y-0.5">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          onChannelClick(s.authorHandle, s.channelID)
+                        }
+                        className="block max-w-full text-left text-sm text-neutral-900 truncate hover:underline cursor-pointer"
+                      >
                         {name}
-                      </p>
-                      <p className="text-xs text-neutral-500 truncate">
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onHandleClick(s.authorHandle)}
+                        className="block max-w-full text-left text-xs text-neutral-500 truncate hover:underline cursor-pointer"
+                      >
                         @{s.authorHandle}
-                      </p>
+                      </button>
                       {error && (
                         <p className="text-xs text-red-600 mt-1 wrap-break-word">
                           Failed to load: {error.error}
                         </p>
                       )}
-                    </button>
+                    </div>
                     {onUnsubscribe && (
                       <button
                         type="button"

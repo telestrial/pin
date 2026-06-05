@@ -310,6 +310,13 @@ export function Home() {
             channelID,
           })
         }
+        onHandleClick={(handle) =>
+          setView({
+            kind: 'handle-directory',
+            handle,
+            returnTo: { kind: 'channels' },
+          })
+        }
         onUnsubscribe={(channelID, name) => {
           if (
             !window.confirm(
