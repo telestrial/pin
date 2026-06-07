@@ -269,6 +269,8 @@ function LoadedDirectory({
         handle={handle}
         isSelf={isSelf}
         profile={profile}
+        voicesCount={ownChannels.length}
+        followingCount={followedChannels.length}
         onBack={onBack}
         onEdit={onEditProfile}
       />
@@ -310,16 +312,31 @@ function LoadedDirectory({
   )
 }
 
+function Stat({ value, label }: { value: number; label: string }) {
+  return (
+    <div className="shrink-0 leading-tight">
+      <div className="text-2xl font-bold text-neutral-900">{value}</div>
+      <div className="text-xs text-neutral-500 uppercase tracking-wide">
+        {label}
+      </div>
+    </div>
+  )
+}
+
 function ProfileHeader({
   handle,
   isSelf,
   profile,
+  voicesCount,
+  followingCount,
   onBack,
   onEdit,
 }: {
   handle: string
   isSelf: boolean
   profile: ProfileRecord | null
+  voicesCount: number
+  followingCount: number
   onBack?: () => void
   onEdit?: () => void
 }) {
@@ -362,13 +379,17 @@ function ProfileHeader({
             <ProfileAvatar profile={profile} handle={handle} />
           </div>
           <div className="flex-1 min-w-0 flex items-start justify-between gap-3 pt-3">
-            <div className="min-w-0 space-y-0.5">
-              <div className="text-lg font-semibold text-neutral-900 truncate">
-                {profile?.displayName || `@${handle}`}
+            <div className="min-w-0 flex items-center gap-5">
+              <div className="min-w-0 space-y-0.5">
+                <div className="text-lg font-semibold text-neutral-900 truncate">
+                  {profile?.displayName || `@${handle}`}
+                </div>
+                <div className="text-sm text-neutral-500 truncate">
+                  @{handle}
+                </div>
               </div>
-              <div className="text-sm text-neutral-500 truncate">
-                @{handle}
-              </div>
+              <Stat value={voicesCount} label="Voices" />
+              <Stat value={followingCount} label="Following" />
             </div>
             {isSelf && onEdit && (
               <button
@@ -541,7 +562,7 @@ function ChannelRow({
         channelID={entry.channelID}
         channelName={entry.manifest.name}
         authorHandle={entry.authorHandle}
-        coverArt={entry.manifest.coverArt}
+        avatar={entry.manifest.avatar}
         size="md"
       />
       <div className="flex-1 min-w-0">

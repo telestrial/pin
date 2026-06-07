@@ -1,4 +1,4 @@
-import type { ChannelCover } from '../core/types'
+import type { ChannelImage } from '../core/types'
 import { useItemBlobURL } from '../lib/useItemBytes'
 import { ChannelMark } from './ChannelMark'
 
@@ -6,16 +6,16 @@ export function ChannelAvatar({
   channelID,
   channelName,
   authorHandle,
-  coverArt,
+  avatar,
   size = 'md',
 }: {
   channelID: string
   channelName: string
   authorHandle: string
-  coverArt?: ChannelCover
+  avatar?: ChannelImage
   size?: 'sm' | 'md' | 'lg'
 }) {
-  if (!coverArt) {
+  if (!avatar) {
     return (
       <ChannelMark
         channelID={channelID}
@@ -26,8 +26,8 @@ export function ChannelAvatar({
     )
   }
   return (
-    <CoverImage
-      coverArt={coverArt}
+    <AvatarImage
+      avatar={avatar}
       channelID={channelID}
       channelName={channelName}
       authorHandle={authorHandle}
@@ -36,23 +36,23 @@ export function ChannelAvatar({
   )
 }
 
-function CoverImage({
-  coverArt,
+function AvatarImage({
+  avatar,
   channelID,
   channelName,
   authorHandle,
   size,
 }: {
-  coverArt: ChannelCover
+  avatar: ChannelImage
   channelID: string
   channelName: string
   authorHandle: string
   size: 'sm' | 'md' | 'lg'
 }) {
   const { url, error } = useItemBlobURL(
-    coverArt.itemURL,
-    coverArt.mimeType,
-    coverArt.contentHash,
+    avatar.itemURL,
+    avatar.mimeType,
+    avatar.contentHash,
   )
   const sizeClass =
     size === 'lg' ? 'size-16' : size === 'sm' ? 'size-7' : 'size-10'

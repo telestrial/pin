@@ -361,7 +361,7 @@ export function Compose({
                 channelID={channel.channelID}
                 channelName={channel.name}
                 authorHandle={handleForAvatar}
-                coverArt={manifests[channel.channelID]?.coverArt}
+                avatar={manifests[channel.channelID]?.avatar}
                 size="md"
               />
             </button>
@@ -370,7 +370,7 @@ export function Compose({
               channelID={channel.channelID}
               channelName={channel.name}
               authorHandle={handleForAvatar}
-              coverArt={manifests[channel.channelID]?.coverArt}
+              avatar={manifests[channel.channelID]?.avatar}
               size="md"
             />
           )}
@@ -398,7 +398,7 @@ export function Compose({
                       channelID={c.channelID}
                       channelName={c.name}
                       authorHandle={handleForAvatar}
-                      coverArt={manifests[c.channelID]?.coverArt}
+                      avatar={manifests[c.channelID]?.avatar}
                       size="sm"
                     />
                     <span className="flex-1 text-left text-neutral-900 truncate">

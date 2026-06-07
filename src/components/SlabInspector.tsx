@@ -1,6 +1,6 @@
 import { RotateCw } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
-import { resolveCoverArtIDs } from '../core/coverArt'
+import { resolveChannelImageIDs } from '../core/channelImages'
 import { formatBytes } from '../lib/format'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
@@ -88,19 +88,20 @@ export function SlabInspector() {
         if (settingsObjectID) {
           extras.push({ id: settingsObjectID, label: 'Settings' })
         }
-        const covers = await resolveCoverArtIDs(sdk, myChannels, manifests)
-        for (const f of covers.failed) {
+        const images = await resolveChannelImageIDs(sdk, myChannels, manifests)
+        for (const f of images.failed) {
           console.warn(
-            `slab inspector: cover resolve failed for ${f.channelID}:`,
+            `slab inspector: ${f.kind} resolve failed for ${f.channelID}:`,
             f.error,
           )
         }
-        for (const channel of myChannels) {
-          const cover = covers.resolved.get(channel.channelID)
-          if (!cover) continue
+        const channelNameByID = new Map(
+          myChannels.map((c) => [c.channelID, c.name]),
+        )
+        for (const img of images.resolved) {
           extras.push({
-            id: cover.objectID,
-            label: `${channel.name} · cover`,
+            id: img.objectID,
+            label: `${channelNameByID.get(img.channelID) ?? img.channelID} · ${img.kind}`,
           })
         }
 

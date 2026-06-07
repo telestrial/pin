@@ -1,6 +1,6 @@
 import type { Sdk } from '@siafoundation/sia-storage'
 import { useEffect } from 'react'
-import { resolveCoverArtIDs } from '../core/coverArt'
+import { resolveChannelImageIDs } from '../core/channelImages'
 import { runRepackBatch, type ScopeRef } from '../core/repack'
 import { isValidAttachment } from '../core/types'
 import { useAuthStore } from '../stores/auth'
@@ -76,24 +76,24 @@ async function buildScope(sdk: Sdk): Promise<ScopeRef[]> {
     }
   }
 
-  // Cover art per owned channel — resolution failures are best-effort,
-  // missing covers just don't get repacked this pass.
-  const covers = await resolveCoverArtIDs(sdk, auth.myChannels, feed.manifests)
-  for (const f of covers.failed) {
+  // Channel images (avatar + cover) per owned channel — resolution failures
+  // are best-effort, missing images just don't get repacked this pass.
+  const images = await resolveChannelImageIDs(sdk, auth.myChannels, feed.manifests)
+  for (const f of images.failed) {
     console.warn(
-      `repack: failed to resolve cover art for ${f.channelID}:`,
+      `repack: failed to resolve ${f.kind} for ${f.channelID}:`,
       f.error,
     )
   }
-  for (const channel of auth.myChannels) {
-    const cover = covers.resolved.get(channel.channelID)
-    if (!cover) continue
+  for (const img of images.resolved) {
+    const channelKey = channelKeyByID.get(img.channelID)
+    if (!channelKey) continue
     push({
       source: 'channel',
-      objectID: cover.objectID,
-      itemURL: cover.itemURL,
-      channelID: channel.channelID,
-      channelKey: channel.channelKey,
+      objectID: img.objectID,
+      itemURL: img.itemURL,
+      channelID: img.channelID,
+      channelKey,
     })
   }
 

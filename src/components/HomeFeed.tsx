@@ -240,7 +240,7 @@ export function FeedRow({
               channelID={channel.channelID}
               channelName={channel.name}
               authorHandle={channel.authorHandle}
-              coverArt={channel.coverArt}
+              avatar={channel.avatar}
             />
           </button>
           <div className="min-w-0 flex-1 space-y-2">

@@ -1,6 +1,8 @@
 import type { Agent } from '@atproto/api'
 import type { Sdk } from '@siafoundation/sia-storage'
 import {
+  CHANNEL_LEXICON,
+  type ChannelRecord,
   deleteChannelRecord,
   getChannelRecord,
   putChannelRecord,
@@ -13,16 +15,37 @@ import {
   encryptForChannel,
   generateChannelKey,
 } from './crypto'
+import {
+  channelAtURI,
+  rkeyForSubject,
+  SUBSCRIPTION_LEXICON,
+  type SubscriptionRecord,
+} from './follow'
 import { downloadItem, uploadItem } from './sia'
 import {
   type AttachmentRef,
   CHANNEL_MANIFEST_VERSION,
-  type ChannelCover,
+  type ChannelImage,
   type ChannelManifest,
   type ChannelVisibility,
   type ItemRef,
   type ItemType,
 } from './types'
+
+// Upload an optional channel image (avatar or cover) to Sia and shape it into
+// a ChannelImage ref. Shared by createChannel and editChannel.
+async function uploadChannelImage(
+  sdk: Sdk,
+  img?: { bytes: Uint8Array; mimeType: string },
+): Promise<ChannelImage | undefined> {
+  if (!img) return undefined
+  const uploaded = await uploadItem(sdk, img.bytes)
+  return {
+    itemURL: uploaded.itemURL,
+    mimeType: img.mimeType,
+    contentHash: uploaded.contentHash,
+  }
+}
 
 export type CreatedChannel = {
   channelID: string
@@ -71,6 +94,7 @@ export async function createChannel(
     // (no follow primitive existed) and the new shape leans toward
     // discoverable-by-default for the Twitter-shape experience.
     visibility?: ChannelVisibility
+    avatarImage?: { bytes: Uint8Array; mimeType: string }
     coverImage?: { bytes: Uint8Array; mimeType: string }
   },
 ): Promise<CreatedChannel> {
@@ -80,15 +104,8 @@ export async function createChannel(
   const channelKey = channelKeyToBase64(keyBytes)
   const channelID = await deriveChannelID(keyBytes)
 
-  let coverArt: ChannelManifest['coverArt']
-  if (args.coverImage) {
-    const uploaded = await uploadItem(sdk, args.coverImage.bytes)
-    coverArt = {
-      itemURL: uploaded.itemURL,
-      mimeType: args.coverImage.mimeType,
-      contentHash: uploaded.contentHash,
-    }
-  }
+  const avatar = await uploadChannelImage(sdk, args.avatarImage)
+  const cover = await uploadChannelImage(sdk, args.coverImage)
 
   const manifest: ChannelManifest = {
     version: CHANNEL_MANIFEST_VERSION,
@@ -98,17 +115,55 @@ export async function createChannel(
     authorATProtoDID: did,
     publishedAt: new Date().toISOString(),
     visibility: args.visibility ?? 'public',
-    coverArt,
+    avatar,
+    cover,
     items: [],
   }
 
   const ciphertext = await encryptForChannel(keyBytes, JSON.stringify(manifest))
-  await putChannelRecord(
-    agent,
-    channelID,
-    ciphertext,
-    manifest.visibility === 'public' ? channelKey : undefined,
-  )
+  const isPublic = manifest.visibility === 'public'
+
+  const channelRecord: ChannelRecord = {
+    $type: CHANNEL_LEXICON,
+    encryptedManifest: ciphertext,
+    ...(isPublic && { key: channelKey }),
+  }
+
+  const writes: Array<{
+    $type: 'com.atproto.repo.applyWrites#create'
+    collection: string
+    rkey: string
+    value: Record<string, unknown>
+  }> = [
+    {
+      $type: 'com.atproto.repo.applyWrites#create',
+      collection: CHANNEL_LEXICON,
+      rkey: channelID,
+      value: channelRecord,
+    },
+  ]
+
+  // Public channels are claimed at birth: the author self-follows in the
+  // SAME atproto commit, so a channel is never momentarily public-but-
+  // unclaimed. Obscure channels can't be followed (the AT-URI rkey derives
+  // from K, so a public follow record would leak the channel's existence),
+  // so they're never claimed and never surface under "Voices".
+  if (isPublic) {
+    const subject = channelAtURI(did, channelID)
+    const subRecord: SubscriptionRecord = {
+      $type: SUBSCRIPTION_LEXICON,
+      subject,
+      createdAt: manifest.publishedAt,
+    }
+    writes.push({
+      $type: 'com.atproto.repo.applyWrites#create',
+      collection: SUBSCRIPTION_LEXICON,
+      rkey: await rkeyForSubject(subject),
+      value: subRecord,
+    })
+  }
+
+  await agent.com.atproto.repo.applyWrites({ repo: did, validate: false, writes })
 
   return {
     channelID,
@@ -121,7 +176,9 @@ export async function createChannel(
 export type EditChannelPatch = {
   name?: string
   description?: string
+  avatarImage?: { bytes: Uint8Array; mimeType: string }
   coverImage?: { bytes: Uint8Array; mimeType: string }
+  removeAvatar?: boolean
   removeCover?: boolean
 }
 
@@ -139,23 +196,26 @@ export async function editChannel(
     channel.channelKey,
   )
 
-  let coverArt: ChannelCover | undefined = current.coverArt
+  let avatar: ChannelImage | undefined = current.avatar
+  if (patch.removeAvatar) {
+    avatar = undefined
+  } else if (patch.avatarImage) {
+    avatar = await uploadChannelImage(sdk, patch.avatarImage)
+  }
+
+  let cover: ChannelImage | undefined = current.cover
   if (patch.removeCover) {
-    coverArt = undefined
+    cover = undefined
   } else if (patch.coverImage) {
-    const uploaded = await uploadItem(sdk, patch.coverImage.bytes)
-    coverArt = {
-      itemURL: uploaded.itemURL,
-      mimeType: patch.coverImage.mimeType,
-      contentHash: uploaded.contentHash,
-    }
+    cover = await uploadChannelImage(sdk, patch.coverImage)
   }
 
   const updated: ChannelManifest = {
     ...current,
     name: patch.name ?? current.name,
     description: patch.description ?? current.description,
-    coverArt,
+    avatar,
+    cover,
     publishedAt: new Date().toISOString(),
   }
 
@@ -244,12 +304,13 @@ export async function unpinChannel(
     }
   }
 
-  if (manifest.coverArt) {
+  for (const image of [manifest.avatar, manifest.cover]) {
+    if (!image) continue
     try {
-      const handle = await sdk.sharedObject(manifest.coverArt.itemURL)
+      const handle = await sdk.sharedObject(image.itemURL)
       await sdk.deleteObject(handle.id())
     } catch (e) {
-      console.warn('Failed to delete cover art:', e)
+      console.warn('Failed to delete channel image:', e)
     }
   }
 

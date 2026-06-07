@@ -104,7 +104,7 @@ export function Sidebar({
                         channelID={c.channelID}
                         channelName={c.name}
                         authorHandle={handle ?? ''}
-                        coverArt={manifests[c.channelID]?.coverArt}
+                        avatar={manifests[c.channelID]?.avatar}
                         size="sm"
                       />
                       <span className="truncate flex-1">{c.name}</span>
@@ -156,7 +156,7 @@ export function Sidebar({
                         channelID={s.channelID}
                         channelName={s.cachedName ?? s.channelID}
                         authorHandle={s.authorHandle}
-                        coverArt={manifests[s.channelID]?.coverArt}
+                        avatar={manifests[s.channelID]?.avatar}
                         size="sm"
                       />
                       <span className="truncate flex-1">

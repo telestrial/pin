@@ -1,6 +1,6 @@
 import type { Sdk } from '@siafoundation/sia-storage'
 import { useEffect } from 'react'
-import { resolveCoverArtIDs } from '../core/coverArt'
+import { resolveChannelImageIDs } from '../core/channelImages'
 import { sweepOrphans } from '../core/orphanSweep'
 import { getProfileRecord } from '../core/profile'
 import { isValidAttachment } from '../core/types'
@@ -53,22 +53,22 @@ async function buildKnownIDs(sdk: Sdk): Promise<{
     }
   }
 
-  // Cover art per owned channel — manifest only stores the share URL,
-  // so resolve via sharedObject(url).id(). If ANY cover-art resolution
-  // fails, we bail on the sweep entirely — incomplete known set is too
-  // risky to proceed with destructive deletes.
-  const covers = await resolveCoverArtIDs(sdk, auth.myChannels, feed.manifests)
-  if (covers.failed.length > 0) {
-    for (const f of covers.failed) {
+  // Channel images (avatar + cover) per owned channel — manifest only stores
+  // the share URL, so resolve via sharedObject(url).id(). If ANY image
+  // resolution fails, we bail on the sweep entirely — incomplete known set is
+  // too risky to proceed with destructive deletes.
+  const images = await resolveChannelImageIDs(sdk, auth.myChannels, feed.manifests)
+  if (images.failed.length > 0) {
+    for (const f of images.failed) {
       console.warn(
-        `sweep: cover-art resolution failed for ${f.channelID}, bailing:`,
+        `sweep: ${f.kind} resolution failed for ${f.channelID}, bailing:`,
         f.error,
       )
     }
     return { ok: false, ids }
   }
-  for (const cover of covers.resolved.values()) {
-    ids.add(cover.objectID)
+  for (const img of images.resolved) {
+    ids.add(img.objectID)
   }
 
   // Resolve legacy attachments. Per-attachment failures are logged and

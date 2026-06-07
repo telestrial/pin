@@ -247,16 +247,10 @@ export async function runRepackBatch(
       return next
     })
 
-    let coverArt = manifest.coverArt
-    if (coverArt) {
-      const r = replacementsByURL.get(coverArt.itemURL)
-      if (r) {
-        coverArt = {
-          ...coverArt,
-          itemURL: r.url,
-          contentHash: r.contentHash,
-        }
-      }
+    const swapImage = (image: ChannelManifest['avatar']) => {
+      if (!image) return image
+      const r = replacementsByURL.get(image.itemURL)
+      return r ? { ...image, itemURL: r.url, contentHash: r.contentHash } : image
     }
 
     const updated: ChannelManifest = {
@@ -266,7 +260,8 @@ export async function runRepackBatch(
       // JetStream commit and refresh; the visible chronological order is
       // unchanged because items kept their timestamps.
       publishedAt: new Date().toISOString(),
-      coverArt,
+      avatar: swapImage(manifest.avatar),
+      cover: swapImage(manifest.cover),
       items: updatedItems,
     }
 

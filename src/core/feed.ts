@@ -1,6 +1,6 @@
 import { fetchChannel } from './channels'
 import type {
-  ChannelCover,
+  ChannelImage,
   ChannelManifest,
   ItemRef,
   SubscriptionRef,
@@ -12,7 +12,8 @@ export type FeedEntry = {
     authorHandle: string
     channelID: string
     name: string
-    coverArt?: ChannelCover
+    // Round avatar for the feed-row identity (banner cover isn't shown here).
+    avatar?: ChannelImage
   }
 }
 
@@ -62,7 +63,7 @@ export async function buildHomeFeed(
             authorHandle: sub.authorHandle,
             channelID: sub.channelID,
             name: manifest.name,
-            coverArt: manifest.coverArt,
+            avatar: manifest.avatar,
           },
         })
       }

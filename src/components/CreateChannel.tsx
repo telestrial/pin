@@ -29,10 +29,22 @@ export function CreateChannel({
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const [visibility, setVisibility] = useState<ChannelVisibility>('public')
+  const [avatarFile, setAvatarFile] = useState<File | null>(null)
+  const [avatarPreviewURL, setAvatarPreviewURL] = useState<string | null>(null)
   const [coverFile, setCoverFile] = useState<File | null>(null)
   const [coverPreviewURL, setCoverPreviewURL] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!avatarFile) {
+      setAvatarPreviewURL(null)
+      return
+    }
+    const url = URL.createObjectURL(avatarFile)
+    setAvatarPreviewURL(url)
+    return () => URL.revokeObjectURL(url)
+  }, [avatarFile])
 
   useEffect(() => {
     if (!coverFile) {
@@ -44,21 +56,25 @@ export function CreateChannel({
     return () => URL.revokeObjectURL(url)
   }, [coverFile])
 
-  function handleCoverChange(e: ChangeEvent<HTMLInputElement>) {
+  function pickImage(
+    e: ChangeEvent<HTMLInputElement>,
+    set: (f: File | null) => void,
+    kind: string,
+  ) {
     const f = e.target.files?.[0] ?? null
     if (!f) {
-      setCoverFile(null)
+      set(null)
       return
     }
     if (!ACCEPTED_COVER_MIMES.includes(f.type)) {
       setError(
-        `Unsupported cover type: ${f.type || 'unknown'}. Use JPEG, PNG, or WebP.`,
+        `Unsupported ${kind} type: ${f.type || 'unknown'}. Use JPEG, PNG, or WebP.`,
       )
-      setCoverFile(null)
+      set(null)
       return
     }
     setError(null)
-    setCoverFile(f)
+    set(f)
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -73,19 +89,19 @@ export function CreateChannel({
     setSubmitting(true)
     setError(null)
     try {
-      let coverImage: { bytes: Uint8Array; mimeType: string } | undefined
-      if (coverFile) {
-        const buf = await coverFile.arrayBuffer()
-        coverImage = {
-          bytes: new Uint8Array(buf),
-          mimeType: coverFile.type,
-        }
-      }
+      const toImage = async (f: File | null) =>
+        f
+          ? {
+              bytes: new Uint8Array(await f.arrayBuffer()),
+              mimeType: f.type,
+            }
+          : undefined
       const result = await createChannel(sdk, agent, atprotoHandle, {
         name: trimmedName,
         description: description.trim(),
         visibility,
-        coverImage,
+        avatarImage: await toImage(avatarFile),
+        coverImage: await toImage(coverFile),
       })
       addMyChannel({
         channelID: result.channelID,
@@ -159,13 +175,13 @@ export function CreateChannel({
 
         <label className="block space-y-2">
           <span className="text-xs font-medium text-neutral-700 uppercase tracking-wider">
-            Cover image <span className="text-neutral-400">(optional)</span>
+            Avatar <span className="text-neutral-400">(optional)</span>
           </span>
           <div className="flex items-center gap-3">
-            {coverPreviewURL ? (
+            {avatarPreviewURL ? (
               <img
-                src={coverPreviewURL}
-                alt="cover preview"
+                src={avatarPreviewURL}
+                alt="avatar preview"
                 className="size-16 rounded-full object-cover border border-neutral-200 shrink-0"
               />
             ) : (
@@ -174,11 +190,33 @@ export function CreateChannel({
             <input
               type="file"
               accept="image/jpeg,image/png,image/webp"
-              onChange={handleCoverChange}
+              onChange={(e) => pickImage(e, setAvatarFile, 'avatar')}
               disabled={submitting}
               className="block w-full text-sm text-neutral-700 file:mr-3 file:px-3 file:py-1.5 file:rounded-md file:border-0 file:text-xs file:font-medium file:bg-neutral-100 file:text-neutral-900 hover:file:bg-neutral-200 file:cursor-pointer disabled:opacity-50"
             />
           </div>
+        </label>
+
+        <label className="block space-y-2">
+          <span className="text-xs font-medium text-neutral-700 uppercase tracking-wider">
+            Cover banner <span className="text-neutral-400">(optional)</span>
+          </span>
+          {coverPreviewURL ? (
+            <img
+              src={coverPreviewURL}
+              alt="cover banner preview"
+              className="w-full h-24 rounded-lg object-cover border border-neutral-200"
+            />
+          ) : (
+            <div className="w-full h-24 rounded-lg bg-neutral-100 border border-neutral-200" />
+          )}
+          <input
+            type="file"
+            accept="image/jpeg,image/png,image/webp"
+            onChange={(e) => pickImage(e, setCoverFile, 'cover')}
+            disabled={submitting}
+            className="block w-full text-sm text-neutral-700 file:mr-3 file:px-3 file:py-1.5 file:rounded-md file:border-0 file:text-xs file:font-medium file:bg-neutral-100 file:text-neutral-900 hover:file:bg-neutral-200 file:cursor-pointer disabled:opacity-50"
+          />
         </label>
 
         <fieldset className="space-y-2">
@@ -213,8 +251,8 @@ export function CreateChannel({
 
       {submitting && (
         <p className="text-neutral-500 text-xs">
-          {coverFile
-            ? 'Uploading cover to Sia (~20 seconds), encrypting manifest, writing to ATProto.'
+          {avatarFile || coverFile
+            ? 'Uploading image(s) to Sia (~20 seconds each), encrypting manifest, writing to ATProto.'
             : 'Generating channel key, encrypting manifest, writing to ATProto.'}
         </p>
       )}

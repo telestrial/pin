@@ -61,7 +61,7 @@ describe('buildHomeFeed', () => {
   it("threads each item into a FeedEntry with the channel's identity", async () => {
     const fetcher: FetchChannel = vi.fn().mockResolvedValue(
       manifest('Alice', [item('2026-05-01T10:00:00.000Z')], {
-        coverArt: { itemURL: 'https://sia.test/cover', mimeType: 'image/jpeg' },
+        avatar: { itemURL: 'https://sia.test/avatar', mimeType: 'image/jpeg' },
       }),
     )
     const result = await buildHomeFeed([sub()], fetcher)
@@ -70,7 +70,7 @@ describe('buildHomeFeed', () => {
       authorHandle: 'alice.test',
       channelID: 'alicechannel0001',
       name: 'Alice',
-      coverArt: { itemURL: 'https://sia.test/cover', mimeType: 'image/jpeg' },
+      avatar: { itemURL: 'https://sia.test/avatar', mimeType: 'image/jpeg' },
     })
     expect(result.entries[0].item.summary).toBe('body at 2026-05-01T10:00:00.000Z')
   })

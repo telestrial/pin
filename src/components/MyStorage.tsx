@@ -69,7 +69,7 @@ export function MyStorage({
           itemCount: items.length,
           bytes,
           authorHandle: sub?.authorHandle ?? '',
-          coverArt: manifests[c.channelID]?.coverArt,
+          avatar: manifests[c.channelID]?.avatar,
         }
       })
       .sort((a, b) => b.bytes - a.bytes)
@@ -241,7 +241,7 @@ export function MyStorage({
                   All
                 </button>
                 {ownedChannelStrip.map(
-                  ({ channel, itemCount, bytes, authorHandle, coverArt }) => {
+                  ({ channel, itemCount, bytes, authorHandle, avatar }) => {
                     const active = selectedChannel === channel.channelID
                     return (
                       <button
@@ -261,7 +261,7 @@ export function MyStorage({
                           channelID={channel.channelID}
                           channelName={channel.name}
                           authorHandle={authorHandle}
-                          coverArt={coverArt}
+                          avatar={avatar}
                           size="sm"
                         />
                         <span className="font-medium truncate max-w-32">

@@ -11,8 +11,8 @@ export type ProfileRecord = {
   displayName?: string
   bio?: string
   // Sia share URLs (with per-object encryption key in the URL fragment),
-  // same shape as ChannelCover.itemURL. Bytes live on Sia, not in atproto
-  // blob storage — symmetric with how channel covers work.
+  // same shape as ChannelImage.itemURL. Bytes live on Sia, not in atproto
+  // blob storage — symmetric with how channel images work.
   avatarURL?: string
   coverURL?: string
   updatedAt: string

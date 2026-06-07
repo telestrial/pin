@@ -4,7 +4,7 @@ import {
   editChannel,
   fetchChannel,
 } from '../core/channels'
-import type { ChannelCover, ChannelManifest } from '../core/types'
+import type { ChannelImage, ChannelManifest } from '../core/types'
 import { useItemBlobURL } from '../lib/useItemBytes'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
@@ -41,11 +41,12 @@ export function EditChannel({
 
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
+  const [newAvatarFile, setNewAvatarFile] = useState<File | null>(null)
+  const [avatarPreviewURL, setAvatarPreviewURL] = useState<string | null>(null)
+  const [removeAvatar, setRemoveAvatar] = useState(false)
   const [newCoverFile, setNewCoverFile] = useState<File | null>(null)
-  const [newCoverPreviewURL, setNewCoverPreviewURL] = useState<string | null>(
-    null,
-  )
-  const [removeExistingCover, setRemoveExistingCover] = useState(false)
+  const [coverPreviewURL, setCoverPreviewURL] = useState<string | null>(null)
+  const [removeCover, setRemoveCover] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -75,36 +76,46 @@ export function EditChannel({
   }, [atprotoDID, channelID, channelKey])
 
   useEffect(() => {
+    if (!newAvatarFile) {
+      setAvatarPreviewURL(null)
+      return
+    }
+    const url = URL.createObjectURL(newAvatarFile)
+    setAvatarPreviewURL(url)
+    return () => URL.revokeObjectURL(url)
+  }, [newAvatarFile])
+
+  useEffect(() => {
     if (!newCoverFile) {
-      setNewCoverPreviewURL(null)
+      setCoverPreviewURL(null)
       return
     }
     const url = URL.createObjectURL(newCoverFile)
-    setNewCoverPreviewURL(url)
+    setCoverPreviewURL(url)
     return () => URL.revokeObjectURL(url)
   }, [newCoverFile])
 
-  function handleCoverChange(e: ChangeEvent<HTMLInputElement>) {
+  function pickImage(
+    e: ChangeEvent<HTMLInputElement>,
+    setFile: (f: File | null) => void,
+    clearRemove: () => void,
+    kind: string,
+  ) {
     const f = e.target.files?.[0] ?? null
     if (!f) {
-      setNewCoverFile(null)
+      setFile(null)
       return
     }
     if (!ACCEPTED_COVER_MIMES.includes(f.type)) {
       setError(
-        `Unsupported cover type: ${f.type || 'unknown'}. Use JPEG, PNG, or WebP.`,
+        `Unsupported ${kind} type: ${f.type || 'unknown'}. Use JPEG, PNG, or WebP.`,
       )
-      setNewCoverFile(null)
+      setFile(null)
       return
     }
     setError(null)
-    setRemoveExistingCover(false)
-    setNewCoverFile(f)
-  }
-
-  function handleRemoveCover() {
-    setNewCoverFile(null)
-    setRemoveExistingCover(true)
+    clearRemove()
+    setFile(f)
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -115,19 +126,19 @@ export function EditChannel({
     setSubmitting(true)
     setError(null)
     try {
+      const toImage = async (f: File) => ({
+        bytes: new Uint8Array(await f.arrayBuffer()),
+        mimeType: f.type,
+      })
       const patch: EditChannelPatch = {}
       if (trimmedName !== original.name) patch.name = trimmedName
       const trimmedDesc = description.trim()
       if (trimmedDesc !== original.description) patch.description = trimmedDesc
-      if (newCoverFile) {
-        const buf = await newCoverFile.arrayBuffer()
-        patch.coverImage = {
-          bytes: new Uint8Array(buf),
-          mimeType: newCoverFile.type,
-        }
-      } else if (removeExistingCover) {
-        patch.removeCover = true
-      }
+      if (newAvatarFile) patch.avatarImage = await toImage(newAvatarFile)
+      else if (removeAvatar) patch.removeAvatar = true
+      if (newCoverFile) patch.coverImage = await toImage(newCoverFile)
+      else if (removeCover) patch.removeCover = true
+
       const updated = await editChannel(
         sdk,
         agent,
@@ -208,14 +219,40 @@ export function EditChannel({
 
         <div className="space-y-2">
           <span className="text-xs font-medium text-neutral-700 uppercase tracking-wider">
-            Cover image <span className="text-neutral-400">(optional)</span>
+            Avatar <span className="text-neutral-400">(optional)</span>
           </span>
-          <CoverPicker
-            existingCover={original.coverArt}
-            newCoverPreviewURL={newCoverPreviewURL}
-            removeExistingCover={removeExistingCover}
-            onCoverChange={handleCoverChange}
-            onRemoveCover={handleRemoveCover}
+          <ImagePicker
+            shape="round"
+            existing={original.avatar}
+            newPreviewURL={avatarPreviewURL}
+            removed={removeAvatar}
+            onPick={(e) =>
+              pickImage(e, setNewAvatarFile, () => setRemoveAvatar(false), 'avatar')
+            }
+            onRemove={() => {
+              setNewAvatarFile(null)
+              setRemoveAvatar(true)
+            }}
+            submitting={submitting}
+          />
+        </div>
+
+        <div className="space-y-2">
+          <span className="text-xs font-medium text-neutral-700 uppercase tracking-wider">
+            Cover banner <span className="text-neutral-400">(optional)</span>
+          </span>
+          <ImagePicker
+            shape="banner"
+            existing={original.cover}
+            newPreviewURL={coverPreviewURL}
+            removed={removeCover}
+            onPick={(e) =>
+              pickImage(e, setNewCoverFile, () => setRemoveCover(false), 'cover')
+            }
+            onRemove={() => {
+              setNewCoverFile(null)
+              setRemoveCover(true)
+            }}
             submitting={submitting}
           />
         </div>
@@ -225,8 +262,8 @@ export function EditChannel({
 
       {submitting && (
         <p className="text-neutral-500 text-xs">
-          {newCoverFile
-            ? 'Uploading cover to Sia (~20 seconds), encrypting manifest, writing to ATProto.'
+          {newAvatarFile || newCoverFile
+            ? 'Uploading image(s) to Sia (~20 seconds each), encrypting manifest, writing to ATProto.'
             : 'Encrypting manifest, writing to ATProto.'}
         </p>
       )}
@@ -242,99 +279,116 @@ export function EditChannel({
   )
 }
 
-function CoverPicker({
-  existingCover,
-  newCoverPreviewURL,
-  removeExistingCover,
-  onCoverChange,
-  onRemoveCover,
+function ImagePicker({
+  shape,
+  existing,
+  newPreviewURL,
+  removed,
+  onPick,
+  onRemove,
   submitting,
 }: {
-  existingCover?: ChannelCover
-  newCoverPreviewURL: string | null
-  removeExistingCover: boolean
-  onCoverChange: (e: ChangeEvent<HTMLInputElement>) => void
-  onRemoveCover: () => void
+  shape: 'round' | 'banner'
+  existing?: ChannelImage
+  newPreviewURL: string | null
+  removed: boolean
+  onPick: (e: ChangeEvent<HTMLInputElement>) => void
+  onRemove: () => void
   submitting: boolean
 }) {
-  const showExisting =
-    !!existingCover && !removeExistingCover && !newCoverPreviewURL
-  const showRemoveButton = !!existingCover && !removeExistingCover
+  const showExisting = !!existing && !removed && !newPreviewURL
+  const showRemoveButton = !!existing && !removed
+  const noun = shape === 'banner' ? 'cover' : 'avatar'
 
+  const preview = (
+    <ImagePreview
+      shape={shape}
+      existing={showExisting ? existing : undefined}
+      newPreviewURL={newPreviewURL}
+    />
+  )
+  const controls = (
+    <div className="flex-1 space-y-1">
+      <input
+        type="file"
+        accept="image/jpeg,image/png,image/webp"
+        onChange={onPick}
+        disabled={submitting}
+        className="block w-full text-sm text-neutral-700 file:mr-3 file:px-3 file:py-1.5 file:rounded-md file:border-0 file:text-xs file:font-medium file:bg-neutral-100 file:text-neutral-900 hover:file:bg-neutral-200 file:cursor-pointer disabled:opacity-50"
+      />
+      {showRemoveButton && (
+        <button
+          type="button"
+          onClick={onRemove}
+          disabled={submitting}
+          className="text-xs text-neutral-500 hover:text-red-600 transition-colors cursor-pointer"
+        >
+          Remove {noun}
+        </button>
+      )}
+      {removed && (
+        <p className="text-xs text-neutral-500">
+          {shape === 'banner' ? 'Cover' : 'Avatar'} will be removed on save.
+        </p>
+      )}
+    </div>
+  )
+
+  if (shape === 'banner') {
+    return (
+      <div className="space-y-2">
+        {preview}
+        {controls}
+      </div>
+    )
+  }
   return (
     <div className="flex items-center gap-3">
-      <CoverPreview
-        existingCover={showExisting ? existingCover : undefined}
-        newCoverPreviewURL={newCoverPreviewURL}
-      />
-      <div className="flex-1 space-y-1">
-        <input
-          type="file"
-          accept="image/jpeg,image/png,image/webp"
-          onChange={onCoverChange}
-          disabled={submitting}
-          className="block w-full text-sm text-neutral-700 file:mr-3 file:px-3 file:py-1.5 file:rounded-md file:border-0 file:text-xs file:font-medium file:bg-neutral-100 file:text-neutral-900 hover:file:bg-neutral-200 file:cursor-pointer disabled:opacity-50"
-        />
-        {showRemoveButton && (
-          <button
-            type="button"
-            onClick={onRemoveCover}
-            disabled={submitting}
-            className="text-xs text-neutral-500 hover:text-red-600 transition-colors cursor-pointer"
-          >
-            Remove cover
-          </button>
-        )}
-        {removeExistingCover && (
-          <p className="text-xs text-neutral-500">
-            Cover will be removed on save.
-          </p>
-        )}
-      </div>
+      {preview}
+      {controls}
     </div>
   )
 }
 
-function CoverPreview({
-  existingCover,
-  newCoverPreviewURL,
+function ImagePreview({
+  shape,
+  existing,
+  newPreviewURL,
 }: {
-  existingCover?: ChannelCover
-  newCoverPreviewURL: string | null
+  shape: 'round' | 'banner'
+  existing?: ChannelImage
+  newPreviewURL: string | null
 }) {
-  if (newCoverPreviewURL) {
-    return (
-      <img
-        src={newCoverPreviewURL}
-        alt="cover preview"
-        className="size-16 rounded-full object-cover border border-neutral-200 shrink-0"
-      />
-    )
+  const imgCls =
+    shape === 'banner'
+      ? 'w-full h-24 rounded-lg object-cover border border-neutral-200'
+      : 'size-16 rounded-full object-cover border border-neutral-200 shrink-0'
+  const emptyCls =
+    shape === 'banner'
+      ? 'w-full h-24 rounded-lg bg-neutral-100 border border-neutral-200'
+      : 'size-16 rounded-full bg-neutral-100 border border-neutral-200 shrink-0'
+
+  if (newPreviewURL) {
+    return <img src={newPreviewURL} alt="preview" className={imgCls} />
   }
-  if (existingCover) {
-    return <ExistingCover cover={existingCover} />
+  if (existing) {
+    return <ExistingImage image={existing} imgCls={imgCls} emptyCls={emptyCls} />
   }
-  return (
-    <div className="size-16 rounded-full bg-neutral-100 border border-neutral-200 shrink-0" />
-  )
+  return <div className={emptyCls} />
 }
 
-function ExistingCover({ cover }: { cover: ChannelCover }) {
-  const { url } = useItemBlobURL(
-    cover.itemURL,
-    cover.mimeType,
-    cover.contentHash,
-  )
+function ExistingImage({
+  image,
+  imgCls,
+  emptyCls,
+}: {
+  image: ChannelImage
+  imgCls: string
+  emptyCls: string
+}) {
+  const { url } = useItemBlobURL(image.itemURL, image.mimeType, image.contentHash)
   if (!url) {
-    return (
-      <div className="size-16 rounded-full bg-neutral-100 border border-neutral-200 shrink-0 animate-pulse" />
-    )
+    return <div className={`${emptyCls} animate-pulse`} />
   }
-  return (
-    <img
-      src={url}
-      alt="current cover"
-      className="size-16 rounded-full object-cover border border-neutral-200 shrink-0"
-    />
-  )
+  return <img src={url} alt="current" className={imgCls} />
 }

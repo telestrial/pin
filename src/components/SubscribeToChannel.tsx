@@ -67,7 +67,7 @@ export function SubscribeToChannel({
           authorHandle: parsed.authorHandle,
           channelID: parsed.channelID,
           name: manifest.name,
-          coverArt: manifest.coverArt,
+          avatar: manifest.avatar,
         },
       }))
       useFeedStore.setState((s) => ({

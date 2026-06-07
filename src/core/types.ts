@@ -57,7 +57,11 @@ export type ItemRef = {
   editedAt?: string
 }
 
-export type ChannelCover = {
+// A channel image reference (avatar or cover banner). itemURL carries the
+// Sia per-object key in its fragment; mimeType is stored because Sia
+// metadata-via-share is publisher-private cross-account, so the reader needs
+// it to render; contentHash is the CIDv1 cache key (stable across repack).
+export type ChannelImage = {
   itemURL: string
   mimeType: string
   contentHash?: string
@@ -82,7 +86,10 @@ export type ChannelManifest = {
   // Absent on manifests written before this field existed; readers treat
   // missing as 'obscure' (the safer default — Follow is opt-in).
   visibility?: ChannelVisibility
-  coverArt?: ChannelCover
+  // avatar = round channel image; cover = wide banner. (Both optional; the
+  // header falls back to a hash-derived mark / gradient when absent.)
+  avatar?: ChannelImage
+  cover?: ChannelImage
   language?: string
   items: ItemRef[]
 }
