@@ -44,6 +44,7 @@ async function uploadChannelImage(
     itemURL: uploaded.itemURL,
     mimeType: img.mimeType,
     contentHash: uploaded.contentHash,
+    byteSize: uploaded.byteSize,
   }
 }
 

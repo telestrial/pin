@@ -65,6 +65,10 @@ export type ChannelImage = {
   itemURL: string
   mimeType: string
   contentHash?: string
+  // Plaintext byte size, for the storage-cost tooltip sum when a channel is
+  // pinned and the MyStorage channel-chip rollup. Optional for back-compat —
+  // legacy channel images predate the field and are omitted from those sums.
+  byteSize?: number
 }
 
 // Whether a channel is publicly followable. Obscure channels are
