@@ -8,6 +8,7 @@ import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
 import { ChannelAvatar } from './ChannelAvatar'
 import { ChannelOwnerMenu } from './ChannelOwnerMenu'
+import { ChannelPinButton } from './ChannelPinButton'
 import { FollowButton } from './FollowButton'
 import { FeedRow } from './HomeFeed'
 import { PinIcon } from './PinIcon'
@@ -151,11 +152,7 @@ export function ChannelView({
                   </div>
                   {/* Actions: below the cover, upper-right, even with the
                       name/Unclaimed row. */}
-                  {(onEdit ||
-                    onUnpin ||
-                    onUnsubscribe ||
-                    (manifest?.visibility === 'public' &&
-                      manifest.authorATProtoDID)) && (
+                  {(onEdit || onUnpin || onUnsubscribe || manifest) && (
                     <div className="shrink-0 flex items-center gap-1.5">
                       {onEdit || onUnpin ? (
                         // Owned channel: Edit channel · ⋯ context menu · pin.
@@ -219,6 +216,15 @@ export function ChannelView({
                               Unsubscribe
                             </button>
                           )}
+                          {/* Whole-channel pin (snapshot/catch-up/unpin) —
+                              visibility-agnostic, so it shows for obscure
+                              channels too. Rightmost, mirroring the owned row. */}
+                          <ChannelPinButton
+                            manifest={manifest}
+                            authorHandle={authorHandle}
+                            channelID={channelID}
+                            channelName={channelName}
+                          />
                         </>
                       )}
                     </div>
@@ -336,5 +342,7 @@ function ChannelCoverBanner({ cover }: { cover: ChannelImage }) {
   if (error || !url) {
     return <div className="h-32 bg-neutral-100" />
   }
-  return <img src={url} alt="" className="w-full h-32 object-cover bg-neutral-100" />
+  return (
+    <img src={url} alt="" className="w-full h-32 object-cover bg-neutral-100" />
+  )
 }
