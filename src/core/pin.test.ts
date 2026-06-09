@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Sdk } from '@siafoundation/sia-storage'
-import { fetchAccountSnapshot, fetchRawContentBytes } from './pin'
+import { fetchAccountSnapshot, fetchRawContentBytes, pinItem, unpinItem } from './pin'
+import type { ItemRef } from './types'
 import { createFakeWorld, FakeSdk } from '../test/fakeSdk'
 
 function asSdk(fake: FakeSdk): Sdk {
@@ -15,6 +16,40 @@ async function uploadBytes(fake: FakeSdk, bytes: Uint8Array): Promise<void> {
     },
   })
   await fake.upload(null, stream)
+}
+
+// Upload bytes into one account's scope and return a share URL another
+// account can resolve — the cross-account mirror path pinItem walks.
+async function uploadAndShare(
+  fake: FakeSdk,
+  bytes: Uint8Array,
+): Promise<string> {
+  const stream = new ReadableStream<Uint8Array>({
+    start(c) {
+      c.enqueue(bytes)
+      c.close()
+    },
+  })
+  const obj = await fake.upload(null, stream)
+  return fake.shareObject(obj, new Date())
+}
+
+function makeItem(itemURL: string, attachmentURLs: string[] = []): ItemRef {
+  return {
+    id: 'item',
+    itemURL,
+    type: 'text',
+    title: '',
+    summary: '',
+    publishedAt: '2026-01-01T00:00:00.000Z',
+    mimeType: 'text/markdown',
+    byteSize: 100,
+    attachments: attachmentURLs.map((url) => ({
+      url,
+      mimeType: 'application/octet-stream',
+      byteSize: 1,
+    })),
+  }
 }
 
 describe('fetchRawContentBytes', () => {
@@ -56,6 +91,97 @@ describe('fetchRawContentBytes', () => {
     const before = world.scopeOf('alice').size
     expect(before).toBe(1)
     expect(await fetchRawContentBytes(asSdk(fake))).toBeLessThan(300)
+  })
+})
+
+describe('pinItem / unpinItem', () => {
+  it('mirrors body + every attachment into the caller scope', async () => {
+    const world = createFakeWorld()
+    const alice = new FakeSdk('alice', world)
+    const bob = new FakeSdk('bob', world)
+    const bodyURL = await uploadAndShare(alice, new Uint8Array(100))
+    const imgURL = await uploadAndShare(alice, new Uint8Array(200))
+    const audURL = await uploadAndShare(alice, new Uint8Array(300))
+
+    const { objectID, attachmentObjectIDs } = await pinItem(
+      asSdk(bob),
+      makeItem(bodyURL, [imgURL, audURL]),
+    )
+
+    expect(attachmentObjectIDs).toHaveLength(2)
+    expect(world.scopeOf('bob').size).toBe(3)
+    expect(world.scopeOf('bob').has(objectID)).toBe(true)
+    for (const aid of attachmentObjectIDs) {
+      expect(world.scopeOf('bob').has(aid)).toBe(true)
+    }
+  })
+
+  it('pins body-only when there are no attachments', async () => {
+    const world = createFakeWorld()
+    const alice = new FakeSdk('alice', world)
+    const bob = new FakeSdk('bob', world)
+    const bodyURL = await uploadAndShare(alice, new Uint8Array(100))
+
+    const { attachmentObjectIDs } = await pinItem(asSdk(bob), makeItem(bodyURL))
+
+    expect(attachmentObjectIDs).toHaveLength(0)
+    expect(world.scopeOf('bob').size).toBe(1)
+  })
+
+  it('skips malformed attachments rather than crashing', async () => {
+    const world = createFakeWorld()
+    const alice = new FakeSdk('alice', world)
+    const bob = new FakeSdk('bob', world)
+    const bodyURL = await uploadAndShare(alice, new Uint8Array(100))
+    const goodURL = await uploadAndShare(alice, new Uint8Array(200))
+
+    const item = makeItem(bodyURL, [goodURL])
+    // Inject pre-schema garbage alongside the valid attachment.
+    item.attachments = [
+      ...(item.attachments ?? []),
+      'bare-string-url' as unknown as never,
+      { mimeType: 'image/png' } as unknown as never,
+    ]
+
+    const { attachmentObjectIDs } = await pinItem(asSdk(bob), item)
+    expect(attachmentObjectIDs).toHaveLength(1)
+    expect(world.scopeOf('bob').size).toBe(2)
+  })
+
+  it('unpinItem releases body + attachments', async () => {
+    const world = createFakeWorld()
+    const alice = new FakeSdk('alice', world)
+    const bob = new FakeSdk('bob', world)
+    const bodyURL = await uploadAndShare(alice, new Uint8Array(100))
+    const imgURL = await uploadAndShare(alice, new Uint8Array(200))
+
+    const { objectID, attachmentObjectIDs } = await pinItem(
+      asSdk(bob),
+      makeItem(bodyURL, [imgURL]),
+    )
+    expect(world.scopeOf('bob').size).toBe(2)
+
+    await unpinItem(asSdk(bob), objectID, attachmentObjectIDs)
+    expect(world.scopeOf('bob').size).toBe(0)
+  })
+
+  it("unpinItem leaves the author's scope intact (custody is independent)", async () => {
+    const world = createFakeWorld()
+    const alice = new FakeSdk('alice', world)
+    const bob = new FakeSdk('bob', world)
+    const bodyURL = await uploadAndShare(alice, new Uint8Array(100))
+    const imgURL = await uploadAndShare(alice, new Uint8Array(200))
+    expect(world.scopeOf('alice').size).toBe(2)
+
+    const { objectID, attachmentObjectIDs } = await pinItem(
+      asSdk(bob),
+      makeItem(bodyURL, [imgURL]),
+    )
+    await unpinItem(asSdk(bob), objectID, attachmentObjectIDs)
+
+    // bob let go; alice still hosts both objects.
+    expect(world.scopeOf('bob').size).toBe(0)
+    expect(world.scopeOf('alice').size).toBe(2)
   })
 })
 

@@ -4,8 +4,8 @@ import { persist } from 'zustand/middleware'
 import {
   type AccountSnapshot,
   fetchAccountSnapshot,
-  pinItemBytes,
-  unpinItemBytes,
+  pinItem,
+  unpinItem,
 } from '../core/pin'
 import type { ItemRef } from '../core/types'
 import { APP_KEY } from '../lib/constants'
@@ -25,10 +25,17 @@ export type PinnedItemRef = {
     name: string
   }
   objectID: string
+  // Object IDs of the item's pinned attachment bytes, so unpin can release
+  // the whole post. Legacy persisted entries predate this field — readers
+  // default to []. Optional so PinInput callers don't construct it.
+  attachmentObjectIDs?: string[]
   pinnedAt: string
 }
 
-export type PinInput = Omit<PinnedItemRef, 'objectID' | 'pinnedAt'>
+export type PinInput = Omit<
+  PinnedItemRef,
+  'objectID' | 'attachmentObjectIDs' | 'pinnedAt'
+>
 
 type PinState = {
   pinned: PinnedItemRef[]
@@ -83,15 +90,24 @@ export const usePinStore = create<PinState>()(
         set({ pinning })
         try {
           // Pin new bytes first so a mid-operation failure can't
-          // leave the user un-pinned. Unpin of the old is
-          // best-effort — orphan sweep catches strays.
-          const { objectID } = await pinItemBytes(sdk, url)
+          // leave the user un-pinned. Whole-item: body + attachments.
+          // Unpin of the old (body + its attachments) is best-effort —
+          // orphan sweep catches strays.
+          const { objectID, attachmentObjectIDs } = await pinItem(
+            sdk,
+            input.item,
+          )
           if (driftedFrom) {
-            unpinItemBytes(sdk, driftedFrom.objectID).catch(() => {})
+            unpinItem(
+              sdk,
+              driftedFrom.objectID,
+              driftedFrom.attachmentObjectIDs ?? [],
+            ).catch(() => {})
           }
           const ref: PinnedItemRef = {
             ...input,
             objectID,
+            attachmentObjectIDs,
             pinnedAt: new Date().toISOString(),
           }
           const next = new Set(get().pinning)
@@ -117,7 +133,7 @@ export const usePinStore = create<PinState>()(
         pinning.add(itemURL)
         set({ pinning })
         try {
-          await unpinItemBytes(sdk, ref.objectID)
+          await unpinItem(sdk, ref.objectID, ref.attachmentObjectIDs ?? [])
           const next = new Set(get().pinning)
           next.delete(itemURL)
           set((s) => ({

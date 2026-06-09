@@ -1,4 +1,5 @@
 import type { Sdk } from '@siafoundation/sia-storage'
+import { type ItemRef, isValidAttachment } from './types'
 
 export type AccountSnapshot = {
   pinnedData: number
@@ -28,6 +29,47 @@ export async function unpinItemBytes(
   objectID: string,
 ): Promise<void> {
   await sdk.deleteObject(objectID)
+}
+
+// Pin a whole item — the body plus every valid attachment. Each is its own
+// content-addressed Sia object, so each gets its own sharedObject + pinObject.
+// Returns the body objectID plus the attachment objectIDs so unpin can release
+// all of them. This is what makes a pinned copy *whole*: custody keeps the
+// post's images/audio/files alive even if the author later retracts. Body is
+// pinned first (throws on failure → caller treats the pin as failed); a failed
+// attachment propagates too, and the already-pinned body becomes a stray the
+// orphan sweep reclaims after its age gate — a retry re-pins idempotently.
+export async function pinItem(
+  sdk: Sdk,
+  item: ItemRef,
+): Promise<{ objectID: string; attachmentObjectIDs: string[] }> {
+  const { objectID } = await pinItemBytes(sdk, item.itemURL)
+  const attachmentObjectIDs: string[] = []
+  for (const att of item.attachments ?? []) {
+    if (!isValidAttachment(att)) continue
+    const { objectID: aid } = await pinItemBytes(sdk, att.url)
+    attachmentObjectIDs.push(aid)
+  }
+  return { objectID, attachmentObjectIDs }
+}
+
+// Unpin a whole item — body plus its attachment objects. Body delete can throw
+// (caller keeps the entry pinned on failure); attachment deletes are
+// best-effort, since a stray attachment is harmless and the orphan sweep
+// reclaims it.
+export async function unpinItem(
+  sdk: Sdk,
+  objectID: string,
+  attachmentObjectIDs: readonly string[] = [],
+): Promise<void> {
+  await unpinItemBytes(sdk, objectID)
+  for (const aid of attachmentObjectIDs) {
+    try {
+      await unpinItemBytes(sdk, aid)
+    } catch {
+      // best-effort — orphan sweep catches strays
+    }
+  }
 }
 
 const EVENTS_PAGE_LIMIT = 200
