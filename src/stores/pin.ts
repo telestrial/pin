@@ -37,15 +37,34 @@ export type PinInput = Omit<
   'objectID' | 'attachmentObjectIDs' | 'pinnedAt'
 >
 
+type ChannelFanoutResult = { total: number; failed: number }
+
 type PinState = {
   pinned: PinnedItemRef[]
   account: AccountSnapshot | null
   pinning: Set<string>
+  // Channel IDs with a batch pin/unpin in flight — drives the channel
+  // header's busy state. Not persisted.
+  pinningChannels: Set<string>
   pin: (sdk: Sdk, input: PinInput) => Promise<void>
   unpin: (sdk: Sdk, itemURL: string) => Promise<void>
+  // Snapshot a whole channel: fan out pin() over every current item
+  // (body + attachments). Reuses pin()'s dedup + drift-swap, so this
+  // doubles as catch-up — already-held items are skipped, drifted ones
+  // swap to current, new ones get pinned. Partial-failure-tolerant: one
+  // item failing doesn't abort the batch; the count comes back so the
+  // caller can surface "pinned 44 of 47."
+  pinChannel: (
+    sdk: Sdk,
+    items: readonly ItemRef[],
+    channel: PinInput['channel'],
+  ) => Promise<ChannelFanoutResult>
+  // Release a whole channel: unpin every item currently held for it.
+  unpinChannel: (sdk: Sdk, channelID: string) => Promise<ChannelFanoutResult>
   refreshAccount: (sdk: Sdk) => Promise<void>
   isPinned: (itemURL: string) => boolean
   isPinning: (itemURL: string) => boolean
+  isPinningChannel: (channelID: string) => boolean
   // Used by the repack runner: swap the underlying object identity for one
   // or more pinned entries when their bytes get re-uploaded into a packed
   // slab. The user-visible "I pinned this" relationship is preserved; only
@@ -67,6 +86,7 @@ export const usePinStore = create<PinState>()(
       pinned: [],
       account: null,
       pinning: new Set<string>(),
+      pinningChannels: new Set<string>(),
       pin: async (sdk, input) => {
         const url = input.item.itemURL
         // Drift case: an existing pin matches the same logical post
@@ -148,6 +168,54 @@ export const usePinStore = create<PinState>()(
           throw e
         }
       },
+      pinChannel: async (sdk, items, channel) => {
+        const { channelID } = channel
+        set((s) => ({
+          pinningChannels: new Set(s.pinningChannels).add(channelID),
+        }))
+        let failed = 0
+        try {
+          for (const item of items) {
+            try {
+              await get().pin(sdk, { item, channel })
+            } catch {
+              failed++
+            }
+          }
+        } finally {
+          set((s) => {
+            const next = new Set(s.pinningChannels)
+            next.delete(channelID)
+            return { pinningChannels: next }
+          })
+        }
+        return { total: items.length, failed }
+      },
+      unpinChannel: async (sdk, channelID) => {
+        set((s) => ({
+          pinningChannels: new Set(s.pinningChannels).add(channelID),
+        }))
+        const targets = get().pinned.filter(
+          (p) => p.channel.channelID === channelID,
+        )
+        let failed = 0
+        try {
+          for (const p of targets) {
+            try {
+              await get().unpin(sdk, p.item.itemURL)
+            } catch {
+              failed++
+            }
+          }
+        } finally {
+          set((s) => {
+            const next = new Set(s.pinningChannels)
+            next.delete(channelID)
+            return { pinningChannels: next }
+          })
+        }
+        return { total: targets.length, failed }
+      },
       refreshAccount: async (sdk) => {
         if (accountRefreshInFlight) {
           accountRefreshPending = sdk
@@ -171,6 +239,7 @@ export const usePinStore = create<PinState>()(
       isPinned: (itemURL) =>
         get().pinned.some((p) => p.item.itemURL === itemURL),
       isPinning: (itemURL) => get().pinning.has(itemURL),
+      isPinningChannel: (channelID) => get().pinningChannels.has(channelID),
       replaceMany: (replacements) => {
         if (replacements.length === 0) return
         const byOldID = new Map(replacements.map((r) => [r.oldObjectID, r]))
@@ -192,7 +261,12 @@ export const usePinStore = create<PinState>()(
         }))
       },
       reset: () =>
-        set({ pinned: [], account: null, pinning: new Set<string>() }),
+        set({
+          pinned: [],
+          account: null,
+          pinning: new Set<string>(),
+          pinningChannels: new Set<string>(),
+        }),
     }),
     {
       name: `sia-pins-${APP_KEY.slice(0, 16)}`,

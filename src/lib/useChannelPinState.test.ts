@@ -113,22 +113,18 @@ describe('channelPinByteSize', () => {
     expect(channelPinByteSize(manifest({ items: [withAtt] }))).toBe(850)
   })
 
-  it('adds avatar and cover bytes', () => {
+  it('excludes avatar and cover (channel-pin mirrors items only for now)', () => {
     const m = manifest({
       items: [item('1')],
       avatar: { itemURL: 'sia://fake/av', mimeType: 'image/png', byteSize: 40 },
       cover: { itemURL: 'sia://fake/co', mimeType: 'image/png', byteSize: 60 },
     })
-    expect(channelPinByteSize(m)).toBe(200)
+    expect(channelPinByteSize(m)).toBe(100)
   })
 
-  it('treats legacy refs without byteSize as 0', () => {
+  it('treats legacy items without byteSize as 0', () => {
     const legacyItem = { ...item('1'), byteSize: undefined as unknown as number }
-    const m = manifest({
-      items: [legacyItem],
-      avatar: { itemURL: 'sia://fake/av', mimeType: 'image/png' }, // no byteSize
-    })
-    expect(channelPinByteSize(m)).toBe(0)
+    expect(channelPinByteSize(manifest({ items: [legacyItem] }))).toBe(0)
   })
 
   it('skips malformed attachments', () => {

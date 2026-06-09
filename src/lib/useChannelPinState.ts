@@ -54,11 +54,14 @@ function bytesOrZero(n: unknown): number {
   return typeof n === 'number' && Number.isFinite(n) ? n : 0
 }
 
-// Total content bytes a full channel pin would mirror — item bodies + valid
-// attachments + the channel's avatar/cover. Legacy refs without byteSize
-// contribute 0. This is the number the storage bar will read after pinning
-// (modulo negligible AES-GCM per-object overhead), so the hover tooltip and
-// the bar speak the same content-byte language.
+// Total content bytes a channel pin mirrors — item bodies + valid
+// attachments. Legacy refs without byteSize contribute 0. This is the number
+// the storage bar will read after pinning (modulo negligible AES-GCM
+// per-object overhead), so the hover tooltip and the bar speak the same
+// content-byte language. Avatar/cover are NOT counted: channel-pin currently
+// mirrors items only (cover/avatar pinning is deferred — see CLAUDE.md), so
+// counting them would overstate what the bar actually moves. They rejoin
+// both the pin and this sum together when cover/avatar pinning lands.
 export function channelPinByteSize(manifest: ChannelManifest): number {
   let total = 0
   for (const item of manifest.items) {
@@ -67,7 +70,5 @@ export function channelPinByteSize(manifest: ChannelManifest): number {
       if (isValidAttachment(att)) total += bytesOrZero(att.byteSize)
     }
   }
-  total += bytesOrZero(manifest.avatar?.byteSize)
-  total += bytesOrZero(manifest.cover?.byteSize)
   return total
 }
