@@ -291,31 +291,60 @@ export async function unpinChannel(
 ): Promise<void> {
   const did = agent.assertDid
 
-  const manifest = await fetchChannel(
-    did,
-    channel.channelID,
-    channel.channelKey,
+  // Retract is idempotent. The channel record may already be gone — a prior
+  // partial retract, a record deleted out-of-band, a stale local entry
+  // pointing at nothing. If the manifest can't be fetched we can't enumerate
+  // the item bytes to delete (the orphan sweep reclaims those), but we still
+  // clear the record best-effort and return normally so the caller drops its
+  // local state. The goal — "this channel is gone" — is already met, and a
+  // ghost channel that can't be retracted would otherwise wedge the UI
+  // (and the e2e cleanup loop) forever.
+  let manifest: ChannelManifest | null = null
+  try {
+    manifest = await fetchChannel(did, channel.channelID, channel.channelKey)
+  } catch (e) {
+    if (!isRecordNotFoundError(e)) throw e
+  }
+
+  if (manifest) {
+    for (const item of manifest.items) {
+      try {
+        await sdk.deleteObject(item.id)
+      } catch (e) {
+        console.warn(`Failed to delete item ${item.id}:`, e)
+      }
+    }
+
+    for (const image of [manifest.avatar, manifest.cover]) {
+      if (!image) continue
+      try {
+        const handle = await sdk.sharedObject(image.itemURL)
+        await sdk.deleteObject(handle.id())
+      } catch (e) {
+        console.warn('Failed to delete channel image:', e)
+      }
+    }
+  }
+
+  try {
+    await deleteChannelRecord(agent, channel.channelID)
+  } catch (e) {
+    if (!isRecordNotFoundError(e)) throw e
+  }
+}
+
+// Whether an atproto error means "the record isn't there" — so a delete can
+// treat it as already-done. Mirrors the local helper in core/follow.ts; kept
+// duplicated (small, two call sites) rather than coupling the modules.
+function isRecordNotFoundError(err: unknown): boolean {
+  if (typeof err !== 'object' || err === null) return false
+  const e = err as { status?: number; error?: string; message?: string }
+  if (e.error === 'RecordNotFound') return true
+  return (
+    e.status === 400 &&
+    typeof e.message === 'string' &&
+    /could not locate|not found|recordnotfound/i.test(e.message)
   )
-
-  for (const item of manifest.items) {
-    try {
-      await sdk.deleteObject(item.id)
-    } catch (e) {
-      console.warn(`Failed to delete item ${item.id}:`, e)
-    }
-  }
-
-  for (const image of [manifest.avatar, manifest.cover]) {
-    if (!image) continue
-    try {
-      const handle = await sdk.sharedObject(image.itemURL)
-      await sdk.deleteObject(handle.id())
-    } catch (e) {
-      console.warn('Failed to delete channel image:', e)
-    }
-  }
-
-  await deleteChannelRecord(agent, channel.channelID)
 }
 
 export async function deletePublishedItem(
