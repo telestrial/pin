@@ -114,9 +114,14 @@ test('alice publishes a post; bob subscribes via URL and sees it', async ({
       .getByRole('button', { name: channelName })
       .click({ timeout: 30_000 })
 
-    // Pinnable → click → the icon flips to the pinned state once every
-    // item's bytes have mirrored into bob's scope. (Item PinButtons read
-    // "Pin to your storage"; the channel button is "Pin this channel…".)
+    // Pinnable → click → fans out one pin per item. During the batch the
+    // header pin fills bottom-up and the title reads "Pinning N/M…"; we
+    // wait for the settled "Unpin this channel…" title that appears once
+    // every item's bytes have mirrored into bob's scope. These regexes
+    // target only the settled states — distinct from the transient
+    // "Pinning…"/"Unpinning…" titles and from the item PinButtons'
+    // "Pin/Unpin to your storage" — so the waits ride through the busy
+    // window without false-matching.
     const pinChannel = bob.getByTitle(/Pin this channel to your storage/)
     await expect(pinChannel).toBeVisible({ timeout: 30_000 })
     await pinChannel.click()
