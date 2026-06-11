@@ -44,7 +44,7 @@ Pin uses [`@siafoundation/sia-storage`](https://www.npmjs.com/package/@siafounda
 | --- | --- |
 | `Sdk` instance per user | Every authenticated session ([core/sia.ts](src/core/sia.ts), AppKey approve flow from `create-sia-app`) |
 | `sdk.upload(new PinnedObject(), Blob.stream())` | Post body bytes, every attachment file on a post, channel cover art, profile avatar / cover image bytes. The composer never blocks on upload — bytes get pushed to Sia by the background runner after Publish, then the manifest is written with the resolved URLs. |
-| `sdk.pinObject(obj)` | Two uses: durability for items you publish (body and each attachment), and mirroring an item from another channel into your own storage when you pin it from the feed |
+| `sdk.pinObject(obj)` | Durability for items you publish (body + each attachment); mirroring a friend's whole post (body + every attachment) into your storage when you pin it; and **channel-level pin** — a snapshot that fans the same mirror out over every item in a channel, with per-item progress shown in the right sidebar and the header pin filling as it goes. Re-pinning a channel catches up newly-published items |
 | `sdk.shareObject(obj, validUntil)` | Per-item distribution URL with the per-object encryption key in the URL fragment; year-9999 expiries verified safe |
 | `sdk.sharedObject(url)` | Resolves a shared URL into a `PinnedObject` handle. Used before downloading (subscriber reads) and before mirroring (pinning a friend's item — `sharedObject` then `pinObject` adds the bytes to your indexer scope) |
 | `sdk.download(obj)` (as `ReadableStream`) | Subscriber reads (cached in IndexedDB after first fetch — see Architecture) |
