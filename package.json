@@ -11,7 +11,7 @@
     "test": "bun run test:unit && bun run test:int && bun run test:e2e",
     "test:unit": "vitest run --exclude='**/*.int.test.ts' --exclude='**/*.int.test.tsx'",
     "test:int": "vitest run .int.test",
-    "test:e2e": "playwright test",
+    "test:e2e": "bun run build && playwright test",
     "test:watch": "vitest",
     "test:ui": "vitest --ui"
   },
