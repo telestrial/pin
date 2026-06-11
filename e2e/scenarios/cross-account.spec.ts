@@ -1,6 +1,7 @@
 // E2E happy-path: alice creates a channel and publishes a post in her
 // browser context; bob subscribes via URL in his context; bob's feed
-// shows alice's post.
+// shows alice's post; bob pins alice's whole channel (real cross-account
+// sharedObject + pinObject fan-out into his Sia scope) and unpins it.
 //
 // Runs against a built `dist/` served by `bun run preview --port 4173`,
 // using real Sia hosts + real bsky.social. The single test in this file
@@ -92,6 +93,52 @@ test('alice publishes a post; bob subscribes via URL and sees it', async ({
     // Channel name appears in two places (sidebar subscribed-channels entry
     // AND feed-row channel header); .first() picks whichever resolves.
     await expect(bob.getByText(channelName).first()).toBeVisible()
+
+    // -- Bob pins alice's whole channel, then unpins it --
+    //
+    // The real cross-account fan-out: pinning the channel mirrors every
+    // item's bytes into bob's OWN Sia scope via sharedObject + pinObject;
+    // unpin-all releases them. This is the reconciliation proof for the
+    // channel-pin fan-out (the integration tier runs the same flow against
+    // the fakes). Bob cleans up his own mirror here, before alice's channel
+    // is retracted in finally, so neither account accumulates state.
+
+    // Open alice's channel from bob's subscribed list. Structural scope to
+    // the left Sidebar via its unique Home button — the channel name also
+    // appears in feed rows and the right PinSidebar.
+    const bobSidebar = bob.locator('aside').filter({
+      has: bob.getByRole('button', { name: 'Home', exact: true }),
+    })
+    await bobSidebar
+      .locator('ul[aria-label="Subscribed channels"]')
+      .getByRole('button', { name: channelName })
+      .click({ timeout: 30_000 })
+
+    // Pinnable → click → the icon flips to the pinned state once every
+    // item's bytes have mirrored into bob's scope. (Item PinButtons read
+    // "Pin to your storage"; the channel button is "Pin this channel…".)
+    const pinChannel = bob.getByTitle(/Pin this channel to your storage/)
+    await expect(pinChannel).toBeVisible({ timeout: 30_000 })
+    await pinChannel.click()
+    await expect(bob.getByTitle(/Unpin this channel/)).toBeVisible({
+      timeout: 90_000,
+    })
+
+    // Custody is real and persisted: bob's snapshot lives in his own
+    // pinStore (localStorage), independent of alice's channel record.
+    const pinnedCount = await bob.evaluate((key) => {
+      const raw = localStorage.getItem(key)
+      return raw ? (JSON.parse(raw).state?.pinned?.length ?? 0) : 0
+    }, 'sia-pins-f6b7539e181e45ee')
+    expect(pinnedCount).toBeGreaterThan(0)
+
+    // Unpin-all (behind the confirm modal) releases bob's mirrored bytes
+    // and returns the icon to pinnable — cleaning up after this run.
+    await bob.getByTitle(/Unpin this channel/).click()
+    await bob.getByRole('button', { name: 'Unpin all' }).click()
+    await expect(
+      bob.getByTitle(/Pin this channel to your storage/),
+    ).toBeVisible({ timeout: 90_000 })
   } finally {
     // Retract alice's channel so the next run starts clean. Cleanup runs
     // even when assertions fail, so e2e never leaves leftover ATProto
