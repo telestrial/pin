@@ -140,14 +140,14 @@ test('alice publishes a post; bob subscribes via URL and sees it', async ({
       bob.getByTitle(/Pin this channel to your storage/),
     ).toBeVisible({ timeout: 90_000 })
   } finally {
-    // Retract alice's channel so the next run starts clean. Cleanup runs
-    // even when assertions fail, so e2e never leaves leftover ATProto
-    // records or Sia bytes accumulating in alice's account. Wrapped in
-    // its own try so cleanup failures don't mask the original test
-    // failure they followed.
-    if (alice && channelName) {
+    // Drain alice's e2e channels so the next run starts clean. Runs even
+    // when assertions fail (so a failed run doesn't leave leftovers) and
+    // whenever alice signed in (so it heals a prior backlog even if this
+    // run failed before creating its own channel). Wrapped in its own try
+    // so cleanup failures don't mask the original test failure.
+    if (alice) {
       try {
-        await cleanupAliceChannel(alice, channelName)
+        await cleanupE2EChannels(alice)
       } catch (e) {
         console.warn('[alice channel cleanup] failed:', e)
       }
@@ -157,36 +157,46 @@ test('alice publishes a post; bob subscribes via URL and sees it', async ({
   }
 })
 
-// Drives alice's "Unpin channel" UI to retract the run's channel. The
-// production unpinChannel path walks every item via deleteObject, deletes
-// the manifest record, and calls pruneSlabs — same housekeeping a real
-// retract performs.
-async function cleanupAliceChannel(page: Page, channelName: string) {
-  // Operate from wherever alice's last test action left her — typically
-  // home with sidebar mounted. We intentionally don't page.goto('/')
-  // because the auth helper's addInitScript reseeds myChannels=[] on
-  // every fresh document load, racing the settings-sync that has to
-  // repopulate from Sia before the sidebar entry appears.
+// Retract every channel this suite created — the current run's plus any
+// leftovers from prior failed runs — so alice's account never accumulates.
+// Matches by the "e2e test" name prefix every run uses, so it only ever
+// touches this suite's channels, and loops because each delete navigates
+// into the channel then back home (the sidebar list shrinks per pass).
+//
+// Why drain-all instead of the run's one channel: once a backlog builds
+// up, the sidebar "Your channels" list caps at 10, so a single-channel
+// cleanup could fail to find the current one and silently leave it —
+// which is exactly how the backlog grew. Draining self-heals it.
+async function cleanupE2EChannels(page: Page) {
+  // Operate from wherever alice's last action left her — home with sidebar
+  // mounted. We intentionally don't page.goto('/') because the auth
+  // helper's addInitScript reseeds myChannels=[] on every fresh document
+  // load, racing the settings-sync that repopulates from Sia.
   //
   // Two "Your channels" lists exist on home — Sidebar (left) and
   // PinSidebar (right). Scope structurally via Sidebar's unique "Home"
-  // button rather than DOM order. Then narrow to the "Your channels"
-  // UL inside it, because owners auto-subscribe to their own channels
-  // and the same channel name appears in Sidebar's "Subscribed
-  // channels" list too.
+  // button. Owners auto-subscribe to their own channels, so the name also
+  // appears in "Subscribed channels"; narrowing to the "Your channels" UL
+  // avoids deleting via the wrong list.
   const sidebar = page.locator('aside').filter({
     has: page.getByRole('button', { name: 'Home', exact: true }),
   })
   const yourChannels = sidebar.locator('ul[aria-label="Your channels"]')
-  await yourChannels
-    .getByRole('button', { name: channelName })
-    .click({ timeout: 30_000 })
-  // window.prompt() is a native browser dialog in Playwright — accept
-  // with the required typed DELETE before clicking, so the click's
-  // prompt picks up the response.
-  page.once('dialog', (dialog) => dialog.accept('DELETE'))
-  await page.getByRole('button', { name: 'Unpin channel' }).click()
-  await expect(yourChannels.getByText(channelName)).toBeHidden({
-    timeout: 60_000,
-  })
+
+  // Safety cap — never loop unbounded against a real account.
+  for (let i = 0; i < 20; i++) {
+    const candidates = yourChannels.getByRole('button', { name: /e2e test/i })
+    if ((await candidates.count()) === 0) break
+    await candidates.first().click({ timeout: 30_000 })
+    // window.prompt() is a native browser dialog in Playwright — accept it
+    // with the required typed DELETE before the click that triggers it.
+    page.once('dialog', (dialog) => dialog.accept('DELETE'))
+    await page.getByRole('button', { name: 'Unpin channel' }).click()
+    // The retract deletes the record + bytes, then navigates back to home,
+    // so the channel page's Unpin button disappears. Wait for that before
+    // re-querying the (now shorter) sidebar list.
+    await expect(
+      page.getByRole('button', { name: 'Unpin channel' }),
+    ).toBeHidden({ timeout: 60_000 })
+  }
 }
