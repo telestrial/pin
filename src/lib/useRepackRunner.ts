@@ -208,15 +208,27 @@ export function useRepackRunner() {
     // Trigger 3: pinStore.pinned grows — catches direct PinButton clicks
     // on Read* pages (which call pinStore.pin without going through the
     // upload queue).
+    //
+    // While a channel-pin batch is fanning out, pinned grows once per item
+    // (N times for an N-item channel). Repacking after each would fire N
+    // full scope walks against the network mid-batch — wasteful, and it
+    // saturates host connections enough to slow the very pins we're
+    // running. So defer while pinningChannels is non-empty and run a single
+    // pass once the batch drains.
     let lastPinnedCount = usePinStore.getState().pinned.length
+    let wasBatchPinning = usePinStore.getState().pinningChannels.size > 0
     const unsubPin = usePinStore.subscribe((state) => {
       const count = state.pinned.length
+      const batchPinning = state.pinningChannels.size > 0
       if (count > lastPinnedCount) {
         lastPinnedCount = count
-        tick()
+        if (!batchPinning) tick()
       } else {
         lastPinnedCount = count
       }
+      // Batch just finished — repack once over everything it added.
+      if (wasBatchPinning && !batchPinning) tick()
+      wasBatchPinning = batchPinning
     })
 
     return () => {
