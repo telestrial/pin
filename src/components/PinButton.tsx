@@ -1,5 +1,7 @@
 import { useState } from 'react'
 import { deletePublishedItem } from '../core/channels'
+import { formatBytes } from '../lib/format'
+import { itemPinByteSize } from '../lib/useChannelPinState'
 import { usePinState } from '../lib/usePinState'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
@@ -67,13 +69,16 @@ export function PinButton({ input }: { input: PinInput }) {
     }
   }
 
+  // Content-byte size of what this pin mirrors (body + attachments) —
+  // the same number the sidebar storage bar moves by, surfaced on hover.
+  const size = formatBytes(itemPinByteSize(input.item))
   const title = isOwned
     ? 'Retract from your channel and storage'
     : pinState === 'edited'
-      ? 'Update your pinned copy to the current version'
+      ? `Update your pinned copy to the current version (${size})`
       : pinState === 'pinned'
-        ? 'Unpin from your storage'
-        : 'Pin to your storage'
+        ? `Unpin from your storage (${size})`
+        : `Pin to your storage (${size})`
 
   // Color delegation: state-aware PinIcon uses currentColor for stroke
   // and fill, so the parent button controls color (and hover).

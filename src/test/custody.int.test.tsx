@@ -100,7 +100,7 @@ describe('integration: custody', () => {
 
     // Before the click: pinnable, nothing in bob's pinned list, no bytes
     // in bob's scope yet (he only subscribed; subscribing is read-only).
-    const pinButton = screen.getByTitle('Pin to your storage')
+    const pinButton = screen.getByTitle(/Pin to your storage/)
     expect(pinButton).toHaveAttribute('aria-pressed', 'false')
     expect(usePinStore.getState().pinned).toHaveLength(0)
 
@@ -131,7 +131,7 @@ describe('integration: custody', () => {
     expect(bobAfter.pinnedData).toBe(aliceSnap.pinnedData)
 
     // UI updated to pinned state.
-    expect(screen.getByTitle('Unpin from your storage')).toHaveAttribute(
+    expect(screen.getByTitle(/Unpin from your storage/)).toHaveAttribute(
       'aria-pressed',
       'true',
     )
@@ -147,7 +147,7 @@ describe('integration: custody', () => {
     )
 
     // Bob pins the original.
-    const initialPin = screen.getByTitle('Pin to your storage')
+    const initialPin = screen.getByTitle(/Pin to your storage/)
     await userEvent.click(initialPin)
     await waitFor(() =>
       expect(usePinStore.getState().pinned).toHaveLength(1),
@@ -172,7 +172,7 @@ describe('integration: custody', () => {
       ).toBeInTheDocument(),
     )
     expect(
-      screen.getByTitle('Update your pinned copy to the current version'),
+      screen.getByTitle(/Update your pinned copy to the current version/),
     ).toBeInTheDocument()
 
     // Bob's pinned entry still points at the ORIGINAL bytes — that's the
@@ -191,7 +191,7 @@ describe('integration: custody', () => {
       expect(screen.getByText('hello from alice')).toBeInTheDocument(),
     )
 
-    await userEvent.click(screen.getByTitle('Pin to your storage'))
+    await userEvent.click(screen.getByTitle(/Pin to your storage/))
     await waitFor(() =>
       expect(usePinStore.getState().pinned).toHaveLength(1),
     )
@@ -204,7 +204,7 @@ describe('integration: custody', () => {
 
     // Re-pin: click the drifted button.
     const driftedButton = await screen.findByTitle(
-      'Update your pinned copy to the current version',
+      /Update your pinned copy to the current version/,
     )
     await userEvent.click(driftedButton)
 
@@ -220,7 +220,7 @@ describe('integration: custody', () => {
     // back to plain "Unpin from your storage" (or stays pinned with no
     // drift dot, depending on title).
     await waitFor(() => {
-      expect(screen.getByTitle('Unpin from your storage')).toBeInTheDocument()
+      expect(screen.getByTitle(/Unpin from your storage/)).toBeInTheDocument()
     })
   })
 
@@ -234,7 +234,7 @@ describe('integration: custody', () => {
     )
 
     // Bob pins, gets custody.
-    await userEvent.click(screen.getByTitle('Pin to your storage'))
+    await userEvent.click(screen.getByTitle(/Pin to your storage/))
     await waitFor(() =>
       expect(usePinStore.getState().pinned).toHaveLength(1),
     )

@@ -64,11 +64,18 @@ function bytesOrZero(n: unknown): number {
 // both the pin and this sum together when cover/avatar pinning lands.
 export function channelPinByteSize(manifest: ChannelManifest): number {
   let total = 0
-  for (const item of manifest.items) {
-    total += bytesOrZero(item.byteSize)
-    for (const att of item.attachments ?? []) {
-      if (isValidAttachment(att)) total += bytesOrZero(att.byteSize)
-    }
+  for (const item of manifest.items) total += itemPinByteSize(item)
+  return total
+}
+
+// Content bytes a single item pin mirrors — body + valid attachments. Same
+// content-byte basis as channelPinByteSize, so the item PinButton's hover
+// tooltip and the sidebar bar speak the same language. Legacy refs without
+// byteSize contribute 0.
+export function itemPinByteSize(item: ItemRef): number {
+  let total = bytesOrZero(item.byteSize)
+  for (const att of item.attachments ?? []) {
+    if (isValidAttachment(att)) total += bytesOrZero(att.byteSize)
   }
   return total
 }

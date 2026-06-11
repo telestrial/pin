@@ -2,7 +2,11 @@ import { describe, expect, it } from 'vitest'
 import type { ChannelManifest, ItemRef } from '../core/types'
 import { CHANNEL_MANIFEST_VERSION } from '../core/types'
 import type { PinnedItemRef } from '../stores/pin'
-import { channelPinByteSize, computeChannelPinState } from './useChannelPinState'
+import {
+  channelPinByteSize,
+  computeChannelPinState,
+  itemPinByteSize,
+} from './useChannelPinState'
 
 function item(publishedAt: string, contentHash?: string): ItemRef {
   return {
@@ -137,5 +141,27 @@ describe('channelPinByteSize', () => {
       ],
     }
     expect(channelPinByteSize(manifest({ items: [withGarbage] }))).toBe(600)
+  })
+})
+
+describe('itemPinByteSize', () => {
+  it('returns the body size for a plain item', () => {
+    expect(itemPinByteSize(item('1'))).toBe(100)
+  })
+
+  it('adds valid attachment bytes', () => {
+    const withAtt: ItemRef = {
+      ...item('1'),
+      attachments: [
+        { url: 'sia://fake/x', mimeType: 'image/png', byteSize: 500 },
+        'bare-string' as unknown as never,
+      ],
+    }
+    expect(itemPinByteSize(withAtt)).toBe(600)
+  })
+
+  it('treats a legacy body without byteSize as 0', () => {
+    const legacy = { ...item('1'), byteSize: undefined as unknown as number }
+    expect(itemPinByteSize(legacy)).toBe(0)
   })
 })
