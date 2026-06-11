@@ -196,12 +196,18 @@ async function cleanupE2EChannels(page: Page) {
     // window.prompt() is a native browser dialog in Playwright — accept it
     // with the required typed DELETE before the click that triggers it.
     page.once('dialog', (dialog) => dialog.accept('DELETE'))
-    await page.getByRole('button', { name: 'Unpin channel' }).click()
+    // The owned-channel retract is the filled pin icon in the header; its
+    // accessible name comes from title="Unpin this channel" (the aria-hidden
+    // glyph contributes nothing). Exact match so it can't collide with the
+    // non-owned "Unpin this channel from your storage" pin.
+    const unpinChannel = page.getByRole('button', {
+      name: 'Unpin this channel',
+      exact: true,
+    })
+    await unpinChannel.click()
     // The retract deletes the record + bytes, then navigates back to home,
     // so the channel page's Unpin button disappears. Wait for that before
     // re-querying the (now shorter) sidebar list.
-    await expect(
-      page.getByRole('button', { name: 'Unpin channel' }),
-    ).toBeHidden({ timeout: 60_000 })
+    await expect(unpinChannel).toBeHidden({ timeout: 60_000 })
   }
 }
