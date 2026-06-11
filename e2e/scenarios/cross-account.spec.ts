@@ -205,9 +205,11 @@ async function cleanupE2EChannels(page: Page) {
       exact: true,
     })
     await unpinChannel.click()
-    // The retract deletes the record + bytes, then navigates back to home,
-    // so the channel page's Unpin button disappears. Wait for that before
-    // re-querying the (now shorter) sidebar list.
-    await expect(unpinChannel).toBeHidden({ timeout: 60_000 })
+    // The retract walks every item via deleteObject + pruneSlabs on the
+    // real network (slow, and slower under the SDK's QUIC idle-timeout
+    // retries), then navigates back to home, so the channel page's Unpin
+    // button disappears. Wait generously for that before re-querying the
+    // (now shorter) sidebar list.
+    await expect(unpinChannel).toBeHidden({ timeout: 120_000 })
   }
 }

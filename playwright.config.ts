@@ -24,7 +24,10 @@ export default defineConfig({
   testDir: './e2e/scenarios',
   fullyParallel: false,
   reporter: 'list',
-  timeout: 5 * 60 * 1000, // 5 min per test — real Sia + real bsky OAuth.
+  // 10 min per test — real Sia + real bsky OAuth, plus the finally-block
+  // cleanup that drains every leftover e2e channel (each a slow real-network
+  // retract), which compounds within the single test until the backlog clears.
+  timeout: 10 * 60 * 1000,
   webServer: {
     command: 'bun run preview --port 4173',
     port: 4173,
