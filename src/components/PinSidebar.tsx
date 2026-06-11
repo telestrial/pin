@@ -71,6 +71,7 @@ export function PinSidebar({
   const account = usePinStore((s) => s.account)
   const pinned = usePinStore((s) => s.pinned)
   const isPinning = usePinStore((s) => s.isPinning)
+  const channelPins = usePinStore((s) => s.channelPins)
   const tasks = useUploadQueueStore((s) => s.tasks)
   const retryTask = useUploadQueueStore((s) => s.retry)
   const removeTask = useUploadQueueStore((s) => s.remove)
@@ -295,6 +296,41 @@ export function PinSidebar({
           </div>
         </div>
       </section>
+
+      {Object.keys(channelPins).length > 0 && (
+        <section className="space-y-2">
+          <h2 className="text-xs font-semibold tracking-wide uppercase text-neutral-500 px-1">
+            Pinning channels
+          </h2>
+          <ul aria-label="Channel pins in flight">
+            {Object.values(channelPins).map((job) => {
+              const pct = job.total > 0 ? (job.done / job.total) * 100 : 0
+              return (
+                <li
+                  key={job.channelID}
+                  className="px-2 py-1.5 rounded space-y-1 bg-neutral-50/60"
+                >
+                  <div className="min-w-0">
+                    <p className="text-xs font-medium text-neutral-900 truncate">
+                      {job.channelName}
+                    </p>
+                    <p className="text-[10px] text-neutral-500 truncate">
+                      {job.mode === 'unpin' ? 'Unpinning' : 'Pinning'} {job.done}
+                      /{job.total}
+                    </p>
+                  </div>
+                  <div className="h-1 rounded-full bg-neutral-200 overflow-hidden">
+                    <div
+                      className="h-full bg-green-600 transition-[width] duration-200"
+                      style={{ width: `${Math.max(2, pct)}%` }}
+                    />
+                  </div>
+                </li>
+              )
+            })}
+          </ul>
+        </section>
+      )}
 
       {inFlight.length > 0 && (
         <section className="space-y-2">

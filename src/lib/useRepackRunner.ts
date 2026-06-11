@@ -216,10 +216,11 @@ export function useRepackRunner() {
     // running. So defer while pinningChannels is non-empty and run a single
     // pass once the batch drains.
     let lastPinnedCount = usePinStore.getState().pinned.length
-    let wasBatchPinning = usePinStore.getState().pinningChannels.size > 0
+    let wasBatchPinning =
+      Object.keys(usePinStore.getState().channelPins).length > 0
     const unsubPin = usePinStore.subscribe((state) => {
       const count = state.pinned.length
-      const batchPinning = state.pinningChannels.size > 0
+      const batchPinning = Object.keys(state.channelPins).length > 0
       if (count > lastPinnedCount) {
         lastPinnedCount = count
         if (!batchPinning) tick()

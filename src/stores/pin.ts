@@ -39,13 +39,26 @@ export type PinInput = Omit<
 
 type ChannelFanoutResult = { total: number; failed: number }
 
+// An in-flight channel batch pin/unpin with per-item progress. Drives the
+// channel header's in-place progress pin (fills bottom-up while pinning,
+// drains while unpinning) and the right-sidebar in-flight row. Not persisted.
+export type ChannelPinJob = {
+  channelID: string
+  channelName: string
+  done: number
+  total: number
+  mode: 'pin' | 'unpin'
+}
+
 type PinState = {
   pinned: PinnedItemRef[]
   account: AccountSnapshot | null
   pinning: Set<string>
-  // Channel IDs with a batch pin/unpin in flight — drives the channel
-  // header's busy state. Not persisted.
-  pinningChannels: Set<string>
+  // Channel batch jobs in flight, keyed by channelID, with progress. The
+  // job outlives the button that started it (it's a store action), so a
+  // navigate-away keeps pinning and the sidebar keeps showing it. Not
+  // persisted.
+  channelPins: Record<string, ChannelPinJob>
   pin: (sdk: Sdk, input: PinInput) => Promise<void>
   unpin: (sdk: Sdk, itemURL: string) => Promise<void>
   // Snapshot a whole channel: fan out pin() over every current item
@@ -80,13 +93,43 @@ type PinState = {
   reset: () => void
 }
 
+// Simplified shape of zustand's setter — enough for the channel-job
+// helpers below to be defined outside the store initializer.
+type PinSet = (
+  partial: Partial<PinState> | ((state: PinState) => Partial<PinState>),
+) => void
+
+function startChannelJob(set: PinSet, job: ChannelPinJob): void {
+  set((s) => ({ channelPins: { ...s.channelPins, [job.channelID]: job } }))
+}
+
+function bumpChannelJob(set: PinSet, channelID: string): void {
+  set((s) => {
+    const job = s.channelPins[channelID]
+    if (!job) return {}
+    return {
+      channelPins: {
+        ...s.channelPins,
+        [channelID]: { ...job, done: job.done + 1 },
+      },
+    }
+  })
+}
+
+function endChannelJob(set: PinSet, channelID: string): void {
+  set((s) => {
+    const { [channelID]: _, ...rest } = s.channelPins
+    return { channelPins: rest }
+  })
+}
+
 export const usePinStore = create<PinState>()(
   persist(
     (set, get) => ({
       pinned: [],
       account: null,
       pinning: new Set<string>(),
-      pinningChannels: new Set<string>(),
+      channelPins: {},
       pin: async (sdk, input) => {
         const url = input.item.itemURL
         // Drift case: an existing pin matches the same logical post
@@ -170,9 +213,13 @@ export const usePinStore = create<PinState>()(
       },
       pinChannel: async (sdk, items, channel) => {
         const { channelID } = channel
-        set((s) => ({
-          pinningChannels: new Set(s.pinningChannels).add(channelID),
-        }))
+        startChannelJob(set, {
+          channelID,
+          channelName: channel.name,
+          done: 0,
+          total: items.length,
+          mode: 'pin',
+        })
         let failed = 0
         try {
           for (const item of items) {
@@ -181,23 +228,24 @@ export const usePinStore = create<PinState>()(
             } catch {
               failed++
             }
+            bumpChannelJob(set, channelID)
           }
         } finally {
-          set((s) => {
-            const next = new Set(s.pinningChannels)
-            next.delete(channelID)
-            return { pinningChannels: next }
-          })
+          endChannelJob(set, channelID)
         }
         return { total: items.length, failed }
       },
       unpinChannel: async (sdk, channelID) => {
-        set((s) => ({
-          pinningChannels: new Set(s.pinningChannels).add(channelID),
-        }))
         const targets = get().pinned.filter(
           (p) => p.channel.channelID === channelID,
         )
+        startChannelJob(set, {
+          channelID,
+          channelName: targets[0]?.channel.name ?? channelID,
+          done: 0,
+          total: targets.length,
+          mode: 'unpin',
+        })
         let failed = 0
         try {
           for (const p of targets) {
@@ -206,13 +254,10 @@ export const usePinStore = create<PinState>()(
             } catch {
               failed++
             }
+            bumpChannelJob(set, channelID)
           }
         } finally {
-          set((s) => {
-            const next = new Set(s.pinningChannels)
-            next.delete(channelID)
-            return { pinningChannels: next }
-          })
+          endChannelJob(set, channelID)
         }
         return { total: targets.length, failed }
       },
@@ -239,7 +284,7 @@ export const usePinStore = create<PinState>()(
       isPinned: (itemURL) =>
         get().pinned.some((p) => p.item.itemURL === itemURL),
       isPinning: (itemURL) => get().pinning.has(itemURL),
-      isPinningChannel: (channelID) => get().pinningChannels.has(channelID),
+      isPinningChannel: (channelID) => channelID in get().channelPins,
       replaceMany: (replacements) => {
         if (replacements.length === 0) return
         const byOldID = new Map(replacements.map((r) => [r.oldObjectID, r]))
@@ -265,7 +310,7 @@ export const usePinStore = create<PinState>()(
           pinned: [],
           account: null,
           pinning: new Set<string>(),
-          pinningChannels: new Set<string>(),
+          channelPins: {},
         }),
     }),
     {

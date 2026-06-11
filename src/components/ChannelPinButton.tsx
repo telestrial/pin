@@ -33,7 +33,11 @@ export function ChannelPinButton({
   const sdk = useAuthStore((s) => s.sdk)
   const pinChannel = usePinStore((s) => s.pinChannel)
   const unpinChannel = usePinStore((s) => s.unpinChannel)
-  const busy = usePinStore((s) => s.isPinningChannel(channelID))
+  // The in-flight batch job (if any) — drives the in-place progress pin.
+  // It lives in the store, so it survives this button unmounting (navigate
+  // away mid-pin and the sidebar keeps the progress).
+  const job = usePinStore((s) => s.channelPins[channelID])
+  const busy = !!job
   const addToast = useToastStore((s) => s.addToast)
   const state = useChannelPinState(manifest, channelID)
   const [confirming, setConfirming] = useState(false)
@@ -72,12 +76,22 @@ export function ChannelPinButton({
     )
   }
 
-  const title =
-    state === 'pinned'
+  const title = job
+    ? `${job.mode === 'unpin' ? 'Unpinning' : 'Pinning'} ${job.done}/${job.total}…`
+    : state === 'pinned'
       ? `Unpin this channel from your storage (${formatBytes(size)})`
       : state === 'edited'
         ? `Catch up — pin new items (channel is ${formatBytes(size)})`
         : `Pin this channel to your storage (${formatBytes(size)})`
+
+  // Fill direction: pinning fills the pin bottom-up (done/total), unpinning
+  // drains it back down (remaining/total).
+  const pct =
+    job && job.total > 0
+      ? job.mode === 'unpin'
+        ? ((job.total - job.done) / job.total) * 100
+        : (job.done / job.total) * 100
+      : 0
 
   // Color delegation, same as the item PinButton: PinIcon uses currentColor,
   // the button drives green-vs-grey.
@@ -97,9 +111,7 @@ export function ChannelPinButton({
         className={`p-1.5 transition-colors hover:bg-neutral-100 rounded-md cursor-pointer disabled:opacity-50 ${colorClass}`}
       >
         {busy ? (
-          <span className="block size-6">
-            <span className="block size-6 border-2 border-neutral-300 border-t-neutral-600 rounded-full animate-spin" />
-          </span>
+          <ProgressPin pct={pct} />
         ) : (
           <PinIcon state={state} aria-hidden="true" />
         )}
@@ -141,5 +153,27 @@ export function ChannelPinButton({
         </Modal>
       )}
     </>
+  )
+}
+
+// The pin glyph as a determinate progress indicator: a neutral outline with
+// a green fill rising from the bottom as `pct` climbs (0→100). The fill is a
+// bottom-anchored, height-clipped copy of the solid pin layered over the
+// outline, so the pin shape itself "fills with green" in place. Pinning
+// fills up; unpinning drains down (caller flips pct accordingly).
+function ProgressPin({ pct }: { pct: number }) {
+  const h = Math.max(0, Math.min(100, pct))
+  return (
+    <span className="relative inline-flex size-6 text-neutral-400">
+      <PinIcon state="pinnable" aria-hidden="true" />
+      <span
+        className="absolute inset-x-0 bottom-0 overflow-hidden text-green-600 transition-[height] duration-200"
+        style={{ height: `${h}%` }}
+      >
+        <span className="absolute bottom-0 left-0 inline-flex size-6">
+          <PinIcon state="pinned" aria-hidden="true" />
+        </span>
+      </span>
+    </span>
   )
 }
