@@ -19,6 +19,21 @@ export async function flushPendingSettingsSave(): Promise<void> {
   if (activeFlush) await activeFlush()
 }
 
+// Persist pending settings changes to Sia now, swallowing upload failures.
+// Call after a myChannels/subscriptions mutation that should be durable
+// before the operation reports done — otherwise the change only reaches Sia
+// on the background debounce, and a quick reload/close rehydrates the stale
+// settings (creating ghost channels / resurrecting removed subs). Best-
+// effort: on failure the settingsDirty bit re-pushes next boot, so callers
+// proceed rather than wedging.
+export async function flushSettingsBestEffort(): Promise<void> {
+  try {
+    await flushPendingSettingsSave()
+  } catch (e) {
+    console.warn('Settings flush failed; will re-push next boot:', e)
+  }
+}
+
 // Loads the user's settings (myChannels + subscriptions) from Sia after
 // auth lands, and keeps them mirrored back to Sia whenever they change.
 //

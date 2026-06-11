@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { unpinChannel } from '../core/channels'
 import type { FeedEntry } from '../core/feed'
 import type { ItemRef } from '../core/types'
-import { flushPendingSettingsSave } from '../lib/useSettingsSync'
+import { flushSettingsBestEffort } from '../lib/useSettingsSync'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
 import { usePinStore } from '../stores/pin'
@@ -318,7 +318,7 @@ export function Home() {
             returnTo: { kind: 'channels' },
           })
         }
-        onUnsubscribe={(channelID, name) => {
+        onUnsubscribe={async (channelID, name) => {
           if (
             !window.confirm(
               `Unsubscribe from "${name}"? Items already pinned to your storage stay where they are.`,
@@ -327,6 +327,7 @@ export function Home() {
             return
           useAuthStore.getState().removeSubscription(channelID)
           useFeedStore.getState().removeChannel(channelID)
+          await flushSettingsBestEffort()
           addToast(`Unsubscribed from "${name}"`)
         }}
         sidebar={renderSidebar()}
@@ -368,14 +369,8 @@ export function Home() {
         // settings, which otherwise saves on a background debounce — a quick
         // reload/close before then rehydrates the just-removed channel from
         // stale settings (the ghost-channel problem). Flush now so the
-        // retract is genuinely "done" when we report it done. Best-effort:
-        // on failure the settingsDirty bit is the backstop (re-pushed next
-        // boot), so don't wedge the UI — navigate regardless.
-        try {
-          await flushPendingSettingsSave()
-        } catch (e) {
-          console.warn('Settings flush after unpin failed:', e)
-        }
+        // retract is durable when we report it done.
+        await flushSettingsBestEffort()
         usePinStore.getState().refreshAccount(sdk)
         addToast(`Unpinned “${owned.name}”`)
         setView({ kind: 'idle' })
@@ -418,7 +413,7 @@ export function Home() {
         onUnpin={owned ? handleUnpinChannel : undefined}
         onUnsubscribe={
           !owned
-            ? () => {
+            ? async () => {
                 if (
                   !window.confirm(
                     `Unsubscribe from this channel? Items already pinned to your storage stay where they are.`,
@@ -427,6 +422,7 @@ export function Home() {
                   return
                 useAuthStore.getState().removeSubscription(view.channelID)
                 useFeedStore.getState().removeChannel(view.channelID)
+                await flushSettingsBestEffort()
                 addToast('Unsubscribed')
                 setView({ kind: 'idle' })
               }

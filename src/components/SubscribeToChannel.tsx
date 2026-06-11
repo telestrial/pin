@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { fetchChannel, parseSubscribeURL } from '../core/channels'
 import type { FeedEntry } from '../core/feed'
+import { flushSettingsBestEffort } from '../lib/useSettingsSync'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
 import { FormCard } from './FormCard'
@@ -75,6 +76,9 @@ export function SubscribeToChannel({
         manifests: { ...s.manifests, [parsed.channelID]: manifest },
       }))
 
+      // Persist the new subscription to Sia settings before reporting done,
+      // so a quick reload before the background debounce doesn't drop it.
+      await flushSettingsBestEffort()
       onSubscribed(manifest.name)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to fetch channel')

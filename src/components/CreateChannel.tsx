@@ -1,6 +1,7 @@
 import { type ChangeEvent, useEffect, useState } from 'react'
 import { createChannel } from '../core/channels'
 import type { ChannelVisibility } from '../core/types'
+import { flushSettingsBestEffort } from '../lib/useSettingsSync'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
 import { FormCard } from './FormCard'
@@ -119,6 +120,11 @@ export function CreateChannel({
         label: result.manifest.name,
       })
       setManifest(result.channelID, result.manifest)
+      // Persist the new channel + auto-subscription to Sia settings before
+      // we hand off to the confirmation screen — otherwise a quick reload
+      // before the background debounce loses it from the local list (the
+      // atproto record survives, but the channel falls off "Your channels").
+      await flushSettingsBestEffort()
       onCreated(result.subscribeURL, result.manifest.name)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to create channel')
