@@ -39,11 +39,12 @@ test('alice publishes a post; bob subscribes via URL and sees it', async ({
   // Hoisted so the finally block can clean up whatever this run created,
   // even if an assertion in the middle fails partway through.
   let alice: Page | undefined
+  let bob: Page | undefined
   let channelName: string | undefined
 
   try {
     alice = await signInAccount(aliceContext, loadAccount('alice'))
-    const bob = await signInAccount(bobContext, loadAccount('bob'))
+    bob = await signInAccount(bobContext, loadAccount('bob'))
 
     // -- Alice creates a channel --
 
@@ -157,6 +158,16 @@ test('alice publishes a post; bob subscribes via URL and sees it', async ({
         console.warn('[alice channel cleanup] failed:', e)
       }
     }
+    // Drain bob's e2e subscriptions too — he subscribes to each run's
+    // channel (which alice then retracts), so without this his sub list
+    // grows with dead pointers. Same self-healing loop as alice's channels.
+    if (bob) {
+      try {
+        await cleanupE2ESubscriptions(bob)
+      } catch (e) {
+        console.warn('[bob subscription cleanup] failed:', e)
+      }
+    }
     await aliceContext.close()
     await bobContext.close()
   }
@@ -211,5 +222,31 @@ async function cleanupE2EChannels(page: Page) {
     // button disappears. Wait generously for that before re-querying the
     // (now shorter) sidebar list.
     await expect(unpinChannel).toBeHidden({ timeout: 120_000 })
+  }
+}
+
+// Drain bob's e2e subscriptions — he subscribes to each run's channel,
+// which alice then retracts, so without this his sub list grows with dead
+// pointers (the same accumulation alice's channels had). Same self-healing
+// loop: open each e2e-test subscribed channel and unsubscribe. A retracted
+// channel's page still renders the Unsubscribe button (it's gated on the
+// non-owned action, not on the manifest loading), so dead subs clear fine;
+// the unsubscribe handler flushes settings, so the removal is durable.
+async function cleanupE2ESubscriptions(page: Page) {
+  const sidebar = page.locator('aside').filter({
+    has: page.getByRole('button', { name: 'Home', exact: true }),
+  })
+  const subscribed = sidebar.locator('ul[aria-label="Subscribed channels"]')
+
+  for (let i = 0; i < 20; i++) {
+    const candidates = subscribed.getByRole('button', { name: /e2e test/i })
+    if ((await candidates.count()) === 0) break
+    await candidates.first().click({ timeout: 30_000 })
+    // ChannelView's Unsubscribe window.confirm()s, then flushes settings and
+    // navigates home — so the button disappears once the removal is durable.
+    page.once('dialog', (dialog) => dialog.accept())
+    const unsubscribe = page.getByRole('button', { name: 'Unsubscribe' })
+    await unsubscribe.click()
+    await expect(unsubscribe).toBeHidden({ timeout: 60_000 })
   }
 }
