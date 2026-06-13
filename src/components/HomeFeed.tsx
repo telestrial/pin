@@ -170,7 +170,7 @@ export function HomeFeed({
   )
 }
 
-function PostBody({ item }: { item: ItemRef }) {
+function PostBody({ item, channelID }: { item: ItemRef; channelID: string }) {
   const html = useMemo(() => renderMarkdown(item.summary ?? ''), [item.summary])
   const hasBody = !!item.summary && item.summary.length > 0
   const hasAttachments = !!item.attachments && item.attachments.length > 0
@@ -184,7 +184,11 @@ function PostBody({ item }: { item: ItemRef }) {
         />
       )}
       {hasAttachments && item.attachments && (
-        <AttachmentGrid attachments={item.attachments} />
+        <AttachmentGrid
+          attachments={item.attachments}
+          channelID={channelID}
+          itemID={item.id}
+        />
       )}
     </>
   )
@@ -286,7 +290,7 @@ export function FeedRow({
                 />
               </div>
             </div>
-            <PostBody item={item} />
+            <PostBody item={item} channelID={channel.channelID} />
           </div>
         </div>
       </div>

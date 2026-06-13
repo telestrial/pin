@@ -166,7 +166,11 @@ export function ReadText({
           )}
 
           {displayItem.attachments && displayItem.attachments.length > 0 && (
-            <AttachmentGrid attachments={displayItem.attachments} />
+            <AttachmentGrid
+              attachments={displayItem.attachments}
+              channelID={channelID}
+              itemID={item.id}
+            />
           )}
 
           <footer className="pt-2 text-xs text-neutral-500">

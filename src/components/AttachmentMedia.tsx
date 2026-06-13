@@ -5,6 +5,7 @@ import { installAppBridge } from '../lib/appBridge'
 import { APP_SANDBOX } from '../lib/constants'
 import { formatBytes } from '../lib/format'
 import { useItemBlobURL, useItemBytes } from '../lib/useItemBytes'
+import { FilePinButton } from './FilePinButton'
 
 export type AttachmentKind = 'image' | 'audio' | 'video' | 'app' | 'file'
 
@@ -151,15 +152,28 @@ function AppAttachment({ attachment }: { attachment: AttachmentRef }) {
   )
 }
 
-function AttachmentTile({ attachment }: { attachment: AttachmentRef }) {
+function AttachmentTile({
+  attachment,
+  channelID,
+  itemID,
+}: {
+  attachment: AttachmentRef
+  channelID: string
+  itemID: string
+}) {
   const kind = kindForMime(attachment.mimeType)
   return (
-    <div className="bg-neutral-50 border border-neutral-200 rounded-lg overflow-hidden">
+    <div className="group relative bg-neutral-50 border border-neutral-200 rounded-lg overflow-hidden">
       {kind === 'app' ? (
         <AppAttachment attachment={attachment} />
       ) : (
         <MediaAttachment attachment={attachment} kind={kind} />
       )}
+      <FilePinButton
+        attachment={attachment}
+        channelID={channelID}
+        itemID={itemID}
+      />
     </div>
   )
 }
@@ -168,8 +182,15 @@ const DISPLAY_CAP = 4
 
 export function AttachmentGrid({
   attachments,
+  channelID,
+  itemID,
 }: {
   attachments: AttachmentRef[]
+  // Channel + item the attachments belong to — lets each tile's FilePinButton
+  // determine ownership (retract-the-file vs mirror-to-library) and target the
+  // right manifest entry on retract.
+  channelID: string
+  itemID: string
 }) {
   // Drop malformed entries — pre-AttachmentRef-schema posts (slice 1's URL-only
   // shape) would arrive as bare strings here. Render nothing rather than crash;
@@ -187,8 +208,13 @@ export function AttachmentGrid({
       }`}
     >
       {visible.map((a, i) => (
-        // biome-ignore lint/suspicious/noArrayIndexKey: attachments is a stable manifest array
-        <AttachmentTile key={i} attachment={a} />
+        <AttachmentTile
+          // biome-ignore lint/suspicious/noArrayIndexKey: attachments is a stable manifest array
+          key={i}
+          attachment={a}
+          channelID={channelID}
+          itemID={itemID}
+        />
       ))}
       {overflow > 0 && (
         <div className="bg-neutral-100 border border-neutral-200 rounded-lg flex items-center justify-center min-h-32">
