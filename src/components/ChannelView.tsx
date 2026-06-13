@@ -190,7 +190,9 @@ export function ChannelView({
                               type="button"
                               onClick={onUnpin}
                               title="Unpin this channel"
-                              className="p-1.5 text-green-600 hover:text-green-700 hover:bg-neutral-100 rounded-md transition-colors cursor-pointer"
+                              // Owned: same axis as the post PinButton — owned
+                              // green dimmed at rest, waking brighter on hover.
+                              className="p-1 cursor-pointer transition-all duration-300 text-green-700 opacity-50 hover:opacity-100 hover:text-green-600"
                             >
                               <PinIcon state="pinned" aria-hidden="true" />
                             </button>

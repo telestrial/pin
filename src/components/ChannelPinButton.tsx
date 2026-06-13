@@ -112,7 +112,7 @@ export function ChannelPinButton({
         disabled={busy}
         title={title}
         aria-pressed={state === 'pinned'}
-        className={`p-1.5 transition-all duration-300 hover:bg-neutral-100 rounded-md cursor-pointer disabled:opacity-50 ${colorClass}`}
+        className={`p-1 cursor-pointer transition-all duration-300 disabled:cursor-default disabled:opacity-50 ${colorClass}`}
       >
         {busy ? (
           <ProgressPin pct={pct} />
