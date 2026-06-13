@@ -28,9 +28,28 @@ import {
   type ChannelImage,
   type ChannelManifest,
   type ChannelVisibility,
+  isValidAttachment,
   type ItemRef,
   type ItemType,
 } from './types'
+
+// Object IDs that survive an edit/retract and must therefore NOT be deleted:
+// the post-edit manifest's own objects (body ids + attachment objectIDs) unioned
+// with `external` — the caller's other-scope refs (other channels' manifests +
+// pins). Eager cleanup deletes a candidate object only when it's absent here.
+function survivingObjectIDs(
+  manifest: ChannelManifest,
+  external: ReadonlySet<string>,
+): Set<string> {
+  const set = new Set(external)
+  for (const item of manifest.items) {
+    set.add(item.id)
+    for (const att of item.attachments ?? []) {
+      if (isValidAttachment(att) && att.objectID) set.add(att.objectID)
+    }
+  }
+  return set
+}
 
 // Upload an optional channel image (avatar or cover) to Sia and shape it into
 // a ChannelImage ref. Shared by createChannel and editChannel.
@@ -352,6 +371,12 @@ export async function deletePublishedItem(
   agent: Agent,
   channel: { channelID: string; channelKey: string },
   itemID: string,
+  // Object IDs referenced elsewhere in the author's own scope (other channel
+  // manifests + pins). Bytes in this set survive the retract — a file shared
+  // with another of your posts, or held by a standalone library pin, isn't
+  // yanked out from under it. Defaults to empty; callers pass their in-memory
+  // scope refs to make the eager cleanup reference-safe.
+  protectedObjectIDs: ReadonlySet<string> = new Set(),
 ): Promise<ChannelManifest> {
   const did = agent.assertDid
 
@@ -360,6 +385,7 @@ export async function deletePublishedItem(
     channel.channelID,
     channel.channelKey,
   )
+  const removed = current.items.find((i) => i.id === itemID)
 
   const updated: ChannelManifest = {
     ...current,
@@ -376,9 +402,87 @@ export async function deletePublishedItem(
     updated.visibility === 'public' ? channel.channelKey : undefined,
   )
 
-  await sdk.deleteObject(itemID)
+  // Eager, reference-safe cleanup: a retract is a decision you made, so the
+  // bytes leave your storage now — not on the next orphan-sweep pass. Delete
+  // the retracted item's body + every attachment, skipping any object still
+  // referenced by something surviving (the orphan sweep remains the backstop
+  // for legacy attachments lacking an objectID). Subscribers' pinned copies
+  // live in their own scope, so deleteObject never touches them.
+  const surviving = survivingObjectIDs(updated, protectedObjectIDs)
+  if (!surviving.has(itemID)) await sdk.deleteObject(itemID)
+  for (const att of removed?.attachments ?? []) {
+    if (!isValidAttachment(att) || !att.objectID) continue
+    if (surviving.has(att.objectID)) continue
+    sdk.deleteObject(att.objectID).catch(() => {})
+  }
 
   return updated
+}
+
+// Retract a single attachment from a published item — the file-level analog of
+// deletePublishedItem. Rewrites the item with that attachment dropped (body and
+// other attachments untouched, publishedAt preserved, editedAt stamped), then
+// eagerly deletes the file's bytes unless something surviving still references
+// them. Subscribers who pinned the post or the file keep their copies.
+export async function removeAttachmentFromItem(
+  sdk: Sdk,
+  agent: Agent,
+  channel: { channelID: string; channelKey: string },
+  itemID: string,
+  attachmentURL: string,
+  protectedObjectIDs: ReadonlySet<string> = new Set(),
+): Promise<{ manifest: ChannelManifest; item: ItemRef }> {
+  const did = agent.assertDid
+
+  const current = await fetchChannel(
+    did,
+    channel.channelID,
+    channel.channelKey,
+  )
+  const index = current.items.findIndex((i) => i.id === itemID)
+  if (index === -1) throw new Error('Item not found in channel')
+  const item = current.items[index]
+  const removed = (item.attachments ?? []).find(
+    (a) => isValidAttachment(a) && a.url === attachmentURL,
+  )
+
+  const finalItem: ItemRef = {
+    ...item,
+    attachments: (item.attachments ?? []).filter(
+      (a) => !(isValidAttachment(a) && a.url === attachmentURL),
+    ),
+    editedAt: new Date().toISOString(),
+  }
+  const updatedItems = [...current.items]
+  updatedItems[index] = finalItem
+  const updated: ChannelManifest = {
+    ...current,
+    publishedAt: new Date().toISOString(),
+    items: updatedItems,
+  }
+
+  const keyBytes = channelKeyFromBase64(channel.channelKey)
+  const ciphertext = await encryptForChannel(keyBytes, JSON.stringify(updated))
+  await putChannelRecord(
+    agent,
+    channel.channelID,
+    ciphertext,
+    updated.visibility === 'public' ? channel.channelKey : undefined,
+  )
+
+  // Eager, reference-safe: delete the removed file's bytes unless another of
+  // your posts / a library pin still references the same object.
+  const surviving = survivingObjectIDs(updated, protectedObjectIDs)
+  if (
+    removed &&
+    isValidAttachment(removed) &&
+    removed.objectID &&
+    !surviving.has(removed.objectID)
+  ) {
+    sdk.deleteObject(removed.objectID).catch(() => {})
+  }
+
+  return { manifest: updated, item: finalItem }
 }
 
 export async function editItem(

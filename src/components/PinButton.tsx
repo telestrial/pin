@@ -1,11 +1,12 @@
 import { useState } from 'react'
 import { deletePublishedItem } from '../core/channels'
 import { formatBytes } from '../lib/format'
+import { objectIDsInManifests } from '../lib/scopeRefs'
 import { itemPinByteSize } from '../lib/useChannelPinState'
 import { usePinState } from '../lib/usePinState'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
-import { type PinInput, usePinStore } from '../stores/pin'
+import { objectIDsReferencedBy, type PinInput, usePinStore } from '../stores/pin'
 import { useToastStore } from '../stores/toast'
 import { PinIcon } from './PinIcon'
 
@@ -41,7 +42,23 @@ export function PinButton({ input }: { input: PinInput }) {
       if (confirmation !== 'DELETE') return
       setDeleting(true)
       try {
-        await deletePublishedItem(sdk, agent, ownedChannel, input.item.id)
+        // Reference-safe eager cleanup: protect bytes still held by your other
+        // channels' manifests or any pin (e.g. an attachment kept as a library
+        // pin) so the retract doesn't yank them.
+        const protectedIDs = new Set([
+          ...objectIDsInManifests(
+            useFeedStore.getState().manifests,
+            ownedChannel.channelID,
+          ),
+          ...objectIDsReferencedBy(usePinStore.getState().pinned),
+        ])
+        await deletePublishedItem(
+          sdk,
+          agent,
+          ownedChannel,
+          input.item.id,
+          protectedIDs,
+        )
         const sub = subscriptions.find(
           (s) => s.channelID === ownedChannel.channelID,
         )
