@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import type { Sdk } from '@siafoundation/sia-storage'
-import { fetchAccountSnapshot, fetchRawContentBytes, pinItem, unpinItem } from './pin'
+import {
+  fetchAccountSnapshot,
+  fetchRawContentBytes,
+  pinItem,
+  unpinItemBytes,
+} from './pin'
 import type { ItemRef } from './types'
 import { createFakeWorld, FakeSdk } from '../test/fakeSdk'
 
@@ -94,7 +99,7 @@ describe('fetchRawContentBytes', () => {
   })
 })
 
-describe('pinItem / unpinItem', () => {
+describe('pinItem / unpinItemBytes', () => {
   it('mirrors body + every attachment into the caller scope', async () => {
     const world = createFakeWorld()
     const alice = new FakeSdk('alice', world)
@@ -148,7 +153,7 @@ describe('pinItem / unpinItem', () => {
     expect(world.scopeOf('bob').size).toBe(2)
   })
 
-  it('unpinItem releases body + attachments', async () => {
+  it('unpinItemBytes releases an object from the caller scope', async () => {
     const world = createFakeWorld()
     const alice = new FakeSdk('alice', world)
     const bob = new FakeSdk('bob', world)
@@ -161,11 +166,13 @@ describe('pinItem / unpinItem', () => {
     )
     expect(world.scopeOf('bob').size).toBe(2)
 
-    await unpinItem(asSdk(bob), objectID, attachmentObjectIDs)
+    // The store orchestrates whole-item release; the primitive drops one id.
+    await unpinItemBytes(asSdk(bob), objectID)
+    for (const aid of attachmentObjectIDs) await unpinItemBytes(asSdk(bob), aid)
     expect(world.scopeOf('bob').size).toBe(0)
   })
 
-  it("unpinItem leaves the author's scope intact (custody is independent)", async () => {
+  it("unpinItemBytes leaves the author's scope intact (custody is independent)", async () => {
     const world = createFakeWorld()
     const alice = new FakeSdk('alice', world)
     const bob = new FakeSdk('bob', world)
@@ -177,7 +184,8 @@ describe('pinItem / unpinItem', () => {
       asSdk(bob),
       makeItem(bodyURL, [imgURL]),
     )
-    await unpinItem(asSdk(bob), objectID, attachmentObjectIDs)
+    await unpinItemBytes(asSdk(bob), objectID)
+    for (const aid of attachmentObjectIDs) await unpinItemBytes(asSdk(bob), aid)
 
     // bob let go; alice still hosts both objects.
     expect(world.scopeOf('bob').size).toBe(0)

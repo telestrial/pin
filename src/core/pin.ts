@@ -53,24 +53,12 @@ export async function pinItem(
   return { objectID, attachmentObjectIDs }
 }
 
-// Unpin a whole item — body plus its attachment objects. Body delete can throw
-// (caller keeps the entry pinned on failure); attachment deletes are
-// best-effort, since a stray attachment is harmless and the orphan sweep
-// reclaims it.
-export async function unpinItem(
-  sdk: Sdk,
-  objectID: string,
-  attachmentObjectIDs: readonly string[] = [],
-): Promise<void> {
-  await unpinItemBytes(sdk, objectID)
-  for (const aid of attachmentObjectIDs) {
-    try {
-      await unpinItemBytes(sdk, aid)
-    } catch {
-      // best-effort — orphan sweep catches strays
-    }
-  }
-}
+// Releasing a whole item (body + its attachment objects) is orchestrated by the
+// pinStore, not here: with granular pinning a file's bytes can be held by both a
+// whole-post pin and a standalone library pin, so unpin is reference-aware — it
+// deletes only the object IDs no other pin still references. That refcount is
+// derived from the store's pinned[] array, so the store calls unpinItemBytes per
+// safe id rather than an aggregate helper.
 
 const EVENTS_PAGE_LIMIT = 200
 // Defensive cap — 200 × 50 = 10000 events covers any plausible scope.

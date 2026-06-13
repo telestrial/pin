@@ -5,7 +5,7 @@ import {
   type AccountSnapshot,
   fetchAccountSnapshot,
   pinItem,
-  unpinItem,
+  unpinItemBytes,
 } from '../core/pin'
 import type { ItemRef } from '../core/types'
 import { APP_KEY } from '../lib/constants'
@@ -92,6 +92,21 @@ type PinState = {
   reset: () => void
 }
 
+// Every Sia object ID currently held by these pins — each pin's body plus its
+// attachment objects. Used by unpin to refcount shared bytes: with granular
+// pinning a file can be held by both a whole-post pin and a standalone library
+// pin, so a delete must skip any object still referenced by another pin.
+export function objectIDsReferencedBy(
+  pins: readonly PinnedItemRef[],
+): Set<string> {
+  const set = new Set<string>()
+  for (const p of pins) {
+    set.add(p.objectID)
+    for (const aid of p.attachmentObjectIDs ?? []) set.add(aid)
+  }
+  return set
+}
+
 // Simplified shape of zustand's setter — enough for the channel-job
 // helpers below to be defined outside the store initializer.
 type PinSet = (
@@ -160,11 +175,21 @@ export const usePinStore = create<PinState>()(
             input.item,
           )
           if (driftedFrom) {
-            unpinItem(
-              sdk,
+            // Release the stale version's bytes — but only those no other pin
+            // (nor the freshly-pinned current version) still references.
+            const referenced = objectIDsReferencedBy(
+              get().pinned.filter((p) => p !== driftedFrom),
+            )
+            referenced.add(objectID)
+            for (const aid of attachmentObjectIDs) referenced.add(aid)
+            const stale = [
               driftedFrom.objectID,
-              driftedFrom.attachmentObjectIDs ?? [],
-            ).catch(() => {})
+              ...(driftedFrom.attachmentObjectIDs ?? []),
+            ]
+            for (const id of stale) {
+              if (referenced.has(id)) continue
+              unpinItemBytes(sdk, id).catch(() => {})
+            }
           }
           const ref: PinnedItemRef = {
             ...input,
@@ -195,7 +220,25 @@ export const usePinStore = create<PinState>()(
         pinning.add(itemURL)
         set({ pinning })
         try {
-          await unpinItem(sdk, ref.objectID, ref.attachmentObjectIDs ?? [])
+          // Reference-aware release: delete only the bytes no other pin still
+          // holds. The body is deleted first when unreferenced — its failure
+          // keeps the entry pinned (don't drop state for bytes we couldn't
+          // release). Attachment/shared deletes are best-effort; a stray is
+          // reclaimed by the orphan sweep.
+          const referenced = objectIDsReferencedBy(
+            get().pinned.filter((p) => p !== ref),
+          )
+          if (!referenced.has(ref.objectID)) {
+            await unpinItemBytes(sdk, ref.objectID)
+          }
+          for (const aid of ref.attachmentObjectIDs ?? []) {
+            if (referenced.has(aid)) continue
+            try {
+              await unpinItemBytes(sdk, aid)
+            } catch {
+              // best-effort — orphan sweep catches strays
+            }
+          }
           const next = new Set(get().pinning)
           next.delete(itemURL)
           set((s) => ({
