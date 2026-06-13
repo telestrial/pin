@@ -122,26 +122,26 @@ export function FilePinButton({
       ? `Remove this file from your library (${size})`
       : `Pin this file to your library (${size})`
 
-  // One uniform pattern across every attachment type:
-  //  owned          → dim green pin at rest (you barely register you own it),
-  //                   full green on hover (click retracts the file)
-  //  library-pinned → solid green, always visible (deliberate "I keep this";
-  //                   click releases)
-  //  pinnable       → solid, opaque outline at rest, ready for pinning; greens
-  //                   on hover (click mirrors the file to your library)
-  const stateAndClass = isOwned
-    ? ({
-        state: 'pinned',
-        cls: 'text-green-600 hover:text-green-700 opacity-40 group-hover:opacity-100 focus:opacity-100',
-      } as const)
-    : isPinned
+  // Attachment pins are invisible at rest and minimal: the whole pill — bg,
+  // shadow, icon — appears (quickly) only when the cursor is essentially on the
+  // button itself (opacity-0 + hover:opacity-100; an opacity-0 element still
+  // captures pointer events), and disappears just as fast when you leave.
+  // Once visible, the color follows the same ownership axis as the post
+  // PinButton: green = "you own it", light green = "click to own it".
+  //  owned / library-pinned → owned green; brightens within the owned family on
+  //                           direct hover (click retracts the file / releases
+  //                           the library pin)
+  //  pinnable               → light green; brightens on hover (click mirrors the
+  //                           file to your library)
+  const stateAndClass =
+    isOwned || isPinned
       ? ({
           state: 'pinned',
-          cls: 'text-green-600 hover:text-green-700',
+          cls: 'text-green-700 hover:text-green-600',
         } as const)
       : ({
           state: 'pinnable',
-          cls: 'text-neutral-600 hover:text-green-600',
+          cls: 'text-green-400 hover:text-green-500',
         } as const)
 
   return (
@@ -152,7 +152,7 @@ export function FilePinButton({
       title={title}
       aria-label={title}
       aria-pressed={!isOwned && isPinned}
-      className={`absolute top-1.5 right-1.5 p-1 rounded-full bg-white/80 backdrop-blur-sm shadow-sm transition-opacity disabled:opacity-50 ${stateAndClass.cls}`}
+      className={`absolute top-1.5 right-1.5 p-1 rounded-full bg-white/80 backdrop-blur-sm shadow-sm cursor-pointer opacity-0 hover:opacity-100 focus:opacity-100 transition-all duration-150 disabled:cursor-default disabled:opacity-50 ${stateAndClass.cls}`}
     >
       {busy ? (
         <span className="block size-6">

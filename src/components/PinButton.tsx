@@ -97,16 +97,18 @@ export function PinButton({ input }: { input: PinInput }) {
         ? `Unpin from your storage (${size})`
         : `Pin to your storage (${size})`
 
-  // Color delegation: state-aware PinIcon uses currentColor for stroke
-  // and fill, so the parent button controls color (and hover).
-  //  pinned   → text-green-600 (committed)
-  //  pinnable → text-neutral-400 hover:text-green-600 (hint at upgrade)
-  //  edited   → text-neutral-400 hover:text-green-600 (re-pin hint —
-  //             green dot stays as the persistent drift badge regardless)
+  // Color axis is ownership: green = "you own it", light green = "click to own
+  // it". (State-aware PinIcon uses currentColor, so the parent button drives
+  // color + opacity.)
+  //  pinnable / edited → light green, never dimmed; brightens slightly on hover
+  //                      (the offer to own). edited keeps its drift dot.
+  //  pinned            → owned green, dimmed at rest; hovering lifts the dim and
+  //                      brightens within the owned-green family ("wakes up as
+  //                      you reach for it"), fading back out as you move away.
   const colorClass =
     pinState === 'pinned'
-      ? 'text-green-600 hover:text-green-700'
-      : 'text-neutral-400 hover:text-green-600'
+      ? 'text-green-700 opacity-50 hover:opacity-100 hover:text-green-600'
+      : 'text-green-400 hover:text-green-500'
 
   return (
     <button
@@ -115,7 +117,7 @@ export function PinButton({ input }: { input: PinInput }) {
       disabled={busy || !sdk}
       title={title}
       aria-pressed={pinState === 'pinned'}
-      className={`p-1 transition-colors disabled:opacity-50 ${colorClass}`}
+      className={`p-1 cursor-pointer transition-all duration-300 disabled:cursor-default disabled:opacity-50 ${colorClass}`}
     >
       {busy ? (
         <span className="block size-6">
