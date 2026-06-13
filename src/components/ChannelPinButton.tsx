@@ -93,12 +93,16 @@ export function ChannelPinButton({
         : (job.done / job.total) * 100
       : 0
 
-  // Color delegation, same as the item PinButton: PinIcon uses currentColor,
-  // the button drives green-vs-grey.
+  // Color axis matches the item PinButton: green = "you own it", light green
+  // = "click to own it". (PinIcon uses currentColor; the button drives color +
+  // opacity.)
+  //  pinnable / edited → light green, never dimmed (the offer to own the channel)
+  //  pinned            → owned green, dimmed at rest; hover lifts the dim and
+  //                      brightens within the owned-green family, fading back out
   const colorClass =
     state === 'pinned'
-      ? 'text-green-600 hover:text-green-700'
-      : 'text-neutral-400 hover:text-green-600'
+      ? 'text-green-700 opacity-50 hover:opacity-100 hover:text-green-600'
+      : 'text-green-400 hover:text-green-500'
 
   return (
     <>
@@ -108,7 +112,7 @@ export function ChannelPinButton({
         disabled={busy}
         title={title}
         aria-pressed={state === 'pinned'}
-        className={`p-1.5 transition-colors hover:bg-neutral-100 rounded-md cursor-pointer disabled:opacity-50 ${colorClass}`}
+        className={`p-1.5 transition-all duration-300 hover:bg-neutral-100 rounded-md cursor-pointer disabled:opacity-50 ${colorClass}`}
       >
         {busy ? (
           <ProgressPin pct={pct} />

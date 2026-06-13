@@ -526,7 +526,10 @@ export function PinSidebar({
                             ? `Re-pin ${itemTitle(entry.item)}`
                             : `Unpin ${itemTitle(entry.item)}`
                         }
-                        className="shrink-0 self-center p-1 rounded text-green-600 hover:bg-green-50 cursor-pointer disabled:opacity-50"
+                        // Owned-green dim/wake, same axis as the post PinButton
+                        // (these are all items you've pinned). The row-level
+                        // 1500ms fade-to-undo is a separate layer, untouched.
+                        className="shrink-0 self-center p-1 rounded cursor-pointer transition-all duration-300 text-green-700 opacity-50 hover:opacity-100 hover:text-green-600 disabled:opacity-50"
                       >
                         {busy ? (
                           <span className="block size-5 border-2 border-neutral-300 border-t-neutral-600 rounded-full animate-spin" />
