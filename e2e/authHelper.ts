@@ -149,3 +149,24 @@ export async function signInAccount(
 
   return page
 }
+
+// settings-sync repopulates myChannels + subscriptions from Sia a beat after
+// sign-in / navigation (the auth seed and the addInitScript both start them
+// at []). Querying the sidebar before that races to a false-empty read — the
+// root cause of cleanup silently draining nothing and the test-channel
+// backlog growing. Poll localStorage until the combined count stabilizes
+// non-zero, capped so a genuinely-empty account still returns promptly.
+export async function waitForChannelsLoaded(page: Page): Promise<void> {
+  let prev = -1
+  for (let t = 0; t < 12; t++) {
+    const n = await page.evaluate((key) => {
+      const s = JSON.parse(localStorage.getItem(key) || '{}').state
+      return (
+        (s?.myChannels ?? []).length + (s?.subscriptions ?? []).length
+      ) as number
+    }, SIA_LOCALSTORAGE_KEY)
+    if (n > 0 && n === prev) return
+    prev = n
+    await page.waitForTimeout(2000)
+  }
+}

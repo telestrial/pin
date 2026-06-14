@@ -12,7 +12,7 @@
 // e2e/authHelper.ts for why we're not using storageState fixtures.
 
 import { expect, type Page, test } from '@playwright/test'
-import { loadAccount, signInAccount } from '../authHelper'
+import { loadAccount, signInAccount, waitForChannelsLoaded } from '../authHelper'
 
 test('alice publishes a post; bob subscribes via URL and sees it', async ({
   browser,
@@ -184,11 +184,15 @@ test('alice publishes a post; bob subscribes via URL and sees it', async ({
 // cleanup could fail to find the current one and silently leave it —
 // which is exactly how the backlog grew. Draining self-heals it.
 async function cleanupE2EChannels(page: Page) {
-  // Operate from wherever alice's last action left her — home with sidebar
-  // mounted. We intentionally don't page.goto('/') because the auth
-  // helper's addInitScript reseeds myChannels=[] on every fresh document
-  // load, racing the settings-sync that repopulates from Sia.
-  //
+  // Land on a known-good home state regardless of where a (possibly failed)
+  // test left the page, then wait for settings-sync to repopulate the channel
+  // list. The addInitScript reseeds myChannels=[] on every fresh load, so
+  // querying the sidebar immediately after goto would race to a false-empty
+  // read and drain nothing (the bug that grew the test-channel backlog).
+  // waitForChannelsLoaded closes that race.
+  await page.goto('/')
+  await waitForChannelsLoaded(page)
+
   // Two "Your channels" lists exist on home — Sidebar (left) and
   // PinSidebar (right). Scope structurally via Sidebar's unique "Home"
   // button. Owners auto-subscribe to their own channels, so the name also
@@ -233,6 +237,11 @@ async function cleanupE2EChannels(page: Page) {
 // non-owned action, not on the manifest loading), so dead subs clear fine;
 // the unsubscribe handler flushes settings, so the removal is durable.
 async function cleanupE2ESubscriptions(page: Page) {
+  // Same goto-home + wait-for-sync guard as cleanupE2EChannels, so a failed
+  // run (which leaves bob's page mid-flow) still finds his subscriptions.
+  await page.goto('/')
+  await waitForChannelsLoaded(page)
+
   const sidebar = page.locator('aside').filter({
     has: page.getByRole('button', { name: 'Home', exact: true }),
   })
