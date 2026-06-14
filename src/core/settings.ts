@@ -1,6 +1,5 @@
 import { PinnedObject, type Sdk } from '@siafoundation/sia-storage'
-import type { OwnedChannel } from '../stores/auth'
-import type { SubscriptionRef } from './types'
+import type { OwnedChannel, SubscriptionRef } from './types'
 
 export const SETTINGS_VERSION = 1
 export const SETTINGS_METADATA_KIND = 'pin:settings'

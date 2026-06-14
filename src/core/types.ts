@@ -108,6 +108,13 @@ export type SubscriptionRef = {
   addedAt: string
 }
 
+export type OwnedChannel = {
+  channelID: string
+  channelKey: string
+  name: string
+  createdAt: string
+}
+
 export type Subscriptions = {
   version: typeof SUBSCRIPTIONS_VERSION
   subscribed: SubscriptionRef[]

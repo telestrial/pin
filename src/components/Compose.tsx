@@ -1,10 +1,14 @@
 import { Check, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import type { AttachmentSource } from '../core/channels'
-import { isValidAttachment, type ItemRef } from '../core/types'
+import {
+  isValidAttachment,
+  type ItemRef,
+  type OwnedChannel,
+} from '../core/types'
 import { NOTE_CHAR_LIMIT } from '../lib/constants'
 import { useItemBlobURL } from '../lib/useItemBytes'
-import { type OwnedChannel, useAuthStore } from '../stores/auth'
+import { useAuthStore } from '../stores/auth'
 import { useComposeStore } from '../stores/compose'
 import { useFeedStore } from '../stores/feed'
 import { useToastStore } from '../stores/toast'

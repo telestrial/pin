@@ -2,7 +2,7 @@ import type { Agent } from '@atproto/api'
 import type { Sdk } from '@siafoundation/sia-storage'
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import type { SubscriptionRef } from '../core/types'
+import type { OwnedChannel, SubscriptionRef } from '../core/types'
 import { APP_KEY } from '../lib/constants'
 import { useFeedStore } from './feed'
 import { usePinStore } from './pin'
@@ -16,13 +16,6 @@ export type AuthStep =
   | 'approve'
   | 'recovery'
   | 'connected'
-
-export type OwnedChannel = {
-  channelID: string
-  channelKey: string
-  name: string
-  createdAt: string
-}
 
 export type FeedSortOrder = 'oldest' | 'newest'
 
