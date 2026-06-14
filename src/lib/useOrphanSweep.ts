@@ -9,7 +9,10 @@ import { useFeedStore } from '../stores/feed'
 import { usePinStore } from '../stores/pin'
 import { useStorageActivityStore } from '../stores/storageActivity'
 import { useToastStore } from '../stores/toast'
-import { useUploadQueueStore } from '../stores/uploadQueue'
+import {
+  checkpointedObjectIDs,
+  useUploadQueueStore,
+} from '../stores/uploadQueue'
 
 // Defer the sweep on app load by this much so manifests have a chance to
 // fetch, pinStore can hydrate from localStorage, and any in-flight
@@ -92,6 +95,16 @@ async function buildKnownIDs(sdk: Sdk): Promise<{
   // pinStore — library + external pins
   for (const p of pin.pinned) {
     if (p.objectID) ids.add(p.objectID)
+  }
+
+  // Checkpointed upload tasks — bytes already on Sia but not yet referenced
+  // by a manifest/pin (a publish that hasn't finished, or failed and is
+  // awaiting retry). Without this they'd read as orphans and the sweep would
+  // delete them, breaking the eventual resume/retry. The 'uploadsIdle' gate
+  // above already bails while a task is mid-flight, but a *failed* task counts
+  // as idle, so its checkpoint bytes specifically need this protection.
+  for (const id of checkpointedObjectIDs(useUploadQueueStore.getState().tasks)) {
+    ids.add(id)
   }
 
   // Profile avatar + cover (one record per user, rkey 'self'). Like

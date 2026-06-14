@@ -8,7 +8,10 @@ import { useFeedStore } from '../stores/feed'
 import { LIBRARY_CHANNEL } from './pinUpload'
 import { usePinStore } from '../stores/pin'
 import { useToastStore } from '../stores/toast'
-import { useUploadQueueStore } from '../stores/uploadQueue'
+import {
+  checkpointedObjectIDs,
+  useUploadQueueStore,
+} from '../stores/uploadQueue'
 import { useStorageActivityStore } from '../stores/storageActivity'
 
 // Build the "what's pinned in your scope right now" snapshot the repack
@@ -31,7 +34,14 @@ async function buildScope(sdk: Sdk): Promise<ScopeRef[]> {
   // Dedup by objectID across every source — an attachment may also be
   // in pinStore as a library entry (same bytes, same Sia object), and
   // we never want to feed the same object into uploadItemsPacked twice.
-  const seenIDs = new Set<string>()
+  //
+  // Pre-seed with the object IDs of any checkpointed upload task: those bytes
+  // are still pin/publish-pending (or a failed task awaiting retry), and the
+  // task's checkpoint holds their current URL. If repack moved them, the
+  // resume would append/pin a stale URL. Treating them as already-seen keeps
+  // them out of every batch until their task completes (then they leave the
+  // queue and become repack-eligible normally).
+  const seenIDs = checkpointedObjectIDs(useUploadQueueStore.getState().tasks)
   const push = (ref: ScopeRef) => {
     if (seenIDs.has(ref.objectID)) return
     seenIDs.add(ref.objectID)
