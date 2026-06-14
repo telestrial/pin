@@ -5,6 +5,7 @@ import { Navbar } from './components/Navbar'
 import { Toasts } from './components/Toast'
 import { bootOauth } from './lib/atprotoClient'
 import './lib/debug'
+import { useGhostReconciliation } from './lib/useGhostReconciliation'
 import { useJetstream } from './lib/useJetstream'
 import { useOrphanSweep } from './lib/useOrphanSweep'
 import { useRepackRunner } from './lib/useRepackRunner'
@@ -28,6 +29,7 @@ export default function App() {
   useRepackRunner()
   useOrphanSweep()
   useSettingsSync()
+  useGhostReconciliation()
 
   // While a pinned item is armed, mark the body so a global CSS rule
   // (in index.css) swaps the cursor to a Pin-green arrow everywhere on

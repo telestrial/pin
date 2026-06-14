@@ -366,6 +366,33 @@ function isRecordNotFoundError(err: unknown): boolean {
   )
 }
 
+// Identify "ghost" owned channels: entries in the user's channel list whose
+// atproto record no longer exists. These arise when a retract deletes the
+// channel record but the follow-up settings save fails — the record is gone
+// but the settings entry is orphaned, so the channel resurrects on the next
+// load from stale settings. Reconciliation prunes them.
+//
+// Only a DEFINITIVE RecordNotFound counts. A transient network failure (QUIC
+// idle-timeout, 502, host churn) returns the channel as "not a ghost" so a
+// blip can never delete a real channel — at worst reconciliation is a no-op
+// that retries next load.
+export async function reconcileGhostChannels(
+  authorDID: string,
+  channelIDs: string[],
+): Promise<string[]> {
+  const results = await Promise.all(
+    channelIDs.map(async (channelID) => {
+      try {
+        await getChannelRecord(authorDID, channelID)
+        return null
+      } catch (e) {
+        return isRecordNotFoundError(e) ? channelID : null
+      }
+    }),
+  )
+  return results.filter((id): id is string => id !== null)
+}
+
 export async function deletePublishedItem(
   sdk: Sdk,
   agent: Agent,
