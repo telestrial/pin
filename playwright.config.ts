@@ -23,6 +23,13 @@ if (existsSync(envPath)) {
 export default defineConfig({
   testDir: './e2e/scenarios',
   fullyParallel: false,
+  // One worker — these are real-network tests that share the alice/bob
+  // accounts. Parallel files (the default worker count) would run e.g.
+  // cross-account and upload-resume as alice simultaneously, stomping each
+  // other's channels and contending for the same Sia host connections (the
+  // QUIC-storm timeouts we chased). Serialized, each test's cleanup also
+  // completes before the next test starts.
+  workers: 1,
   reporter: 'list',
   // 10 min per test — real Sia + real bsky OAuth, plus the finally-block
   // cleanup that drains every leftover e2e channel (each a slow real-network

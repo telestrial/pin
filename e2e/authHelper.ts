@@ -150,6 +150,119 @@ export async function signInAccount(
   return page
 }
 
+// Shared, bounded retract of this suite's "e2e test" channels. A test's
+// in-finally cleanup MUST NOT be able to exceed the test's own time budget —
+// that's what let the backlog grow (each run's cleanup got cut off at the
+// 10-min ceiling, often masking the body's real result). So this is guarded
+// two ways: a hard iteration cap AND a wall-clock budget checked before every
+// pass, so a slow/flaky retract can never compound past `budgetMs`. Whatever
+// doesn't fit clears incrementally on later runs, or in bulk via
+// drain-e2e-channels (which passes a large max + budget). Per-pass failures
+// recover to home and continue rather than aborting the whole drain. Returns
+// the number drained, for the maintenance task's logging.
+//
+// Always lands on home + waits for settings-sync first, so a test that failed
+// mid-flow (leaving the page anywhere) still finds the channel list.
+export async function drainE2EChannels(
+  page: Page,
+  { max = 8, budgetMs = 150_000 }: { max?: number; budgetMs?: number } = {},
+): Promise<number> {
+  // Bounded nav: a Sia boot churning through QUIC-failing hosts (a normal
+  // characteristic of the network, not necessarily a bad run) can stall the
+  // load event long enough that an un-timed goto would hang cleanup for the
+  // whole test budget (the 10-min timeouts we saw land in the finally block).
+  // Best-effort — proceed even if it times out; the sidebar query below just
+  // finds nothing to drain.
+  await page.goto('/', { timeout: 60_000 }).catch(() => {})
+  await waitForChannelsLoaded(page)
+  const sidebar = page.locator('aside').filter({
+    has: page.getByRole('button', { name: 'Home', exact: true }),
+  })
+  // Owners auto-subscribe to their own channels, so the name also appears in
+  // "Subscribed channels"; narrow to the "Your channels" UL so we retract
+  // (owned) rather than unsubscribe.
+  const yourChannels = sidebar.locator('ul[aria-label="Your channels"]')
+
+  const start = Date.now()
+  let drained = 0
+  for (let i = 0; i < max; i++) {
+    if (Date.now() - start > budgetMs) break // wall-clock guard — never blow the budget
+    const candidates = yourChannels.getByRole('button', { name: /e2e test/i })
+    if ((await candidates.count()) === 0) break
+    try {
+      await candidates.first().click({ timeout: 30_000 })
+      // window.prompt() is a native dialog in Playwright — accept with the
+      // required typed DELETE before the click that triggers it.
+      page.once('dialog', (d) => d.accept('DELETE'))
+      const unpin = page.getByRole('button', {
+        name: 'Unpin this channel',
+        exact: true,
+      })
+      await unpin.click({ timeout: 30_000 })
+      // NB: waitFor + catch, NOT expect(). A failed expect() in @playwright/test
+      // taints the test result even when the throw is caught — so cleanup, where
+      // a slow/failed retract must stay non-fatal, must never assert.
+      await unpin.waitFor({ state: 'hidden', timeout: 45_000 }).catch(() => {})
+      if (!(await unpin.isVisible().catch(() => false))) drained++
+    } catch (e) {
+      console.warn(`[drainE2EChannels] pass ${i} failed, recovering:`, e)
+      await page
+        .getByRole('button', { name: 'Home', exact: true })
+        .first()
+        .click({ timeout: 30_000 })
+        .catch(() => {})
+    }
+  }
+  return drained
+}
+
+// Sibling of drainE2EChannels for subscribed channels — a subscriber (bob)
+// accumulates dead subscriptions to channels that get retracted. Same bounded
+// + budgeted + recover-and-continue shape.
+export async function drainE2ESubscriptions(
+  page: Page,
+  { max = 8, budgetMs = 150_000 }: { max?: number; budgetMs?: number } = {},
+): Promise<number> {
+  // Bounded nav: a Sia boot churning through QUIC-failing hosts (a normal
+  // characteristic of the network, not necessarily a bad run) can stall the
+  // load event long enough that an un-timed goto would hang cleanup for the
+  // whole test budget (the 10-min timeouts we saw land in the finally block).
+  // Best-effort — proceed even if it times out; the sidebar query below just
+  // finds nothing to drain.
+  await page.goto('/', { timeout: 60_000 }).catch(() => {})
+  await waitForChannelsLoaded(page)
+  const sidebar = page.locator('aside').filter({
+    has: page.getByRole('button', { name: 'Home', exact: true }),
+  })
+  const subscribed = sidebar.locator('ul[aria-label="Subscribed channels"]')
+
+  const start = Date.now()
+  let drained = 0
+  for (let i = 0; i < max; i++) {
+    if (Date.now() - start > budgetMs) break
+    const candidates = subscribed.getByRole('button', { name: /e2e test/i })
+    if ((await candidates.count()) === 0) break
+    try {
+      await candidates.first().click({ timeout: 30_000 })
+      page.once('dialog', (d) => d.accept())
+      const unsub = page.getByRole('button', { name: 'Unsubscribe' })
+      await unsub.click({ timeout: 30_000 })
+      // waitFor + catch, NOT expect() — see drainE2EChannels: a caught expect()
+      // still fails the test, so cleanup must not assert.
+      await unsub.waitFor({ state: 'hidden', timeout: 45_000 }).catch(() => {})
+      if (!(await unsub.isVisible().catch(() => false))) drained++
+    } catch (e) {
+      console.warn(`[drainE2ESubscriptions] pass ${i} failed, recovering:`, e)
+      await page
+        .getByRole('button', { name: 'Home', exact: true })
+        .first()
+        .click({ timeout: 30_000 })
+        .catch(() => {})
+    }
+  }
+  return drained
+}
+
 // settings-sync repopulates myChannels + subscriptions from Sia a beat after
 // sign-in / navigation (the auth seed and the addInitScript both start them
 // at []). Querying the sidebar before that races to a false-empty read — the

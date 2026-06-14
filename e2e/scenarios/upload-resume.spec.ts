@@ -12,7 +12,7 @@
 // only catches the publish-append, not the channel setup.
 
 import { expect, type Page, test } from '@playwright/test'
-import { loadAccount, signInAccount } from '../authHelper'
+import { drainE2EChannels, loadAccount, signInAccount } from '../authHelper'
 
 const SIA_KEY = 'sia-auth-f6b7539e181e45ee'
 const QUEUE_DB = 'pin-upload-queue'
@@ -177,7 +177,7 @@ test('an interrupted publish resumes from its checkpoint on reload', async ({
   } finally {
     if (alice) {
       try {
-        await cleanupE2EChannels(alice)
+        await drainE2EChannels(alice)
       } catch (e) {
         console.warn('[alice channel cleanup] failed:', e)
       }
@@ -185,25 +185,3 @@ test('an interrupted publish resumes from its checkpoint on reload', async ({
     await context.close()
   }
 })
-
-// Retract every "e2e test" channel so the account never accumulates. Same
-// self-healing drain-loop as the cross-account spec.
-async function cleanupE2EChannels(page: Page) {
-  const sidebar = page.locator('aside').filter({
-    has: page.getByRole('button', { name: 'Home', exact: true }),
-  })
-  const yourChannels = sidebar.locator('ul[aria-label="Your channels"]')
-
-  for (let i = 0; i < 20; i++) {
-    const candidates = yourChannels.getByRole('button', { name: /e2e test/i })
-    if ((await candidates.count()) === 0) break
-    await candidates.first().click({ timeout: 30_000 })
-    page.once('dialog', (dialog) => dialog.accept('DELETE'))
-    const unpinChannel = page.getByRole('button', {
-      name: 'Unpin this channel',
-      exact: true,
-    })
-    await unpinChannel.click()
-    await expect(unpinChannel).toBeHidden({ timeout: 120_000 })
-  }
-}

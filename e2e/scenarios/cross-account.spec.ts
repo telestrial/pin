@@ -12,7 +12,12 @@
 // e2e/authHelper.ts for why we're not using storageState fixtures.
 
 import { expect, type Page, test } from '@playwright/test'
-import { loadAccount, signInAccount, waitForChannelsLoaded } from '../authHelper'
+import {
+  drainE2EChannels,
+  drainE2ESubscriptions,
+  loadAccount,
+  signInAccount,
+} from '../authHelper'
 
 test('alice publishes a post; bob subscribes via URL and sees it', async ({
   browser,
@@ -153,7 +158,7 @@ test('alice publishes a post; bob subscribes via URL and sees it', async ({
     // so cleanup failures don't mask the original test failure.
     if (alice) {
       try {
-        await cleanupE2EChannels(alice)
+        await drainE2EChannels(alice)
       } catch (e) {
         console.warn('[alice channel cleanup] failed:', e)
       }
@@ -163,7 +168,7 @@ test('alice publishes a post; bob subscribes via URL and sees it', async ({
     // grows with dead pointers. Same self-healing loop as alice's channels.
     if (bob) {
       try {
-        await cleanupE2ESubscriptions(bob)
+        await drainE2ESubscriptions(bob)
       } catch (e) {
         console.warn('[bob subscription cleanup] failed:', e)
       }
@@ -172,90 +177,3 @@ test('alice publishes a post; bob subscribes via URL and sees it', async ({
     await bobContext.close()
   }
 })
-
-// Retract every channel this suite created — the current run's plus any
-// leftovers from prior failed runs — so alice's account never accumulates.
-// Matches by the "e2e test" name prefix every run uses, so it only ever
-// touches this suite's channels, and loops because each delete navigates
-// into the channel then back home (the sidebar list shrinks per pass).
-//
-// Why drain-all instead of the run's one channel: once a backlog builds
-// up, the sidebar "Your channels" list caps at 10, so a single-channel
-// cleanup could fail to find the current one and silently leave it —
-// which is exactly how the backlog grew. Draining self-heals it.
-async function cleanupE2EChannels(page: Page) {
-  // Land on a known-good home state regardless of where a (possibly failed)
-  // test left the page, then wait for settings-sync to repopulate the channel
-  // list. The addInitScript reseeds myChannels=[] on every fresh load, so
-  // querying the sidebar immediately after goto would race to a false-empty
-  // read and drain nothing (the bug that grew the test-channel backlog).
-  // waitForChannelsLoaded closes that race.
-  await page.goto('/')
-  await waitForChannelsLoaded(page)
-
-  // Two "Your channels" lists exist on home — Sidebar (left) and
-  // PinSidebar (right). Scope structurally via Sidebar's unique "Home"
-  // button. Owners auto-subscribe to their own channels, so the name also
-  // appears in "Subscribed channels"; narrowing to the "Your channels" UL
-  // avoids deleting via the wrong list.
-  const sidebar = page.locator('aside').filter({
-    has: page.getByRole('button', { name: 'Home', exact: true }),
-  })
-  const yourChannels = sidebar.locator('ul[aria-label="Your channels"]')
-
-  // Safety cap — never loop unbounded against a real account.
-  for (let i = 0; i < 20; i++) {
-    const candidates = yourChannels.getByRole('button', { name: /e2e test/i })
-    if ((await candidates.count()) === 0) break
-    await candidates.first().click({ timeout: 30_000 })
-    // window.prompt() is a native browser dialog in Playwright — accept it
-    // with the required typed DELETE before the click that triggers it.
-    page.once('dialog', (dialog) => dialog.accept('DELETE'))
-    // The owned-channel retract is the filled pin icon in the header; its
-    // accessible name comes from title="Unpin this channel" (the aria-hidden
-    // glyph contributes nothing). Exact match so it can't collide with the
-    // non-owned "Unpin this channel from your storage" pin.
-    const unpinChannel = page.getByRole('button', {
-      name: 'Unpin this channel',
-      exact: true,
-    })
-    await unpinChannel.click()
-    // The retract walks every item via deleteObject + pruneSlabs on the
-    // real network (slow, and slower under the SDK's QUIC idle-timeout
-    // retries), then navigates back to home, so the channel page's Unpin
-    // button disappears. Wait generously for that before re-querying the
-    // (now shorter) sidebar list.
-    await expect(unpinChannel).toBeHidden({ timeout: 120_000 })
-  }
-}
-
-// Drain bob's e2e subscriptions — he subscribes to each run's channel,
-// which alice then retracts, so without this his sub list grows with dead
-// pointers (the same accumulation alice's channels had). Same self-healing
-// loop: open each e2e-test subscribed channel and unsubscribe. A retracted
-// channel's page still renders the Unsubscribe button (it's gated on the
-// non-owned action, not on the manifest loading), so dead subs clear fine;
-// the unsubscribe handler flushes settings, so the removal is durable.
-async function cleanupE2ESubscriptions(page: Page) {
-  // Same goto-home + wait-for-sync guard as cleanupE2EChannels, so a failed
-  // run (which leaves bob's page mid-flow) still finds his subscriptions.
-  await page.goto('/')
-  await waitForChannelsLoaded(page)
-
-  const sidebar = page.locator('aside').filter({
-    has: page.getByRole('button', { name: 'Home', exact: true }),
-  })
-  const subscribed = sidebar.locator('ul[aria-label="Subscribed channels"]')
-
-  for (let i = 0; i < 20; i++) {
-    const candidates = subscribed.getByRole('button', { name: /e2e test/i })
-    if ((await candidates.count()) === 0) break
-    await candidates.first().click({ timeout: 30_000 })
-    // ChannelView's Unsubscribe window.confirm()s, then flushes settings and
-    // navigates home — so the button disappears once the removal is durable.
-    page.once('dialog', (dialog) => dialog.accept())
-    const unsubscribe = page.getByRole('button', { name: 'Unsubscribe' })
-    await unsubscribe.click()
-    await expect(unsubscribe).toBeHidden({ timeout: 60_000 })
-  }
-}
