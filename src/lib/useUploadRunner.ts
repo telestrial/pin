@@ -15,6 +15,7 @@ import {
   useUploadQueueStore,
 } from '../stores/uploadQueue'
 import { LIBRARY_CHANNEL } from './pinUpload'
+import { loadPersistedTasks } from './uploadQueuePersist'
 
 const SUCCESS_AUTO_REMOVE_MS = 4000
 
@@ -32,6 +33,36 @@ function displayTitle(task: UploadTask): string {
   if (p.summary) return p.summary.slice(0, 60)
   if (p.filename) return p.filename
   return 'item'
+}
+
+// Module-level guard so React StrictMode's double-mount (and any remount)
+// doesn't re-read IDB and double-insert tasks.
+let hydrated = false
+
+// Re-enqueue tasks that were persisted but never finished — a tab closed
+// mid-upload, a crash, etc. Persisted tasks are only ever 'pending' or
+// 'failed' (in-flight states are coerced to 'pending' on write), so both
+// resume correctly: pending re-runs through the runner — fast-pathing past
+// the upload if it carries a checkpoint — and failed waits for a retry.
+// Runs once on app start, before/independent of the SDK being ready.
+export function useUploadQueueHydration() {
+  useEffect(() => {
+    if (hydrated) return
+    hydrated = true
+    loadPersistedTasks()
+      .then((persisted) => {
+        if (persisted.length === 0) return
+        useUploadQueueStore.setState((s) => {
+          const existing = new Set(s.tasks.map((t) => t.id))
+          const restored = persisted.filter((t) => !existing.has(t.id))
+          if (restored.length === 0) return s
+          return { tasks: [...restored, ...s.tasks] }
+        })
+      })
+      .catch(() => {
+        // best-effort; a failed restore just means nothing to resume
+      })
+  }, [])
 }
 
 export function useUploadRunner() {
@@ -89,80 +120,103 @@ export function useUploadRunner() {
         return
       }
 
-      queue.setState(task.id, 'uploading', undefined)
-
       try {
-        // Eager packing: collect every byte source for this task (attachments
-        // with kind='bytes' + body) and bin-pack them through a single
-        // PackedUpload. A post + 3 image attachments that fit in one 40 MiB
-        // slab now consumes one slab of pinnedData instead of four. URL-shape
-        // attachments (already-uploaded library items) stay as-is.
-        const sources = task.payload.attachmentSources ?? []
-        const bytesToUpload: Uint8Array[] = [
-          ...sources.flatMap((s) => (s.kind === 'bytes' ? [s.bytes] : [])),
-          task.payload.bytes,
-        ]
-        const totalBytes = bytesToUpload.reduce((acc, b) => acc + b.length, 0)
-        const totalExpected = expectedShardCountForTotal(totalBytes)
-        let count = 0
-        const onShard = () => {
-          count += 1
-          const pct = Math.min(95, (count / totalExpected) * 100)
-          useUploadQueueStore.getState().setProgress(task.id, pct)
-        }
+        // Resume fast-path: a checkpoint from a prior run means the bytes are
+        // already on Sia, so skip the (slow) re-upload and go straight to the
+        // manifest writes. Otherwise upload now and checkpoint before touching
+        // any manifest.
+        let itemRef: ItemRef
+        if (task.uploadedItemRef) {
+          itemRef = task.uploadedItemRef
+          queue.setState(task.id, 'publishing', undefined)
+          useUploadQueueStore.getState().setProgress(task.id, 97)
+        } else {
+          queue.setState(task.id, 'uploading', undefined)
 
-        const uploadedItems = await uploadItemsPacked(
-          sdk,
-          bytesToUpload,
-          onShard,
-        )
-
-        // Map results back to attachmentRefs in the original sources order;
-        // URL-shape attachments interleave with the freshly-packed ones.
-        const attachmentRefs: AttachmentRef[] = []
-        let bytesIdx = 0
-        for (const src of sources) {
-          if (src.kind === 'url') {
-            attachmentRefs.push({
-              url: src.url,
-              mimeType: src.mimeType,
-              filename: src.filename,
-              byteSize: src.byteSize,
-              contentHash: src.contentHash,
-              objectID: src.objectID,
-            })
-          } else {
-            const u = uploadedItems[bytesIdx++]
-            attachmentRefs.push({
-              url: u.itemURL,
-              mimeType: src.mimeType,
-              filename: src.filename,
-              byteSize: src.bytes.length,
-              contentHash: u.contentHash,
-              objectID: u.id,
-            })
+          // Eager packing: collect every byte source for this task (attachments
+          // with kind='bytes' + body) and bin-pack them through a single
+          // PackedUpload. A post + 3 image attachments that fit in one 40 MiB
+          // slab now consumes one slab of pinnedData instead of four. URL-shape
+          // attachments (already-uploaded library items) stay as-is.
+          const sources = task.payload.attachmentSources ?? []
+          const bytesToUpload: Uint8Array[] = [
+            ...sources.flatMap((s) => (s.kind === 'bytes' ? [s.bytes] : [])),
+            task.payload.bytes,
+          ]
+          const totalBytes = bytesToUpload.reduce((acc, b) => acc + b.length, 0)
+          const totalExpected = expectedShardCountForTotal(totalBytes)
+          let count = 0
+          const onShard = () => {
+            count += 1
+            const pct = Math.min(95, (count / totalExpected) * 100)
+            useUploadQueueStore.getState().setProgress(task.id, pct)
           }
-        }
-        // The body was added last to the packed upload, so it's at the
-        // tail of uploadedItems.
-        const uploaded = uploadedItems[bytesIdx]
 
-        queue.setState(task.id, 'publishing', undefined)
-        useUploadQueueStore.getState().setProgress(task.id, 97)
+          const uploadedItems = await uploadItemsPacked(
+            sdk,
+            bytesToUpload,
+            onShard,
+          )
 
-        const resolvedPayload = {
-          ...task.payload,
-          attachments: attachmentRefs.length > 0 ? attachmentRefs : undefined,
-          attachmentSources: undefined,
+          // Map results back to attachmentRefs in the original sources order;
+          // URL-shape attachments interleave with the freshly-packed ones.
+          const attachmentRefs: AttachmentRef[] = []
+          let bytesIdx = 0
+          for (const src of sources) {
+            if (src.kind === 'url') {
+              attachmentRefs.push({
+                url: src.url,
+                mimeType: src.mimeType,
+                filename: src.filename,
+                byteSize: src.byteSize,
+                contentHash: src.contentHash,
+                objectID: src.objectID,
+              })
+            } else {
+              const u = uploadedItems[bytesIdx++]
+              attachmentRefs.push({
+                url: u.itemURL,
+                mimeType: src.mimeType,
+                filename: src.filename,
+                byteSize: src.bytes.length,
+                contentHash: u.contentHash,
+                objectID: u.id,
+              })
+            }
+          }
+          // The body was added last to the packed upload, so it's at the
+          // tail of uploadedItems.
+          const uploaded = uploadedItems[bytesIdx]
+
+          const resolvedPayload = {
+            ...task.payload,
+            attachments:
+              attachmentRefs.length > 0 ? attachmentRefs : undefined,
+            attachmentSources: undefined,
+          }
+          itemRef = buildItemRef(uploaded, resolvedPayload)
+
+          // Checkpoint before any manifest write. The bytes are committed, so
+          // a crash in the publish loop below resumes from here without
+          // re-uploading; publishedAt is frozen in itemRef from this moment.
+          queue.checkpoint(task.id, itemRef)
+
+          queue.setState(task.id, 'publishing', undefined)
+          useUploadQueueStore.getState().setProgress(task.id, 97)
         }
-        const itemRef = buildItemRef(uploaded, resolvedPayload)
 
         if (task.destination === 'library') {
+          // itemRef.itemURL is stable across resumes (from the checkpoint) and
+          // pinStore dedups library pins by URL, so a resumed pin is idempotent.
           await pin.pin(sdk, { item: itemRef, channel: LIBRARY_CHANNEL })
         } else {
           // Non-null per the agent guard above for channel destinations.
           const agent = auth.atprotoAgent!
+          const alreadyPublished = new Set(task.publishedChannelIDs ?? [])
           for (const ch of channels) {
+            // Skip channels a prior run already wrote to — the resume guard
+            // against a mid-loop crash double-appending.
+            if (alreadyPublished.has(ch.channelID)) continue
             if (task.editingItemID) {
               // editItem preserves publishedAt from the original; the
               // caller stamps editedAt on the pre-built ItemRef.
@@ -181,6 +235,9 @@ export function useUploadRunner() {
             } else {
               await appendItemToChannel(agent, ch, itemRef)
             }
+            // Record this channel as done (and persist) before the next one,
+            // so a crash mid-loop resumes without re-writing here.
+            queue.markChannelPublished(task.id, ch.channelID)
             const sub = auth.subscriptions.find(
               (s) => s.channelID === ch.channelID,
             )

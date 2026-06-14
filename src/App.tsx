@@ -9,7 +9,10 @@ import { useJetstream } from './lib/useJetstream'
 import { useOrphanSweep } from './lib/useOrphanSweep'
 import { useRepackRunner } from './lib/useRepackRunner'
 import { useSettingsSync } from './lib/useSettingsSync'
-import { useUploadRunner } from './lib/useUploadRunner'
+import {
+  useUploadQueueHydration,
+  useUploadRunner,
+} from './lib/useUploadRunner'
 import { useAuthStore } from './stores/auth'
 import { useComposeStore } from './stores/compose'
 import { usePinStore } from './stores/pin'
@@ -20,6 +23,7 @@ export default function App() {
   const armedItem = useComposeStore((s) => s.armedItem)
 
   useJetstream()
+  useUploadQueueHydration()
   useUploadRunner()
   useRepackRunner()
   useOrphanSweep()
