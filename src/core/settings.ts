@@ -25,21 +25,42 @@ export type LoadedSettings = {
 
 const PAGE_LIMIT = 200
 
-// Walks the indexer's object events looking for the most-recently-updated
-// object whose metadata is tagged as our settings record. Returns the parsed
-// settings + that object's ID (so future saves can delete the prior one).
-// Returns null if no settings object exists in this account's scope.
+type SettingsCandidate = { id: string; updatedAt: string }
+
+// Of all the settings objects found in scope, which are safe to delete: every
+// one STRICTLY OLDER than the object we kept. Never the kept object, never one
+// with an equal-or-newer updatedAt — so a transiently-unreadable newer object
+// (we fell back to an older readable one) is never destroyed by mistake.
+export function staleSettingsIds(
+  candidates: SettingsCandidate[],
+  keepId: string,
+  keepUpdatedAt: string,
+): string[] {
+  return candidates
+    .filter((c) => c.id !== keepId && c.updatedAt < keepUpdatedAt)
+    .map((c) => c.id)
+}
+
+// Loads the authoritative settings object and converges the account to a
+// single one. Content-addressing means every save is a NEW object, so over
+// time (especially when a prior delete failed) several settings objects can
+// coexist; picking by raw event-order is unstable and flip-flops the loaded
+// state. Instead: collect EVERY settings-tagged object, pick the latest by the
+// updatedAt in its metadata (deterministic), then delete the strictly-older
+// duplicates so the next load has exactly one to find. Returns null if none.
 export async function loadSettings(sdk: Sdk): Promise<LoadedSettings | null> {
+  // Pass 1: collect every settings-tagged object (id + updatedAt from
+  // metadata — no body download yet).
+  const candidates: SettingsCandidate[] = []
   let cursor: unknown
-  // Hard cap: ~5 pages of events. For accounts with very large object
-  // histories we'd want richer pagination, but settings is typically near
-  // the top by recency since it's rewritten on every channel/sub change.
+  // Hard cap: ~5 pages of events. Settings sits near the top by recency since
+  // it's rewritten on every channel/sub change; objects older than that are
+  // already superseded.
   for (let page = 0; page < 5; page++) {
     // biome-ignore lint/suspicious/noExplicitAny: SDK cursor type isn't exported
     const events = await sdk.objectEvents(cursor as any, PAGE_LIMIT)
-    if (events.length === 0) return null
+    if (events.length === 0) break
 
-    // Iterate newest-to-oldest within the page. Stop at the first match.
     for (const ev of events) {
       if (ev.deleted || !ev.object) continue
       const metaBytes = ev.object.metadata()
@@ -51,26 +72,61 @@ export async function loadSettings(sdk: Sdk): Promise<LoadedSettings | null> {
         continue
       }
       if (meta.kind !== SETTINGS_METADATA_KIND) continue
-
-      const handle = await sdk.object(ev.id)
-      const stream = sdk.download(handle)
-      const blob = await new Response(stream).blob()
-      const text = await blob.text()
-      const settings = JSON.parse(text) as DispatchSettings
-      if (settings.version !== SETTINGS_VERSION) continue
-      return { settings, objectID: ev.id }
+      if (meta.version !== SETTINGS_VERSION) continue
+      candidates.push({ id: ev.id, updatedAt: meta.updatedAt ?? '' })
     }
 
-    if (events.length < PAGE_LIMIT) return null
+    if (events.length < PAGE_LIMIT) break
     // biome-ignore lint/suspicious/noExplicitAny: events carry an opaque cursor
     cursor = (events[events.length - 1] as any).cursor ?? undefined
-    if (!cursor) return null
+    if (!cursor) break
   }
-  return null
+
+  if (candidates.length === 0) return null
+
+  // Newest first (updatedAt is ISO-8601, so lexicographic = chronological;
+  // id breaks ties for stable ordering).
+  const ordered = [...candidates].sort(
+    (a, b) =>
+      b.updatedAt.localeCompare(a.updatedAt) || b.id.localeCompare(a.id),
+  )
+
+  // Pass 2: load the newest readable+valid object's body, falling back through
+  // older candidates if one is unreadable/invalid.
+  let loaded: LoadedSettings | null = null
+  let keptUpdatedAt = ''
+  for (const cand of ordered) {
+    try {
+      const handle = await sdk.object(cand.id)
+      const text = await new Response(sdk.download(handle)).text()
+      const settings = JSON.parse(text) as DispatchSettings
+      if (settings.version !== SETTINGS_VERSION) continue
+      loaded = { settings, objectID: cand.id }
+      keptUpdatedAt = cand.updatedAt
+      break
+    } catch {
+      // try the next-newest candidate
+    }
+  }
+  if (!loaded) return null
+
+  // Converge to one: delete the strictly-older duplicates. The orphan sweep
+  // protects all settings-tagged objects, so this is the only place stale
+  // ones get reclaimed. Best-effort — a failed delete just retries next load.
+  const stale = staleSettingsIds(candidates, loaded.objectID, keptUpdatedAt)
+  if (stale.length > 0) {
+    await Promise.all(stale.map((id) => sdk.deleteObject(id).catch(() => {})))
+    await sdk.pruneSlabs().catch(() => {})
+  }
+
+  return loaded
 }
 
-// Uploads a fresh settings object, tags its metadata, pins it, and (best-effort)
-// deletes the prior one. Returns the new object ID for the caller to track.
+// Uploads a fresh settings object, tags its metadata, pins it, and deletes the
+// prior one. Returns the new object ID for the caller to track. The delete is
+// AWAITED (not fire-and-forget) so a successful save leaves exactly one object;
+// if the delete fails it's logged and loadSettings' convergence reclaims the
+// straggler on the next load.
 export async function saveSettings(
   sdk: Sdk,
   settings: DispatchSettings,
@@ -93,9 +149,11 @@ export async function saveSettings(
   const newID = obj.id()
 
   if (previousObjectID && previousObjectID !== newID) {
-    sdk.deleteObject(previousObjectID).catch((e) => {
+    try {
+      await sdk.deleteObject(previousObjectID)
+    } catch (e) {
       console.warn('Failed to delete previous settings object:', e)
-    })
+    }
   }
   return newID
 }
