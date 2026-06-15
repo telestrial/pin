@@ -1,6 +1,6 @@
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
-import { ChannelAvatar } from './ChannelAvatar'
+import { ChannelAvatar } from './channel/ChannelAvatar'
 
 const CAP = 10
 

@@ -18,7 +18,7 @@ import {
   kindForMime,
   MediaPreview,
 } from './AttachmentMedia'
-import { ChannelAvatar } from './ChannelAvatar'
+import { ChannelAvatar } from './channel/ChannelAvatar'
 
 export type ComposeEditMode = {
   item: ItemRef

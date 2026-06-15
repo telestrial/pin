@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
-import { downloadItemBytes } from '../core/channels'
-import type { ItemRef } from '../core/types'
-import { formatBytes } from '../lib/format'
-import { useAuthStore } from '../stores/auth'
-import type { PinInput } from '../stores/pin'
-import { PinButton } from './PinButton'
+import { downloadItemBytes } from '../../core/channels'
+import type { ItemRef } from '../../core/types'
+import { formatBytes } from '../../lib/format'
+import { useAuthStore } from '../../stores/auth'
+import type { PinInput } from '../../stores/pin'
+import { PinButton } from '../pin/PinButton'
 
 export function ReadFile({
   item,

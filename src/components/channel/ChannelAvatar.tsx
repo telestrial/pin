@@ -1,5 +1,5 @@
-import type { ChannelImage } from '../core/types'
-import { useItemBlobURL } from '../lib/hooks/useItemBytes'
+import type { ChannelImage } from '../../core/types'
+import { useItemBlobURL } from '../../lib/hooks/useItemBytes'
 import { ChannelMark } from './ChannelMark'
 
 export function ChannelAvatar({

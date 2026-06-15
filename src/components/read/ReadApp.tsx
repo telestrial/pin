@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef } from 'react'
-import type { ItemRef } from '../core/types'
-import { installAppBridge } from '../lib/appBridge'
-import { APP_SANDBOX } from '../lib/constants'
-import { useItemBytes } from '../lib/hooks/useItemBytes'
-import type { PinInput } from '../stores/pin'
-import { PinButton } from './PinButton'
+import type { ItemRef } from '../../core/types'
+import { installAppBridge } from '../../lib/appBridge'
+import { APP_SANDBOX } from '../../lib/constants'
+import { useItemBytes } from '../../lib/hooks/useItemBytes'
+import type { PinInput } from '../../stores/pin'
+import { PinButton } from '../pin/PinButton'
 
 export function ReadApp({
   item,

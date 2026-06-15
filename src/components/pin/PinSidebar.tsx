@@ -1,18 +1,18 @@
 import { Box, CheckCircle2, HardDrive, RotateCw, Search, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { type PinnedItemRef, usePinStore } from '../stores/pin'
-import type { ItemRef } from '../core/types'
-import { useAuthStore } from '../stores/auth'
-import { useComposeStore } from '../stores/compose'
-import { useFeedStore } from '../stores/feed'
+import { type PinnedItemRef, usePinStore } from '../../stores/pin'
+import type { ItemRef } from '../../core/types'
+import { useAuthStore } from '../../stores/auth'
+import { useComposeStore } from '../../stores/compose'
+import { useFeedStore } from '../../stores/feed'
 import {
   type UploadTask,
   type UploadTaskState,
   useUploadQueueStore,
-} from '../stores/uploadQueue'
-import { useStorageActivityStore } from '../stores/storageActivity'
-import { formatBytes } from '../lib/format'
-import { useFadeCancelUnpin } from '../lib/hooks/useFadeCancelUnpin'
+} from '../../stores/uploadQueue'
+import { useStorageActivityStore } from '../../stores/storageActivity'
+import { formatBytes } from '../../lib/format'
+import { useFadeCancelUnpin } from '../../lib/hooks/useFadeCancelUnpin'
 import { PinIcon } from './PinIcon'
 
 function itemTitle(item: ItemRef): string {

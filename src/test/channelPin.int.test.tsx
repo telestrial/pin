@@ -19,7 +19,7 @@ vi.mock('@siafoundation/sia-storage', async () =>
   (await import('./fakeModules')).fakeSiaStorageModule(),
 )
 
-import { ChannelView } from '../components/ChannelView'
+import { ChannelView } from '../components/channel/ChannelView'
 import type { SubscriptionRef } from '../core/types'
 import { useFeedStore } from '../stores/feed'
 import { usePinStore } from '../stores/pin'

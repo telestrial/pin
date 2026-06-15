@@ -2,7 +2,7 @@ import { AppWindow, FileText, Music, Play, Quote } from 'lucide-react'
 import type { ItemRef } from '../core/types'
 import { formatBytes } from '../lib/format'
 import { useItemBlobURL } from '../lib/hooks/useItemBytes'
-import { PinIcon } from './PinIcon'
+import { PinIcon } from './pin/PinIcon'
 
 export type TileSource = 'external' | 'library' | 'own'
 

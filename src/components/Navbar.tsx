@@ -1,9 +1,9 @@
-import { PinIcon } from './PinIcon'
+import { PinIcon } from './pin/PinIcon'
 import { useMemo, useState } from 'react'
 import { flushPendingSettingsSave } from '../lib/hooks/useSettingsSync'
 import { APP_NAME } from '../lib/constants'
 import { useAuthStore } from '../stores/auth'
-import { CopyButton } from './CopyButton'
+import { CopyButton } from './ui/CopyButton'
 
 export function Navbar() {
   const step = useAuthStore((s) => s.step)

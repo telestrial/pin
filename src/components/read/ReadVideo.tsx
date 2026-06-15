@@ -1,9 +1,9 @@
-import type { ItemRef } from '../core/types'
-import { useItemBlobURL } from '../lib/hooks/useItemBytes'
-import type { PinInput } from '../stores/pin'
-import { PinButton } from './PinButton'
+import type { ItemRef } from '../../core/types'
+import { useItemBlobURL } from '../../lib/hooks/useItemBytes'
+import type { PinInput } from '../../stores/pin'
+import { PinButton } from '../pin/PinButton'
 
-export function ReadImage({
+export function ReadVideo({
   item,
   channelName,
   onBack,
@@ -11,7 +11,6 @@ export function ReadImage({
   sidebar,
   rightSidebar,
   pinInput,
-  onEdit,
 }: {
   item: ItemRef
   channelName: string
@@ -20,9 +19,8 @@ export function ReadImage({
   sidebar: React.ReactNode
   rightSidebar: React.ReactNode
   pinInput: PinInput
-  onEdit?: () => void
 }) {
-  const { url: imgURL, error } = useItemBlobURL(
+  const { url: videoURL, error } = useItemBlobURL(
     item.itemURL,
     item.mimeType,
     item.contentHash,
@@ -41,18 +39,7 @@ export function ReadImage({
             >
               {backLabel}
             </button>
-            <div className="flex items-center gap-1.5">
-              {onEdit && (
-                <button
-                  type="button"
-                  onClick={onEdit}
-                  className="px-2.5 py-1 text-xs font-medium text-neutral-600 hover:text-neutral-900 bg-neutral-100 hover:bg-neutral-200 rounded-full transition-colors cursor-pointer"
-                >
-                  Edit
-                </button>
-              )}
-              <PinButton input={pinInput} />
-            </div>
+            <PinButton input={pinInput} />
           </div>
 
           <header className="space-y-1">
@@ -72,14 +59,16 @@ export function ReadImage({
 
           {error ? (
             <p className="text-red-600 text-sm wrap-break-word">{error}</p>
-          ) : imgURL === null ? (
+          ) : videoURL === null ? (
             <p className="text-neutral-500 text-sm">Loading…</p>
           ) : (
-            <img
-              src={imgURL}
-              alt={item.title || 'image'}
-              className="max-w-full rounded-lg border border-neutral-200 bg-neutral-50"
-            />
+            <video
+              src={videoURL}
+              controls
+              className="w-full rounded-lg border border-neutral-200 bg-black"
+            >
+              <track kind="captions" />
+            </video>
           )}
         </article>
         {rightSidebar}

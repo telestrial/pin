@@ -8,7 +8,7 @@ import {
 import { uploadItem } from '../core/sia'
 import { useItemBlobURL } from '../lib/hooks/useItemBytes'
 import { useAuthStore } from '../stores/auth'
-import { FormCard } from './FormCard'
+import { FormCard } from './ui/FormCard'
 
 const ACCEPTED_IMAGE_MIMES = ['image/jpeg', 'image/png', 'image/webp']
 

@@ -5,7 +5,7 @@ import {
   validateRecoveryPhrase,
 } from '@siafoundation/sia-storage'
 import { useAuthStore } from '../../stores/auth'
-import { CopyButton } from '../CopyButton'
+import { CopyButton } from '../ui/CopyButton'
 
 export function RecoveryScreen({
   builder,

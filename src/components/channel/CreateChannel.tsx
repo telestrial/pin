@@ -1,10 +1,10 @@
 import { type ChangeEvent, useEffect, useState } from 'react'
-import { createChannel } from '../core/channels'
-import type { ChannelVisibility } from '../core/types'
-import { flushSettingsBestEffort } from '../lib/hooks/useSettingsSync'
-import { useAuthStore } from '../stores/auth'
-import { useFeedStore } from '../stores/feed'
-import { FormCard } from './FormCard'
+import { createChannel } from '../../core/channels'
+import type { ChannelVisibility } from '../../core/types'
+import { flushSettingsBestEffort } from '../../lib/hooks/useSettingsSync'
+import { useAuthStore } from '../../stores/auth'
+import { useFeedStore } from '../../stores/feed'
+import { FormCard } from '../ui/FormCard'
 
 const ACCEPTED_COVER_MIMES = ['image/jpeg', 'image/png', 'image/webp']
 

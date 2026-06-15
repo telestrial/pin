@@ -1,4 +1,4 @@
-import { PinIcon } from '../PinIcon'
+import { PinIcon } from '../pin/PinIcon'
 
 // Wraps every AuthFlow screen so the Pin logo stays mounted and transitions
 // in place across step changes. Grey + pulsing while we're booting (WASM

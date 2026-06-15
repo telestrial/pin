@@ -1,4 +1,4 @@
-import type { PinState } from '../../components/PinIcon'
+import type { PinState } from '../../components/pin/PinIcon'
 import type { ChannelManifest, ItemRef } from '../../core/types'
 import { isValidAttachment } from '../../core/types'
 import { type PinnedItemRef, usePinStore } from '../../stores/pin'

@@ -1,8 +1,8 @@
-import { buildSubscribeURL } from '../core/channels'
-import { useAuthStore } from '../stores/auth'
-import { useFeedStore } from '../stores/feed'
-import { CopyButton } from './CopyButton'
-import { FormCard } from './FormCard'
+import { buildSubscribeURL } from '../../core/channels'
+import { useAuthStore } from '../../stores/auth'
+import { useFeedStore } from '../../stores/feed'
+import { CopyButton } from '../ui/CopyButton'
+import { FormCard } from '../ui/FormCard'
 
 export function ChannelsView({
   onCancel,

@@ -4,7 +4,7 @@ import type { FeedEntry } from '../core/feed'
 import { flushSettingsBestEffort } from '../lib/hooks/useSettingsSync'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
-import { FormCard } from './FormCard'
+import { FormCard } from './ui/FormCard'
 
 export function SubscribeToChannel({
   onCancel,

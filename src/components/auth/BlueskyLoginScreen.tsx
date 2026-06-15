@@ -1,7 +1,7 @@
 import { useState } from 'react'
-import { getOauthClient } from '../lib/atprotoClient'
-import { useAuthStore } from '../stores/auth'
-import { FormCard } from './FormCard'
+import { getOauthClient } from '../../lib/atprotoClient'
+import { useAuthStore } from '../../stores/auth'
+import { FormCard } from '../ui/FormCard'
 
 export function BlueskyLoginScreen({
   onCancel,

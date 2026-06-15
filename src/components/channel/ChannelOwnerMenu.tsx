@@ -1,9 +1,9 @@
 import { MoreHorizontal } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
-import { follow, unfollow } from '../core/follow'
-import { useAuthStore } from '../stores/auth'
-import { useToastStore } from '../stores/toast'
-import { Modal } from './Modal'
+import { follow, unfollow } from '../../core/follow'
+import { useAuthStore } from '../../stores/auth'
+import { useToastStore } from '../../stores/toast'
+import { Modal } from '../ui/Modal'
 
 // Owner-actions menu for a channel you authored. Horizontal-dots trigger →
 // dropdown. Today it holds one item: the claim toggle.

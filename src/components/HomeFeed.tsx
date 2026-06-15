@@ -6,8 +6,8 @@ import { formatAbsolute, formatRelativeShort } from '../lib/time'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
 import { AttachmentGrid } from './AttachmentMedia'
-import { ChannelAvatar } from './ChannelAvatar'
-import { PinButton } from './PinButton'
+import { ChannelAvatar } from './channel/ChannelAvatar'
+import { PinButton } from './pin/PinButton'
 
 export function HomeFeed({
   onItemClick,

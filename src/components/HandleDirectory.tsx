@@ -7,7 +7,7 @@ import type { ChannelManifest } from '../core/types'
 import { useItemBlobURL } from '../lib/hooks/useItemBytes'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
-import { ChannelAvatar } from './ChannelAvatar'
+import { ChannelAvatar } from './channel/ChannelAvatar'
 
 type ChannelEntry = {
   authorDID: string

@@ -1,14 +1,14 @@
 import { useState } from 'react'
-import type { ChannelManifest } from '../core/types'
-import { formatBytes } from '../lib/format'
+import type { ChannelManifest } from '../../core/types'
+import { formatBytes } from '../../lib/format'
 import {
   channelPinByteSize,
   useChannelPinState,
-} from '../lib/hooks/useChannelPinState'
-import { useAuthStore } from '../stores/auth'
-import { usePinStore } from '../stores/pin'
-import { useToastStore } from '../stores/toast'
-import { Modal } from './Modal'
+} from '../../lib/hooks/useChannelPinState'
+import { useAuthStore } from '../../stores/auth'
+import { usePinStore } from '../../stores/pin'
+import { useToastStore } from '../../stores/toast'
+import { Modal } from '../ui/Modal'
 import { PinIcon } from './PinIcon'
 
 // Channel-level pin for a channel you DON'T own (owned channels use the

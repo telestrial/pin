@@ -1,7 +1,7 @@
-import type { ItemRef } from '../core/types'
-import { useItemBlobURL } from '../lib/hooks/useItemBytes'
-import type { PinInput } from '../stores/pin'
-import { PinButton } from './PinButton'
+import type { ItemRef } from '../../core/types'
+import { useItemBlobURL } from '../../lib/hooks/useItemBytes'
+import type { PinInput } from '../../stores/pin'
+import { PinButton } from '../pin/PinButton'
 
 export function ReadAudio({
   item,

@@ -3,12 +3,12 @@ import {
   type EditChannelPatch,
   editChannel,
   fetchChannel,
-} from '../core/channels'
-import type { ChannelImage, ChannelManifest } from '../core/types'
-import { useItemBlobURL } from '../lib/hooks/useItemBytes'
-import { useAuthStore } from '../stores/auth'
-import { useFeedStore } from '../stores/feed'
-import { FormCard } from './FormCard'
+} from '../../core/channels'
+import type { ChannelImage, ChannelManifest } from '../../core/types'
+import { useItemBlobURL } from '../../lib/hooks/useItemBytes'
+import { useAuthStore } from '../../stores/auth'
+import { useFeedStore } from '../../stores/feed'
+import { FormCard } from '../ui/FormCard'
 
 const ACCEPTED_COVER_MIMES = ['image/jpeg', 'image/png', 'image/webp']
 
