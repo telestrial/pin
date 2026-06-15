@@ -1,5 +1,5 @@
 import type { ItemRef } from '../core/types'
-import { useItemBlobURL } from '../lib/useItemBytes'
+import { useItemBlobURL } from '../lib/hooks/useItemBytes'
 import type { PinInput } from '../stores/pin'
 import { PinButton } from './PinButton'
 

@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react'
-import { useAuthStore } from '../stores/auth'
-import { usePinStore } from '../stores/pin'
-import { useToastStore } from '../stores/toast'
+import { useAuthStore } from '../../stores/auth'
+import { usePinStore } from '../../stores/pin'
+import { useToastStore } from '../../stores/toast'
 
 const DEFAULT_FADE_MS = 1500
 

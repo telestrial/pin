@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
-import { isFollowing } from '../core/follow'
-import { useAuthStore } from '../stores/auth'
+import { isFollowing } from '../../core/follow'
+import { useAuthStore } from '../../stores/auth'
 
 // Claim state for one of YOUR public channels: are you publicly self-following
 // it — i.e. is it advertised under "Voices" on your profile. `null` means

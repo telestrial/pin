@@ -6,7 +6,7 @@ import {
   putProfileRecord,
 } from '../core/profile'
 import { uploadItem } from '../core/sia'
-import { useItemBlobURL } from '../lib/useItemBytes'
+import { useItemBlobURL } from '../lib/hooks/useItemBytes'
 import { useAuthStore } from '../stores/auth'
 import { FormCard } from './FormCard'
 

@@ -4,9 +4,9 @@ import {
   loadSettings,
   SETTINGS_VERSION,
   saveSettings,
-} from '../core/settings'
-import { useAuthStore } from '../stores/auth'
-import { useStorageActivityStore } from '../stores/storageActivity'
+} from '../../core/settings'
+import { useAuthStore } from '../../stores/auth'
+import { useStorageActivityStore } from '../../stores/storageActivity'
 
 const SAVE_DEBOUNCE_MS = 1500
 

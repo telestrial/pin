@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import type { ChannelManifest, ItemRef } from '../core/types'
-import { CHANNEL_MANIFEST_VERSION } from '../core/types'
-import type { PinnedItemRef } from '../stores/pin'
+import type { ChannelManifest, ItemRef } from '../../core/types'
+import { CHANNEL_MANIFEST_VERSION } from '../../core/types'
+import type { PinnedItemRef } from '../../stores/pin'
 import {
   channelPinByteSize,
   computeChannelPinState,

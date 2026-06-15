@@ -1,7 +1,7 @@
 import { useEffect } from 'react'
-import { connectJetstream } from '../core/jetstream'
-import { useAuthStore } from '../stores/auth'
-import { useFeedStore } from '../stores/feed'
+import { connectJetstream } from '../../core/jetstream'
+import { useAuthStore } from '../../stores/auth'
+import { useFeedStore } from '../../stores/feed'
 
 export function useJetstream() {
   const subscriptions = useAuthStore((s) => s.subscriptions)

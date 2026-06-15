@@ -1,6 +1,6 @@
 import { PinIcon } from './PinIcon'
 import { useMemo, useState } from 'react'
-import { flushPendingSettingsSave } from '../lib/useSettingsSync'
+import { flushPendingSettingsSave } from '../lib/hooks/useSettingsSync'
 import { APP_NAME } from '../lib/constants'
 import { useAuthStore } from '../stores/auth'
 import { CopyButton } from './CopyButton'

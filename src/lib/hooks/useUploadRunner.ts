@@ -3,19 +3,19 @@ import {
   appendItemToChannel,
   buildItemRef,
   editItem,
-} from '../core/channels'
-import { uploadItemsPacked } from '../core/sia'
-import type { AttachmentRef, ItemRef } from '../core/types'
-import { useAuthStore } from '../stores/auth'
-import { useFeedStore } from '../stores/feed'
-import { usePinStore } from '../stores/pin'
-import { useToastStore } from '../stores/toast'
+} from '../../core/channels'
+import { uploadItemsPacked } from '../../core/sia'
+import type { AttachmentRef, ItemRef } from '../../core/types'
+import { useAuthStore } from '../../stores/auth'
+import { useFeedStore } from '../../stores/feed'
+import { usePinStore } from '../../stores/pin'
+import { useToastStore } from '../../stores/toast'
 import {
   type UploadTask,
   useUploadQueueStore,
-} from '../stores/uploadQueue'
-import { LIBRARY_CHANNEL } from './pinUpload'
-import { loadPersistedTasks } from './uploadQueuePersist'
+} from '../../stores/uploadQueue'
+import { LIBRARY_CHANNEL } from '../pinUpload'
+import { loadPersistedTasks } from '../uploadQueuePersist'
 
 const SUCCESS_AUTO_REMOVE_MS = 4000
 

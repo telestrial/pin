@@ -1,7 +1,7 @@
-import type { PinState } from '../components/PinIcon'
-import type { ChannelManifest, ItemRef } from '../core/types'
-import { isValidAttachment } from '../core/types'
-import { type PinnedItemRef, usePinStore } from '../stores/pin'
+import type { PinState } from '../../components/PinIcon'
+import type { ChannelManifest, ItemRef } from '../../core/types'
+import { isValidAttachment } from '../../core/types'
+import { type PinnedItemRef, usePinStore } from '../../stores/pin'
 
 // Channel-level pin state, derived from the per-item pins of the current
 // manifest — the membership-drift analog of usePinState's content-drift.

@@ -4,7 +4,7 @@ import { type AttachmentRef, isValidAttachment } from '../core/types'
 import { installAppBridge } from '../lib/appBridge'
 import { APP_SANDBOX } from '../lib/constants'
 import { formatBytes } from '../lib/format'
-import { useItemBlobURL, useItemBytes } from '../lib/useItemBytes'
+import { useItemBlobURL, useItemBytes } from '../lib/hooks/useItemBytes'
 import { FilePinButton } from './FilePinButton'
 
 export type AttachmentKind = 'image' | 'audio' | 'video' | 'app' | 'file'

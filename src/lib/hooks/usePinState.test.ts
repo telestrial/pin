@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import type { ItemRef } from '../core/types'
-import type { PinnedItemRef } from '../stores/pin'
+import type { ItemRef } from '../../core/types'
+import type { PinnedItemRef } from '../../stores/pin'
 import { computePinState } from './usePinState'
 
 const PUBLISHED_AT = '2026-05-15T10:00:00.000Z'

@@ -1,8 +1,8 @@
 import { useEffect } from 'react'
-import { reconcileGhostChannels } from '../core/channels'
-import { useAuthStore } from '../stores/auth'
-import { useFeedStore } from '../stores/feed'
-import { useToastStore } from '../stores/toast'
+import { reconcileGhostChannels } from '../../core/channels'
+import { useAuthStore } from '../../stores/auth'
+import { useFeedStore } from '../../stores/feed'
+import { useToastStore } from '../../stores/toast'
 import { flushSettingsBestEffort } from './useSettingsSync'
 
 // Once-guard across StrictMode's double-mount (and any remount). settingsLoaded

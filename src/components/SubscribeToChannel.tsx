@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { fetchChannel, parseSubscribeURL } from '../core/channels'
 import type { FeedEntry } from '../core/feed'
-import { flushSettingsBestEffort } from '../lib/useSettingsSync'
+import { flushSettingsBestEffort } from '../lib/hooks/useSettingsSync'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
 import { FormCard } from './FormCard'

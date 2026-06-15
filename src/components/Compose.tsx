@@ -7,7 +7,7 @@ import {
   type OwnedChannel,
 } from '../core/types'
 import { NOTE_CHAR_LIMIT } from '../lib/constants'
-import { useItemBlobURL } from '../lib/useItemBytes'
+import { useItemBlobURL } from '../lib/hooks/useItemBytes'
 import { useAuthStore } from '../stores/auth'
 import { useComposeStore } from '../stores/compose'
 import { useFeedStore } from '../stores/feed'

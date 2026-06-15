@@ -12,7 +12,7 @@ import {
 } from '../stores/uploadQueue'
 import { useStorageActivityStore } from '../stores/storageActivity'
 import { formatBytes } from '../lib/format'
-import { useFadeCancelUnpin } from '../lib/useFadeCancelUnpin'
+import { useFadeCancelUnpin } from '../lib/hooks/useFadeCancelUnpin'
 import { PinIcon } from './PinIcon'
 
 function itemTitle(item: ItemRef): string {

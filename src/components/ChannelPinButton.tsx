@@ -4,7 +4,7 @@ import { formatBytes } from '../lib/format'
 import {
   channelPinByteSize,
   useChannelPinState,
-} from '../lib/useChannelPinState'
+} from '../lib/hooks/useChannelPinState'
 import { useAuthStore } from '../stores/auth'
 import { usePinStore } from '../stores/pin'
 import { useToastStore } from '../stores/toast'

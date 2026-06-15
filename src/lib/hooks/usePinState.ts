@@ -1,7 +1,7 @@
-import type { PinState } from '../components/PinIcon'
-import type { ItemRef } from '../core/types'
-import { useAuthStore } from '../stores/auth'
-import { type PinnedItemRef, usePinStore } from '../stores/pin'
+import type { PinState } from '../../components/PinIcon'
+import type { ItemRef } from '../../core/types'
+import { useAuthStore } from '../../stores/auth'
+import { type PinnedItemRef, usePinStore } from '../../stores/pin'
 
 // Drift-aware pin state for a given item in a given channel.
 //

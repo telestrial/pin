@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
-import { downloadItemBytes } from '../core/channels'
-import { useAuthStore } from '../stores/auth'
-import { getCached, putCached } from './itemCache'
+import { downloadItemBytes } from '../../core/channels'
+import { useAuthStore } from '../../stores/auth'
+import { getCached, putCached } from '../itemCache'
 
 // Cache key for an item: prefer the plaintext content hash when present
 // (stable across repack URL swaps and across encryption regimes), fall

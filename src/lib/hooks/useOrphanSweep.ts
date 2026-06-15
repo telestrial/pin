@@ -1,18 +1,18 @@
 import type { Sdk } from '@siafoundation/sia-storage'
 import { useEffect } from 'react'
-import { resolveChannelImageIDs } from '../core/channelImages'
-import { sweepOrphans } from '../core/orphanSweep'
-import { getProfileRecord } from '../core/profile'
-import { isValidAttachment } from '../core/types'
-import { useAuthStore } from '../stores/auth'
-import { useFeedStore } from '../stores/feed'
-import { usePinStore } from '../stores/pin'
-import { useStorageActivityStore } from '../stores/storageActivity'
-import { useToastStore } from '../stores/toast'
+import { resolveChannelImageIDs } from '../../core/channelImages'
+import { sweepOrphans } from '../../core/orphanSweep'
+import { getProfileRecord } from '../../core/profile'
+import { isValidAttachment } from '../../core/types'
+import { useAuthStore } from '../../stores/auth'
+import { useFeedStore } from '../../stores/feed'
+import { usePinStore } from '../../stores/pin'
+import { useStorageActivityStore } from '../../stores/storageActivity'
+import { useToastStore } from '../../stores/toast'
 import {
   checkpointedObjectIDs,
   useUploadQueueStore,
-} from '../stores/uploadQueue'
+} from '../../stores/uploadQueue'
 
 // Defer the sweep on app load by this much so manifests have a chance to
 // fetch, pinStore can hydrate from localStorage, and any in-flight

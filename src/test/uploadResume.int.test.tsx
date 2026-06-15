@@ -26,7 +26,7 @@ vi.mock(
 import type { Sdk } from '@siafoundation/sia-storage'
 import { buildItemRef, fetchChannel } from '../core/channels'
 import { uploadItem } from '../core/sia'
-import { useUploadRunner } from '../lib/useUploadRunner'
+import { useUploadRunner } from '../lib/hooks/useUploadRunner'
 import { useUploadQueueStore } from '../stores/uploadQueue'
 import {
   authorCreateChannel,

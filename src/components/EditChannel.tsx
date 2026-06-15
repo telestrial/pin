@@ -5,7 +5,7 @@ import {
   fetchChannel,
 } from '../core/channels'
 import type { ChannelImage, ChannelManifest } from '../core/types'
-import { useItemBlobURL } from '../lib/useItemBytes'
+import { useItemBlobURL } from '../lib/hooks/useItemBytes'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
 import { FormCard } from './FormCard'

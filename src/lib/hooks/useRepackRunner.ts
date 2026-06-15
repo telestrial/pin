@@ -1,18 +1,18 @@
 import type { Sdk } from '@siafoundation/sia-storage'
 import { useEffect } from 'react'
-import { resolveChannelImageIDs } from '../core/channelImages'
-import { runRepackBatch, type ScopeRef } from '../core/repack'
-import { isValidAttachment } from '../core/types'
-import { useAuthStore } from '../stores/auth'
-import { useFeedStore } from '../stores/feed'
-import { LIBRARY_CHANNEL } from './pinUpload'
-import { usePinStore } from '../stores/pin'
-import { useToastStore } from '../stores/toast'
+import { resolveChannelImageIDs } from '../../core/channelImages'
+import { runRepackBatch, type ScopeRef } from '../../core/repack'
+import { isValidAttachment } from '../../core/types'
+import { useAuthStore } from '../../stores/auth'
+import { useFeedStore } from '../../stores/feed'
+import { LIBRARY_CHANNEL } from '../pinUpload'
+import { usePinStore } from '../../stores/pin'
+import { useToastStore } from '../../stores/toast'
 import {
   checkpointedObjectIDs,
   useUploadQueueStore,
-} from '../stores/uploadQueue'
-import { useStorageActivityStore } from '../stores/storageActivity'
+} from '../../stores/uploadQueue'
+import { useStorageActivityStore } from '../../stores/storageActivity'
 
 // Build the "what's pinned in your scope right now" snapshot the repack
 // core needs to evaluate slabs. Own-channel items come from feedStore

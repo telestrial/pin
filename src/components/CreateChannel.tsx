@@ -1,7 +1,7 @@
 import { type ChangeEvent, useEffect, useState } from 'react'
 import { createChannel } from '../core/channels'
 import type { ChannelVisibility } from '../core/types'
-import { flushSettingsBestEffort } from '../lib/useSettingsSync'
+import { flushSettingsBestEffort } from '../lib/hooks/useSettingsSync'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
 import { FormCard } from './FormCard'
