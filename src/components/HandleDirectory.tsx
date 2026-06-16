@@ -8,6 +8,7 @@ import { useItemBlobURL } from '../lib/hooks/useItemBytes'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
 import { ChannelAvatar } from './channel/ChannelAvatar'
+import { FollowHandleButton } from './FollowHandleButton'
 
 type ChannelEntry = {
   authorDID: string
@@ -222,6 +223,7 @@ export function HandleDirectory({
           {state.kind === 'loaded' && (
             <LoadedDirectory
               handle={handle}
+              did={state.did}
               isSelf={isSelf}
               profile={state.profile}
               ownChannels={state.ownChannels}
@@ -241,6 +243,7 @@ export function HandleDirectory({
 
 function LoadedDirectory({
   handle,
+  did,
   isSelf,
   profile,
   ownChannels,
@@ -251,6 +254,7 @@ function LoadedDirectory({
   onEditProfile,
 }: {
   handle: string
+  did: string
   isSelf: boolean
   profile: ProfileRecord | null
   ownChannels: ChannelEntry[]
@@ -267,6 +271,7 @@ function LoadedDirectory({
     <div className="space-y-5">
       <ProfileHeader
         handle={handle}
+        did={did}
         isSelf={isSelf}
         profile={profile}
         voicesCount={ownChannels.length}
@@ -325,6 +330,7 @@ function Stat({ value, label }: { value: number; label: string }) {
 
 function ProfileHeader({
   handle,
+  did,
   isSelf,
   profile,
   voicesCount,
@@ -333,6 +339,7 @@ function ProfileHeader({
   onEdit,
 }: {
   handle: string
+  did: string
   isSelf: boolean
   profile: ProfileRecord | null
   voicesCount: number
@@ -399,6 +406,11 @@ function ProfileHeader({
               >
                 {profile ? 'Edit profile' : 'Set up profile'}
               </button>
+            )}
+            {!isSelf && (
+              <div className="shrink-0">
+                <FollowHandleButton subjectDID={did} subjectHandle={handle} />
+              </div>
             )}
           </div>
         </div>

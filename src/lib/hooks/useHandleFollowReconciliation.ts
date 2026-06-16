@@ -1,11 +1,13 @@
 import { useEffect } from 'react'
 import {
   autoWatchAdditions,
+  autoWatchRemovals,
   listHandleFollows,
   resolveAutoWatchCandidates,
 } from '../../core/handleFollow'
 import type { SubscriptionRef } from '../../core/types'
 import { useAuthStore } from '../../stores/auth'
+import { useFeedStore } from '../../stores/feed'
 import { useToastStore } from '../../stores/toast'
 import { flushSettingsBestEffort } from './useSettingsSync'
 
@@ -45,6 +47,34 @@ export async function reconcileOneHandle(
 ): Promise<number> {
   const candidates = await resolveAutoWatchCandidates(followedDID)
   return applyAutoWatch(candidates)
+}
+
+// Unfollow sweep: remove all of the unfollowed person's feeds from my Watches.
+// "All their feeds" is re-derived live (their currently-claimed public
+// channels), matching the literal intent — including a channel I'd also
+// subscribed to manually. Clears the tombstones for the swept channels too, so
+// a later re-follow re-adds them fresh. Returns how many were removed.
+export async function sweepHandleFollow(
+  followedDID: string,
+): Promise<number> {
+  const candidates = await resolveAutoWatchCandidates(followedDID)
+  const auth = useAuthStore.getState()
+  const subscribedChannelIDs = new Set(
+    auth.subscriptions.map((s) => s.channelID),
+  )
+  const removals = autoWatchRemovals(
+    candidates.map((c) => c.channelID),
+    subscribedChannelIDs,
+  )
+  if (removals.length === 0) return 0
+  const feed = useFeedStore.getState()
+  for (const id of removals) {
+    auth.removeSubscription(id) // tombstones it…
+    feed.removeChannel(id)
+  }
+  auth.clearDismissedAutoWatch(removals) // …then clear, for a clean re-follow
+  await flushSettingsBestEffort()
+  return removals.length
 }
 
 // Boot reconcile: walk my handle-follows, resolve each followed person's
