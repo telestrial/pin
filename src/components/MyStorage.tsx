@@ -9,11 +9,13 @@ import { useToastStore } from '../stores/toast'
 import { useUploadQueueStore } from '../stores/uploadQueue'
 import { kindForMime } from './AttachmentMedia'
 import { ChannelStorageCard } from './ChannelStorageCard'
+import { ChannelStorageDetail } from './ChannelStorageDetail'
 import { useFadeCancelUnpin } from '../lib/hooks/useFadeCancelUnpin'
 import { ItemTile } from './ItemTile'
 import type { TileChannel, TileSource } from './ItemTile'
 import { PIN_ITEM_DRAG_TYPE } from './pin/PinSidebar'
 import { SlabInspector } from './SlabInspector'
+import { TabButton } from './ui/TabButton'
 
 type TileEntry = {
   item: ItemRef
@@ -46,6 +48,9 @@ export function MyStorage({
   const enqueue = useUploadQueueStore((s) => s.enqueue)
 
   const [topTab, setTopTab] = useState<TopTab>('files')
+  const [selectedChannelID, setSelectedChannelID] = useState<string | null>(
+    null,
+  )
   const [isDragging, setIsDragging] = useState(false)
   const FADE_MS = 1500
   const { removingURLs, toggle: toggleTilePinFade } = useFadeCancelUnpin({
@@ -111,6 +116,28 @@ export function MyStorage({
         ),
       )
   }, [pinned, myChannelIDSet])
+
+  // Drill-in target: the selected channel's card data (for the header) plus
+  // its posts (for the detail's Files/Posts tabs). detailChannel is null when
+  // nothing is selected or the selected channel vanished mid-view, which falls
+  // the render back to the cards grid.
+  const detailChannel = selectedChannelID
+    ? (ownedChannelCards.find(
+        (c) => c.channel.channelID === selectedChannelID,
+      ) ?? null)
+    : null
+  const detailPosts = useMemo<ItemRef[]>(() => {
+    if (!selectedChannelID) return []
+    return feedEntries
+      .filter((e) => e.channel.channelID === selectedChannelID)
+      .map((e) => e.item)
+  }, [feedEntries, selectedChannelID])
+
+  // Switching top tabs always exits any open channel detail.
+  function selectTopTab(t: TopTab) {
+    setTopTab(t)
+    setSelectedChannelID(null)
+  }
 
   function handleUnpinClick(url: string) {
     toggleTilePinFade(url)
@@ -203,6 +230,19 @@ export function MyStorage({
       <div className="max-w-7xl mx-auto flex flex-col lg:flex-row lg:items-start gap-6">
         {sidebar}
         <div className="flex-1 min-w-0">
+          {detailChannel ? (
+            <ChannelStorageDetail
+              channelID={detailChannel.channel.channelID}
+              channelName={detailChannel.channel.name}
+              authorHandle={detailChannel.authorHandle}
+              avatar={detailChannel.avatar}
+              cover={detailChannel.cover}
+              description={detailChannel.description}
+              posts={detailPosts}
+              onBack={() => setSelectedChannelID(null)}
+              onOpenItem={onItemClick}
+            />
+          ) : (
           <div
             {...dragProps}
             className={`relative bg-white border rounded-lg p-5 space-y-5 transition-colors ${
@@ -235,13 +275,13 @@ export function MyStorage({
             <div className="flex gap-4 border-b border-neutral-200">
               <TabButton
                 active={topTab === 'files'}
-                onClick={() => setTopTab('files')}
+                onClick={() => selectTopTab('files')}
               >
                 My Files
               </TabButton>
               <TabButton
                 active={topTab === 'channels'}
-                onClick={() => setTopTab('channels')}
+                onClick={() => selectTopTab('channels')}
               >
                 My Channels
               </TabButton>
@@ -312,38 +352,16 @@ export function MyStorage({
                     description={c.description}
                     itemCount={c.itemCount}
                     bytes={c.bytes}
+                    onClick={() => setSelectedChannelID(c.channel.channelID)}
                   />
                 ))}
               </div>
             )}
           </div>
+          )}
         </div>
         {rightSidebar}
       </div>
     </div>
-  )
-}
-
-function TabButton({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean
-  onClick: () => void
-  children: React.ReactNode
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`-mb-px px-1 pb-2 text-sm font-medium border-b-2 transition-colors cursor-pointer ${
-        active
-          ? 'border-green-600 text-neutral-900'
-          : 'border-transparent text-neutral-500 hover:text-neutral-900'
-      }`}
-    >
-      {children}
-    </button>
   )
 }
