@@ -7,9 +7,8 @@ import { LIBRARY_CHANNEL } from '../lib/pinUpload'
 import { type PinnedItemRef, usePinStore } from '../stores/pin'
 import { useToastStore } from '../stores/toast'
 import { useUploadQueueStore } from '../stores/uploadQueue'
-import { ChannelAvatar } from './channel/ChannelAvatar'
 import { kindForMime } from './AttachmentMedia'
-import { formatBytes } from '../lib/format'
+import { ChannelStorageCard } from './ChannelStorageCard'
 import { useFadeCancelUnpin } from '../lib/hooks/useFadeCancelUnpin'
 import { ItemTile } from './ItemTile'
 import type { TileChannel, TileSource } from './ItemTile'
@@ -23,6 +22,8 @@ type TileEntry = {
   objectID?: string
   pinnedAt?: string
 }
+
+type TopTab = 'files' | 'channels'
 
 export function MyStorage({
   sidebar,
@@ -44,7 +45,7 @@ export function MyStorage({
   const addToast = useToastStore((s) => s.addToast)
   const enqueue = useUploadQueueStore((s) => s.enqueue)
 
-  const [selectedChannel, setSelectedChannel] = useState<string | null>(null)
+  const [topTab, setTopTab] = useState<TopTab>('files')
   const [isDragging, setIsDragging] = useState(false)
   const FADE_MS = 1500
   const { removingURLs, toggle: toggleTilePinFade } = useFadeCancelUnpin({
@@ -56,37 +57,51 @@ export function MyStorage({
     [myChannels],
   )
 
-  const ownedChannelStrip = useMemo(() => {
+  // One storage card per owned channel. bytes is the channel's full storage
+  // footprint — post bodies plus their attachment files — not just the body
+  // bytes, so the card's stat is the honest "what this channel costs."
+  const ownedChannelCards = useMemo(() => {
     return myChannels
       .map((c) => {
         const items = feedEntries.filter(
           (e) => e.channel.channelID === c.channelID,
         )
-        const bytes = items.reduce((sum, e) => sum + e.item.byteSize, 0)
+        // Coalesce undefined byteSize to 0 — a corrupt/legacy item or
+        // attachment missing the field would otherwise NaN-poison the sum
+        // and render "NaN GB". We can't know its size, so it undercounts.
+        const bytes = items.reduce((sum, e) => {
+          const attBytes =
+            e.item.attachments?.reduce((s, a) => s + (a.byteSize ?? 0), 0) ?? 0
+          return sum + (e.item.byteSize ?? 0) + attBytes
+        }, 0)
         const sub = subscriptions.find((s) => s.channelID === c.channelID)
+        const manifest = manifests[c.channelID]
         return {
           channel: c,
           itemCount: items.length,
           bytes,
           authorHandle: sub?.authorHandle ?? '',
-          avatar: manifests[c.channelID]?.avatar,
+          avatar: manifest?.avatar,
+          cover: manifest?.cover,
+          description: manifest?.description ?? '',
         }
       })
       .sort((a, b) => b.bytes - a.bytes)
   }, [myChannels, feedEntries, subscriptions, manifests])
 
-  // Flat entries — external pins + library items, no own-channel items.
-  // Per the rule we settled: own-channel items live "in the channel"; you
-  // reach them by selecting that channel chip, not as flat tiles.
+  // My Files = external pins + library drops. Own-channel items deliberately
+  // excluded — they live under My Channels, reachable by drilling into the
+  // channel, not as flat tiles here.
   const flatEntries = useMemo<TileEntry[]>(() => {
     return pinned
       .filter((p) => !myChannelIDSet.has(p.channel.channelID))
       .map((p) => ({
         item: p.item,
         channel: p.channel,
-        source: p.channel.channelID === LIBRARY_CHANNEL.channelID
-          ? ('library' as const)
-          : ('external' as const),
+        source:
+          p.channel.channelID === LIBRARY_CHANNEL.channelID
+            ? ('library' as const)
+            : ('external' as const),
         objectID: p.objectID,
         pinnedAt: p.pinnedAt,
       }))
@@ -96,26 +111,6 @@ export function MyStorage({
         ),
       )
   }, [pinned, myChannelIDSet])
-
-  // Channel-filtered view: items in a single owned channel, in publish order.
-  const channelEntries = useMemo<TileEntry[]>(() => {
-    if (!selectedChannel) return []
-    const sub = subscriptions.find((s) => s.channelID === selectedChannel)
-    return feedEntries
-      .filter((e) => e.channel.channelID === selectedChannel)
-      .map((e) => ({
-        item: e.item,
-        channel: {
-          authorHandle: sub?.authorHandle ?? '',
-          channelID: e.channel.channelID,
-          name: e.channel.name,
-        },
-        source: 'own' as const,
-      }))
-      .sort((a, b) => b.item.publishedAt.localeCompare(a.item.publishedAt))
-  }, [feedEntries, selectedChannel, subscriptions])
-
-  const tiles = selectedChannel ? channelEntries : flatEntries
 
   function handleUnpinClick(url: string) {
     toggleTilePinFade(url)
@@ -190,16 +185,26 @@ export function MyStorage({
     )
   }
 
+  // Drag-drop intake belongs to My Files only — dropping an OS file pins it
+  // into your library. The handlers are attached only on that tab so a drop
+  // on My Channels does nothing.
+  const dragProps =
+    topTab === 'files'
+      ? {
+          onDragEnter: handleDragEnter,
+          onDragOver: handleDragOver,
+          onDragLeave: handleDragLeave,
+          onDrop: handleDrop,
+        }
+      : {}
+
   return (
     <div className="flex-1 p-6">
       <div className="max-w-7xl mx-auto flex flex-col lg:flex-row lg:items-start gap-6">
         {sidebar}
         <div className="flex-1 min-w-0">
           <div
-            onDragEnter={handleDragEnter}
-            onDragOver={handleDragOver}
-            onDragLeave={handleDragLeave}
-            onDrop={handleDrop}
+            {...dragProps}
             className={`relative bg-white border rounded-lg p-5 space-y-5 transition-colors ${
               isDragging
                 ? 'border-green-600 ring-2 ring-green-600/30'
@@ -227,112 +232,118 @@ export function MyStorage({
               </button>
             </div>
 
-            {ownedChannelStrip.length > 0 && (
-              <div className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1">
-                <button
-                  type="button"
-                  onClick={() => setSelectedChannel(null)}
-                  className={`shrink-0 px-3 py-1.5 rounded-full text-xs font-medium transition-colors cursor-pointer ${
-                    selectedChannel === null
-                      ? 'bg-neutral-900 text-white'
-                      : 'bg-neutral-100 text-neutral-700 hover:bg-neutral-200'
-                  }`}
-                >
-                  All
-                </button>
-                {ownedChannelStrip.map(
-                  ({ channel, itemCount, bytes, authorHandle, avatar }) => {
-                    const active = selectedChannel === channel.channelID
-                    return (
-                      <button
-                        type="button"
-                        key={channel.channelID}
-                        onClick={() => setSelectedChannel(channel.channelID)}
-                        className={`shrink-0 inline-flex items-center gap-2 pl-1.5 pr-3 py-1 rounded-full text-xs transition-colors cursor-pointer ${
-                          active
-                            ? 'bg-neutral-900 text-white'
-                            : 'bg-neutral-100 text-neutral-700 hover:bg-neutral-200'
-                        }`}
-                        title={`${itemCount} item${
-                          itemCount === 1 ? '' : 's'
-                        } · ${formatBytes(bytes)}`}
-                      >
-                        <ChannelAvatar
-                          channelID={channel.channelID}
-                          channelName={channel.name}
-                          authorHandle={authorHandle}
-                          avatar={avatar}
-                          size="sm"
-                        />
-                        <span className="font-medium truncate max-w-32">
-                          {channel.name}
-                        </span>
-                        <span
-                          className={
-                            active ? 'text-white/70' : 'text-neutral-500'
-                          }
-                        >
-                          {formatBytes(bytes)}
-                        </span>
-                      </button>
-                    )
-                  },
-                )}
-              </div>
-            )}
+            <div className="flex gap-4 border-b border-neutral-200">
+              <TabButton
+                active={topTab === 'files'}
+                onClick={() => setTopTab('files')}
+              >
+                My Files
+              </TabButton>
+              <TabButton
+                active={topTab === 'channels'}
+                onClick={() => setTopTab('channels')}
+              >
+                My Channels
+              </TabButton>
+            </div>
 
-            {tiles.length === 0 ? (
+            {topTab === 'files' ? (
+              <>
+                {flatEntries.length === 0 ? (
+                  <p className="text-sm text-neutral-500 py-8 text-center">
+                    Pin items to keep them here.
+                  </p>
+                ) : (
+                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+                    {flatEntries.map((entry) => {
+                      const url = entry.item.itemURL
+                      const canUnpin = !!entry.objectID
+                      return (
+                        <ItemTile
+                          key={`${entry.channel.channelID}:${entry.item.publishedAt}`}
+                          item={entry.item}
+                          channel={entry.channel}
+                          source={entry.source}
+                          removing={removingURLs.has(url)}
+                          busy={isPinning(url)}
+                          onOpen={() =>
+                            onItemClick({
+                              item: entry.item,
+                              channel: entry.channel,
+                              objectID: entry.objectID ?? '',
+                              pinnedAt: entry.pinnedAt ?? '',
+                            })
+                          }
+                          onUnpin={
+                            canUnpin ? () => handleUnpinClick(url) : undefined
+                          }
+                          onDragStart={
+                            entry.item.type === 'text'
+                              ? undefined
+                              : buildDragHandler(entry)
+                          }
+                        />
+                      )
+                    })}
+                  </div>
+                )}
+
+                {/* Inspection view — debug-shape, not final UX. Surfaces the
+                    actual slab landscape so we can see what the repacker sees
+                    and what's left as orphans. Remove when packing is settled. */}
+                <div className="pt-5 border-t border-neutral-200">
+                  <SlabInspector />
+                </div>
+              </>
+            ) : ownedChannelCards.length === 0 ? (
               <p className="text-sm text-neutral-500 py-8 text-center">
-                {selectedChannel
-                  ? 'This channel has no items yet.'
-                  : 'Pin items to keep them here.'}
+                Channels you create show up here.
               </p>
             ) : (
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
-                {tiles.map((entry) => {
-                  const url = entry.item.itemURL
-                  const canUnpin =
-                    entry.source !== 'own' && !!entry.objectID
-                  return (
-                    <ItemTile
-                      key={`${entry.channel.channelID}:${entry.item.publishedAt}`}
-                      item={entry.item}
-                      channel={entry.channel}
-                      source={entry.source}
-                      removing={removingURLs.has(url)}
-                      busy={isPinning(url)}
-                      onOpen={() =>
-                        onItemClick({
-                          item: entry.item,
-                          channel: entry.channel,
-                          objectID: entry.objectID ?? '',
-                          pinnedAt: entry.pinnedAt ?? '',
-                        })
-                      }
-                      onUnpin={
-                        canUnpin ? () => handleUnpinClick(url) : undefined
-                      }
-                      onDragStart={
-                        entry.item.type === 'text'
-                          ? undefined
-                          : buildDragHandler(entry)
-                      }
-                    />
-                  )
-                })}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {ownedChannelCards.map((c) => (
+                  <ChannelStorageCard
+                    key={c.channel.channelID}
+                    channelID={c.channel.channelID}
+                    channelName={c.channel.name}
+                    authorHandle={c.authorHandle}
+                    avatar={c.avatar}
+                    cover={c.cover}
+                    description={c.description}
+                    itemCount={c.itemCount}
+                    bytes={c.bytes}
+                  />
+                ))}
               </div>
             )}
-
-            {/* Inspection view — debug-shape, not final UX. Surfaces the
-                actual slab landscape so we can see what the repacker sees
-                and what's left as orphans. Remove when packing is settled. */}
-            <div className="pt-5 border-t border-neutral-200">
-              <SlabInspector />
-            </div>
           </div>
         </div>
         {rightSidebar}
       </div>
     </div>
+  )
+}
+
+function TabButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean
+  onClick: () => void
+  children: React.ReactNode
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`-mb-px px-1 pb-2 text-sm font-medium border-b-2 transition-colors cursor-pointer ${
+        active
+          ? 'border-green-600 text-neutral-900'
+          : 'border-transparent text-neutral-500 hover:text-neutral-900'
+      }`}
+    >
+      {children}
+    </button>
   )
 }
