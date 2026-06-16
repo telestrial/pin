@@ -1,19 +1,21 @@
-import { useMemo } from 'react'
-import type { ChannelImage, ItemRef } from '../core/types'
+import { useMemo, useState } from 'react'
+import type { FeedEntry } from '../core/feed'
+import type { ChannelImage } from '../core/types'
 import { isValidAttachment } from '../core/types'
 import { itemRefFromAttachment } from '../lib/filePin'
 import { useItemBlobURL } from '../lib/hooks/useItemBytes'
 import type { PinnedItemRef } from '../stores/pin'
 import { ChannelAvatar } from './channel/ChannelAvatar'
+import { FeedRow } from './HomeFeed'
 import { ItemTile } from './ItemTile'
 import { TabButton } from './ui/TabButton'
 
 // The drill-in storage view for one owned channel, reached from a card on the
 // My Channels tab. Mirrors the ChannelView header (cover + avatar + name +
 // description) minus the public-page actions. Sub-tabs: Files (the byte-bearing
-// attachments across the channel's posts — the storage lens) and Posts (the
-// posts themselves; added next). Takes over the middle column; Back returns to
-// the channel cards.
+// attachments across the channel's posts — the storage lens, default) and Posts
+// (the posts themselves). Takes over the middle column; Back returns to the
+// channel cards.
 export function ChannelStorageDetail({
   channelID,
   channelName,
@@ -21,9 +23,11 @@ export function ChannelStorageDetail({
   avatar,
   cover,
   description,
-  posts,
+  entries,
   onBack,
   onOpenItem,
+  onChannelClick,
+  onHandleClick,
 }: {
   channelID: string
   channelName: string
@@ -31,22 +35,36 @@ export function ChannelStorageDetail({
   avatar?: ChannelImage
   cover?: ChannelImage
   description?: string
-  posts: ItemRef[]
+  entries: FeedEntry[]
   onBack: () => void
   onOpenItem: (ref: PinnedItemRef) => void
+  onChannelClick: (authorHandle: string, channelID: string) => void
+  onHandleClick: (handle: string) => void
 }) {
+  const [channelTab, setChannelTab] = useState<'files' | 'posts'>('files')
+  const tileChannel = { authorHandle, channelID, name: channelName }
+
+  // Newest-first; drives both tabs' ordering.
+  const sortedEntries = useMemo(
+    () =>
+      [...entries].sort((a, b) =>
+        b.item.publishedAt.localeCompare(a.item.publishedAt),
+      ),
+    [entries],
+  )
+
   // Flatten every valid attachment across the channel's posts into file tiles.
   // byteSize is coalesced to 0 when synthesizing the tile item so a legacy
   // attachment missing the field doesn't render "NaN B" on its tile.
   const fileTiles = useMemo(() => {
-    return posts.flatMap((post) =>
-      (post.attachments ?? []).filter(isValidAttachment).map((att) => ({
+    return sortedEntries.flatMap((entry) =>
+      (entry.item.attachments ?? []).filter(isValidAttachment).map((att) => ({
         key: att.objectID ?? att.url,
         item: { ...itemRefFromAttachment(att), byteSize: att.byteSize ?? 0 },
         objectID: att.objectID,
       })),
     )
-  }, [posts])
+  }, [sortedEntries])
 
   return (
     <div className="border border-neutral-200 rounded-lg bg-white overflow-hidden">
@@ -88,34 +106,72 @@ export function ChannelStorageDetail({
         </div>
 
         <div className="flex gap-4 border-b border-neutral-200">
-          <TabButton active onClick={() => {}}>
+          <TabButton
+            active={channelTab === 'files'}
+            onClick={() => setChannelTab('files')}
+          >
             Files
+          </TabButton>
+          <TabButton
+            active={channelTab === 'posts'}
+            onClick={() => setChannelTab('posts')}
+          >
+            Posts
           </TabButton>
         </div>
 
-        {fileTiles.length === 0 ? (
+        {channelTab === 'files' ? (
+          fileTiles.length === 0 ? (
+            <p className="text-sm text-neutral-500 py-8 text-center">
+              No files in this channel yet.
+            </p>
+          ) : (
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+              {fileTiles.map((tile) => (
+                <ItemTile
+                  key={tile.key}
+                  item={tile.item}
+                  channel={tileChannel}
+                  source="own"
+                  onOpen={() =>
+                    onOpenItem({
+                      item: tile.item,
+                      channel: tileChannel,
+                      objectID: tile.objectID ?? '',
+                      pinnedAt: '',
+                    })
+                  }
+                />
+              ))}
+            </div>
+          )
+        ) : sortedEntries.length === 0 ? (
           <p className="text-sm text-neutral-500 py-8 text-center">
-            No files in this channel yet.
+            No posts in this channel yet.
           </p>
         ) : (
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
-            {fileTiles.map((tile) => (
-              <ItemTile
-                key={tile.key}
-                item={tile.item}
-                channel={{ authorHandle, channelID, name: channelName }}
-                source="own"
-                onOpen={() =>
+          // Render the posts as they appear in the feed — same FeedRow used by
+          // the home feed and channel page. Conceptually right (these are the
+          // posts), even though the per-row channel identity is redundant in a
+          // single-channel view.
+          <ul className="divide-y divide-neutral-100">
+            {sortedEntries.map((entry) => (
+              <FeedRow
+                key={`${channelID}:${entry.item.publishedAt}`}
+                entry={entry}
+                onItemClick={(e) =>
                   onOpenItem({
-                    item: tile.item,
-                    channel: { authorHandle, channelID, name: channelName },
-                    objectID: tile.objectID ?? '',
+                    item: e.item,
+                    channel: tileChannel,
+                    objectID: '',
                     pinnedAt: '',
                   })
                 }
+                onChannelClick={onChannelClick}
+                onHandleClick={onHandleClick}
               />
             ))}
-          </div>
+          </ul>
         )}
       </div>
     </div>

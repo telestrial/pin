@@ -175,6 +175,12 @@ export function Home() {
             returnTo: storageView,
           })
         }
+        onChannelClick={(authorHandle, channelID) =>
+          setView({ kind: 'viewing-channel', authorHandle, channelID })
+        }
+        onHandleClick={(handle) =>
+          setView({ kind: 'handle-directory', handle, returnTo: storageView })
+        }
       />
     )
   }

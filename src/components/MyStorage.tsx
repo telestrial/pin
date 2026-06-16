@@ -32,11 +32,15 @@ export function MyStorage({
   rightSidebar,
   onClose,
   onItemClick,
+  onChannelClick,
+  onHandleClick,
 }: {
   sidebar?: React.ReactNode
   rightSidebar?: React.ReactNode
   onClose: () => void
   onItemClick: (ref: PinnedItemRef) => void
+  onChannelClick: (authorHandle: string, channelID: string) => void
+  onHandleClick: (handle: string) => void
 }) {
   const myChannels = useAuthStore((s) => s.myChannels)
   const subscriptions = useAuthStore((s) => s.subscriptions)
@@ -126,11 +130,9 @@ export function MyStorage({
         (c) => c.channel.channelID === selectedChannelID,
       ) ?? null)
     : null
-  const detailPosts = useMemo<ItemRef[]>(() => {
+  const detailEntries = useMemo(() => {
     if (!selectedChannelID) return []
-    return feedEntries
-      .filter((e) => e.channel.channelID === selectedChannelID)
-      .map((e) => e.item)
+    return feedEntries.filter((e) => e.channel.channelID === selectedChannelID)
   }, [feedEntries, selectedChannelID])
 
   // Switching top tabs always exits any open channel detail.
@@ -238,9 +240,11 @@ export function MyStorage({
               avatar={detailChannel.avatar}
               cover={detailChannel.cover}
               description={detailChannel.description}
-              posts={detailPosts}
+              entries={detailEntries}
               onBack={() => setSelectedChannelID(null)}
               onOpenItem={onItemClick}
+              onChannelClick={onChannelClick}
+              onHandleClick={onHandleClick}
             />
           ) : (
           <div
