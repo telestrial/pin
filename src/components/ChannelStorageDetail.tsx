@@ -1,3 +1,4 @@
+import { X } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import type { FeedEntry } from '../core/feed'
 import type { ChannelImage } from '../core/types'
@@ -77,9 +78,10 @@ export function ChannelStorageDetail({
         <button
           type="button"
           onClick={onBack}
-          className="absolute top-3 left-3 inline-flex items-center px-2.5 py-1 text-xs font-medium text-white bg-black/40 hover:bg-black/60 backdrop-blur-sm rounded-full transition-colors cursor-pointer"
+          aria-label="Close"
+          className="absolute top-3 right-3 inline-flex items-center justify-center p-1.5 rounded-full text-white bg-black/40 hover:bg-black/60 backdrop-blur-sm transition-colors cursor-pointer"
         >
-          Back
+          <X className="size-5" aria-hidden="true" />
         </button>
       </div>
       <div className="px-5 pb-5 space-y-5">
