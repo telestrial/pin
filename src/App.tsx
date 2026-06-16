@@ -6,6 +6,7 @@ import { Toasts } from './components/ui/Toast'
 import { bootOauth } from './lib/atprotoClient'
 import './lib/debug'
 import { useGhostReconciliation } from './lib/hooks/useGhostReconciliation'
+import { useHandleFollowReconciliation } from './lib/hooks/useHandleFollowReconciliation'
 import { useJetstream } from './lib/hooks/useJetstream'
 import { useOrphanSweep } from './lib/hooks/useOrphanSweep'
 import { useRepackRunner } from './lib/hooks/useRepackRunner'
@@ -30,6 +31,7 @@ export default function App() {
   useOrphanSweep()
   useSettingsSync()
   useGhostReconciliation()
+  useHandleFollowReconciliation()
 
   // While a pinned item is armed, mark the body so a global CSS rule
   // (in index.css) swaps the cursor to a Pin-green arrow everywhere on

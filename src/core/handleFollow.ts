@@ -1,5 +1,7 @@
 import { Agent, AtpAgent } from '@atproto/api'
+import { getChannelRecord } from './atproto'
 import { deriveAtRkey } from './crypto'
+import { listFollows, parseChannelAtURI } from './follow'
 import type { SubscriptionRef } from './types'
 
 export const HANDLEFOLLOW_LEXICON = 'dev.sia.pin.handlefollow'
@@ -102,6 +104,62 @@ export async function listHandleFollows(
     cursor = result.data.cursor
   } while (cursor)
   return out
+}
+
+// Resolve a followed person's claimed channels into Watch candidates. A
+// person's claims are their own public follows whose subject channel is
+// authored by them (the channel-as-voice self-follow written at creation) —
+// the same derivation the handle directory's "Their voices" uses. Only
+// PUBLIC channels qualify: their record carries K (record.key), so we can
+// build a functional Watch (handle, channelID, K) without the subscribe URL.
+// Obscure channels are skipped — we'd have no key to decrypt them. cachedName
+// is intentionally left unset; the feed fills the display name from the
+// manifest cache on first load (one fewer fetch + decrypt here).
+export async function resolveAutoWatchCandidates(
+  followedDID: string,
+): Promise<SubscriptionRef[]> {
+  // Resolve DID → handle once for this person; reused across their channels.
+  let handle = followedDID
+  try {
+    const unauthed = new AtpAgent({ service: DEFAULT_SERVICE })
+    const r = await unauthed.com.atproto.repo.describeRepo({ repo: followedDID })
+    handle = r.data.handle
+  } catch {
+    // Fall back to the DID as the handle slot — fetchChannel/JetStream key
+    // off authorDID anyway; the handle is for display + subscribe-URL text.
+  }
+
+  const follows = await listFollows(followedDID)
+  const claimedChannelIDs: string[] = []
+  const seen = new Set<string>()
+  for (const f of follows) {
+    const parsed = parseChannelAtURI(f.record.subject)
+    if (!parsed) continue
+    if (parsed.authorDID !== followedDID) continue // not a self-authored claim
+    if (seen.has(parsed.channelID)) continue
+    seen.add(parsed.channelID)
+    claimedChannelIDs.push(parsed.channelID)
+  }
+
+  const addedAt = new Date().toISOString()
+  const candidates = await Promise.all(
+    claimedChannelIDs.map(async (channelID): Promise<SubscriptionRef | null> => {
+      try {
+        const record = await getChannelRecord(followedDID, channelID)
+        if (!record.key) return null // obscure — no key to Watch with
+        return {
+          authorHandle: handle,
+          authorDID: followedDID,
+          channelID,
+          channelKey: record.key,
+          addedAt,
+        }
+      } catch {
+        return null // unreadable record — skip, next reconcile retries
+      }
+    }),
+  )
+  return candidates.filter((c): c is SubscriptionRef => c !== null)
 }
 
 // --- Reconciliation logic (pure; network orchestration lives in the hook) ---
