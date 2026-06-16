@@ -73,6 +73,7 @@ export function useSettingsSync() {
               .hydrateSettings(
                 result.settings.myChannels,
                 result.settings.subscriptions,
+                result.settings.dismissedAutoWatch ?? [],
                 result.objectID,
               )
           }
@@ -109,18 +110,27 @@ export function useSettingsSync() {
     const needsMigration =
       initialState.settingsObjectID === null &&
       (initialState.myChannels.length > 0 ||
-        initialState.subscriptions.length > 0)
+        initialState.subscriptions.length > 0 ||
+        initialState.dismissedAutoWatch.length > 0)
     // needsPush covers both: pre-feature migration AND a dirty bit carried
     // over from a prior session that didn't get to commit. Both want the
     // same thing — fire a save against current local state at startup.
     const needsPush = needsMigration || initialState.settingsDirty
     let lastSerialized = needsPush
       ? '__migrate__'
-      : serialize(initialState.myChannels, initialState.subscriptions)
+      : serialize(
+          initialState.myChannels,
+          initialState.subscriptions,
+          initialState.dismissedAutoWatch,
+        )
 
     const runSave = async () => {
       const state = useAuthStore.getState()
-      const serialized = serialize(state.myChannels, state.subscriptions)
+      const serialized = serialize(
+        state.myChannels,
+        state.subscriptions,
+        state.dismissedAutoWatch,
+      )
       if (serialized === lastSerialized) return
       lastSerialized = serialized
 
@@ -131,6 +141,7 @@ export function useSettingsSync() {
           version: SETTINGS_VERSION,
           myChannels: state.myChannels,
           subscriptions: state.subscriptions,
+          dismissedAutoWatch: state.dismissedAutoWatch,
           updatedAt: new Date().toISOString(),
         }
         const newID = await saveSettings(sdk, settings, state.settingsObjectID)
@@ -140,7 +151,11 @@ export function useSettingsSync() {
         // runSave will clear dirty when it catches up.
         const after = useAuthStore.getState()
         if (
-          serialize(after.myChannels, after.subscriptions) === lastSerialized
+          serialize(
+            after.myChannels,
+            after.subscriptions,
+            after.dismissedAutoWatch,
+          ) === lastSerialized
         ) {
           useAuthStore.getState().setSettingsDirty(false)
         }
@@ -177,7 +192,8 @@ export function useSettingsSync() {
     const unsub = useAuthStore.subscribe((state, prev) => {
       if (
         state.myChannels === prev.myChannels &&
-        state.subscriptions === prev.subscriptions
+        state.subscriptions === prev.subscriptions &&
+        state.dismissedAutoWatch === prev.dismissedAutoWatch
       ) {
         return
       }
@@ -197,7 +213,11 @@ export function useSettingsSync() {
       // Save if anything is still dirty.
       const state = useAuthStore.getState()
       if (
-        serialize(state.myChannels, state.subscriptions) !== lastSerialized
+        serialize(
+          state.myChannels,
+          state.subscriptions,
+          state.dismissedAutoWatch,
+        ) !== lastSerialized
       ) {
         await runSave()
       }
@@ -214,6 +234,9 @@ export function useSettingsSync() {
 function serialize(
   myChannels: ReturnType<typeof useAuthStore.getState>['myChannels'],
   subscriptions: ReturnType<typeof useAuthStore.getState>['subscriptions'],
+  dismissedAutoWatch: ReturnType<
+    typeof useAuthStore.getState
+  >['dismissedAutoWatch'],
 ): string {
-  return JSON.stringify({ myChannels, subscriptions })
+  return JSON.stringify({ myChannels, subscriptions, dismissedAutoWatch })
 }

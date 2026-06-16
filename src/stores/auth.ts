@@ -28,6 +28,13 @@ type AuthState = {
   approvalURL: string | null
   myChannels: OwnedChannel[]
   subscriptions: SubscriptionRef[]
+  // channelIDs the user explicitly unsubscribed from and hasn't re-added.
+  // The handle-follow auto-Watch reconcile skips anything in here so an
+  // explicit unsubscribe survives repeated boots (otherwise a channel
+  // claimed by a person you follow would be re-added every reconcile).
+  // Driven uniformly by add/removeSubscription — no handle-follow
+  // special-casing; it's just "channels I deliberately dropped".
+  dismissedAutoWatch: string[]
   atprotoAgent: Agent | null
   atprotoDID: string | null
   atprotoHandle: string | null
@@ -47,6 +54,9 @@ type AuthState = {
   addSubscription: (sub: SubscriptionRef) => void
   updateSubscriptionName: (channelID: string, name: string) => void
   removeSubscription: (channelID: string) => void
+  // Clears tombstones for the given channelIDs (used on handle-unfollow,
+  // which sweeps a person's channels — a later re-follow then re-adds fresh).
+  clearDismissedAutoWatch: (channelIDs: string[]) => void
   setATProtoIdentity: (
     agent: Agent | null,
     did: string | null,
@@ -57,6 +67,7 @@ type AuthState = {
   hydrateSettings: (
     myChannels: OwnedChannel[],
     subscriptions: SubscriptionRef[],
+    dismissedAutoWatch: string[],
     objectID: string,
   ) => void
   setSettingsObjectID: (id: string) => void
@@ -76,6 +87,7 @@ export const useAuthStore = create<AuthState>()(
       approvalURL: null,
       myChannels: [],
       subscriptions: [],
+      dismissedAutoWatch: [],
       atprotoAgent: null,
       atprotoDID: null,
       atprotoHandle: null,
@@ -102,15 +114,20 @@ export const useAuthStore = create<AuthState>()(
           myChannels: s.myChannels.filter((c) => c.channelID !== channelID),
         })),
       addSubscription: (sub) =>
-        set((s) =>
-          s.subscriptions.some(
+        set((s) => {
+          // Re-adding clears any tombstone for this channel (you want it again).
+          const dismissedAutoWatch = s.dismissedAutoWatch.filter(
+            (id) => id !== sub.channelID,
+          )
+          const already = s.subscriptions.some(
             (x) =>
               x.authorHandle === sub.authorHandle &&
               x.channelID === sub.channelID,
           )
-            ? s
-            : { subscriptions: [...s.subscriptions, sub] },
-        ),
+          return already
+            ? { dismissedAutoWatch }
+            : { subscriptions: [...s.subscriptions, sub], dismissedAutoWatch }
+        }),
       updateSubscriptionName: (channelID, name) =>
         set((s) => ({
           subscriptions: s.subscriptions.map((sub) =>
@@ -124,7 +141,20 @@ export const useAuthStore = create<AuthState>()(
           subscriptions: s.subscriptions.filter(
             (sub) => sub.channelID !== channelID,
           ),
+          // Tombstone it so the auto-Watch reconcile won't resurrect it.
+          dismissedAutoWatch: s.dismissedAutoWatch.includes(channelID)
+            ? s.dismissedAutoWatch
+            : [...s.dismissedAutoWatch, channelID],
         })),
+      clearDismissedAutoWatch: (channelIDs) =>
+        set((s) => {
+          const drop = new Set(channelIDs)
+          return {
+            dismissedAutoWatch: s.dismissedAutoWatch.filter(
+              (id) => !drop.has(id),
+            ),
+          }
+        }),
       setATProtoIdentity: (atprotoAgent, atprotoDID, atprotoHandle) =>
         // Don't overwrite an already-cached handle with null. The OAuth
         // scope doesn't permit app.bsky.actor.getProfile, so doBoot can
@@ -139,10 +169,11 @@ export const useAuthStore = create<AuthState>()(
         })),
       setATProtoHandle: (atprotoHandle) => set({ atprotoHandle }),
       setFeedSortOrder: (feedSortOrder) => set({ feedSortOrder }),
-      hydrateSettings: (myChannels, subscriptions, objectID) =>
+      hydrateSettings: (myChannels, subscriptions, dismissedAutoWatch, objectID) =>
         set({
           myChannels,
           subscriptions,
+          dismissedAutoWatch,
           settingsObjectID: objectID,
           settingsLoaded: true,
         }),
@@ -161,6 +192,7 @@ export const useAuthStore = create<AuthState>()(
           approvalURL: null,
           myChannels: [],
           subscriptions: [],
+          dismissedAutoWatch: [],
           atprotoAgent: null,
           atprotoDID: null,
           atprotoHandle: null,
@@ -177,6 +209,7 @@ export const useAuthStore = create<AuthState>()(
         indexerURL: state.indexerURL,
         myChannels: state.myChannels,
         subscriptions: state.subscriptions,
+        dismissedAutoWatch: state.dismissedAutoWatch,
         atprotoDID: state.atprotoDID,
         atprotoHandle: state.atprotoHandle,
         feedSortOrder: state.feedSortOrder,
