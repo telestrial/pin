@@ -50,6 +50,7 @@ export function createFakeApp(): FakeApp {
     world,
     createAccount: ({ did, handle, maxPinned }) => {
       if (maxPinned !== undefined) world.accountMax.set(did, maxPinned)
+      world.handles.set(did, handle)
       const sdk = new FakeSdk(did, world)
       const agent = new FakeAgent(did, world)
       return { sdk, agent, did, handle }

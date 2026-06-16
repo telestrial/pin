@@ -92,6 +92,10 @@ export class FakeWorld {
   // ATProto universe — populated when the first FakeAgent attaches to
   // this world. Tests don't need this directly; the agent reads/writes it.
   records?: FakeRecordStore
+  // DID → handle, populated by createFakeApp's createAccount. Backs the
+  // fake describeRepo (the unauthenticated DID↔handle resolution real Pin
+  // does for the directory + handle-follow reconcile).
+  readonly handles = new Map<string, string>()
 
   nextObjectID(): string {
     this._objectCounter++

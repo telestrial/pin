@@ -64,6 +64,23 @@ class FakeAtpAgent {
             .map((r) => ({ uri: r.uri, cid: r.cid, value: r.value }))
           return { data: { records } }
         },
+        describeRepo: async ({ repo }: { repo: string }) => {
+          // repo may be a DID (registry key) or a handle (registry value).
+          const handles = getCurrentWorld().handles
+          let did = repo
+          let handle = handles.get(repo)
+          if (!handle) {
+            for (const [d, h] of handles) {
+              if (h === repo) {
+                did = d
+                handle = h
+                break
+              }
+            }
+          }
+          if (!handle) throw atprotoNotFound()
+          return { data: { did, handle, didDoc: {}, collections: [] } }
+        },
         putRecord: async (_args: AtprotoCallArgs) => {
           throw new Error(
             'Unauthenticated AtpAgent cannot putRecord — use a FakeAgent for the authenticated path.',

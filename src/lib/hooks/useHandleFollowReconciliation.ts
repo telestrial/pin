@@ -58,21 +58,23 @@ export async function sweepHandleFollow(
   followedDID: string,
 ): Promise<number> {
   const candidates = await resolveAutoWatchCandidates(followedDID)
+  const claimedIDs = candidates.map((c) => c.channelID)
+  if (claimedIDs.length === 0) return 0
   const auth = useAuthStore.getState()
   const subscribedChannelIDs = new Set(
     auth.subscriptions.map((s) => s.channelID),
   )
-  const removals = autoWatchRemovals(
-    candidates.map((c) => c.channelID),
-    subscribedChannelIDs,
-  )
-  if (removals.length === 0) return 0
+  const removals = autoWatchRemovals(claimedIDs, subscribedChannelIDs)
   const feed = useFeedStore.getState()
   for (const id of removals) {
     auth.removeSubscription(id) // tombstones it…
     feed.removeChannel(id)
   }
-  auth.clearDismissedAutoWatch(removals) // …then clear, for a clean re-follow
+  // Clear tombstones for ALL their claimed channels, not just the ones we
+  // removed — a channel you'd earlier unsubscribed (tombstoned, not held)
+  // must also clear, so re-following this person later re-adds everything
+  // fresh. Done after the removals above (which tombstone what they drop).
+  auth.clearDismissedAutoWatch(claimedIDs)
   await flushSettingsBestEffort()
   return removals.length
 }
