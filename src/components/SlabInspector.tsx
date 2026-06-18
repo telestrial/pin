@@ -1,5 +1,5 @@
 import { RotateCw } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { resolveChannelImageIDs } from '../core/channelImages'
 import { formatBytes } from '../lib/format'
 import { useAuthStore } from '../stores/auth'
@@ -9,6 +9,8 @@ import { usePinStore } from '../stores/pin'
 // SDK default: 10 data shards × ~4 MiB each = ~40 MiB usable per slab
 // (the same constant useUploadRunner.expectedShardCount uses).
 const SHARD_BYTES = 4 * 1024 * 1024
+const EVENTS_PAGE_LIMIT = 200
+const EVENTS_MAX_PAGES = 50
 
 type SlabPiece = {
   objectID: string
@@ -36,123 +38,142 @@ function shortID(id: string): string {
   return `${id.slice(0, 6)}…${id.slice(-4)}`
 }
 
+// Build a best-effort label for an object from whatever local state knows
+// about it — own-channel items, pins, settings, channel cover/avatar. Objects
+// the local state doesn't recognize (e.g. profile-record assets, or anything
+// when the local state is empty) fall back to their metadata `kind`, then to a
+// generic marker. This is enrichment only; the authoritative object set comes
+// from the objectEvents walk below, so an unlabeled object still shows up.
+async function buildLabelMap(
+  // biome-ignore lint/suspicious/noExplicitAny: SDK type isn't re-exported here
+  sdk: any,
+): Promise<Map<string, string>> {
+  const labelByID = new Map<string, string>()
+  const auth = useAuthStore.getState()
+  const feed = useFeedStore.getState()
+  const pin = usePinStore.getState()
+
+  const myChannelIDSet = new Set(auth.myChannels.map((c) => c.channelID))
+  const titleOf = (item: {
+    title?: string
+    summary?: string
+    type: string
+  }) => item.title || (item.summary ?? '').slice(0, 40) || `(${item.type})`
+
+  for (const e of feed.entries) {
+    if (!myChannelIDSet.has(e.channel.channelID)) continue
+    labelByID.set(e.item.id, `${e.channel.name} · ${titleOf(e.item)}`)
+  }
+  for (const p of pin.pinned) {
+    if (!p.objectID) continue
+    labelByID.set(p.objectID, `${p.channel.name} · ${titleOf(p.item)}`)
+  }
+  if (auth.settingsObjectID) labelByID.set(auth.settingsObjectID, 'Settings')
+
+  try {
+    const images = await resolveChannelImageIDs(
+      sdk,
+      auth.myChannels,
+      feed.manifests,
+    )
+    const channelNameByID = new Map(
+      auth.myChannels.map((c) => [c.channelID, c.name]),
+    )
+    for (const img of images.resolved) {
+      labelByID.set(
+        img.objectID,
+        `${channelNameByID.get(img.channelID) ?? img.channelID} · ${img.kind}`,
+      )
+    }
+  } catch {
+    // image resolution is best-effort enrichment; ignore failures
+  }
+  return labelByID
+}
+
 export function SlabInspector() {
   const sdk = useAuthStore((s) => s.sdk)
-  const settingsObjectID = useAuthStore((s) => s.settingsObjectID)
-  const myChannels = useAuthStore((s) => s.myChannels)
-  const feedEntries = useFeedStore((s) => s.entries)
-  const manifests = useFeedStore((s) => s.manifests)
-  const pinned = usePinStore((s) => s.pinned)
+  const account = usePinStore((s) => s.account)
 
   const [slabs, setSlabs] = useState<SlabGroup[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [refreshTick, setRefreshTick] = useState(0)
 
-  const candidates = useMemo(() => {
-    const items: { id: string; label: string }[] = []
-    const myChannelIDSet = new Set(myChannels.map((c) => c.channelID))
-    for (const e of feedEntries) {
-      if (!myChannelIDSet.has(e.channel.channelID)) continue
-      const title =
-        e.item.title || (e.item.summary ?? '').slice(0, 40) || `(${e.item.type})`
-      items.push({ id: e.item.id, label: `${e.channel.name} · ${title}` })
-    }
-    for (const p of pinned) {
-      if (!p.objectID) continue
-      const title =
-        p.item.title || (p.item.summary ?? '').slice(0, 40) || `(${p.item.type})`
-      items.push({ id: p.objectID, label: `${p.channel.name} · ${title}` })
-    }
-    const seen = new Set<string>()
-    return items.filter((x) => {
-      if (seen.has(x.id)) return false
-      seen.add(x.id)
-      return true
-    })
-  }, [myChannels, feedEntries, pinned])
-
   useEffect(() => {
     if (!sdk) return
     let cancelled = false
     setLoading(true)
     setError(null)
-
     ;(async () => {
       try {
-        // Resolve cover-art object IDs (manifest stores URL only) and the
-        // settings object so the inspector covers everything pinned in
-        // your scope. Without this the bytes are real but invisible —
-        // nothing can sneak by accumulating.
-        const extras: { id: string; label: string }[] = []
-        if (settingsObjectID) {
-          extras.push({ id: settingsObjectID, label: 'Settings' })
-        }
-        const images = await resolveChannelImageIDs(sdk, myChannels, manifests)
-        for (const f of images.failed) {
-          console.warn(
-            `slab inspector: ${f.kind} resolve failed for ${f.channelID}:`,
-            f.error,
-          )
-        }
-        const channelNameByID = new Map(
-          myChannels.map((c) => [c.channelID, c.name]),
-        )
-        for (const img of images.resolved) {
-          extras.push({
-            id: img.objectID,
-            label: `${channelNameByID.get(img.channelID) ?? img.channelID} · ${img.kind}`,
-          })
-        }
+        const labelByID = await buildLabelMap(sdk)
 
-        const allCandidates = [...candidates, ...extras].filter(
-          (() => {
-            const seen = new Set<string>()
-            return (x: { id: string }) => {
-              if (seen.has(x.id)) return false
-              seen.add(x.id)
-              return true
-            }
-          })(),
-        )
+        // Walk EVERY pinned object in scope (account-wide), keeping the
+        // latest event per id — the same enumeration the storage meter's
+        // rawContentBytes uses. This is what makes the inspector complete:
+        // it no longer depends on local channel/pin state, so profile assets
+        // and anything the app has forgotten still show up.
+        // biome-ignore lint/suspicious/noExplicitAny: SDK ObjectEvent / cursor types aren't exported
+        const latestByID = new Map<string, any>()
+        // biome-ignore lint/suspicious/noExplicitAny: SDK cursor type isn't exported
+        let cursor: any = null
+        for (let page = 0; page < EVENTS_MAX_PAGES; page++) {
+          const events = await sdk.objectEvents(cursor, EVENTS_PAGE_LIMIT)
+          if (events.length === 0) break
+          for (const ev of events) {
+            const prev = latestByID.get(ev.id)
+            if (!prev || ev.updatedAt > prev.updatedAt) latestByID.set(ev.id, ev)
+          }
+          if (events.length < EVENTS_PAGE_LIMIT) break
+          const last = events[events.length - 1]
+          cursor = { id: last.id, after: last.updatedAt }
+        }
 
         const groups = new Map<string, SlabGroup>()
-        await Promise.all(
-          allCandidates.map(async ({ id, label }) => {
+        for (const ev of latestByID.values()) {
+          if (ev.deleted || !ev.object) continue
+          const id: string = ev.id
+          let label = labelByID.get(id)
+          if (!label) {
+            let kind = ''
             try {
-              const obj = await sdk.object(id)
-              const objSlabs = obj.slabs()
-              for (const s of objSlabs) {
-                let g = groups.get(s.encryptionKey)
-                if (!g) {
-                  g = {
-                    encryptionKey: s.encryptionKey,
-                    minShards: s.minShards,
-                    totalShards: s.sectors.length,
-                    bytesUsed: 0,
-                    capacityBytes: s.minShards * SHARD_BYTES,
-                    pieces: [],
-                  }
-                  groups.set(s.encryptionKey, g)
-                }
-                g.bytesUsed += s.length
-                g.pieces.push({
-                  objectID: id,
-                  label,
-                  offset: s.offset,
-                  length: s.length,
-                })
+              const mb: Uint8Array = ev.object.metadata()
+              if (mb && mb.length > 0) {
+                kind = JSON.parse(new TextDecoder().decode(mb)).kind ?? ''
               }
-            } catch (e) {
-              console.warn(`slab fetch failed for ${id}:`, e)
+            } catch {
+              // unreadable metadata — fall through to generic label
             }
-          }),
-        )
+            label = kind ? `(${kind})` : '(unlabeled object)'
+          }
+          let objSlabs: ReturnType<typeof ev.object.slabs>
+          try {
+            objSlabs = ev.object.slabs()
+          } catch {
+            continue
+          }
+          for (const s of objSlabs) {
+            let g = groups.get(s.encryptionKey)
+            if (!g) {
+              g = {
+                encryptionKey: s.encryptionKey,
+                minShards: s.minShards,
+                totalShards: s.sectors.length,
+                bytesUsed: 0,
+                capacityBytes: s.minShards * SHARD_BYTES,
+                pieces: [],
+              }
+              groups.set(s.encryptionKey, g)
+            }
+            g.bytesUsed += s.length
+            g.pieces.push({ objectID: id, label, offset: s.offset, length: s.length })
+          }
+        }
         if (cancelled) return
-        const result = Array.from(groups.values()).sort(
-          (a, b) => b.bytesUsed - a.bytesUsed,
+        setSlabs(
+          Array.from(groups.values()).sort((a, b) => b.bytesUsed - a.bytesUsed),
         )
-        setSlabs(result)
       } catch (e) {
         if (cancelled) return
         setError(e instanceof Error ? e.message : 'Failed to load slabs')
@@ -164,7 +185,7 @@ export function SlabInspector() {
     return () => {
       cancelled = true
     }
-  }, [sdk, candidates, refreshTick, myChannels, manifests, settingsObjectID])
+  }, [sdk, refreshTick])
 
   if (!sdk) return null
 
@@ -199,6 +220,19 @@ export function SlabInspector() {
           {formatBytes(totalUsed)} packed across {slabs.length} slab
           {slabs.length === 1 ? '' : 's'} · {overallFillPct.toFixed(1)}% used of{' '}
           {formatBytes(totalCapacity)} slab capacity
+        </p>
+      )}
+
+      {/* Account-level allocation for contrast: pinnedData counts allocated
+          40 MiB slabs (incl. emptied-but-unpruned ones), so it can sit far
+          above the content actually packed below. A large gap = empty slabs
+          awaiting pruneSlabs. */}
+      {account && (
+        <p className="text-xs text-neutral-400">
+          Account allocation (pinnedData): {formatBytes(account.pinnedData)}
+          {totalUsed > 0 &&
+            account.pinnedData > totalUsed * 2 &&
+            ' · gap = empty slabs awaiting prune'}
         </p>
       )}
 
