@@ -66,10 +66,17 @@ export function Sidebar({
   const subscriptions = useAuthStore((s) => s.subscriptions)
   const manifests = useFeedStore((s) => s.manifests)
 
+  const ownedChannelIDs = new Set(myChannels.map((c) => c.channelID))
   const channelsToShow = [...myChannels]
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
     .slice(0, CAP)
-  const subsToShow = [...subscriptions]
+  // A channel you own auto-subscribes you to itself (public ones also write a
+  // self-follow claim), so it'd otherwise show under both Channels and
+  // Subscriptions. It already lives under Channels — keep it out of subs.
+  const visibleSubs = subscriptions.filter(
+    (s) => !ownedChannelIDs.has(s.channelID),
+  )
+  const subsToShow = [...visibleSubs]
     .sort((a, b) => b.addedAt.localeCompare(a.addedAt))
     .slice(0, CAP)
 
@@ -222,7 +229,7 @@ export function Sidebar({
               onClick={onSeeAll}
               className="text-xs text-neutral-500 hover:text-neutral-900 transition-colors underline underline-offset-2 px-3"
             >
-              See all ({subscriptions.length})
+              See all ({visibleSubs.length})
             </button>
           </>
         )}
