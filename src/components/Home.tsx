@@ -3,9 +3,11 @@ import { unpinChannel } from '../core/channels'
 import type { FeedEntry } from '../core/feed'
 import type { ItemRef } from '../core/types'
 import { flushSettingsBestEffort } from '../lib/hooks/useSettingsSync'
+import { objectIDsInManifests } from '../lib/scopeRefs'
+import { useActionStore } from '../stores/actionQueue'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
-import { usePinStore } from '../stores/pin'
+import { objectIDsReferencedBy, usePinStore } from '../stores/pin'
 import { useToastStore } from '../stores/toast'
 import { BlueskyLoginScreen } from './auth/BlueskyLoginScreen'
 import { ChannelsView } from './channel/ChannelsView'
@@ -367,16 +369,33 @@ export function Home() {
       )
       if (confirmation !== 'DELETE') return
       try {
-        await unpinChannel(sdk, agent, owned)
+        // Reference-safe: protect bytes still held by your other channels'
+        // manifests or any pin so the retract doesn't yank them.
+        const protectedIDs = new Set([
+          ...objectIDsInManifests(
+            useFeedStore.getState().manifests,
+            owned.channelID,
+          ),
+          ...objectIDsReferencedBy(usePinStore.getState().pinned),
+        ])
+        // Reliable leg: the record is dropped inside unpinChannel.
+        const { objectIDs, urls } = await unpinChannel(agent, owned, protectedIDs)
         useAuthStore.getState().removeMyChannel(owned.channelID)
         useAuthStore.getState().removeSubscription(owned.channelID)
         useFeedStore.getState().removeChannel(owned.channelID)
-        // The removal only persists across sessions once it reaches Sia
-        // settings, which otherwise saves on a background debounce — a quick
-        // reload/close before then rehydrates the just-removed channel from
-        // stale settings (the ghost-channel problem). Flush now so the
-        // retract is durable when we report it done.
+        // The removal is durable once it reaches the PDS settings record.
+        // Flush now (awaited) so the retract is durable when we report it done,
+        // rather than relying on a background save a reload/close could lose.
         await flushSettingsBestEffort()
+        // Byte cleanup as a durable, retried journal action — not a
+        // fire-and-forget delete a QUIC blip could silently drop.
+        useActionStore
+          .getState()
+          .enqueueDeleteObjects({
+            objectIDs,
+            urls,
+            label: `Reclaiming “${owned.name}”`,
+          })
         usePinStore.getState().refreshAccount(sdk)
         addToast(`Unpinned “${owned.name}”`)
         setView({ kind: 'idle' })

@@ -30,6 +30,7 @@ import {
   buildItemRef,
   deletePublishedItem,
   removeAttachmentFromItem,
+  unpinChannel,
 } from '../core/channels'
 import { uploadItem } from '../core/sia'
 import type { AttachmentRef, ItemRef } from '../core/types'
@@ -219,5 +220,68 @@ describe('integration: author-side granular pinning', () => {
     // Dropped from the post, but the protected bytes are left out of the list.
     expect(edited.attachments).toHaveLength(0)
     expect(orphanedObjectIDs).toEqual([])
+  })
+
+  it('unpinChannel deletes the record and returns the channel bytes as the orphan list', async () => {
+    const { app, alice, channel } = await setup()
+    const { bodyObjectID, attachmentObjectIDs } =
+      await publishPostWithAttachments(alice, channel, 'hi', [
+        { mime: 'image/png', size: 200 },
+      ])
+    expect(app.world.scopeOf('did:plc:alice').size).toBe(2)
+
+    const { objectIDs, urls } = await unpinChannel(
+      alice.agent as unknown as Agent,
+      channel,
+    )
+
+    // Reliable leg: the record is gone.
+    expect(
+      app.world.records?.get(
+        'did:plc:alice',
+        'dev.sia.pin.channel',
+        channel.channelID,
+      ),
+    ).toBeUndefined()
+    // Bytes are returned for the journal, not deleted by core.
+    expect(new Set(objectIDs)).toEqual(
+      new Set([bodyObjectID, ...attachmentObjectIDs]),
+    )
+    expect(urls).toEqual([])
+    expect(app.world.scopeOf('did:plc:alice').size).toBe(2)
+  })
+
+  it('unpinChannel orphan list, run through the cleanup handler, empties the scope', async () => {
+    const { app, alice, channel } = await setup()
+    await publishPostWithAttachments(alice, channel, 'hi', [
+      { mime: 'image/png', size: 200 },
+    ])
+    const { objectIDs } = await unpinChannel(
+      alice.agent as unknown as Agent,
+      channel,
+    )
+    await runDeleteObjects(cleanup(objectIDs), {
+      sdk: alice.sdk as unknown as Sdk,
+      markDone: () => {},
+    })
+    expect(app.world.scopeOf('did:plc:alice').size).toBe(0)
+  })
+
+  it('unpinChannel excludes protected object IDs from the orphan list', async () => {
+    const { alice, channel } = await setup()
+    const { bodyObjectID, attachmentObjectIDs } =
+      await publishPostWithAttachments(alice, channel, 'hi', [
+        { mime: 'image/png', size: 200 },
+      ])
+    const sharedFileID = attachmentObjectIDs[0]
+
+    const { objectIDs } = await unpinChannel(
+      alice.agent as unknown as Agent,
+      channel,
+      new Set([sharedFileID]),
+    )
+
+    // The protected attachment is left out; the body is still orphaned.
+    expect(objectIDs).toEqual([bodyObjectID])
   })
 })

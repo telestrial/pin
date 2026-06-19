@@ -317,20 +317,22 @@ export function buildItemRef(
 }
 
 export async function unpinChannel(
-  sdk: Sdk,
   agent: Agent,
   channel: { channelID: string; channelKey: string },
-): Promise<void> {
+  // Object IDs referenced elsewhere in the author's own scope (other channel
+  // manifests + pins) — survive the retract, same reference-safety as
+  // deletePublishedItem. Defaults to empty.
+  protectedObjectIDs: ReadonlySet<string> = new Set(),
+): Promise<{ objectIDs: string[]; urls: string[] }> {
   const did = agent.assertDid
 
   // Retract is idempotent. The channel record may already be gone — a prior
   // partial retract, a record deleted out-of-band, a stale local entry
   // pointing at nothing. If the manifest can't be fetched we can't enumerate
-  // the item bytes to delete (the orphan sweep reclaims those), but we still
-  // clear the record best-effort and return normally so the caller drops its
-  // local state. The goal — "this channel is gone" — is already met, and a
-  // ghost channel that can't be retracted would otherwise wedge the UI
-  // (and the e2e cleanup loop) forever.
+  // the item bytes to delete, but we still clear the record best-effort and
+  // return empty lists so the caller drops its local state. The goal — "this
+  // channel is gone" — is already met, and a ghost channel that can't be
+  // retracted would otherwise wedge the UI (and the e2e cleanup loop) forever.
   let manifest: ChannelManifest | null = null
   try {
     manifest = await fetchChannel(did, channel.channelID, channel.channelKey)
@@ -338,31 +340,36 @@ export async function unpinChannel(
     if (!isRecordNotFoundError(e)) throw e
   }
 
+  // Enumerate the channel's bytes before dropping the record. Items + their
+  // attachment objects go in objectIDs (reference-filtered); avatar/cover go in
+  // urls (the delete-objects action resolves URL→id). The caller journals these
+  // as a durable, retried delete-objects action instead of a fire-and-forget
+  // delete a QUIC blip could silently drop.
+  const objectIDs: string[] = []
+  const urls: string[] = []
   if (manifest) {
     for (const item of manifest.items) {
-      try {
-        await sdk.deleteObject(item.id)
-      } catch (e) {
-        console.warn(`Failed to delete item ${item.id}:`, e)
+      if (!protectedObjectIDs.has(item.id)) objectIDs.push(item.id)
+      for (const att of item.attachments ?? []) {
+        if (!isValidAttachment(att) || !att.objectID) continue
+        if (protectedObjectIDs.has(att.objectID)) continue
+        objectIDs.push(att.objectID)
       }
     }
-
     for (const image of [manifest.avatar, manifest.cover]) {
-      if (!image) continue
-      try {
-        const handle = await sdk.sharedObject(image.itemURL)
-        await sdk.deleteObject(handle.id())
-      } catch (e) {
-        console.warn('Failed to delete channel image:', e)
-      }
+      if (image) urls.push(image.itemURL)
     }
   }
 
+  // Reliable leg first: drop the record (removes the reference) before the
+  // byte-cleanup is journaled.
   try {
     await deleteChannelRecord(agent, channel.channelID)
   } catch (e) {
     if (!isRecordNotFoundError(e)) throw e
   }
+
+  return { objectIDs, urls }
 }
 
 // Whether an atproto error means "the record isn't there" — so a delete can
