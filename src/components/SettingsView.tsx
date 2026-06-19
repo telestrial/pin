@@ -1,0 +1,47 @@
+import { useState } from 'react'
+import { fullReset } from '../lib/fullReset'
+import { useAuthStore } from '../stores/auth'
+
+// Settings page (rendered inside a FormCard by Home). One control for now:
+// the danger-zone full reset.
+export function SettingsView() {
+  const [resetting, setResetting] = useState(false)
+
+  const handleFullReset = async () => {
+    const confirmation = window.prompt(
+      'FULL RESET permanently deletes everything — every channel, post, file, ' +
+        'subscription, profile, and setting, both on Sia and on your atproto ' +
+        'repo — and signs you out. This cannot be undone.\n\nType RESET to confirm.',
+    )
+    if (confirmation !== 'RESET') return
+    setResetting(true)
+    const { sdk, atprotoAgent, atprotoDID } = useAuthStore.getState()
+    // fullReset reloads the page on completion — nothing after this runs.
+    await fullReset({ sdk, agent: atprotoAgent, atprotoDID })
+  }
+
+  return (
+    <div className="space-y-6">
+      <h1 className="text-lg font-semibold text-neutral-900">Settings</h1>
+
+      <section className="border border-red-200 bg-red-50 rounded-lg p-4 space-y-3">
+        <div>
+          <h2 className="text-sm font-semibold text-red-900">Danger zone</h2>
+          <p className="text-xs text-red-700 mt-1 leading-relaxed">
+            Full reset wipes every channel, post, file, subscription, profile,
+            and setting — on Sia and on your atproto repo — then signs you out
+            and returns you to the welcome screen. There is no undo.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={handleFullReset}
+          disabled={resetting}
+          className="px-3 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 disabled:opacity-60 rounded-md transition-colors cursor-pointer"
+        >
+          {resetting ? 'Resetting…' : 'Full reset'}
+        </button>
+      </section>
+    </div>
+  )
+}

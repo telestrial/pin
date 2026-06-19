@@ -7,24 +7,28 @@ const CAP = 10
 export function Sidebar({
   onHome,
   onProfile,
+  onSettings,
   onCreate,
   onSubscribe,
   onSeeAll,
   onChannelClick,
   activeHome,
   activeProfile,
+  activeSettings,
   activeChannelID,
 }: {
   onHome: () => void
   // Only wired when the user has an atproto handle (Bluesky signed-in).
   // Just-Reading users see the rest of the sidebar but not this entry.
   onProfile?: () => void
+  onSettings: () => void
   onCreate: () => void
   onSubscribe: () => void
   onSeeAll: () => void
   onChannelClick: (authorHandle: string, channelID: string) => void
   activeHome?: boolean
   activeProfile?: boolean
+  activeSettings?: boolean
   activeChannelID?: string
 }) {
   const myChannels = useAuthStore((s) => s.myChannels)
@@ -74,6 +78,19 @@ export function Sidebar({
             )}
           </button>
         )}
+        <button
+          type="button"
+          onClick={onSettings}
+          className="w-full px-3 py-2 text-sm font-medium rounded-md transition-colors cursor-pointer text-neutral-700 hover:text-neutral-900 hover:bg-neutral-50 flex items-center justify-between gap-2 text-left"
+        >
+          <span>Settings</span>
+          {activeSettings && (
+            <span
+              aria-hidden="true"
+              className="size-1.5 rounded-full bg-neutral-900 shrink-0"
+            />
+          )}
+        </button>
       </section>
 
       <section className="space-y-2">

@@ -18,6 +18,14 @@ export function getOauthClient(): Promise<BrowserOAuthClient> {
   return clientPromise
 }
 
+// Revoke + remove the OAuth session (sign out of atproto). Used by full reset
+// so the post-wipe reload lands on the welcome screen rather than a
+// half-restored session (Sia gone, Bluesky still signed in).
+export async function signOutOauth(did: string): Promise<void> {
+  const client = await getOauthClient()
+  await client.revoke(did)
+}
+
 export type OAuthBootResult = {
   session: OAuthSession
   agent: Agent

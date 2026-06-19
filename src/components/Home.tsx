@@ -19,6 +19,7 @@ import { EditProfile } from './EditProfile'
 import { FormCard } from './ui/FormCard'
 import { HandleDirectory } from './HandleDirectory'
 import { HomeFeed } from './HomeFeed'
+import { SettingsView } from './SettingsView'
 import { MyStorage } from './MyStorage'
 import { ReadApp } from './read/ReadApp'
 import { ReadAudio } from './read/ReadAudio'
@@ -53,6 +54,7 @@ type View =
       channelID: string
       returnTo: View
     }
+  | { kind: 'settings' }
   | { kind: 'reading'; entry: FeedEntry; returnTo: View }
   | { kind: 'bluesky-login'; resumeTo: View; cancelTo: View }
   | { kind: 'storage'; returnTo: View }
@@ -117,6 +119,7 @@ export function Home() {
                 })
             : undefined
         }
+        onSettings={() => setView({ kind: 'settings' })}
         onCreate={gotoCreating}
         onSubscribe={() => setView({ kind: 'subscribing' })}
         onSeeAll={() => setView({ kind: 'channels' })}
@@ -129,6 +132,7 @@ export function Home() {
         }
         activeHome={activeHome}
         activeProfile={activeProfile}
+        activeSettings={view.kind === 'settings'}
         activeChannelID={activeChannelID}
       />
     )
@@ -293,6 +297,18 @@ export function Home() {
             </button>
           </div>
         </div>
+      </FormCard>
+    )
+  }
+
+  if (view.kind === 'settings') {
+    return (
+      <FormCard
+        onBack={() => setView({ kind: 'idle' })}
+        sidebar={renderSidebar()}
+        rightSidebar={renderPinSidebar()}
+      >
+        <SettingsView />
       </FormCard>
     )
   }
