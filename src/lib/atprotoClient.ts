@@ -104,7 +104,7 @@ async function createClient(): Promise<BrowserOAuthClient> {
     // exactly these — no profile/posts/likes/follows surface they'd otherwise
     // be granting under transition:generic.
     const scope =
-      'atproto repo:dev.sia.pin.channel repo:dev.sia.pin.profile repo:dev.sia.pin.subscription repo:dev.sia.pin.handlefollow'
+      'atproto repo:dev.sia.pin.channel repo:dev.sia.pin.profile repo:dev.sia.pin.subscription repo:dev.sia.pin.handlefollow repo:dev.sia.pin.settings'
     const clientId = buildAtprotoLoopbackClientId({
       scope,
       redirect_uris: [redirectURI],
