@@ -47,9 +47,12 @@ export async function deriveAtRkey(input: Uint8Array | string): Promise<string> 
   return base32Encode(hash.slice(0, CHANNEL_ID_HASH_BYTES))
 }
 
-export async function encryptForChannel(
+// Byte-level AES-GCM core. Blob format: 1-byte version || 12-byte IV ||
+// ciphertext-with-16-byte-tag, base64-encoded. encryptForChannel and
+// encryptSettings both build on this so there's one GCM implementation.
+async function encryptBytes(
   key: Uint8Array,
-  plaintext: string,
+  bytes: Uint8Array,
 ): Promise<string> {
   const iv = crypto.getRandomValues(new Uint8Array(IV_BYTES))
   const cryptoKey = await importKey(key)
@@ -57,7 +60,7 @@ export async function encryptForChannel(
     await crypto.subtle.encrypt(
       { name: 'AES-GCM', iv },
       cryptoKey,
-      new TextEncoder().encode(plaintext),
+      bytes as BufferSource,
     ),
   )
   const out = new Uint8Array(1 + iv.length + ciphertext.length)
@@ -67,10 +70,10 @@ export async function encryptForChannel(
   return base64Encode(out)
 }
 
-export async function decryptForChannel(
+async function decryptBytes(
   key: Uint8Array,
   base64Ciphertext: string,
-): Promise<string> {
+): Promise<Uint8Array> {
   const all = base64Decode(base64Ciphertext)
   if (all.length < 1 + IV_BYTES + 16) {
     throw new Error('Encrypted blob too short to contain version + IV + auth tag')
@@ -89,7 +92,108 @@ export async function decryptForChannel(
     cryptoKey,
     ciphertext,
   )
-  return new TextDecoder().decode(plaintext)
+  return new Uint8Array(plaintext)
+}
+
+export async function encryptForChannel(
+  key: Uint8Array,
+  plaintext: string,
+): Promise<string> {
+  return encryptBytes(key, new TextEncoder().encode(plaintext))
+}
+
+export async function decryptForChannel(
+  key: Uint8Array,
+  base64Ciphertext: string,
+): Promise<string> {
+  return new TextDecoder().decode(await decryptBytes(key, base64Ciphertext))
+}
+
+// --- Settings encryption -------------------------------------------------
+//
+// The settings record lives PUBLICLY on the PDS (records are world-readable),
+// so it carries its own encryption — unlike channel manifests, whose key K is
+// shared deliberately, the settings key is never shared. It's derived from the
+// Sia AppKey, not the atproto identity (under OAuth we don't hold the atproto
+// signing key, but we DO hold the AppKey secret via export()).
+//
+// The plaintext is padded to a FIXED size before encryption so the ciphertext
+// length is constant regardless of how many channels/subs it holds — a
+// public, firehose-watchable record otherwise leaks channel/sub count via its
+// size. Fixed-size padding leaks nothing about content at any pad size; 128 KiB
+// is ~400+ entries of headroom (friend-scale is 5–50) and stays well inside
+// atproto's "keep records to a few dozen KB" guidance (1 MiB hard ceiling).
+export const SETTINGS_PAD_SIZE = 128 * 1024
+const SETTINGS_LENGTH_HEADER_BYTES = 4
+const SETTINGS_KEY_INFO = 'pin:settings:v1'
+
+// HKDF-SHA256 over the raw AppKey bytes (domain-separated from the ed25519
+// signing use via `info`). Deterministic, so it's re-derivable from the Sia
+// recovery phrase alone after a localStorage wipe — the recovery path for
+// settings.
+export async function deriveSettingsKey(
+  appKeyBytes: Uint8Array,
+): Promise<Uint8Array> {
+  const hkdfKey = await crypto.subtle.importKey(
+    'raw',
+    appKeyBytes as BufferSource,
+    'HKDF',
+    false,
+    ['deriveBits'],
+  )
+  const bits = await crypto.subtle.deriveBits(
+    {
+      name: 'HKDF',
+      hash: 'SHA-256',
+      salt: new Uint8Array(0),
+      info: new TextEncoder().encode(SETTINGS_KEY_INFO),
+    },
+    hkdfKey,
+    KEY_BYTES * 8,
+  )
+  return new Uint8Array(bits)
+}
+
+export async function encryptSettings(
+  key: Uint8Array,
+  plaintext: string,
+): Promise<string> {
+  const json = new TextEncoder().encode(plaintext)
+  if (SETTINGS_LENGTH_HEADER_BYTES + json.length > SETTINGS_PAD_SIZE) {
+    // Loud, deliberate overflow — the signal to bump SETTINGS_PAD_SIZE and
+    // ship expansion handling. Never silently truncate.
+    throw new Error(
+      `Settings payload (${json.length} B) exceeds the ${SETTINGS_PAD_SIZE} B fixed pad`,
+    )
+  }
+  const padded = new Uint8Array(SETTINGS_PAD_SIZE)
+  new DataView(padded.buffer).setUint32(0, json.length, false)
+  padded.set(json, SETTINGS_LENGTH_HEADER_BYTES)
+  return encryptBytes(key, padded)
+}
+
+export async function decryptSettings(
+  key: Uint8Array,
+  base64Ciphertext: string,
+): Promise<string> {
+  const padded = await decryptBytes(key, base64Ciphertext)
+  if (padded.length < SETTINGS_LENGTH_HEADER_BYTES) {
+    throw new Error('Decrypted settings blob too short for length header')
+  }
+  const len = new DataView(
+    padded.buffer,
+    padded.byteOffset,
+    padded.byteLength,
+  ).getUint32(0, false)
+  if (SETTINGS_LENGTH_HEADER_BYTES + len > padded.length) {
+    throw new Error('Settings length header exceeds blob size')
+  }
+  return new TextDecoder().decode(
+    padded.slice(
+      SETTINGS_LENGTH_HEADER_BYTES,
+      SETTINGS_LENGTH_HEADER_BYTES + len,
+    ),
+  )
 }
 
 async function importKey(key: Uint8Array): Promise<CryptoKey> {
