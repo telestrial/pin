@@ -1,4 +1,5 @@
 import { AtpAgent } from '@atproto/api'
+import { Plus } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { fetchChannel } from '../core/channels'
 import { listFollows, parseChannelAtURI } from '../core/follow'
@@ -35,6 +36,7 @@ export function HandleDirectory({
   onChannelClick,
   onHandleClick,
   onEditProfile,
+  onCreate,
   sidebar,
   rightSidebar,
 }: {
@@ -50,6 +52,9 @@ export function HandleDirectory({
   // skips passing this when isSelf would be false, so an undefined here
   // is the signal to ProfileHeader to hide the Edit affordance.
   onEditProfile?: () => void
+  // Create a new channel. Gated to self by the render below; the handler
+  // itself carries the Bluesky-session gate (same as onEditProfile).
+  onCreate?: () => void
   sidebar: React.ReactNode
   rightSidebar: React.ReactNode
 }) {
@@ -232,6 +237,7 @@ export function HandleDirectory({
               onChannelClick={onChannelClick}
               onHandleClick={onHandleClick}
               onEditProfile={isSelf ? onEditProfile : undefined}
+              onCreate={isSelf ? onCreate : undefined}
             />
           )}
         </div>
@@ -252,6 +258,7 @@ function LoadedDirectory({
   onChannelClick,
   onHandleClick,
   onEditProfile,
+  onCreate,
 }: {
   handle: string
   did: string
@@ -263,6 +270,7 @@ function LoadedDirectory({
   onChannelClick: (authorHandle: string, channelID: string) => void
   onHandleClick: (handle: string) => void
   onEditProfile?: () => void
+  onCreate?: () => void
 }) {
   const isEmpty =
     !profile && ownChannels.length === 0 && followedChannels.length === 0
@@ -274,7 +282,6 @@ function LoadedDirectory({
         did={did}
         isSelf={isSelf}
         profile={profile}
-        voicesCount={ownChannels.length}
         followingCount={followedChannels.length}
         onBack={onBack}
         onEdit={onEditProfile}
@@ -286,18 +293,37 @@ function LoadedDirectory({
         </div>
       )}
 
+      {/* Big create affordance, self-only, above the listed channels. No
+          noun on it — the naming question is parked. */}
+      {onCreate && (
+        <button
+          type="button"
+          onClick={onCreate}
+          className="w-full flex items-center justify-center gap-2 rounded-lg border-2 border-dashed border-neutral-200 bg-white py-8 text-base font-medium text-neutral-500 hover:border-green-400 hover:text-green-700 hover:bg-green-50/40 transition-colors cursor-pointer"
+        >
+          <Plus className="size-6" />
+          Create
+        </button>
+      )}
+
+      {/* Public channels this person owns — one full-width preview card each,
+          unlabeled (the naming question is parked). */}
       {ownChannels.length > 0 && (
-        <Section title={isSelf ? 'Your voices' : 'Their voices'}>
+        <div className="space-y-3">
           {ownChannels.map((c) => (
-            <ChannelRow
+            <div
               key={`${c.authorDID}:${c.channelID}`}
-              entry={c}
-              showAuthor={false}
-              onChannelClick={onChannelClick}
-              onHandleClick={onHandleClick}
-            />
+              className="bg-white border border-neutral-200 rounded-lg overflow-hidden"
+            >
+              <ChannelRow
+                entry={c}
+                showAuthor={false}
+                onChannelClick={onChannelClick}
+                onHandleClick={onHandleClick}
+              />
+            </div>
           ))}
-        </Section>
+        </div>
       )}
 
       {followedChannels.length > 0 && (
@@ -333,7 +359,6 @@ function ProfileHeader({
   did,
   isSelf,
   profile,
-  voicesCount,
   followingCount,
   onBack,
   onEdit,
@@ -342,7 +367,6 @@ function ProfileHeader({
   did: string
   isSelf: boolean
   profile: ProfileRecord | null
-  voicesCount: number
   followingCount: number
   onBack?: () => void
   onEdit?: () => void
@@ -395,7 +419,6 @@ function ProfileHeader({
                   @{handle}
                 </div>
               </div>
-              <Stat value={voicesCount} label="Voices" />
               <Stat value={followingCount} label="Following" />
             </div>
             {isSelf && onEdit && (

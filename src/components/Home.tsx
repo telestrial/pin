@@ -228,6 +228,7 @@ export function Home() {
             })
           }
         }}
+        onCreate={gotoCreating}
         sidebar={renderSidebar()}
         rightSidebar={renderPinSidebar()}
       />
