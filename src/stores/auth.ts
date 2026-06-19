@@ -40,6 +40,9 @@ type AuthState = {
   atprotoHandle: string | null
   feedSortOrder: FeedSortOrder
   settingsObjectID: string | null
+  // CID of the current dev.sia.pin.settings/self record — the compare-and-swap
+  // guard for the next write. Runtime-only (re-fetched on load), not persisted.
+  settingsRecordCid: string | null
   settingsLoaded: boolean
   settingsDirty: boolean
   setSdk: (sdk: Sdk) => void
@@ -68,9 +71,10 @@ type AuthState = {
     myChannels: OwnedChannel[],
     subscriptions: SubscriptionRef[],
     dismissedAutoWatch: string[],
-    objectID: string,
+    cid: string,
   ) => void
   setSettingsObjectID: (id: string) => void
+  setSettingsRecordCid: (cid: string | null) => void
   setSettingsLoaded: (loaded: boolean) => void
   setSettingsDirty: (dirty: boolean) => void
   reset: () => void
@@ -93,6 +97,7 @@ export const useAuthStore = create<AuthState>()(
       atprotoHandle: null,
       feedSortOrder: 'newest',
       settingsObjectID: null,
+      settingsRecordCid: null,
       settingsLoaded: false,
       settingsDirty: false,
       setSdk: (sdk) => set({ sdk, step: 'connected', error: null }),
@@ -169,15 +174,16 @@ export const useAuthStore = create<AuthState>()(
         })),
       setATProtoHandle: (atprotoHandle) => set({ atprotoHandle }),
       setFeedSortOrder: (feedSortOrder) => set({ feedSortOrder }),
-      hydrateSettings: (myChannels, subscriptions, dismissedAutoWatch, objectID) =>
+      hydrateSettings: (myChannels, subscriptions, dismissedAutoWatch, cid) =>
         set({
           myChannels,
           subscriptions,
           dismissedAutoWatch,
-          settingsObjectID: objectID,
+          settingsRecordCid: cid,
           settingsLoaded: true,
         }),
       setSettingsObjectID: (settingsObjectID) => set({ settingsObjectID }),
+      setSettingsRecordCid: (settingsRecordCid) => set({ settingsRecordCid }),
       setSettingsLoaded: (settingsLoaded) => set({ settingsLoaded }),
       setSettingsDirty: (settingsDirty) => set({ settingsDirty }),
       reset: () => {
@@ -197,6 +203,7 @@ export const useAuthStore = create<AuthState>()(
           atprotoDID: null,
           atprotoHandle: null,
           settingsObjectID: null,
+          settingsRecordCid: null,
           settingsLoaded: false,
           settingsDirty: false,
         })
