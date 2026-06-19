@@ -1,8 +1,39 @@
+import { Plus } from 'lucide-react'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
 import { ChannelAvatar } from './channel/ChannelAvatar'
 
 const CAP = 10
+
+// Section header in the muted uppercase style shared with the right sidebar's
+// "Recent pins" etc. The trailing + is the section's add action (create a
+// channel / subscribe to one) — always available even when the list is empty.
+function SectionHeader({
+  title,
+  addLabel,
+  onAdd,
+}: {
+  title: string
+  addLabel: string
+  onAdd: () => void
+}) {
+  return (
+    <div className="flex items-center justify-between gap-2 px-3">
+      <h2 className="text-xs font-semibold tracking-wide uppercase text-neutral-500">
+        {title}
+      </h2>
+      <button
+        type="button"
+        onClick={onAdd}
+        title={addLabel}
+        aria-label={addLabel}
+        className="text-neutral-400 hover:text-neutral-900 transition-colors cursor-pointer"
+      >
+        <Plus className="size-4" />
+      </button>
+    </div>
+  )
+}
 
 export function Sidebar({
   onHome,
@@ -94,13 +125,11 @@ export function Sidebar({
       </section>
 
       <section className="space-y-2">
-        <button
-          type="button"
-          onClick={onCreate}
-          className="w-full text-left px-3 py-2 text-sm font-medium text-neutral-900 bg-neutral-100 hover:bg-neutral-200 rounded-md transition-colors cursor-pointer"
-        >
-          + Create a channel
-        </button>
+        <SectionHeader
+          title="Channels"
+          addLabel="Create a channel"
+          onAdd={onCreate}
+        />
         {channelsToShow.length > 0 && (
           <>
             <ul aria-label="Your channels">
@@ -148,13 +177,11 @@ export function Sidebar({
       </section>
 
       <section className="space-y-2">
-        <button
-          type="button"
-          onClick={onSubscribe}
-          className="w-full text-left px-3 py-2 text-sm font-medium text-neutral-900 bg-neutral-100 hover:bg-neutral-200 rounded-md transition-colors cursor-pointer"
-        >
-          + Subscribe
-        </button>
+        <SectionHeader
+          title="Subscriptions"
+          addLabel="Subscribe to a channel"
+          onAdd={onSubscribe}
+        />
         {subsToShow.length > 0 && (
           <>
             <ul aria-label="Subscribed channels">
