@@ -1,10 +1,12 @@
-// Author-side granular pinning: eager, reference-safe cleanup on retract.
+// Author-side granular pinning: reference-safe cleanup on retract.
 //
-// A retract is a decision you made, so the bytes leave your storage now (not on
-// the next orphan-sweep pass) — but a file shared with another of your posts or
-// held by a standalone library pin must survive. These tests exercise the core
-// channels functions through the Phase 3 fakes (which need the @atproto/api
-// module mock, hence the int tier).
+// The core channels functions compute the reference-safe orphan list (the body
+// + attachments whose bytes nothing surviving still references) and hand it
+// back; the journal's delete-objects handler does the actual byte reclaim. A
+// file shared with another of your posts or held by a standalone library pin
+// must be excluded from the list. These tests exercise the core functions (and
+// the core→handler hand-off) through the Phase 3 fakes (which need the
+// @atproto/api module mock, hence the int tier).
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -31,6 +33,8 @@ import {
 } from '../core/channels'
 import { uploadItem } from '../core/sia'
 import type { AttachmentRef, ItemRef } from '../core/types'
+import { runDeleteObjects } from '../lib/actions/deleteObjects'
+import type { DeleteObjectsAction } from '../stores/actionQueue'
 import {
   authorCreateChannel,
   createFakeApp,
@@ -91,81 +95,110 @@ describe('integration: author-side granular pinning', () => {
     return { app, alice, channel }
   }
 
-  it('retracting a post eagerly deletes the body AND its attachments', async () => {
+  // Construct a minimal delete-objects action to drive the cleanup handler with
+  // a real orphan list (the handler only reads intent + ledger).
+  function cleanup(objectIDs: string[]): DeleteObjectsAction {
+    return {
+      intent: { objectIDs, urls: [] },
+      ledger: {},
+    } as unknown as DeleteObjectsAction
+  }
+
+  it('retract returns the body + all attachments as the orphan list (core does not delete)', async () => {
     const { app, alice, channel } = await setup()
-    const { item } = await publishPostWithAttachments(alice, channel, 'hi', [
-      { mime: 'image/png', size: 200 },
-      { mime: 'application/pdf', size: 300 },
-    ])
-    // body + 2 attachments in alice's scope.
+    const { item, bodyObjectID, attachmentObjectIDs } =
+      await publishPostWithAttachments(alice, channel, 'hi', [
+        { mime: 'image/png', size: 200 },
+        { mime: 'application/pdf', size: 300 },
+      ])
     expect(app.world.scopeOf('did:plc:alice').size).toBe(3)
 
-    await deletePublishedItem(
-      alice.sdk as unknown as Sdk,
+    const { orphanedObjectIDs } = await deletePublishedItem(
       alice.agent as unknown as Agent,
       channel,
       item.id,
     )
 
-    // Eager: body and both attachments gone immediately — no waiting on a sweep.
+    // Core computes the reference-safe prune but does NOT delete — that's the
+    // journal's job. Scope is unchanged until the cleanup runs.
+    expect(new Set(orphanedObjectIDs)).toEqual(
+      new Set([bodyObjectID, ...attachmentObjectIDs]),
+    )
+    expect(app.world.scopeOf('did:plc:alice').size).toBe(3)
+  })
+
+  it('the orphan list, run through the cleanup handler, empties the scope', async () => {
+    const { app, alice, channel } = await setup()
+    const { item } = await publishPostWithAttachments(alice, channel, 'hi', [
+      { mime: 'image/png', size: 200 },
+      { mime: 'application/pdf', size: 300 },
+    ])
+    expect(app.world.scopeOf('did:plc:alice').size).toBe(3)
+
+    const { orphanedObjectIDs } = await deletePublishedItem(
+      alice.agent as unknown as Agent,
+      channel,
+      item.id,
+    )
+    await runDeleteObjects(cleanup(orphanedObjectIDs), {
+      sdk: alice.sdk as unknown as Sdk,
+      markDone: () => {},
+    })
+
+    // The full author-retract path — core prune → journal cleanup — reclaims
+    // every byte. No sweep involved.
     expect(app.world.scopeOf('did:plc:alice').size).toBe(0)
   })
 
-  it('retract protects an attachment still referenced elsewhere', async () => {
-    const { app, alice, channel } = await setup()
-    const { item, attachmentObjectIDs } = await publishPostWithAttachments(
-      alice,
-      channel,
-      'hi',
-      [{ mime: 'image/png', size: 200 }],
-    )
+  it('retract excludes a protected attachment from the orphan list', async () => {
+    const { alice, channel } = await setup()
+    const { item, bodyObjectID, attachmentObjectIDs } =
+      await publishPostWithAttachments(alice, channel, 'hi', [
+        { mime: 'image/png', size: 200 },
+      ])
     const sharedFileID = attachmentObjectIDs[0]
-    expect(app.world.scopeOf('did:plc:alice').size).toBe(2)
 
     // Simulate the file being held by another of alice's posts / a library pin.
-    await deletePublishedItem(
-      alice.sdk as unknown as Sdk,
+    const { orphanedObjectIDs } = await deletePublishedItem(
       alice.agent as unknown as Agent,
       channel,
       item.id,
       new Set([sharedFileID]),
     )
 
-    // Body released; the protected attachment survives.
-    expect(app.world.scopeOf('did:plc:alice').has(sharedFileID)).toBe(true)
-    expect(app.world.scopeOf('did:plc:alice').size).toBe(1)
+    // Body orphaned; the protected attachment is left out of the list.
+    expect(orphanedObjectIDs).toEqual([bodyObjectID])
   })
 
-  it('removeAttachmentFromItem drops one file from the post and deletes its bytes', async () => {
-    const { app, alice, channel } = await setup()
-    const { item, bodyObjectID, attachmentObjectIDs } =
-      await publishPostWithAttachments(alice, channel, 'hi', [
+  it('removeAttachmentFromItem returns the removed file as the orphan list', async () => {
+    const { alice, channel } = await setup()
+    const { item, attachmentObjectIDs } = await publishPostWithAttachments(
+      alice,
+      channel,
+      'hi',
+      [
         { mime: 'image/png', size: 200 },
         { mime: 'image/png', size: 250 },
-      ])
-    const [fileA, fileB] = attachmentObjectIDs
-    expect(app.world.scopeOf('did:plc:alice').size).toBe(3)
-
+      ],
+    )
+    const fileA = attachmentObjectIDs[0]
     const fileAURL = item.attachments?.[0].url as string
-    const { item: edited } = await removeAttachmentFromItem(
-      alice.sdk as unknown as Sdk,
+
+    const { item: edited, orphanedObjectIDs } = await removeAttachmentFromItem(
       alice.agent as unknown as Agent,
       channel,
       item.id,
       fileAURL,
     )
 
-    // Manifest entry keeps body + the other attachment; fileA's bytes are gone.
+    // Manifest entry keeps body + the other attachment; fileA is the orphan.
     expect(edited.attachments).toHaveLength(1)
     expect(edited.editedAt).toBeDefined()
-    expect(app.world.scopeOf('did:plc:alice').has(fileA)).toBe(false)
-    expect(app.world.scopeOf('did:plc:alice').has(fileB)).toBe(true)
-    expect(app.world.scopeOf('did:plc:alice').has(bodyObjectID)).toBe(true)
-    expect(app.world.scopeOf('did:plc:alice').size).toBe(2)
+    expect(orphanedObjectIDs).toEqual([fileA])
   })
 
-  it('removeAttachmentFromItem keeps bytes a sibling reference protects', async () => {
-    const { app, alice, channel } = await setup()
+  it('removeAttachmentFromItem omits a protected sibling from the orphan list', async () => {
+    const { alice, channel } = await setup()
     const { item, attachmentObjectIDs } = await publishPostWithAttachments(
       alice,
       channel,
@@ -175,8 +208,7 @@ describe('integration: author-side granular pinning', () => {
     const fileA = attachmentObjectIDs[0]
     const fileAURL = item.attachments?.[0].url as string
 
-    const { item: edited } = await removeAttachmentFromItem(
-      alice.sdk as unknown as Sdk,
+    const { item: edited, orphanedObjectIDs } = await removeAttachmentFromItem(
       alice.agent as unknown as Agent,
       channel,
       item.id,
@@ -184,8 +216,8 @@ describe('integration: author-side granular pinning', () => {
       new Set([fileA]),
     )
 
-    // Dropped from the post, but the protected bytes survive in alice's scope.
+    // Dropped from the post, but the protected bytes are left out of the list.
     expect(edited.attachments).toHaveLength(0)
-    expect(app.world.scopeOf('did:plc:alice').has(fileA)).toBe(true)
+    expect(orphanedObjectIDs).toEqual([])
   })
 })

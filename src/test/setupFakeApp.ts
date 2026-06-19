@@ -116,7 +116,7 @@ export async function editTextPost(
     }),
     editedAt: new Date().toISOString(),
   }
-  const result = await editItem(sdk, agent, channel, oldItemID, newItem)
+  const result = await editItem(agent, channel, oldItemID, newItem)
   return result.item
 }
 

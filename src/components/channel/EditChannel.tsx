@@ -6,6 +6,7 @@ import {
 } from '../../core/channels'
 import type { ChannelImage, ChannelManifest } from '../../core/types'
 import { useItemBlobURL } from '../../lib/hooks/useItemBytes'
+import { useActionStore } from '../../stores/actionQueue'
 import { useAuthStore } from '../../stores/auth'
 import { useFeedStore } from '../../stores/feed'
 import { FormCard } from '../ui/FormCard'
@@ -139,12 +140,17 @@ export function EditChannel({
       if (newCoverFile) patch.coverImage = await toImage(newCoverFile)
       else if (removeCover) patch.removeCover = true
 
-      const updated = await editChannel(
+      const { manifest: updated, reclaimURLs } = await editChannel(
         sdk,
         agent,
         { channelID, channelKey },
         patch,
       )
+      // Reclaim the old avatar/cover bytes via the journal (durable, retried).
+      useActionStore.getState().enqueueDeleteObjects({
+        urls: reclaimURLs,
+        label: 'Reclaiming old channel image',
+      })
       if (patch.name) {
         updateMyChannelName(channelID, updated.name)
         updateSubscriptionName(channelID, updated.name)

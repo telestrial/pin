@@ -9,7 +9,7 @@ import type { AttachmentRef, ItemRef } from '../../core/types'
 import { useAuthStore } from '../../stores/auth'
 import { useFeedStore } from '../../stores/feed'
 import { usePinStore } from '../../stores/pin'
-import type { PublishAction } from '../../stores/actionQueue'
+import { type PublishAction, useActionStore } from '../../stores/actionQueue'
 import { LIBRARY_CHANNEL } from '../pinUpload'
 
 const SLAB_DATA_BYTES = 10 * 4 * 1024 * 1024 // 10 data shards × 4 MiB each
@@ -147,6 +147,9 @@ export async function runPublish(
     // Non-null per the agent guard above for channel destinations.
     const agent = auth.atprotoAgent!
     const alreadyPublished = new Set(action.ledger.publishedChannelIDs ?? [])
+    // Old-version bytes an edit orphans (same body objectID across channels →
+    // deduped before journaling).
+    const orphanedFromEdits = new Set<string>()
     for (const ch of channels) {
       // Skip channels a prior run already wrote to — the resume guard against
       // a mid-loop crash double-appending.
@@ -157,14 +160,14 @@ export async function runPublish(
           ...itemRef,
           editedAt: new Date().toISOString(),
         }
-        await editItem(
-          sdk,
+        const { orphanedObjectIDs } = await editItem(
           agent,
           ch,
           intent.editingItemID,
           editedItem,
           intent.removedAttachmentObjectIDs,
         )
+        for (const id of orphanedObjectIDs) orphanedFromEdits.add(id)
       } else {
         await appendItemToChannel(agent, ch, itemRef)
       }
@@ -172,6 +175,13 @@ export async function runPublish(
       markPublished(ch.channelID)
       const sub = auth.subscriptions.find((s) => s.channelID === ch.channelID)
       if (sub) feed.refreshChannel(sub)
+    }
+    // Reclaim the replaced bytes via the journal (durable, retried).
+    if (orphanedFromEdits.size > 0) {
+      useActionStore.getState().enqueueDeleteObjects({
+        objectIDs: [...orphanedFromEdits],
+        label: `Reclaiming old version of “${itemRef.title || 'post'}”`,
+      })
     }
   }
 }

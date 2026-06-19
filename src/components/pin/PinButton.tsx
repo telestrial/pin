@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { deletePublishedItem } from '../../core/channels'
+import { useActionStore } from '../../stores/actionQueue'
 import { formatBytes } from '../../lib/format'
 import { objectIDsInManifests } from '../../lib/scopeRefs'
 import { itemPinByteSize } from '../../lib/hooks/useChannelPinState'
@@ -52,13 +53,18 @@ export function PinButton({ input }: { input: PinInput }) {
           ),
           ...objectIDsReferencedBy(usePinStore.getState().pinned),
         ])
-        await deletePublishedItem(
-          sdk,
+        const { orphanedObjectIDs } = await deletePublishedItem(
           agent,
           ownedChannel,
           input.item.id,
           protectedIDs,
         )
+        // The record write is done; reclaim the orphaned bytes as a durable,
+        // retried journal action rather than a fire-and-forget delete.
+        useActionStore.getState().enqueueDeleteObjects({
+          objectIDs: orphanedObjectIDs,
+          label: `Reclaiming “${input.item.title || 'post'}”`,
+        })
         const sub = subscriptions.find(
           (s) => s.channelID === ownedChannel.channelID,
         )

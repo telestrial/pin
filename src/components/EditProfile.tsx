@@ -7,6 +7,7 @@ import {
 } from '../core/profile'
 import { uploadItem } from '../core/sia'
 import { useItemBlobURL } from '../lib/hooks/useItemBytes'
+import { useActionStore } from '../stores/actionQueue'
 import { useAuthStore } from '../stores/auth'
 import { FormCard } from './ui/FormCard'
 
@@ -183,10 +184,19 @@ export function EditProfile({
       // are explicit via removeAvatar / removeCover flags).
       await putProfileRecord(agent, patch)
 
-      // Old avatar/cover bytes (if replaced or removed) become orphans
-      // pinned in our scope. The orphan sweep adds profile bytes to its
-      // known set and cleans them up on its next run — no explicit
-      // delete here. Parallels how editChannel handles old cover bytes.
+      // Reclaim old avatar/cover bytes a replace/remove orphaned — durable,
+      // retried byte-cleanup via the journal. Per-object Sia encryption makes
+      // each image's objectID unique, so this is reference-safe. (Closes the
+      // image-swap leak; previously these bytes just accumulated.)
+      const reclaimURLs: string[] = []
+      if ((newAvatarFile || removeExistingAvatar) && original?.avatarURL)
+        reclaimURLs.push(original.avatarURL)
+      if ((newCoverFile || removeExistingCover) && original?.coverURL)
+        reclaimURLs.push(original.coverURL)
+      useActionStore.getState().enqueueDeleteObjects({
+        urls: reclaimURLs,
+        label: 'Reclaiming old profile image',
+      })
 
       onSaved()
     } catch (e) {

@@ -207,7 +207,7 @@ export async function editChannel(
   agent: Agent,
   channel: { channelID: string; channelKey: string },
   patch: EditChannelPatch,
-): Promise<ChannelManifest> {
+): Promise<{ manifest: ChannelManifest; reclaimURLs: string[] }> {
   const did = agent.assertDid
 
   const current = await fetchChannel(
@@ -248,7 +248,20 @@ export async function editChannel(
     updated.visibility === 'public' ? channel.channelKey : undefined,
   )
 
-  return updated
+  // Old avatar/cover bytes a replace/remove orphaned. Per-object Sia encryption
+  // gives each upload a unique objectID, so an old image is never shared with
+  // another channel — handing back its URL for the caller to journal as a
+  // delete-objects cleanup is reference-safe without a refcount check. Closes
+  // the image-swap leak (these bytes previously just accumulated).
+  const reclaimURLs: string[] = []
+  if ((patch.removeAvatar || patch.avatarImage) && current.avatar) {
+    reclaimURLs.push(current.avatar.itemURL)
+  }
+  if ((patch.removeCover || patch.coverImage) && current.cover) {
+    reclaimURLs.push(current.cover.itemURL)
+  }
+
+  return { manifest: updated, reclaimURLs }
 }
 
 // channelKey is optional: for public channels, K is embedded in the
@@ -394,7 +407,6 @@ export async function reconcileGhostChannels(
 }
 
 export async function deletePublishedItem(
-  sdk: Sdk,
   agent: Agent,
   channel: { channelID: string; channelKey: string },
   itemID: string,
@@ -402,9 +414,9 @@ export async function deletePublishedItem(
   // manifests + pins). Bytes in this set survive the retract — a file shared
   // with another of your posts, or held by a standalone library pin, isn't
   // yanked out from under it. Defaults to empty; callers pass their in-memory
-  // scope refs to make the eager cleanup reference-safe.
+  // scope refs to make the reference-safe prune correct.
   protectedObjectIDs: ReadonlySet<string> = new Set(),
-): Promise<ChannelManifest> {
+): Promise<{ manifest: ChannelManifest; orphanedObjectIDs: string[] }> {
   const did = agent.assertDid
 
   const current = await fetchChannel(
@@ -429,21 +441,23 @@ export async function deletePublishedItem(
     updated.visibility === 'public' ? channel.channelKey : undefined,
   )
 
-  // Eager, reference-safe cleanup: a retract is a decision you made, so the
-  // bytes leave your storage now — not on the next orphan-sweep pass. Delete
-  // the retracted item's body + every attachment, skipping any object still
-  // referenced by something surviving (the orphan sweep remains the backstop
-  // for legacy attachments lacking an objectID). Subscribers' pinned copies
-  // live in their own scope, so deleteObject never touches them.
+  // Reference-safe prune: the reliable leg (the record write above) is done, so
+  // collect the body + every attachment whose bytes nothing surviving still
+  // references, and hand them back. The caller journals them as a delete-objects
+  // action — a durable, retried byte-cleanup — instead of a best-effort delete
+  // that a QUIC blip could silently drop. Subscribers' pinned copies live in
+  // their own scope, so this never touches them. (Legacy attachments without an
+  // objectID can't be enumerated here; they're a known, bounded gap.)
   const surviving = survivingObjectIDs(updated, protectedObjectIDs)
-  if (!surviving.has(itemID)) await sdk.deleteObject(itemID)
+  const orphanedObjectIDs: string[] = []
+  if (!surviving.has(itemID)) orphanedObjectIDs.push(itemID)
   for (const att of removed?.attachments ?? []) {
     if (!isValidAttachment(att) || !att.objectID) continue
     if (surviving.has(att.objectID)) continue
-    sdk.deleteObject(att.objectID).catch(() => {})
+    orphanedObjectIDs.push(att.objectID)
   }
 
-  return updated
+  return { manifest: updated, orphanedObjectIDs }
 }
 
 // Retract a single attachment from a published item — the file-level analog of
@@ -452,13 +466,16 @@ export async function deletePublishedItem(
 // eagerly deletes the file's bytes unless something surviving still references
 // them. Subscribers who pinned the post or the file keep their copies.
 export async function removeAttachmentFromItem(
-  sdk: Sdk,
   agent: Agent,
   channel: { channelID: string; channelKey: string },
   itemID: string,
   attachmentURL: string,
   protectedObjectIDs: ReadonlySet<string> = new Set(),
-): Promise<{ manifest: ChannelManifest; item: ItemRef }> {
+): Promise<{
+  manifest: ChannelManifest
+  item: ItemRef
+  orphanedObjectIDs: string[]
+}> {
   const did = agent.assertDid
 
   const current = await fetchChannel(
@@ -497,29 +514,34 @@ export async function removeAttachmentFromItem(
     updated.visibility === 'public' ? channel.channelKey : undefined,
   )
 
-  // Eager, reference-safe: delete the removed file's bytes unless another of
-  // your posts / a library pin still references the same object.
+  // Reference-safe prune: hand back the removed file's bytes unless another of
+  // your posts / a library pin still references the same object. The caller
+  // journals it as a delete-objects action.
   const surviving = survivingObjectIDs(updated, protectedObjectIDs)
+  const orphanedObjectIDs: string[] = []
   if (
     removed &&
     isValidAttachment(removed) &&
     removed.objectID &&
     !surviving.has(removed.objectID)
   ) {
-    sdk.deleteObject(removed.objectID).catch(() => {})
+    orphanedObjectIDs.push(removed.objectID)
   }
 
-  return { manifest: updated, item: finalItem }
+  return { manifest: updated, item: finalItem, orphanedObjectIDs }
 }
 
 export async function editItem(
-  sdk: Sdk,
   agent: Agent,
   channel: { channelID: string; channelKey: string },
   oldItemID: string,
   newItem: ItemRef,
   removedAttachmentObjectIDs?: string[],
-): Promise<{ manifest: ChannelManifest; item: ItemRef }> {
+): Promise<{
+  manifest: ChannelManifest
+  item: ItemRef
+  orphanedObjectIDs: string[]
+}> {
   const did = agent.assertDid
 
   const current = await fetchChannel(
@@ -553,16 +575,12 @@ export async function editItem(
     updated.visibility === 'public' ? channel.channelKey : undefined,
   )
 
-  // Drop old bytes best-effort; subscribers who pinned keep their snapshot.
-  sdk.deleteObject(oldItemID).catch(() => {})
+  // Hand back the old body + any removed-attachment bytes for the caller to
+  // journal as a delete-objects action. Subscribers who pinned the old version
+  // keep their snapshots (their copies live in their own scope).
+  const orphanedObjectIDs = [oldItemID, ...(removedAttachmentObjectIDs ?? [])]
 
-  // Drop removed-attachment bytes best-effort. Subscribers who pinned
-  // those attachments keep their snapshots too.
-  for (const id of removedAttachmentObjectIDs ?? []) {
-    sdk.deleteObject(id).catch(() => {})
-  }
-
-  return { manifest: updated, item: finalItem }
+  return { manifest: updated, item: finalItem, orphanedObjectIDs }
 }
 
 export async function appendItemToChannel(

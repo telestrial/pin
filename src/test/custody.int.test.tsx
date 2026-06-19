@@ -25,7 +25,6 @@ vi.mock(
 )
 
 import type { Agent } from '@atproto/api'
-import type { Sdk } from '@siafoundation/sia-storage'
 import { deletePublishedItem } from '../core/channels'
 import type { SubscriptionRef } from '../core/types'
 import { HomeFeed } from '../components/HomeFeed'
@@ -239,11 +238,11 @@ describe('integration: custody', () => {
       expect(usePinStore.getState().pinned).toHaveLength(1),
     )
 
-    // Alice retracts. core/channels.deletePublishedItem filters the item
-    // from her manifest AND deletes the object from her Sia scope. Bob's
-    // independent pin keeps the bytes alive because he's still a pinner.
+    // Alice retracts. core/channels.deletePublishedItem filters the item from
+    // her manifest and returns the orphaned bytes for the journal to reclaim.
+    // Bob's independent pin keeps the bytes alive because he's still a pinner;
+    // his snapshot is unaffected by alice's retract regardless.
     await deletePublishedItem(
-      alice.sdk as unknown as Sdk,
       alice.agent as unknown as Agent,
       channel,
       postItemID,
