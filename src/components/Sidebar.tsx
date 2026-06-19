@@ -100,7 +100,7 @@ export function Sidebar({
             onClick={onProfile}
             className="w-full px-3 py-2 text-sm font-medium rounded-md transition-colors cursor-pointer text-neutral-700 hover:text-neutral-900 hover:bg-neutral-50 flex items-center justify-between gap-2 text-left"
           >
-            <span>My Profile</span>
+            <span>Profile</span>
             {activeProfile && (
               <span
                 aria-hidden="true"
