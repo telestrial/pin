@@ -19,8 +19,11 @@ vi.mock('@siafoundation/sia-storage', async () =>
   (await import('./fakeModules')).fakeSiaStorageModule(),
 )
 
+import type { Sdk } from '@siafoundation/sia-storage'
 import { ChannelView } from '../components/channel/ChannelView'
 import type { SubscriptionRef } from '../core/types'
+import { runDeleteObjects } from '../lib/actions/deleteObjects'
+import { type DeleteObjectsAction, useActionStore } from '../stores/actionQueue'
 import { useFeedStore } from '../stores/feed'
 import { usePinStore } from '../stores/pin'
 import {
@@ -39,6 +42,19 @@ import {
 // fan-out sees two logical items, the way real seconds-apart publishes do.
 async function tickMs(): Promise<void> {
   await new Promise((r) => setTimeout(r, 3))
+}
+
+// Unpin journals the byte reclaim as delete-objects actions; this test doesn't
+// mount the runner, so drain the pending cleanups through the handler to make
+// bob's scope actually shrink.
+async function drainCleanups(sdk: Sdk): Promise<void> {
+  const pending = useActionStore
+    .getState()
+    .actions.filter((a) => a.kind === 'delete-objects' && a.state === 'pending')
+  for (const a of pending) {
+    await runDeleteObjects(a as DeleteObjectsAction, { sdk, markDone: () => {} })
+    useActionStore.getState().remove(a.id)
+  }
 }
 
 async function setup(): Promise<{
@@ -172,6 +188,9 @@ describe('integration: channel pin', () => {
     await userEvent.click(confirm)
 
     await waitFor(() => expect(usePinStore.getState().pinned).toHaveLength(0))
+    await act(async () => {
+      await drainCleanups(bob.sdk as unknown as Sdk)
+    })
     expect((await bob.sdk.account()).pinnedData).toBe(0)
     // Icon returns to the pinnable state.
     await waitFor(() =>

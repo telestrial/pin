@@ -5,6 +5,7 @@ import {
   useActionStore,
 } from '../../stores/actionQueue'
 import { useAuthStore } from '../../stores/auth'
+import { usePinStore } from '../../stores/pin'
 import { useToastStore } from '../../stores/toast'
 import {
   type DeleteObjectsContext,
@@ -111,6 +112,10 @@ export function useActionRunner() {
         store.setProgress(action.id, 100)
         store.setState(action.id, 'success', undefined)
         if (!action.silent) toast.addToast(`${action.successLabel} “${action.title}”`)
+        // A completed byte reclaim changed Sia storage — refresh the meter.
+        if (action.kind === 'delete-objects') {
+          usePinStore.getState().refreshAccount(sdk)
+        }
         setTimeout(() => {
           useActionStore.getState().remove(action.id)
         }, SUCCESS_AUTO_REMOVE_MS)

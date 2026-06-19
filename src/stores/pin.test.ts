@@ -1,13 +1,28 @@
 import type { Sdk } from '@siafoundation/sia-storage'
 import { beforeEach, describe, expect, it } from 'vitest'
 import type { AttachmentRef, ItemRef } from '../core/types'
+import { runDeleteObjects } from '../lib/actions/deleteObjects'
 import { itemRefFromAttachment } from '../lib/filePin'
 import { LIBRARY_CHANNEL } from '../lib/pinUpload'
 import { createFakeWorld, FakeSdk } from '../test/fakeSdk'
+import { type DeleteObjectsAction, useActionStore } from './actionQueue'
 import { objectIDsReferencedBy, type PinnedItemRef, usePinStore } from './pin'
 
 function asSdk(fake: FakeSdk): Sdk {
   return fake as unknown as Sdk
+}
+
+// Unpin now removes the local pin synchronously and JOURNALS the byte reclaim
+// as a delete-objects action. Drain those pending cleanups through the real
+// handler so the world-scope assertions see the bytes actually gone.
+async function drainCleanups(sdk: Sdk): Promise<void> {
+  const pending = useActionStore
+    .getState()
+    .actions.filter((a) => a.kind === 'delete-objects' && a.state === 'pending')
+  for (const a of pending) {
+    await runDeleteObjects(a as DeleteObjectsAction, { sdk, markDone: () => {} })
+    useActionStore.getState().remove(a.id)
+  }
 }
 
 async function uploadAndShare(
@@ -68,6 +83,7 @@ describe('objectIDsReferencedBy', () => {
 describe('reference-aware unpin (granular pinning)', () => {
   beforeEach(() => {
     usePinStore.getState().reset()
+    useActionStore.getState().reset()
     localStorage.clear()
   })
 
@@ -120,6 +136,7 @@ describe('reference-aware unpin (granular pinning)', () => {
     // Unpin the whole post. Body is released; the file survives because the
     // library pin still references it.
     await store.unpin(asSdk(bob), bodyURL)
+    await drainCleanups(asSdk(bob))
     const remaining = usePinStore.getState().pinned
     expect(remaining).toHaveLength(1)
     expect(remaining[0].item.itemURL).toBe(fileURL)
@@ -128,6 +145,7 @@ describe('reference-aware unpin (granular pinning)', () => {
 
     // Unpin the file too → its bytes are now released.
     await store.unpin(asSdk(bob), fileURL)
+    await drainCleanups(asSdk(bob))
     expect(usePinStore.getState().pinned).toHaveLength(0)
     expect(world.scopeOf('bob').size).toBe(0)
   })
@@ -143,9 +161,11 @@ describe('reference-aware unpin (granular pinning)', () => {
     expect(world.scopeOf('bob').size).toBe(2)
 
     // No standalone file pin holds the attachment → whole-post unpin releases
-    // both body and attachment (today's behavior, preserved).
+    // both body and attachment (today's behavior, preserved — now via the
+    // journaled cleanup).
     await store.unpin(asSdk(bob), bodyURL)
-    expect(world.scopeOf('bob').size).toBe(0)
     expect(usePinStore.getState().pinned).toHaveLength(0)
+    await drainCleanups(asSdk(bob))
+    expect(world.scopeOf('bob').size).toBe(0)
   })
 })

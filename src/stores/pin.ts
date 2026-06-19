@@ -5,10 +5,10 @@ import {
   type AccountSnapshot,
   fetchAccountSnapshot,
   pinItem,
-  unpinItemBytes,
 } from '../core/pin'
 import type { ItemRef } from '../core/types'
 import { APP_KEY } from '../lib/constants'
+import { useActionStore } from './actionQueue'
 
 // At-most-one-in-flight account refresh. Coalesces bursts (e.g.
 // loop-until-clean repack with N batches, each calling refreshAccount)
@@ -176,7 +176,9 @@ export const usePinStore = create<PinState>()(
           )
           if (driftedFrom) {
             // Release the stale version's bytes — but only those no other pin
-            // (nor the freshly-pinned current version) still references.
+            // (nor the freshly-pinned current version) still references. The
+            // byte reclaim is journaled (durable, retried) rather than a
+            // best-effort delete that a QUIC blip could silently drop.
             const referenced = objectIDsReferencedBy(
               get().pinned.filter((p) => p !== driftedFrom),
             )
@@ -185,11 +187,11 @@ export const usePinStore = create<PinState>()(
             const stale = [
               driftedFrom.objectID,
               ...(driftedFrom.attachmentObjectIDs ?? []),
-            ]
-            for (const id of stale) {
-              if (referenced.has(id)) continue
-              unpinItemBytes(sdk, id).catch(() => {})
-            }
+            ].filter((id) => !referenced.has(id))
+            useActionStore.getState().enqueueDeleteObjects({
+              objectIDs: stale,
+              label: `Reclaiming old version of “${input.item.title || 'item'}”`,
+            })
           }
           const ref: PinnedItemRef = {
             ...input,
@@ -216,42 +218,26 @@ export const usePinStore = create<PinState>()(
       unpin: async (sdk, itemURL) => {
         const ref = get().pinned.find((p) => p.item.itemURL === itemURL)
         if (!ref) return
-        const pinning = new Set(get().pinning)
-        pinning.add(itemURL)
-        set({ pinning })
-        try {
-          // Reference-aware release: delete only the bytes no other pin still
-          // holds. The body is deleted first when unreferenced — its failure
-          // keeps the entry pinned (don't drop state for bytes we couldn't
-          // release). Attachment/shared deletes are best-effort; a stray is
-          // reclaimed by the orphan sweep.
-          const referenced = objectIDsReferencedBy(
-            get().pinned.filter((p) => p !== ref),
-          )
-          if (!referenced.has(ref.objectID)) {
-            await unpinItemBytes(sdk, ref.objectID)
-          }
-          for (const aid of ref.attachmentObjectIDs ?? []) {
-            if (referenced.has(aid)) continue
-            try {
-              await unpinItemBytes(sdk, aid)
-            } catch {
-              // best-effort — orphan sweep catches strays
-            }
-          }
-          const next = new Set(get().pinning)
-          next.delete(itemURL)
-          set((s) => ({
-            pinned: s.pinned.filter((p) => p.item.itemURL !== itemURL),
-            pinning: next,
-          }))
-          get().refreshAccount(sdk)
-        } catch (e) {
-          const next = new Set(get().pinning)
-          next.delete(itemURL)
-          set({ pinning: next })
-          throw e
-        }
+        // Reference-aware: reclaim only the bytes no other pin still holds.
+        const referenced = objectIDsReferencedBy(
+          get().pinned.filter((p) => p !== ref),
+        )
+        const toDelete = [
+          ref.objectID,
+          ...(ref.attachmentObjectIDs ?? []),
+        ].filter((id) => !referenced.has(id))
+        // Drop the local pin now (the reliable leg); the byte reclaim is
+        // journaled — durable + retried — instead of a best-effort delete that
+        // a QUIC blip could silently drop. The runner refreshes the storage
+        // meter when the cleanup completes.
+        set((s) => ({
+          pinned: s.pinned.filter((p) => p.item.itemURL !== itemURL),
+        }))
+        useActionStore.getState().enqueueDeleteObjects({
+          objectIDs: toDelete,
+          label: `Reclaiming “${ref.item.title || 'item'}”`,
+        })
+        get().refreshAccount(sdk)
       },
       pinChannel: async (sdk, items, channel) => {
         const { channelID } = channel
