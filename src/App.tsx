@@ -1,6 +1,7 @@
-import { useEffect } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { AuthFlow } from './components/auth/AuthFlow'
 import { Home } from './components/Home'
+import { LockScreen } from './components/LockScreen'
 import { Navbar } from './components/Navbar'
 import { Toasts } from './components/ui/Toast'
 import { bootOauth } from './lib/atprotoClient'
@@ -18,10 +19,35 @@ import { useAuthStore } from './stores/auth'
 import { useComposeStore } from './stores/compose'
 import { usePinStore } from './stores/pin'
 
+// Surface fade duration on lock/unlock — matches the overlay's CSS transition.
+const FADE_MS = 300
+
 export default function App() {
   const step = useAuthStore((s) => s.step)
   const sdk = useAuthStore((s) => s.sdk)
+  const locked = useAuthStore((s) => s.locked)
   const armedItem = useComposeStore((s) => s.armedItem)
+  const [fading, setFading] = useState(false)
+
+  // Lock/unlock both fade the whole surface to white, swap underneath, then
+  // fade back in — so Home↔LockScreen reads as one transition rather than a
+  // hard cut. The session stays live across a lock (see auth.locked), so the
+  // swap is the only work; no teardown, no reconnect.
+  const lock = useCallback(() => {
+    setFading(true)
+    setTimeout(() => {
+      useAuthStore.getState().setLocked(true)
+      setFading(false)
+    }, FADE_MS)
+  }, [])
+
+  const unlock = useCallback(() => {
+    setFading(true)
+    setTimeout(() => {
+      useAuthStore.getState().setLocked(false)
+      setFading(false)
+    }, FADE_MS)
+  }, [])
 
   useJetstream()
   useActionQueueHydration()
@@ -84,13 +110,33 @@ export default function App() {
     usePinStore.getState().refreshAccount(sdk)
   }, [sdk])
 
+  const connected = step === 'connected'
+
   return (
     <div className="min-h-screen flex flex-col">
-      <Navbar />
+      {connected && !locked && <Navbar onLock={lock} />}
       <div className="flex-1 flex flex-col">
-        {step === 'connected' ? <Home /> : <AuthFlow />}
+        {connected ? (
+          locked ? (
+            <LockScreen onContinue={unlock} />
+          ) : (
+            <Home />
+          )
+        ) : (
+          <AuthFlow />
+        )}
       </div>
       <Toasts />
+      {/* Fade-to-white overlay for the lock/unlock transition. Inert except
+          during the brief fade, when it also blocks stray clicks. */}
+      <div
+        aria-hidden="true"
+        className="fixed inset-0 z-100 bg-white transition-opacity duration-300"
+        style={{
+          opacity: fading ? 1 : 0,
+          pointerEvents: fading ? 'auto' : 'none',
+        }}
+      />
     </div>
   )
 }

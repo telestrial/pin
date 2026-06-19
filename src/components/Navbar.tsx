@@ -1,67 +1,28 @@
-import { PinIcon } from './pin/PinIcon'
-import { useMemo, useState } from 'react'
-import { flushPendingSettingsSave } from '../lib/hooks/useSettingsSync'
 import { APP_NAME } from '../lib/constants'
-import { useAuthStore } from '../stores/auth'
-import { CopyButton } from './ui/CopyButton'
+import { PinIcon } from './pin/PinIcon'
 
-export function Navbar() {
-  const step = useAuthStore((s) => s.step)
-  const sdk = useAuthStore((s) => s.sdk)
-  const reset = useAuthStore((s) => s.reset)
-  const isConnected = step === 'connected'
-  const [signingOut, setSigningOut] = useState(false)
-
-  const publicKey = useMemo(() => {
-    try {
-      return sdk?.appKey().publicKey() ?? null
-    } catch {
-      return null
-    }
-  }, [sdk])
-
-  async function handleSignOut() {
-    setSigningOut(true)
-    try {
-      // Wait for any pending settings save so K's reach Sia before logout.
-      await flushPendingSettingsSave()
-    } catch (e) {
-      console.warn('Pre-signout flush failed:', e)
-    }
-    reset()
-    window.location.reload()
-  }
-
+// Connected-only header. Three zones (grid-cols-3) so the wordmark is truly
+// centered regardless of the right action's width: empty left · "Pin" center ·
+// lock pin right. The right pin behaves like any owned pin (filled green,
+// dim-at-rest, wake-on-hover); clicking it soft-locks the session — releasing
+// custody of the surface, the same gesture as unpinning.
+export function Navbar({ onLock }: { onLock: () => void }) {
   return (
     <header className="bg-white border-b border-neutral-200/80 px-6">
-      <div className="flex items-center justify-between py-3 max-w-7xl mx-auto">
-        <h1 className="flex items-center gap-1.5 text-sm font-semibold text-neutral-900 tracking-tight">
-          <PinIcon className="text-green-600" fill="currentColor" />
+      <div className="grid grid-cols-3 items-center py-3 max-w-7xl mx-auto">
+        <div />
+        <h1 className="justify-self-center text-sm font-semibold text-neutral-900 tracking-tight">
           {APP_NAME}
         </h1>
-        {isConnected && publicKey && (
-          <div className="flex items-center gap-3">
-            <span className="relative flex h-2 w-2">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-500 opacity-75" />
-              <span className="relative inline-flex rounded-full h-2 w-2 bg-green-600" />
-            </span>
-            <span
-              className="text-[11px] font-mono text-neutral-500"
-              title={publicKey}
-            >
-              {publicKey.slice(0, 8)}...{publicKey.slice(-6)}
-            </span>
-            <CopyButton value={publicKey} label="Public key copied" />
-            <button
-              type="button"
-              onClick={handleSignOut}
-              disabled={signingOut}
-              className="text-xs text-neutral-500 hover:text-neutral-900 transition-colors ml-1 disabled:opacity-50 disabled:cursor-wait"
-            >
-              {signingOut ? 'Saving…' : 'Sign Out'}
-            </button>
-          </div>
-        )}
+        <button
+          type="button"
+          onClick={onLock}
+          title="Lock"
+          aria-label="Lock"
+          className="justify-self-end text-green-700 opacity-50 hover:opacity-100 hover:text-green-600 transition-all duration-300 cursor-pointer"
+        >
+          <PinIcon state="pinned" />
+        </button>
       </div>
     </header>
   )

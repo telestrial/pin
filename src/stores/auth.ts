@@ -45,6 +45,12 @@ type AuthState = {
   settingsRecordCid: string | null
   settingsLoaded: boolean
   settingsDirty: boolean
+  // Soft lock: when true, the connected surface is replaced by the lock
+  // screen. The session (sdk, agent, AppKey) stays live and the background
+  // runners keep going — this is a visual gate, not a teardown — so
+  // unlocking is instant. Runtime-only (not persisted): a real reload runs
+  // normal boot, so you can never be stuck locked across a refresh.
+  locked: boolean
   setSdk: (sdk: Sdk) => void
   setStep: (step: AuthStep) => void
   setError: (error: string | null) => void
@@ -77,6 +83,7 @@ type AuthState = {
   setSettingsRecordCid: (cid: string | null) => void
   setSettingsLoaded: (loaded: boolean) => void
   setSettingsDirty: (dirty: boolean) => void
+  setLocked: (locked: boolean) => void
   reset: () => void
 }
 
@@ -100,6 +107,7 @@ export const useAuthStore = create<AuthState>()(
       settingsRecordCid: null,
       settingsLoaded: false,
       settingsDirty: false,
+      locked: false,
       setSdk: (sdk) => set({ sdk, step: 'connected', error: null }),
       setStep: (step) => set({ step, error: null }),
       setError: (error) => set({ error }),
@@ -186,6 +194,7 @@ export const useAuthStore = create<AuthState>()(
       setSettingsRecordCid: (settingsRecordCid) => set({ settingsRecordCid }),
       setSettingsLoaded: (settingsLoaded) => set({ settingsLoaded }),
       setSettingsDirty: (settingsDirty) => set({ settingsDirty }),
+      setLocked: (locked) => set({ locked }),
       reset: () => {
         useFeedStore.getState().reset()
         usePinStore.getState().reset()
@@ -206,6 +215,7 @@ export const useAuthStore = create<AuthState>()(
           settingsRecordCid: null,
           settingsLoaded: false,
           settingsDirty: false,
+          locked: false,
         })
       },
     }),
