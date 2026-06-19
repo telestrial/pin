@@ -13,7 +13,10 @@ import { PROFILE_LEXICON } from './profile'
 import { SETTINGS_LEXICON } from './settingsRecord'
 
 const PAGE_LIMIT = 200
-// Generous cap for a wipe — 200 × 100 = 20000 covers any realistic account.
+// com.atproto.repo.listRecords caps `limit` at 100 — passing more is an
+// InvalidRequest. (objectEvents above has no such cap, hence the split.)
+const RECORD_PAGE_LIMIT = 100
+// Generous cap for a wipe — covers any realistic account.
 const MAX_PAGES = 100
 
 // Every atproto collection Pin writes to. A full reset clears all of them.
@@ -81,34 +84,45 @@ export async function wipeAllPinRecords(agent: Agent): Promise<WipeResult> {
   let failed = 0
 
   for (const collection of PIN_LEXICONS) {
-    const rkeys: string[] = []
-    let cursor: string | undefined
-    for (let page = 0; page < MAX_PAGES; page++) {
-      const res = await agent.com.atproto.repo.listRecords({
-        repo: did,
-        collection,
-        limit: PAGE_LIMIT,
-        cursor,
-      })
-      for (const rec of res.data.records) {
-        const rkey = rec.uri.split('/').pop()
-        if (rkey) rkeys.push(rkey)
-      }
-      cursor = res.data.cursor
-      if (!cursor || res.data.records.length === 0) break
-    }
-
-    for (const rkey of rkeys) {
-      try {
-        await agent.com.atproto.repo.deleteRecord({ repo: did, collection, rkey })
-        deleted++
-      } catch (e) {
-        if (isRecordNotFound(e)) {
-          deleted++
-          continue
+    // Isolate per collection: a failure listing/deleting one (transient error,
+    // unexpected reject) must not abort the wipe of the others.
+    try {
+      const rkeys: string[] = []
+      let cursor: string | undefined
+      for (let page = 0; page < MAX_PAGES; page++) {
+        const res = await agent.com.atproto.repo.listRecords({
+          repo: did,
+          collection,
+          limit: RECORD_PAGE_LIMIT,
+          cursor,
+        })
+        for (const rec of res.data.records) {
+          const rkey = rec.uri.split('/').pop()
+          if (rkey) rkeys.push(rkey)
         }
-        failed++
+        cursor = res.data.cursor
+        if (!cursor || res.data.records.length === 0) break
       }
+
+      for (const rkey of rkeys) {
+        try {
+          await agent.com.atproto.repo.deleteRecord({
+            repo: did,
+            collection,
+            rkey,
+          })
+          deleted++
+        } catch (e) {
+          if (isRecordNotFound(e)) {
+            deleted++
+            continue
+          }
+          failed++
+        }
+      }
+    } catch (e) {
+      console.warn(`wipeAllPinRecords: ${collection} failed`, e)
+      failed++
     }
   }
 
