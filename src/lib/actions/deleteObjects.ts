@@ -34,11 +34,13 @@ export async function runDeleteObjects(
 ): Promise<void> {
   const { sdk, markDone } = ctx
   const done = new Set(action.ledger.done ?? [])
+  let didWork = false
 
   for (const id of action.intent.objectIDs) {
     if (done.has(id)) continue
     await deleteIdempotent(sdk, id)
     markDone(id)
+    didWork = true
   }
 
   for (const url of action.intent.urls) {
@@ -51,11 +53,20 @@ export async function runDeleteObjects(
       // there's nothing to delete. Treat the key as done.
       if (isNotFound(e)) {
         markDone(url)
+        didWork = true
         continue
       }
       throw e
     }
     await deleteIdempotent(sdk, objectID)
     markDone(url)
+    didWork = true
   }
+
+  // Reclaim the now-empty slab capacity. deleteObject frees the bytes but the
+  // indexer doesn't auto-drop emptied slabs, so without this a retract leaves
+  // `pinnedData` inflated until some later repack happens to prune. This is the
+  // only prune on the delete path (repack covers the pin path). Best-effort and
+  // skipped on a no-op resume so we don't prune for nothing.
+  if (didWork) await sdk.pruneSlabs().catch(() => {})
 }

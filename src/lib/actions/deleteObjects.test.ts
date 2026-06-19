@@ -23,15 +23,21 @@ function action(intent: {
   }
 }
 
-function fakeSdk(over: Partial<Record<'deleteObject' | 'sharedObject', unknown>> = {}) {
+function fakeSdk(
+  over: Partial<
+    Record<'deleteObject' | 'sharedObject' | 'pruneSlabs', unknown>
+  > = {},
+) {
   const deleteObject = vi.fn().mockResolvedValue(undefined)
   const sharedObject = vi
     .fn()
     .mockResolvedValue({ id: () => 'resolved-id' })
+  const pruneSlabs = vi.fn().mockResolvedValue(undefined)
   return {
-    sdk: { deleteObject, sharedObject, ...over } as unknown as Sdk,
+    sdk: { deleteObject, sharedObject, pruneSlabs, ...over } as unknown as Sdk,
     deleteObject,
     sharedObject,
+    pruneSlabs,
   }
 }
 
@@ -99,5 +105,23 @@ describe('runDeleteObjects', () => {
       runDeleteObjects(action({ objectIDs: ['a'] }), { sdk, markDone }),
     ).rejects.toThrow('network down')
     expect(markDone).not.toHaveBeenCalled()
+  })
+
+  it('prunes slabs after deleting (reclaims the emptied capacity)', async () => {
+    const { sdk, pruneSlabs } = fakeSdk()
+    await runDeleteObjects(action({ objectIDs: ['a', 'b'] }), {
+      sdk,
+      markDone: vi.fn(),
+    })
+    expect(pruneSlabs).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not prune on a no-op resume (nothing deleted this run)', async () => {
+    const { sdk, pruneSlabs } = fakeSdk()
+    await runDeleteObjects(action({ objectIDs: ['a'], done: ['a'] }), {
+      sdk,
+      markDone: vi.fn(),
+    })
+    expect(pruneSlabs).not.toHaveBeenCalled()
   })
 })
