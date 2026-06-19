@@ -227,7 +227,7 @@ export class FakeSdk {
 
   // Emits one event per object currently in this account's scope, latest-
   // first by createdAt. Caller's cursor / limit are honored so paginated
-  // walks (e.g. fetchRawContentBytes, loadSettings) terminate naturally.
+  // walks (e.g. fetchRawContentBytes) terminate naturally.
   async objectEvents(
     cursor: { id: string; after: Date } | null,
     limit: number,

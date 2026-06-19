@@ -1,7 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { deriveSettingsKey } from '../../core/crypto'
 import { type DispatchSettings, SETTINGS_VERSION } from '../../core/settings'
-import { loadOrMigrateSettings } from '../../core/settingsMigration'
 import {
   loadSettingsRecord,
   saveSettingsRecord,
@@ -96,7 +95,7 @@ export function useSettingsSync() {
           return
         }
 
-        const result = await loadOrMigrateSettings(agent, sdk, key)
+        const result = await loadSettingsRecord(agent, key)
         if (cancelled) return
         if (result) {
           useAuthStore
