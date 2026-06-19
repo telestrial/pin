@@ -1,9 +1,9 @@
-// Integration coverage for the persistent upload queue's resume path — the
-// novel behavior the unit tests can't reach. Drives the production
-// useUploadRunner against the Phase 3 fakes:
+// Integration coverage for the action journal's resume path — the novel
+// behavior the unit tests can't reach. Drives the production useActionRunner
+// against the Phase 3 fakes:
 //   1. a normal publish goes upload → checkpoint → append → success, with the
-//      task carrying its checkpoint + published-channel bookkeeping;
-//   2. a rehydrated checkpointed task (as hydration would seed it: bytes
+//      action carrying its checkpoint + published-channel bookkeeping;
+//   2. a rehydrated checkpointed action (as hydration would seed it: bytes
 //      stripped, uploadedItemRef present) resumes WITHOUT re-uploading and
 //      still lands the manifest append.
 
@@ -26,8 +26,8 @@ vi.mock(
 import type { Sdk } from '@siafoundation/sia-storage'
 import { buildItemRef, fetchChannel } from '../core/channels'
 import { uploadItem } from '../core/sia'
-import { useUploadRunner } from '../lib/hooks/useUploadRunner'
-import { useUploadQueueStore } from '../stores/uploadQueue'
+import { useActionRunner } from '../lib/hooks/useActionRunner'
+import { useActionStore } from '../stores/actionQueue'
 import {
   authorCreateChannel,
   createFakeApp,
@@ -37,13 +37,13 @@ import {
 
 // Mounting this drives the production runner effect against the seeded stores.
 function RunnerHarness() {
-  useUploadRunner()
+  useActionRunner()
   return null
 }
 
 const enc = (s: string) => new TextEncoder().encode(s)
 
-describe('integration: upload queue resume', () => {
+describe('integration: action journal resume', () => {
   beforeEach(() => {
     resetAllStores()
   })
@@ -60,7 +60,7 @@ describe('integration: upload queue resume', () => {
 
     render(<RunnerHarness />)
 
-    const id = useUploadQueueStore.getState().enqueue({
+    const id = useActionStore.getState().enqueuePublish({
       payload: {
         type: 'text',
         title: '',
@@ -74,12 +74,12 @@ describe('integration: upload queue resume', () => {
     // Catch it at success (before the 4s auto-remove) to inspect the
     // bookkeeping the runner wrote.
     await waitFor(() => {
-      const t = useUploadQueueStore.getState().tasks.find((t) => t.id === id)
-      expect(t?.state).toBe('success')
+      const a = useActionStore.getState().actions.find((a) => a.id === id)
+      expect(a?.state).toBe('success')
     })
-    const done = useUploadQueueStore.getState().tasks.find((t) => t.id === id)
-    expect(done?.uploadedItemRef).toBeDefined()
-    expect(done?.publishedChannelIDs).toEqual([channel.channelID])
+    const done = useActionStore.getState().actions.find((a) => a.id === id)
+    expect(done?.ledger.uploadedItemRef).toBeDefined()
+    expect(done?.ledger.publishedChannelIDs).toEqual([channel.channelID])
 
     // The append landed in the manifest.
     const manifest = await fetchChannel(
@@ -90,7 +90,7 @@ describe('integration: upload queue resume', () => {
     expect(manifest.items.some((i) => i.summary === 'fresh post')).toBe(true)
   })
 
-  it('resumes a checkpointed task without re-uploading', async () => {
+  it('resumes a checkpointed action without re-uploading', async () => {
     const app = createFakeApp()
     const alice = app.createAccount({ did: 'did:plc:alice', handle: 'alice.test' })
     const channel = await authorCreateChannel(alice, { name: 'voice' })
@@ -114,25 +114,31 @@ describe('integration: upload queue resume', () => {
       ],
     })
 
-    // Seed the queue exactly as hydration would: pending, bytes stripped,
+    // Seed the journal exactly as hydration would: pending, bytes stripped,
     // checkpoint present.
-    useUploadQueueStore.setState({
-      tasks: [
+    useActionStore.setState({
+      actions: [
         {
           id: 'resume-1',
+          kind: 'publish',
           state: 'pending',
           progress: 0,
           createdAt: '2026-06-14T00:00:00.000Z',
-          payload: {
-            type: 'text',
-            title: '',
-            summary: body,
-            mimeType: 'text/markdown',
-            bytes: new Uint8Array(0),
+          title: body,
+          successLabel: 'Published',
+          failLabel: 'Publish',
+          intent: {
+            payload: {
+              type: 'text',
+              title: '',
+              summary: body,
+              mimeType: 'text/markdown',
+              bytes: new Uint8Array(0),
+            },
+            channelIDs: [channel.channelID],
+            destination: 'channel',
           },
-          channelIDs: [channel.channelID],
-          destination: 'channel',
-          uploadedItemRef: itemRef,
+          ledger: { uploadedItemRef: itemRef },
         },
       ],
     })
@@ -140,8 +146,8 @@ describe('integration: upload queue resume', () => {
     render(<RunnerHarness />)
 
     await waitFor(() => {
-      const t = useUploadQueueStore.getState().tasks.find((t) => t.id === 'resume-1')
-      expect(!t || t.state === 'success').toBe(true)
+      const a = useActionStore.getState().actions.find((a) => a.id === 'resume-1')
+      expect(!a || a.state === 'success').toBe(true)
     })
 
     // No new Sia object was minted — the slow re-upload was skipped.

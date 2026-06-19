@@ -5,11 +5,7 @@ import type { ItemRef } from '../../core/types'
 import { useAuthStore } from '../../stores/auth'
 import { useComposeStore } from '../../stores/compose'
 import { useFeedStore } from '../../stores/feed'
-import {
-  type UploadTask,
-  type UploadTaskState,
-  useUploadQueueStore,
-} from '../../stores/uploadQueue'
+import { type Action, useActionStore } from '../../stores/actionQueue'
 import { useStorageActivityStore } from '../../stores/storageActivity'
 import { formatBytes } from '../../lib/format'
 import { useFadeCancelUnpin } from '../../lib/hooks/useFadeCancelUnpin'
@@ -43,20 +39,17 @@ type LibraryEntry = {
   pinnedAt?: string
 }
 
-function taskTitle(task: UploadTask): string {
-  const p = task.payload
-  if (p.title) return p.title
-  if (p.summary) return p.summary.slice(0, 60)
-  if (p.filename) return p.filename
-  return 'item'
-}
-
-function taskStateLabel(state: UploadTaskState): string {
-  if (state === 'pending') return 'Queued'
-  if (state === 'uploading') return 'Uploading'
-  if (state === 'publishing') return 'Publishing'
-  if (state === 'success') return 'Published'
-  return 'Failed'
+function taskStateLabel(action: Action): string {
+  switch (action.state) {
+    case 'pending':
+      return 'Queued'
+    case 'running':
+      return action.phase ?? 'Working'
+    case 'success':
+      return action.successLabel
+    default:
+      return 'Failed'
+  }
 }
 
 export function PinSidebar({
@@ -72,9 +65,9 @@ export function PinSidebar({
   const pinned = usePinStore((s) => s.pinned)
   const isPinning = usePinStore((s) => s.isPinning)
   const channelPins = usePinStore((s) => s.channelPins)
-  const tasks = useUploadQueueStore((s) => s.tasks)
-  const retryTask = useUploadQueueStore((s) => s.retry)
-  const removeTask = useUploadQueueStore((s) => s.remove)
+  const tasks = useActionStore((s) => s.actions)
+  const retryTask = useActionStore((s) => s.retry)
+  const removeTask = useActionStore((s) => s.remove)
   const feedEntries = useFeedStore((s) => s.entries)
   const armedItem = useComposeStore((s) => s.armedItem)
   const toggleArm = useComposeStore((s) => s.toggle)
@@ -345,8 +338,7 @@ export function PinSidebar({
                   : task.state === 'success'
                     ? 'text-green-600'
                     : 'text-neutral-500'
-              const showProgress =
-                task.state === 'uploading' || task.state === 'publishing'
+              const showProgress = task.state === 'running'
               return (
                 <li
                   key={task.id}
@@ -355,10 +347,10 @@ export function PinSidebar({
                   <div className="flex items-start gap-2">
                     <div className="min-w-0 flex-1">
                       <p className="text-xs font-medium text-neutral-900 truncate">
-                        {taskTitle(task)}
+                        {task.title}
                       </p>
                       <p className={`text-[10px] ${stateColor} truncate`}>
-                        {taskStateLabel(task.state)}
+                        {taskStateLabel(task)}
                         {task.state === 'success' && (
                           <CheckCircle2 className="inline size-3 ml-1 align-text-bottom" />
                         )}
@@ -371,19 +363,18 @@ export function PinSidebar({
                           type="button"
                           onClick={() => retryTask(task.id)}
                           title="Retry"
-                          aria-label={`Retry ${taskTitle(task)}`}
+                          aria-label={`Retry ${task.title}`}
                           className="p-1 rounded text-neutral-400 hover:text-neutral-900 hover:bg-neutral-100"
                         >
                           <RotateCw className="size-3" aria-hidden="true" />
                         </button>
                       )}
-                      {task.state !== 'uploading' &&
-                        task.state !== 'publishing' && (
+                      {task.state !== 'running' && (
                           <button
                             type="button"
                             onClick={() => removeTask(task.id)}
                             title="Dismiss"
-                            aria-label={`Dismiss ${taskTitle(task)}`}
+                            aria-label={`Dismiss ${task.title}`}
                             className="p-1 rounded text-neutral-400 hover:text-neutral-900 hover:bg-neutral-100"
                           >
                             <X className="size-3" aria-hidden="true" />

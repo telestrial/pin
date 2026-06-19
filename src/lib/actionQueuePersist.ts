@@ -1,10 +1,14 @@
-import type { UploadTask } from '../stores/uploadQueue'
+import type { Action } from '../stores/actionQueue'
 
-// Dedicated IndexedDB for the upload queue so a tab close mid-upload doesn't
-// drop the pending bytes — the queue resumes on the next load. Separate from
-// the item cache's DB (lib/itemCache.ts) so the two version their schemas
-// independently. Tasks (including their Uint8Array body + attachment bytes)
-// round-trip through structured clone unchanged.
+// Dedicated IndexedDB for the action journal so a tab close mid-action doesn't
+// drop pending work — the journal resumes on the next load. Separate from the
+// item cache's DB (lib/itemCache.ts) so the two version their schemas
+// independently. Actions (including any Uint8Array body + attachment bytes a
+// publish carries) round-trip through structured clone unchanged.
+//
+// The DB name is unchanged from the upload-queue era on purpose: an in-flight
+// record persisted by an older build shouldn't be orphaned across the rename.
+// Old records have no `kind`, so hydration (useActionRunner) filters them out.
 const DB_NAME = 'pin-upload-queue'
 const DB_VERSION = 1
 const STORE = 'tasks'
@@ -46,24 +50,24 @@ function available(): boolean {
   return typeof indexedDB !== 'undefined'
 }
 
-// Write a task snapshot. Fire-and-forget — callers don't await, and any
-// failure (no IDB, quota, serialization) is swallowed so persistence can
-// never break the in-memory queue. Only ever called with 'pending' or
-// 'failed' tasks (see the store): in-flight states are deliberately not
-// persisted, so an interrupted run rehydrates as 'pending' and re-runs.
-export async function persistTask(task: UploadTask): Promise<void> {
+// Write an action snapshot. Fire-and-forget — callers don't await, and any
+// failure (no IDB, quota, serialization) is swallowed so persistence can never
+// break the in-memory journal. Only ever called with 'pending' or 'failed'
+// snapshots (see the store): in-flight states aren't persisted, so an
+// interrupted run rehydrates as 'pending' and re-runs.
+export async function persistAction(action: Action): Promise<void> {
   if (!available()) return
   try {
     const db = await openDB()
     const tx = db.transaction(STORE, 'readwrite')
-    tx.objectStore(STORE).put(task)
+    tx.objectStore(STORE).put(action)
     await txDone(tx)
   } catch {
     // best-effort
   }
 }
 
-export async function deletePersistedTask(id: string): Promise<void> {
+export async function deletePersistedAction(id: string): Promise<void> {
   if (!available()) return
   try {
     const db = await openDB()
@@ -75,7 +79,7 @@ export async function deletePersistedTask(id: string): Promise<void> {
   }
 }
 
-export async function clearPersistedTasks(): Promise<void> {
+export async function clearPersistedActions(): Promise<void> {
   if (!available()) return
   try {
     const db = await openDB()
@@ -87,14 +91,17 @@ export async function clearPersistedTasks(): Promise<void> {
   }
 }
 
-export async function loadPersistedTasks(): Promise<UploadTask[]> {
+// Loads every persisted record. The caller (hydration) is responsible for
+// filtering to recognized kinds — records written by an older build have no
+// recognized `kind` and a different shape.
+export async function loadPersistedActions(): Promise<Action[]> {
   if (!available()) return []
   try {
     const db = await openDB()
     const tx = db.transaction(STORE, 'readonly')
     const all = (await reqAsPromise(
       tx.objectStore(STORE).getAll(),
-    )) as UploadTask[]
+    )) as Action[]
     await txDone(tx)
     return all
   } catch {

@@ -13,7 +13,7 @@ import { useComposeStore } from '../stores/compose'
 import { useFeedStore } from '../stores/feed'
 import { usePinStore } from '../stores/pin'
 import { useToastStore } from '../stores/toast'
-import { useUploadQueueStore } from '../stores/uploadQueue'
+import { useActionStore } from '../stores/actionQueue'
 import {
   appendItemToChannel,
   buildItemRef,
@@ -62,7 +62,7 @@ export function resetAllStores(): void {
   useAuthStore.getState().reset()
   useFeedStore.getState().reset()
   usePinStore.getState().reset()
-  useUploadQueueStore.getState().reset()
+  useActionStore.getState().reset()
   useComposeStore.getState().disarm()
   useToastStore.setState({ toasts: [] })
   // The persist middleware re-reads localStorage on rehydrate; nuke it
@@ -95,7 +95,7 @@ export async function publishTextPost(
 
 // Convenience: author edits an existing text post in place. Uploads new
 // bytes, swaps the manifest entry (preserving publishedAt), and stamps
-// editedAt. Mirrors what useUploadRunner does in production.
+// editedAt. Mirrors what the publish handler does in production.
 export async function editTextPost(
   author: FakeAccount,
   channel: { channelID: string; channelKey: string },

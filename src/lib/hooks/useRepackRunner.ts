@@ -10,8 +10,8 @@ import { usePinStore } from '../../stores/pin'
 import { useToastStore } from '../../stores/toast'
 import {
   checkpointedObjectIDs,
-  useUploadQueueStore,
-} from '../../stores/uploadQueue'
+  useActionStore,
+} from '../../stores/actionQueue'
 import { useStorageActivityStore } from '../../stores/storageActivity'
 
 // Build the "what's pinned in your scope right now" snapshot the repack
@@ -41,7 +41,7 @@ async function buildScope(sdk: Sdk): Promise<ScopeRef[]> {
   // resume would append/pin a stale URL. Treating them as already-seen keeps
   // them out of every batch until their task completes (then they leave the
   // queue and become repack-eligible normally).
-  const seenIDs = checkpointedObjectIDs(useUploadQueueStore.getState().tasks)
+  const seenIDs = checkpointedObjectIDs(useActionStore.getState().actions)
   const push = (ref: ScopeRef) => {
     if (seenIDs.has(ref.objectID)) return
     seenIDs.add(ref.objectID)
@@ -201,17 +201,17 @@ export function useRepackRunner() {
     // Trigger 1: app load — catches accumulated waste from prior sessions.
     tick()
 
-    // Trigger 2: an upload-runner task transitions to success. Covers
-    // both library pins (drag-drop intake) and channel publishes.
+    // Trigger 2: an action transitions to success. Covers both library pins
+    // (drag-drop intake) and channel publishes.
     let lastSuccessIDs = new Set<string>()
-    const unsubQueue = useUploadQueueStore.subscribe((state) => {
+    const unsubQueue = useActionStore.subscribe((state) => {
       const newSuccesses: string[] = []
-      for (const t of state.tasks) {
-        if (t.state === 'success' && !lastSuccessIDs.has(t.id)) {
-          newSuccesses.push(t.id)
+      for (const a of state.actions) {
+        if (a.state === 'success' && !lastSuccessIDs.has(a.id)) {
+          newSuccesses.push(a.id)
         }
       }
-      lastSuccessIDs = new Set(state.tasks.map((t) => t.id))
+      lastSuccessIDs = new Set(state.actions.map((a) => a.id))
       if (newSuccesses.length > 0) tick()
     })
 

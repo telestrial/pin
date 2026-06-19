@@ -6,8 +6,8 @@ import { channelKeyFromBase64, encryptForChannel } from './crypto'
 import { downloadItem, uploadItemsPacked } from './sia'
 import type { ChannelManifest } from './types'
 
-// 10 data shards × 4 MiB each = 40 MiB usable per slab. Same constant
-// useUploadRunner uses for shard-count math.
+// 10 data shards × 4 MiB each = 40 MiB usable per slab. Same constant the
+// publish handler (lib/actions/publish) uses for shard-count math.
 const SLAB_DATA_BYTES = 10 * 4 * 1024 * 1024
 
 // Pack to ~95% of slab capacity to leave a hair of headroom and avoid

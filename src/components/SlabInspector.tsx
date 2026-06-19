@@ -7,7 +7,7 @@ import { useFeedStore } from '../stores/feed'
 import { usePinStore } from '../stores/pin'
 
 // SDK default: 10 data shards × ~4 MiB each = ~40 MiB usable per slab
-// (the same constant useUploadRunner.expectedShardCount uses).
+// (the same constant the publish handler in lib/actions/publish uses).
 const SHARD_BYTES = 4 * 1024 * 1024
 const EVENTS_PAGE_LIMIT = 200
 const EVENTS_MAX_PAGES = 50

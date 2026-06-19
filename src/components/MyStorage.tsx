@@ -6,7 +6,7 @@ import { useFeedStore } from '../stores/feed'
 import { LIBRARY_CHANNEL } from '../lib/pinUpload'
 import { type PinnedItemRef, usePinStore } from '../stores/pin'
 import { useToastStore } from '../stores/toast'
-import { useUploadQueueStore } from '../stores/uploadQueue'
+import { useActionStore } from '../stores/actionQueue'
 import { kindForMime } from './AttachmentMedia'
 import { ChannelStorageCard } from './ChannelStorageCard'
 import { ChannelStorageDetail } from './ChannelStorageDetail'
@@ -49,7 +49,7 @@ export function MyStorage({
   const pinned = usePinStore((s) => s.pinned)
   const isPinning = usePinStore((s) => s.isPinning)
   const addToast = useToastStore((s) => s.addToast)
-  const enqueue = useUploadQueueStore((s) => s.enqueue)
+  const enqueue = useActionStore((s) => s.enqueuePublish)
 
   const [topTab, setTopTab] = useState<TopTab>('files')
   const [selectedChannelID, setSelectedChannelID] = useState<string | null>(

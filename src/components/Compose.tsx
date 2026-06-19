@@ -12,7 +12,7 @@ import { useAuthStore } from '../stores/auth'
 import { useComposeStore } from '../stores/compose'
 import { useFeedStore } from '../stores/feed'
 import { useToastStore } from '../stores/toast'
-import { useUploadQueueStore } from '../stores/uploadQueue'
+import { useActionStore } from '../stores/actionQueue'
 import {
   type AttachmentKind,
   kindForMime,
@@ -62,7 +62,7 @@ export function Compose({
   const sdk = useAuthStore((s) => s.sdk)
   const agent = useAuthStore((s) => s.atprotoAgent)
   const atprotoHandle = useAuthStore((s) => s.atprotoHandle)
-  const enqueue = useUploadQueueStore((s) => s.enqueue)
+  const enqueue = useActionStore((s) => s.enqueuePublish)
   const addToast = useToastStore((s) => s.addToast)
   const armedItem = useComposeStore((s) => s.armedItem)
   const disarm = useComposeStore((s) => s.disarm)

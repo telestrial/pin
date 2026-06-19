@@ -11,9 +11,9 @@ import { useJetstream } from './lib/hooks/useJetstream'
 import { useRepackRunner } from './lib/hooks/useRepackRunner'
 import { useSettingsSync } from './lib/hooks/useSettingsSync'
 import {
-  useUploadQueueHydration,
-  useUploadRunner,
-} from './lib/hooks/useUploadRunner'
+  useActionQueueHydration,
+  useActionRunner,
+} from './lib/hooks/useActionRunner'
 import { useAuthStore } from './stores/auth'
 import { useComposeStore } from './stores/compose'
 import { usePinStore } from './stores/pin'
@@ -24,8 +24,8 @@ export default function App() {
   const armedItem = useComposeStore((s) => s.armedItem)
 
   useJetstream()
-  useUploadQueueHydration()
-  useUploadRunner()
+  useActionQueueHydration()
+  useActionRunner()
   useRepackRunner()
   useSettingsSync()
   useGhostReconciliation()
