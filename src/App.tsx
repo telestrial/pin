@@ -8,7 +8,6 @@ import './lib/debug'
 import { useGhostReconciliation } from './lib/hooks/useGhostReconciliation'
 import { useHandleFollowReconciliation } from './lib/hooks/useHandleFollowReconciliation'
 import { useJetstream } from './lib/hooks/useJetstream'
-import { useOrphanSweep } from './lib/hooks/useOrphanSweep'
 import { useRepackRunner } from './lib/hooks/useRepackRunner'
 import { useSettingsSync } from './lib/hooks/useSettingsSync'
 import {
@@ -28,7 +27,6 @@ export default function App() {
   useUploadQueueHydration()
   useUploadRunner()
   useRepackRunner()
-  useOrphanSweep()
   useSettingsSync()
   useGhostReconciliation()
   useHandleFollowReconciliation()

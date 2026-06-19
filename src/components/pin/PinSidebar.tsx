@@ -80,7 +80,7 @@ export function PinSidebar({
   const toggleArm = useComposeStore((s) => s.toggle)
   const disarm = useComposeStore((s) => s.disarm)
   const storageActive = useStorageActivityStore(
-    (s) => s.running || s.sweeping || s.savingSettings,
+    (s) => s.running || s.savingSettings,
   )
   const [query, setQuery] = useState('')
   // Click-pin → opacity transitions to 0 over FADE_MS, then unpin commits.
