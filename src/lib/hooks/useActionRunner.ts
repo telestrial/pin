@@ -6,6 +6,10 @@ import {
 } from '../../stores/actionQueue'
 import { useAuthStore } from '../../stores/auth'
 import { useToastStore } from '../../stores/toast'
+import {
+  type DeleteObjectsContext,
+  runDeleteObjects,
+} from '../actions/deleteObjects'
 import { type PublishContext, runPublish, SilentActionError } from '../actions/publish'
 import { loadPersistedActions } from '../actionQueuePersist'
 
@@ -87,6 +91,14 @@ export function useActionRunner() {
           }
           return runPublish(action, ctx)
         }
+        case 'delete-objects': {
+          const store = useActionStore.getState()
+          const ctx: DeleteObjectsContext = {
+            sdk,
+            markDone: (key) => store.markObjectDeleted(action.id, key),
+          }
+          return runDeleteObjects(action, ctx)
+        }
       }
     }
 
@@ -98,15 +110,16 @@ export function useActionRunner() {
         await dispatch(action)
         store.setProgress(action.id, 100)
         store.setState(action.id, 'success', undefined)
-        toast.addToast(`${action.successLabel} “${action.title}”`)
+        if (!action.silent) toast.addToast(`${action.successLabel} “${action.title}”`)
         setTimeout(() => {
           useActionStore.getState().remove(action.id)
         }, SUCCESS_AUTO_REMOVE_MS)
       } catch (e) {
         const msg = e instanceof Error ? e.message : 'Failed'
         store.setState(action.id, 'failed', msg)
-        // Guard failures already show in the in-flight row; don't double-signal.
-        if (!(e instanceof SilentActionError)) {
+        // Background actions (silent) and guard failures (SilentActionError)
+        // already surface in the in-flight row; don't double-signal with a toast.
+        if (!action.silent && !(e instanceof SilentActionError)) {
           toast.addToast(`${action.failLabel} failed: ${msg}`)
         }
       }

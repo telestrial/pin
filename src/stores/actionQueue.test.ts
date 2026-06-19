@@ -37,6 +37,11 @@ const itemRef: ItemRef = {
   contentHash: 'bafy-deadbeef',
 }
 
+// These tests only enqueue publish actions, so the persisted records are
+// PublishActions — narrow once here instead of guarding every assertion.
+const loadPublishActions = async () =>
+  (await loadPersistedActions()) as PublishAction[]
+
 describe('actionQueue persistence', () => {
   beforeEach(async () => {
     useActionStore.getState().reset()
@@ -46,7 +51,7 @@ describe('actionQueue persistence', () => {
   it('persists an enqueued action with its bytes, as pending', async () => {
     enqueueText(['chA'])
     await flush()
-    const [persisted] = await loadPersistedActions()
+    const [persisted] = await loadPublishActions()
     expect(persisted.state).toBe('pending')
     expect(persisted.ledger.uploadedItemRef).toBeUndefined()
     expect(persisted.intent.payload.bytes.length).toBe(4)
@@ -56,13 +61,15 @@ describe('actionQueue persistence', () => {
     const id = enqueueText(['chA'])
     useActionStore.getState().checkpoint(id, itemRef)
     await flush()
-    const [persisted] = await loadPersistedActions()
+    const [persisted] = await loadPublishActions()
     // Resumable snapshot: pending state, ref present, bytes gone.
     expect(persisted.state).toBe('pending')
     expect(persisted.ledger.uploadedItemRef?.itemURL).toBe(itemRef.itemURL)
     expect(persisted.intent.payload.bytes.length).toBe(0)
     // In-memory action keeps the checkpoint too.
-    const live = useActionStore.getState().actions.find((a) => a.id === id)
+    const live = useActionStore.getState().actions.find((a) => a.id === id) as
+      | PublishAction
+      | undefined
     expect(live?.ledger.uploadedItemRef?.itemURL).toBe(itemRef.itemURL)
   })
 
@@ -72,7 +79,7 @@ describe('actionQueue persistence', () => {
     store.checkpoint(id, itemRef)
     store.markChannelPublished(id, 'chA')
     await flush()
-    const [persisted] = await loadPersistedActions()
+    const [persisted] = await loadPublishActions()
     expect(persisted.ledger.publishedChannelIDs).toEqual(['chA'])
     expect(persisted.state).toBe('pending')
   })
@@ -90,11 +97,58 @@ describe('actionQueue persistence', () => {
     useActionStore.getState().checkpoint(id, itemRef)
     useActionStore.getState().setState(id, 'failed', 'boom')
     await flush()
-    const [persisted] = await loadPersistedActions()
+    const [persisted] = await loadPublishActions()
     expect(persisted.state).toBe('failed')
     expect(persisted.error).toBe('boom')
     expect(persisted.ledger.uploadedItemRef?.itemURL).toBe(itemRef.itemURL)
     expect(persisted.intent.payload.bytes.length).toBe(0)
+  })
+})
+
+describe('delete-objects actions', () => {
+  beforeEach(async () => {
+    useActionStore.getState().reset()
+    await flush()
+  })
+
+  it('no-ops (returns empty id) when there is nothing to delete', () => {
+    const id = useActionStore.getState().enqueueDeleteObjects({ label: 'x' })
+    expect(id).toBe('')
+    expect(useActionStore.getState().actions).toHaveLength(0)
+  })
+
+  it('enqueues a silent pending action carrying the intent', () => {
+    const id = useActionStore
+      .getState()
+      .enqueueDeleteObjects({ objectIDs: ['a'], urls: ['u'], label: 'Reclaiming' })
+    const a = useActionStore.getState().actions.find((a) => a.id === id)
+    expect(a?.kind).toBe('delete-objects')
+    expect(a?.silent).toBe(true)
+    expect(a?.state).toBe('pending')
+    if (a?.kind === 'delete-objects') {
+      expect(a.intent.objectIDs).toEqual(['a'])
+      expect(a.intent.urls).toEqual(['u'])
+    }
+  })
+
+  it('records reclaimed keys via markObjectDeleted', () => {
+    const id = useActionStore
+      .getState()
+      .enqueueDeleteObjects({ objectIDs: ['a', 'b'], label: 'x' })
+    useActionStore.getState().markObjectDeleted(id, 'a')
+    const a = useActionStore.getState().actions.find((a) => a.id === id)
+    if (a?.kind === 'delete-objects') expect(a.ledger.done).toEqual(['a'])
+  })
+
+  it('persists a failed cleanup as resumable (pending) so it self-heals on boot', async () => {
+    const id = useActionStore
+      .getState()
+      .enqueueDeleteObjects({ objectIDs: ['a'], label: 'x' })
+    useActionStore.getState().setState(id, 'failed', 'boom')
+    await flush()
+    const persisted = (await loadPersistedActions())[0]
+    expect(persisted.kind).toBe('delete-objects')
+    expect(persisted.state).toBe('pending')
   })
 })
 

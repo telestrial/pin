@@ -27,7 +27,7 @@ import type { Sdk } from '@siafoundation/sia-storage'
 import { buildItemRef, fetchChannel } from '../core/channels'
 import { uploadItem } from '../core/sia'
 import { useActionRunner } from '../lib/hooks/useActionRunner'
-import { useActionStore } from '../stores/actionQueue'
+import { type PublishAction, useActionStore } from '../stores/actionQueue'
 import {
   authorCreateChannel,
   createFakeApp,
@@ -77,7 +77,9 @@ describe('integration: action journal resume', () => {
       const a = useActionStore.getState().actions.find((a) => a.id === id)
       expect(a?.state).toBe('success')
     })
-    const done = useActionStore.getState().actions.find((a) => a.id === id)
+    const done = useActionStore.getState().actions.find((a) => a.id === id) as
+      | PublishAction
+      | undefined
     expect(done?.ledger.uploadedItemRef).toBeDefined()
     expect(done?.ledger.publishedChannelIDs).toEqual([channel.channelID])
 

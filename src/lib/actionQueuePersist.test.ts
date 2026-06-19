@@ -43,7 +43,7 @@ describe('actionQueuePersist', () => {
 
   it('round-trips an action including its body bytes', async () => {
     await persistAction(makeAction('act-1'))
-    const loaded = await loadPersistedActions()
+    const loaded = (await loadPersistedActions()) as PublishAction[]
     expect(loaded).toHaveLength(1)
     expect(loaded[0].id).toBe('act-1')
     expect(Array.from(loaded[0].intent.payload.bytes)).toEqual([1, 2, 3])
@@ -72,8 +72,8 @@ describe('actionQueuePersist', () => {
         },
       }),
     )
-    const src = (await loadPersistedActions())[0].intent.payload
-      .attachmentSources?.[0]
+    const src = ((await loadPersistedActions()) as PublishAction[])[0].intent
+      .payload.attachmentSources?.[0]
     expect(src?.kind).toBe('bytes')
     if (src?.kind === 'bytes') expect(Array.from(src.bytes)).toEqual([4, 5, 6])
   })

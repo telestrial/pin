@@ -63,6 +63,9 @@ type ActionBase = ActionDisplay & {
   phase?: string
   error?: string
   createdAt: string
+  // When true, the runner emits no success/failure toast (background work like
+  // storage cleanup). The action still appears in the in-flight list.
+  silent?: boolean
 }
 
 export type PublishAction = ActionBase & {
@@ -71,13 +74,37 @@ export type PublishAction = ActionBase & {
   ledger: PublishLedger
 }
 
+export type DeleteObjectsIntent = {
+  // Object IDs to delete directly.
+  objectIDs: string[]
+  // Share URLs whose backing object must first be resolved (sharedObject) then
+  // deleted — used for channel/profile images, which store only the URL.
+  urls: string[]
+}
+
+export type DeleteObjectsLedger = {
+  // Intent keys (object IDs and URLs) already handled, so a resume skips them.
+  done?: string[]
+}
+
+// Reclaim Sia bytes that a mutation orphaned. The reliable leg (the record
+// write) already happened synchronously in the caller; this is the flaky byte
+// leg, journaled so a QUIC-failed delete is retried/resumed rather than lost.
+// Reference-safety was checked at enqueue time (the list is pre-pruned); the
+// handler is pure positive-identification — it only deletes ids it was told to.
+export type DeleteObjectsAction = ActionBase & {
+  kind: 'delete-objects'
+  intent: DeleteObjectsIntent
+  ledger: DeleteObjectsLedger
+}
+
 // The journal's action union. Grows as kinds are added.
-export type Action = PublishAction
+export type Action = PublishAction | DeleteObjectsAction
 
 // Recognized kinds — hydration drops any persisted record whose kind isn't in
 // this set (e.g. legacy upload-queue tasks from before the journal rename,
 // which have no `kind` and a different shape).
-export const ACTION_KINDS = ['publish'] as const
+export const ACTION_KINDS = ['publish', 'delete-objects'] as const
 
 function newId(): string {
   return `act-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
@@ -162,6 +189,12 @@ type ActionQueueState = {
     editingItemID?: string
     removedAttachmentObjectIDs?: string[]
   }) => string
+  // Enqueue a background byte-reclaim. No-ops (returns '') if nothing to do.
+  enqueueDeleteObjects: (input: {
+    objectIDs?: string[]
+    urls?: string[]
+    label: string
+  }) => string
   retry: (id: string) => void
   remove: (id: string) => void
   setProgress: (id: string, progress: number) => void
@@ -171,6 +204,8 @@ type ActionQueueState = {
   checkpoint: (id: string, uploadedItemRef: ItemRef) => void
   // Mark one channel published (and persist) before moving to the next.
   markChannelPublished: (id: string, channelID: string) => void
+  // Mark one delete-objects intent key (object ID or URL) reclaimed.
+  markObjectDeleted: (id: string, key: string) => void
   reset: () => void
 }
 
@@ -207,6 +242,26 @@ export const useActionStore = create<ActionQueueState>()((set) => ({
     set((s) => ({ actions: [...s.actions, action] }))
     // Persist so a tab close before the runner finishes doesn't drop the
     // bytes — hydration on next load re-enqueues it.
+    persistResumable(action)
+    return id
+  },
+  enqueueDeleteObjects: ({ objectIDs = [], urls = [], label }) => {
+    if (objectIDs.length === 0 && urls.length === 0) return ''
+    const id = newId()
+    const action: DeleteObjectsAction = {
+      id,
+      kind: 'delete-objects',
+      state: 'pending',
+      progress: 0,
+      createdAt: new Date().toISOString(),
+      title: label,
+      successLabel: 'Reclaimed',
+      failLabel: 'Reclaim',
+      silent: true,
+      intent: { objectIDs, urls },
+      ledger: {},
+    }
+    set((s) => ({ actions: [...s.actions, action] }))
     persistResumable(action)
     return id
   },
@@ -264,7 +319,14 @@ export const useActionStore = create<ActionQueueState>()((set) => ({
         void deletePersistedAction(id)
       } else if (state === 'failed') {
         const updated = actions.find((a) => a.id === id)
-        if (updated) void persistAction(persistableSnapshot(updated))
+        if (updated) {
+          // Background hygiene self-heals: a failed delete-objects persists as
+          // resumable (pending) so the next boot retries it automatically,
+          // rather than waiting for a manual retry. A failed publish persists
+          // as 'failed' — re-publishing is a deliberate user decision.
+          if (updated.kind === 'delete-objects') persistResumable(updated)
+          else void persistAction(persistableSnapshot(updated))
+        }
       }
       return { actions }
     }),
@@ -293,6 +355,17 @@ export const useActionStore = create<ActionQueueState>()((set) => ({
                 ],
               },
             }
+          : a,
+      )
+      const updated = actions.find((a) => a.id === id)
+      if (updated) persistResumable(updated)
+      return { actions }
+    }),
+  markObjectDeleted: (id, key) =>
+    set((s) => {
+      const actions = s.actions.map((a) =>
+        a.id === id && a.kind === 'delete-objects'
+          ? { ...a, ledger: { ...a.ledger, done: [...(a.ledger.done ?? []), key] } }
           : a,
       )
       const updated = actions.find((a) => a.id === id)
