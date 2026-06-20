@@ -20,6 +20,13 @@ function paletteIndex(seed: string): number {
   return Math.abs(h) % PALETTE.length
 }
 
+// The [pale, dark] color pair a seed maps to. Exposed so other surfaces
+// (e.g. a channel hero card's no-cover gradient) can share a channel's
+// identity color, keeping the fallback visually tied to its mark.
+export function channelPalette(seed: string): [string, string] {
+  return PALETTE[paletteIndex(seed)]
+}
+
 function firstLetter(...sources: string[]): string {
   for (const s of sources) {
     const m = s.match(/\p{L}/u)
