@@ -44,16 +44,18 @@ export function ChannelMark({
   channelID: string
   channelName: string
   authorHandle: string
-  size?: 'sm' | 'md' | 'lg'
+  size?: 'xs' | 'sm' | 'md' | 'lg'
 }) {
   const [bg, fg] = PALETTE[paletteIndex(channelID)]
   const letter = firstLetter(channelName, authorHandle)
   const sizeClass =
     size === 'lg'
       ? 'size-16 text-2xl'
-      : size === 'sm'
-        ? 'size-7 text-xs'
-        : 'size-10 text-sm'
+      : size === 'xs'
+        ? 'size-5 text-[10px]'
+        : size === 'sm'
+          ? 'size-7 text-xs'
+          : 'size-10 text-sm'
   return (
     <div
       aria-hidden="true"

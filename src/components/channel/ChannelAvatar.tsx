@@ -13,7 +13,7 @@ export function ChannelAvatar({
   channelName: string
   authorHandle: string
   avatar?: ChannelImage
-  size?: 'sm' | 'md' | 'lg'
+  size?: 'xs' | 'sm' | 'md' | 'lg'
 }) {
   if (!avatar) {
     return (
@@ -47,7 +47,7 @@ function AvatarImage({
   channelID: string
   channelName: string
   authorHandle: string
-  size: 'sm' | 'md' | 'lg'
+  size: 'xs' | 'sm' | 'md' | 'lg'
 }) {
   const { url, error } = useItemBlobURL(
     avatar.itemURL,
@@ -55,7 +55,13 @@ function AvatarImage({
     avatar.contentHash,
   )
   const sizeClass =
-    size === 'lg' ? 'size-16' : size === 'sm' ? 'size-7' : 'size-10'
+    size === 'lg'
+      ? 'size-16'
+      : size === 'xs'
+        ? 'size-5'
+        : size === 'sm'
+          ? 'size-7'
+          : 'size-10'
 
   if (error || !url) {
     return (
