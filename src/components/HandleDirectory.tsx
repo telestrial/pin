@@ -5,11 +5,12 @@ import { fetchChannel } from '../core/channels'
 import { listFollows, parseChannelAtURI } from '../core/follow'
 import { getProfileRecord, type ProfileRecord } from '../core/profile'
 import type { ChannelManifest } from '../core/types'
+import { formatBytes } from '../lib/format'
 import { useItemBlobURL } from '../lib/hooks/useItemBytes'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
 import { ChannelAvatar } from './channel/ChannelAvatar'
-import { channelPalette } from './channel/ChannelMark'
+import { ChannelHeroCard } from './channel/ChannelHeroCard'
 import { FollowHandleButton } from './FollowHandleButton'
 
 type ChannelEntry = {
@@ -308,16 +309,31 @@ function LoadedDirectory({
       )}
 
       {/* Public channels this person owns — one full-bodied hero card each,
-          cover art (or identity gradient) forward, unlabeled (naming parked). */}
+          cover art (or identity gradient) forward, unlabeled (naming parked).
+          On your own profile the badge also carries storage bytes (you own
+          these); on someone else's it's item count only. */}
       {ownChannels.length > 0 && (
         <div className="space-y-3">
-          {ownChannels.map((c) => (
-            <ChannelHeroCard
-              key={`${c.authorDID}:${c.channelID}`}
-              entry={c}
-              onChannelClick={onChannelClick}
-            />
-          ))}
+          {ownChannels.map((c) => {
+            const count = c.manifest.items.length
+            const items = `${count} ${count === 1 ? 'item' : 'items'}`
+            const badge = isSelf
+              ? `${items} · ${formatBytes(channelContentBytes(c.manifest))}`
+              : items
+            return (
+              <ChannelHeroCard
+                key={`${c.authorDID}:${c.channelID}`}
+                channelID={c.channelID}
+                channelName={c.manifest.name}
+                authorHandle={c.authorHandle}
+                avatar={c.manifest.avatar}
+                cover={c.manifest.cover}
+                description={c.manifest.description}
+                badge={badge}
+                onClick={() => onChannelClick(c.authorHandle, c.channelID)}
+              />
+            )
+          })}
         </div>
       )}
 
@@ -557,97 +573,15 @@ function Section({
   )
 }
 
-// Full-bodied "hero" preview for a channel you own: the cover art (or an
-// identity-derived gradient when there's none) fills the card, a dark scrim
-// anchors white name/description + avatar at the bottom, item count top-right.
-// The whole card clicks through to the channel.
-function ChannelHeroCard({
-  entry,
-  onChannelClick,
-}: {
-  entry: ChannelEntry
-  onChannelClick: (authorHandle: string, channelID: string) => void
-}) {
-  const { manifest, channelID, authorHandle } = entry
-  const itemCount = manifest.items.length
-  return (
-    <button
-      type="button"
-      onClick={() => onChannelClick(authorHandle, channelID)}
-      className="relative block w-full h-44 rounded-lg overflow-hidden text-left cursor-pointer"
-    >
-      <HeroBackground cover={manifest.cover} channelID={channelID} />
-      {/* Scrim: darkest at the bottom where the text sits. */}
-      <div className="absolute inset-0 bg-linear-to-t from-black/75 via-black/15 to-black/5" />
-      <span className="absolute top-3 right-3 rounded-full bg-black/35 backdrop-blur-sm px-2 py-0.5 text-xs font-medium text-white">
-        {itemCount} {itemCount === 1 ? 'item' : 'items'}
-      </span>
-      <div className="absolute inset-x-0 bottom-0 p-4 flex items-end gap-3">
-        <div className="rounded-full ring-2 ring-white/90 shrink-0">
-          <ChannelAvatar
-            channelID={channelID}
-            channelName={manifest.name}
-            authorHandle={authorHandle}
-            avatar={manifest.avatar}
-            size="md"
-          />
-        </div>
-        <div className="min-w-0 flex-1 pb-0.5">
-          <div className="text-base font-semibold text-white truncate drop-shadow-sm">
-            {manifest.name}
-          </div>
-          {manifest.description && (
-            <div className="text-sm text-white/85 truncate drop-shadow-sm">
-              {manifest.description}
-            </div>
-          )}
-        </div>
-      </div>
-    </button>
-  )
-}
-
-function HeroBackground({
-  cover,
-  channelID,
-}: {
-  cover: ChannelManifest['cover']
-  channelID: string
-}) {
-  if (cover?.itemURL) {
-    return <HeroCover cover={cover} channelID={channelID} />
-  }
-  return <IdentityGradient channelID={channelID} />
-}
-
-function HeroCover({
-  cover,
-  channelID,
-}: {
-  cover: NonNullable<ChannelManifest['cover']>
-  channelID: string
-}) {
-  const { url, error } = useItemBlobURL(
-    cover.itemURL,
-    cover.mimeType,
-    cover.contentHash,
-  )
-  if (error || !url) return <IdentityGradient channelID={channelID} />
-  return <img src={url} alt="" className="absolute inset-0 size-full object-cover" />
-}
-
-// No-cover fallback: a diagonal gradient from the channel's identity palette
-// (dark → pale), so a cover-less space still has a distinct, recognizable
-// backdrop tied to its mark color.
-function IdentityGradient({ channelID }: { channelID: string }) {
-  const [bg, fg] = channelPalette(channelID)
-  return (
-    <div
-      aria-hidden="true"
-      className="absolute inset-0"
-      style={{ backgroundImage: `linear-gradient(135deg, ${fg}, ${bg})` }}
-    />
-  )
+// Total content bytes a channel holds — post bodies + their attachments — from
+// the manifest items. Coalesces missing byteSize to 0 (legacy/corrupt items
+// undercount rather than NaN-poison the sum). Same number My Storage shows.
+function channelContentBytes(manifest: ChannelManifest): number {
+  return manifest.items.reduce((sum, item) => {
+    const attBytes =
+      item.attachments?.reduce((s, a) => s + (a.byteSize ?? 0), 0) ?? 0
+    return sum + (item.byteSize ?? 0) + attBytes
+  }, 0)
 }
 
 function ChannelRow({

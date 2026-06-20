@@ -7,8 +7,9 @@ import { LIBRARY_CHANNEL } from '../lib/pinUpload'
 import { type PinnedItemRef, usePinStore } from '../stores/pin'
 import { useToastStore } from '../stores/toast'
 import { useActionStore } from '../stores/actionQueue'
+import { formatBytes } from '../lib/format'
 import { kindForMime } from './AttachmentMedia'
-import { ChannelStorageCard } from './ChannelStorageCard'
+import { ChannelHeroCard } from './channel/ChannelHeroCard'
 import { ChannelStorageDetail } from './ChannelStorageDetail'
 import { useFadeCancelUnpin } from '../lib/hooks/useFadeCancelUnpin'
 import { ItemTile } from './ItemTile'
@@ -344,9 +345,9 @@ export function MyStorage({
                 Channels you create show up here.
               </p>
             ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="space-y-3">
                 {ownedChannelCards.map((c) => (
-                  <ChannelStorageCard
+                  <ChannelHeroCard
                     key={c.channel.channelID}
                     channelID={c.channel.channelID}
                     channelName={c.channel.name}
@@ -354,8 +355,7 @@ export function MyStorage({
                     avatar={c.avatar}
                     cover={c.cover}
                     description={c.description}
-                    itemCount={c.itemCount}
-                    bytes={c.bytes}
+                    badge={`${c.itemCount} ${c.itemCount === 1 ? 'item' : 'items'} · ${formatBytes(c.bytes)}`}
                     onClick={() => setSelectedChannelID(c.channel.channelID)}
                   />
                 ))}
