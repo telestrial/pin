@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Builder } from '@siafoundation/sia-storage'
+import { inTauri, openExternal } from '../../lib/openExternal'
 import { useAuthStore } from '../../stores/auth'
 
 export function ApproveScreen({
@@ -75,6 +76,14 @@ export function ApproveScreen({
             href={approvalURL}
             target="_blank"
             rel="noopener noreferrer"
+            onClick={(e) => {
+              // In the desktop shell the webview won't pop a new window;
+              // route to the system browser instead. Web path is unchanged.
+              if (inTauri()) {
+                e.preventDefault()
+                void openExternal(approvalURL)
+              }
+            }}
             className="block w-full text-center py-3 bg-green-600 hover:bg-green-700 text-white font-medium rounded-lg transition-colors"
           >
             Open approval page →
