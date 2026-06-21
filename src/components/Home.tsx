@@ -20,6 +20,7 @@ import { FormCard } from './ui/FormCard'
 import { HandleDirectory } from './HandleDirectory'
 import { HomeFeed } from './HomeFeed'
 import { SettingsView } from './SettingsView'
+import { CurateView } from './CurateView'
 import { MyStorage } from './MyStorage'
 import { ReadApp } from './read/ReadApp'
 import { ReadAudio } from './read/ReadAudio'
@@ -55,6 +56,7 @@ type View =
       returnTo: View
     }
   | { kind: 'settings' }
+  | { kind: 'curate' }
   | { kind: 'reading'; entry: FeedEntry; returnTo: View }
   | { kind: 'bluesky-login'; resumeTo: View; cancelTo: View }
   | { kind: 'storage'; returnTo: View }
@@ -119,6 +121,7 @@ export function Home() {
                 })
             : undefined
         }
+        onCurate={() => setView({ kind: 'curate' })}
         onSettings={() => setView({ kind: 'settings' })}
         onCreate={gotoCreating}
         onSubscribe={() => setView({ kind: 'subscribing' })}
@@ -132,6 +135,7 @@ export function Home() {
         }
         activeHome={activeHome}
         activeProfile={activeProfile}
+        activeCurate={view.kind === 'curate'}
         activeSettings={view.kind === 'settings'}
         activeChannelID={activeChannelID}
       />
@@ -310,6 +314,18 @@ export function Home() {
         rightSidebar={renderPinSidebar()}
       >
         <SettingsView />
+      </FormCard>
+    )
+  }
+
+  if (view.kind === 'curate') {
+    return (
+      <FormCard
+        onBack={() => setView({ kind: 'idle' })}
+        sidebar={renderSidebar()}
+        rightSidebar={renderPinSidebar()}
+      >
+        <CurateView />
       </FormCard>
     )
   }

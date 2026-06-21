@@ -47,6 +47,7 @@ function SectionHeader({
 export function Sidebar({
   onHome,
   onProfile,
+  onCurate,
   onSettings,
   onCreate,
   onSubscribe,
@@ -54,6 +55,7 @@ export function Sidebar({
   onChannelClick,
   activeHome,
   activeProfile,
+  activeCurate,
   activeSettings,
   activeChannelID,
 }: {
@@ -61,6 +63,7 @@ export function Sidebar({
   // Only wired when the user has an atproto handle (Bluesky signed-in).
   // Just-Reading users see the rest of the sidebar but not this entry.
   onProfile?: () => void
+  onCurate: () => void
   onSettings: () => void
   onCreate: () => void
   onSubscribe: () => void
@@ -68,6 +71,7 @@ export function Sidebar({
   onChannelClick: (authorHandle: string, channelID: string) => void
   activeHome?: boolean
   activeProfile?: boolean
+  activeCurate?: boolean
   activeSettings?: boolean
   activeChannelID?: string
 }) {
@@ -125,6 +129,19 @@ export function Sidebar({
             )}
           </button>
         )}
+        <button
+          type="button"
+          onClick={onCurate}
+          className="w-full px-3 py-2 text-sm font-medium rounded-md transition-colors cursor-pointer text-neutral-700 hover:text-neutral-900 hover:bg-neutral-50 flex items-center justify-between gap-2 text-left"
+        >
+          <span>Curate</span>
+          {activeCurate && (
+            <span
+              aria-hidden="true"
+              className="size-1.5 rounded-full bg-neutral-900 shrink-0"
+            />
+          )}
+        </button>
         <button
           type="button"
           onClick={onSettings}
