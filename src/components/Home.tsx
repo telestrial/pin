@@ -518,7 +518,7 @@ export function Home() {
     }
     return (
       <div className="flex-1 p-6">
-        <div className="max-w-7xl mx-auto flex flex-col lg:flex-row lg:items-start gap-6">
+        <div className="flex flex-col lg:flex-row lg:items-start gap-6">
           {renderSidebar(view.channelID)}
           <div className="flex-1 min-w-0">
             <Compose
@@ -707,7 +707,7 @@ export function Home() {
 
   return (
     <div className="flex-1 p-6">
-      <div className="max-w-7xl mx-auto flex flex-col lg:flex-row lg:items-start gap-6">
+      <div className="flex flex-col lg:flex-row lg:items-start gap-6">
         {renderSidebar(undefined, true)}
         <div className="flex-1 space-y-6 min-w-0">
           {composerSlot}

@@ -11,7 +11,7 @@ export function FormCard({
 }) {
   return (
     <div className="flex-1 p-6">
-      <div className="max-w-7xl mx-auto flex flex-col lg:flex-row lg:items-start gap-6">
+      <div className="flex flex-col lg:flex-row lg:items-start gap-6">
         {sidebar}
         <div className="flex-1 min-w-0">
           <div className="bg-white border border-neutral-200 rounded-lg p-5 space-y-5">

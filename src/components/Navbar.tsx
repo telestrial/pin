@@ -9,7 +9,7 @@ import { PinIcon } from './pin/PinIcon'
 export function Navbar({ onLock }: { onLock: () => void }) {
   return (
     <header className="bg-white border-b border-neutral-200/80 px-6">
-      <div className="grid grid-cols-3 items-center py-3 max-w-7xl mx-auto">
+      <div className="grid grid-cols-3 items-center py-3">
         <div />
         <h1 className="justify-self-center text-sm font-semibold text-neutral-900 tracking-tight">
           {APP_NAME}
