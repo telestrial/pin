@@ -181,6 +181,34 @@ function Diagnostics({ status }: { status: CuratorStatus }) {
         (direct vs relayed) will appear here once peers connect.
       </p>
 
+      <div className="space-y-1 pt-1 border-t border-neutral-100">
+        <div className="text-xs font-medium text-neutral-500 pt-3">
+          Local repo
+        </div>
+        {status.repoError ? (
+          <code className="text-xs font-mono text-red-700 break-all block">
+            {status.repoError}
+          </code>
+        ) : status.repoDid ? (
+          <>
+            <div className="flex items-start gap-2">
+              <code className="text-xs font-mono text-neutral-700 break-all flex-1">
+                {status.repoDid}
+              </code>
+              <CopyButton value={status.repoDid} label="Repo DID copied" />
+            </div>
+            <div className="text-xs text-neutral-400 break-all">
+              root commit{' '}
+              <span className="font-mono text-neutral-500">
+                {status.repoRoot}
+              </span>
+            </div>
+          </>
+        ) : (
+          <div className="text-xs text-neutral-400">—</div>
+        )}
+      </div>
+
       {status.lastError && (
         <div className="space-y-1">
           <div className="text-xs font-medium text-red-600">Last error</div>

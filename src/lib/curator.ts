@@ -25,6 +25,12 @@ export type CuratorReport = {
   otherAddrs: string[]
   // Seconds since the endpoint bound.
   uptimeSecs: number | null
+  // The local repo's did:key (stable across restarts).
+  repoDid: string | null
+  // The local repo's signed root commit CID.
+  repoRoot: string | null
+  // The repo engine error, if it failed to come up (iroh still runs).
+  repoError: string | null
   // Last bind/runtime error.
   lastError: string | null
 }
@@ -43,6 +49,9 @@ const OFFLINE: CuratorReport = {
   directAddrs: [],
   otherAddrs: [],
   uptimeSecs: null,
+  repoDid: null,
+  repoRoot: null,
+  repoError: null,
   lastError: null,
 }
 
