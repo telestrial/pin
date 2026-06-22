@@ -8,34 +8,62 @@
 
 import { inTauri } from './openExternal'
 
-export type CuratorStatus = {
-  // Whether the always-on Curator task is currently running.
+// What the Rust commands return (serde camelCase).
+export type CuratorReport = {
   running: boolean
+  // off | binding | connecting | online | stopping | error
+  phase: string
+  // iroh EndpointId — this node's stable public-key identity.
+  nodeId: string | null
+  // Connected to a relay (reachable).
+  online: boolean
+  // Relay transport addresses (debug-formatted).
+  relays: string[]
+  // Direct IP transport addresses discovered (LAN + public via STUN).
+  directAddrs: string[]
+  // Non-relay, non-IP transport addresses.
+  otherAddrs: string[]
+  // Seconds since the endpoint bound.
+  uptimeSecs: number | null
+  // Last bind/runtime error.
+  lastError: string | null
+}
+
+export type CuratorStatus = CuratorReport & {
   // Whether a Curator can run here at all (i.e. we're in the desktop shell).
   available: boolean
 }
 
-const UNAVAILABLE: CuratorStatus = { running: false, available: false }
+const OFFLINE: CuratorReport = {
+  running: false,
+  phase: 'off',
+  nodeId: null,
+  online: false,
+  relays: [],
+  directAddrs: [],
+  otherAddrs: [],
+  uptimeSecs: null,
+  lastError: null,
+}
 
-async function invokeCommand(command: string): Promise<{ running: boolean }> {
+const UNAVAILABLE: CuratorStatus = { ...OFFLINE, available: false }
+
+async function invokeCommand(command: string): Promise<CuratorReport> {
   const { invoke } = await import('@tauri-apps/api/core')
-  return invoke<{ running: boolean }>(command)
+  return invoke<CuratorReport>(command)
 }
 
 export async function curatorStatus(): Promise<CuratorStatus> {
   if (!inTauri()) return UNAVAILABLE
-  const { running } = await invokeCommand('curator_status')
-  return { running, available: true }
+  return { ...(await invokeCommand('curator_status')), available: true }
 }
 
 export async function startCurator(): Promise<CuratorStatus> {
   if (!inTauri()) return UNAVAILABLE
-  const { running } = await invokeCommand('start_curator')
-  return { running, available: true }
+  return { ...(await invokeCommand('start_curator')), available: true }
 }
 
 export async function stopCurator(): Promise<CuratorStatus> {
   if (!inTauri()) return UNAVAILABLE
-  const { running } = await invokeCommand('stop_curator')
-  return { running, available: true }
+  return { ...(await invokeCommand('stop_curator')), available: true }
 }
