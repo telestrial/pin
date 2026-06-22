@@ -15,13 +15,16 @@
 // thread, rather than Tauri's runtime, so a tokio time driver is guaranteed and
 // the agent's lifecycle is fully ours to start and stop.
 
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use iroh::endpoint::presets;
-use iroh::Endpoint;
+use iroh::{Endpoint, SecretKey};
+use tauri::Manager;
 
 /// What the frontend reads. snake_case fields are renamed to camelCase on the
 /// wire for the TS client.
@@ -121,7 +124,7 @@ impl CuratorState {
 }
 
 #[tauri::command]
-pub fn start_curator(state: tauri::State<CuratorState>) -> CuratorStatus {
+pub fn start_curator(app: tauri::AppHandle, state: tauri::State<CuratorState>) -> CuratorStatus {
     let mut inner = state.0.lock().unwrap();
     if inner.running.load(Ordering::SeqCst) {
         return CuratorState::snapshot(&inner);
@@ -131,6 +134,15 @@ pub fn start_curator(state: tauri::State<CuratorState>) -> CuratorStatus {
         let _ = handle.join();
     }
 
+    // Where the Curator's persistent iroh secret key lives — local (not
+    // roaming) app data, so the node identity is per-machine and never synced
+    // to a second device (two machines sharing one node key would be wrong).
+    let key_path = app
+        .path()
+        .app_local_data_dir()
+        .ok()
+        .map(|dir| dir.join("curator").join("node_key"));
+
     let running = Arc::new(AtomicBool::new(true));
     let diag = Arc::new(Mutex::new(Diag::off()));
     {
@@ -139,7 +151,7 @@ pub fn start_curator(state: tauri::State<CuratorState>) -> CuratorStatus {
     }
     inner.running = running.clone();
     inner.diag = Some(diag.clone());
-    inner.handle = Some(thread::spawn(move || run_curator(running, diag)));
+    inner.handle = Some(thread::spawn(move || run_curator(running, diag, key_path)));
 
     CuratorState::snapshot(&inner)
 }
@@ -161,7 +173,7 @@ pub fn curator_status(state: tauri::State<CuratorState>) -> CuratorStatus {
 
 /// Owns a dedicated tokio runtime for the Curator's lifetime and drives the
 /// async endpoint loop on it.
-fn run_curator(running: Arc<AtomicBool>, diag: Arc<Mutex<Diag>>) {
+fn run_curator(running: Arc<AtomicBool>, diag: Arc<Mutex<Diag>>, key_path: Option<PathBuf>) {
     let rt = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -174,12 +186,45 @@ fn run_curator(running: Arc<AtomicBool>, diag: Arc<Mutex<Diag>>) {
             return;
         }
     };
-    rt.block_on(curator_loop(running, diag));
+    rt.block_on(curator_loop(running, diag, key_path));
 }
 
-async fn curator_loop(running: Arc<AtomicBool>, diag: Arc<Mutex<Diag>>) {
-    log::info!("curator binding iroh endpoint");
-    let endpoint = match Endpoint::bind(presets::N0).await {
+/// Load the persisted iroh secret key, or generate one and persist it. The key
+/// IS the node's network identity (its EndpointId / dial-by-key address), so it
+/// must be stable across restarts. Returns the key and whether it's durable
+/// (false = we couldn't read or write the file and are running ephemerally).
+fn load_or_create_key(path: Option<&Path>) -> (SecretKey, bool) {
+    let Some(path) = path else {
+        return (SecretKey::generate(), false);
+    };
+    if let Ok(bytes) = fs::read(path) {
+        if let Ok(arr) = <[u8; 32]>::try_from(bytes.as_slice()) {
+            return (SecretKey::from_bytes(&arr), true);
+        }
+        log::warn!("curator key file malformed; regenerating");
+    }
+    let key = SecretKey::generate();
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let persisted = fs::write(path, key.to_bytes()).is_ok();
+    if !persisted {
+        log::warn!("curator could not persist key at {}", path.display());
+    }
+    (key, persisted)
+}
+
+async fn curator_loop(running: Arc<AtomicBool>, diag: Arc<Mutex<Diag>>, key_path: Option<PathBuf>) {
+    let (secret, persisted) = load_or_create_key(key_path.as_deref());
+    log::info!(
+        "curator binding iroh endpoint (identity: {})",
+        if persisted { "persisted" } else { "ephemeral" }
+    );
+    let endpoint = match Endpoint::builder(presets::N0)
+        .secret_key(secret)
+        .bind()
+        .await
+    {
         Ok(ep) => ep,
         Err(e) => {
             log::error!("curator endpoint bind failed: {e}");
