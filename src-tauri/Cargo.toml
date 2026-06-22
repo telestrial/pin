@@ -1,3 +1,9 @@
+# Standalone workspace so we can opt into the v3 (MSRV-aware) dependency
+# resolver — it picks a consistent windows-core for the iroh→netwatch→wmi chain
+# alongside Tauri's windows deps, which resolver 2 splits and fails to compile.
+[workspace]
+resolver = "3"
+
 [package]
 name = "app"
 version = "0.1.0"
@@ -6,7 +12,10 @@ authors = ["you"]
 license = ""
 repository = ""
 edition = "2021"
-rust-version = "1.77.2"
+# 1.82 floor: iroh's netwatch pins windows 0.62 (MSRV 1.82); below this, the
+# MSRV-aware resolver splits wmi across windows 0.61/windows-core 0.62 and fails
+# to compile. Our toolchain is 1.92.
+rust-version = "1.82"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -24,3 +33,5 @@ log = "0.4"
 tauri = { version = "2.11.3", features = [] }
 tauri-plugin-log = "2"
 tauri-plugin-opener = "2.5.4"
+iroh = "1.0.0"
+tokio = { version = "1", features = ["rt-multi-thread", "time"] }
