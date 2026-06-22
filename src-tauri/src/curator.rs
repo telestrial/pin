@@ -47,6 +47,12 @@ pub struct CuratorStatus {
     pub other_addrs: Vec<String>,
     /// Seconds since the endpoint bound, if running.
     pub uptime_secs: Option<u64>,
+    /// The local repo's did:key (stable across restarts).
+    pub repo_did: Option<String>,
+    /// The local repo's signed root commit CID.
+    pub repo_root: Option<String>,
+    /// The repo engine error, if it failed to come up (iroh still runs).
+    pub repo_error: Option<String>,
     /// The last bind/runtime error, if the Curator failed.
     pub last_error: Option<String>,
 }
@@ -60,6 +66,9 @@ struct Diag {
     relays: Vec<String>,
     direct_addrs: Vec<String>,
     other_addrs: Vec<String>,
+    repo_did: Option<String>,
+    repo_root: Option<String>,
+    repo_error: Option<String>,
     last_error: Option<String>,
     started: Option<Instant>,
 }
@@ -73,6 +82,9 @@ impl Diag {
             relays: Vec::new(),
             direct_addrs: Vec::new(),
             other_addrs: Vec::new(),
+            repo_did: None,
+            repo_root: None,
+            repo_error: None,
             last_error: None,
             started: None,
         }
@@ -105,6 +117,9 @@ impl CuratorState {
                     direct_addrs: d.direct_addrs.clone(),
                     other_addrs: d.other_addrs.clone(),
                     uptime_secs: d.started.map(|t| t.elapsed().as_secs()),
+                    repo_did: d.repo_did.clone(),
+                    repo_root: d.repo_root.clone(),
+                    repo_error: d.repo_error.clone(),
                     last_error: d.last_error.clone(),
                 }
             }
@@ -117,6 +132,9 @@ impl CuratorState {
                 direct_addrs: Vec::new(),
                 other_addrs: Vec::new(),
                 uptime_secs: None,
+                repo_did: None,
+                repo_root: None,
+                repo_error: None,
                 last_error: None,
             },
         }
@@ -134,14 +152,15 @@ pub fn start_curator(app: tauri::AppHandle, state: tauri::State<CuratorState>) -
         let _ = handle.join();
     }
 
-    // Where the Curator's persistent iroh secret key lives — local (not
-    // roaming) app data, so the node identity is per-machine and never synced
-    // to a second device (two machines sharing one node key would be wrong).
-    let key_path = app
+    // The Curator's local data dir — local (not roaming) app data, so the
+    // per-machine secrets (iroh node key, repo signing key) live here and are
+    // never synced to a second device. Kept in one dir for the future encrypted
+    // local vault.
+    let data_dir = app
         .path()
         .app_local_data_dir()
         .ok()
-        .map(|dir| dir.join("curator").join("node_key"));
+        .map(|dir| dir.join("curator"));
 
     let running = Arc::new(AtomicBool::new(true));
     let diag = Arc::new(Mutex::new(Diag::off()));
@@ -151,7 +170,7 @@ pub fn start_curator(app: tauri::AppHandle, state: tauri::State<CuratorState>) -
     }
     inner.running = running.clone();
     inner.diag = Some(diag.clone());
-    inner.handle = Some(thread::spawn(move || run_curator(running, diag, key_path)));
+    inner.handle = Some(thread::spawn(move || run_curator(running, diag, data_dir)));
 
     CuratorState::snapshot(&inner)
 }
@@ -173,7 +192,7 @@ pub fn curator_status(state: tauri::State<CuratorState>) -> CuratorStatus {
 
 /// Owns a dedicated tokio runtime for the Curator's lifetime and drives the
 /// async endpoint loop on it.
-fn run_curator(running: Arc<AtomicBool>, diag: Arc<Mutex<Diag>>, key_path: Option<PathBuf>) {
+fn run_curator(running: Arc<AtomicBool>, diag: Arc<Mutex<Diag>>, data_dir: Option<PathBuf>) {
     let rt = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -186,7 +205,7 @@ fn run_curator(running: Arc<AtomicBool>, diag: Arc<Mutex<Diag>>, key_path: Optio
             return;
         }
     };
-    rt.block_on(curator_loop(running, diag, key_path));
+    rt.block_on(curator_loop(running, diag, data_dir));
 }
 
 /// Load the persisted iroh secret key, or generate one and persist it. The key
@@ -214,8 +233,11 @@ fn load_or_create_key(path: Option<&Path>) -> (SecretKey, bool) {
     (key, persisted)
 }
 
-async fn curator_loop(running: Arc<AtomicBool>, diag: Arc<Mutex<Diag>>, key_path: Option<PathBuf>) {
-    let (secret, persisted) = load_or_create_key(key_path.as_deref());
+async fn curator_loop(running: Arc<AtomicBool>, diag: Arc<Mutex<Diag>>, data_dir: Option<PathBuf>) {
+    let node_key_path = data_dir.as_ref().map(|d| d.join("node_key"));
+    let repo_key_path = data_dir.as_ref().map(|d| d.join("repo_key"));
+
+    let (secret, persisted) = load_or_create_key(node_key_path.as_deref());
     log::info!(
         "curator binding iroh endpoint (identity: {})",
         if persisted { "persisted" } else { "ephemeral" }
@@ -242,6 +264,21 @@ async fn curator_loop(running: Arc<AtomicBool>, diag: Arc<Mutex<Diag>>, key_path
         d.node_id = Some(node_id);
         d.phase = "connecting";
         d.started = Some(Instant::now());
+    }
+
+    // Bring up the local repo engine. Best-effort: if it fails, iroh keeps
+    // running and the error surfaces in diagnostics rather than killing the node.
+    match crate::repo::init_repo(repo_key_path.as_deref()).await {
+        Ok(info) => {
+            log::info!("curator repo online: did={} root={}", info.did, info.root);
+            let mut d = diag.lock().unwrap();
+            d.repo_did = Some(info.did);
+            d.repo_root = Some(info.root);
+        }
+        Err(e) => {
+            log::error!("curator repo engine failed: {e}");
+            diag.lock().unwrap().repo_error = Some(e);
+        }
     }
 
     // Poll the endpoint's address set so relay connection + discovered direct
