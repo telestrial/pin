@@ -209,6 +209,30 @@ function Diagnostics({ status }: { status: CuratorStatus }) {
         )}
       </div>
 
+      <div className="space-y-1 pt-1">
+        <div className="text-xs font-medium text-neutral-500">
+          RPC <span className="font-normal text-neutral-400">pin-keeper/0</span>
+        </div>
+        <Field
+          label="Serving"
+          value={status.rpcServing ? 'yes' : 'no'}
+        />
+        {status.rpcSelftest && (
+          <div className="text-xs text-neutral-400 break-all">
+            self-test:{' '}
+            <span
+              className={
+                status.rpcSelftest.startsWith('ok')
+                  ? 'text-green-600'
+                  : 'text-red-600'
+              }
+            >
+              {status.rpcSelftest}
+            </span>
+          </div>
+        )}
+      </div>
+
       {status.lastError && (
         <div className="space-y-1">
           <div className="text-xs font-medium text-red-600">Last error</div>

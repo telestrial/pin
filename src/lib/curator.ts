@@ -31,6 +31,10 @@ export type CuratorReport = {
   repoRoot: string | null
   // The repo engine error, if it failed to come up (iroh still runs).
   repoError: string | null
+  // Whether the RPC server (ALPN pin-keeper/0) is accepting connections.
+  rpcServing: boolean
+  // Result of the one-shot RPC self-test ("ok …" or an error string).
+  rpcSelftest: string | null
   // Last bind/runtime error.
   lastError: string | null
 }
@@ -52,6 +56,8 @@ const OFFLINE: CuratorReport = {
   repoDid: null,
   repoRoot: null,
   repoError: null,
+  rpcServing: false,
+  rpcSelftest: null,
   lastError: null,
 }
 
