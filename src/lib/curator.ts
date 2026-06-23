@@ -29,6 +29,9 @@ export type CuratorReport = {
   repoDid: string | null
   // The local repo's signed root commit CID.
   repoRoot: string | null
+  // Whether the repo was reopened from an on-disk CAR (true) or created fresh
+  // this run (false) — proof that content survives a restart.
+  repoReopened: boolean
   // The repo engine error, if it failed to come up (iroh still runs).
   repoError: string | null
   // Whether the RPC server (ALPN pin-keeper/0) is accepting connections.
@@ -55,6 +58,7 @@ const OFFLINE: CuratorReport = {
   uptimeSecs: null,
   repoDid: null,
   repoRoot: null,
+  repoReopened: false,
   repoError: null,
   rpcServing: false,
   rpcSelftest: null,

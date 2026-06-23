@@ -51,6 +51,9 @@ pub struct CuratorStatus {
     pub repo_did: Option<String>,
     /// The local repo's signed root commit CID.
     pub repo_root: Option<String>,
+    /// Whether the repo was reopened from an on-disk CAR (true) or created fresh
+    /// this run (false) — the visible proof that content survives a restart.
+    pub repo_reopened: bool,
     /// The repo engine error, if it failed to come up (iroh still runs).
     pub repo_error: Option<String>,
     /// Whether the RPC server (ALPN pin-keeper/0) is accepting connections.
@@ -72,6 +75,7 @@ struct Diag {
     other_addrs: Vec<String>,
     repo_did: Option<String>,
     repo_root: Option<String>,
+    repo_reopened: bool,
     repo_error: Option<String>,
     rpc_serving: bool,
     rpc_selftest: Option<String>,
@@ -90,6 +94,7 @@ impl Diag {
             other_addrs: Vec::new(),
             repo_did: None,
             repo_root: None,
+            repo_reopened: false,
             repo_error: None,
             rpc_serving: false,
             rpc_selftest: None,
@@ -127,6 +132,7 @@ impl CuratorState {
                     uptime_secs: d.started.map(|t| t.elapsed().as_secs()),
                     repo_did: d.repo_did.clone(),
                     repo_root: d.repo_root.clone(),
+                    repo_reopened: d.repo_reopened,
                     repo_error: d.repo_error.clone(),
                     rpc_serving: d.rpc_serving,
                     rpc_selftest: d.rpc_selftest.clone(),
@@ -144,6 +150,7 @@ impl CuratorState {
                 uptime_secs: None,
                 repo_did: None,
                 repo_root: None,
+                repo_reopened: false,
                 repo_error: None,
                 rpc_serving: false,
                 rpc_selftest: None,
@@ -247,7 +254,6 @@ fn load_or_create_key(path: Option<&Path>) -> (SecretKey, bool) {
 
 async fn curator_loop(running: Arc<AtomicBool>, diag: Arc<Mutex<Diag>>, data_dir: Option<PathBuf>) {
     let node_key_path = data_dir.as_ref().map(|d| d.join("node_key"));
-    let repo_key_path = data_dir.as_ref().map(|d| d.join("repo_key"));
 
     let (secret, persisted) = load_or_create_key(node_key_path.as_deref());
     log::info!(
@@ -282,29 +288,40 @@ async fn curator_loop(running: Arc<AtomicBool>, diag: Arc<Mutex<Diag>>, data_dir
     // running and the error surfaces in diagnostics rather than killing the node.
     // On success, serve the RPC over iroh and self-test it.
     let mut router = None;
-    match crate::repo::init_repo(repo_key_path.as_deref()).await {
-        Ok(info) => {
-            log::info!("curator repo online: did={} root={}", info.did, info.root);
+    match crate::repo::init_repo(data_dir.as_deref()).await {
+        Ok(handle) => {
+            log::info!(
+                "curator repo online: did={} root={} ({})",
+                handle.did,
+                handle.root,
+                if handle.reopened {
+                    "reopened from disk"
+                } else {
+                    "created fresh"
+                }
+            );
+            let root = handle.root.clone();
             {
                 let mut d = diag.lock().unwrap();
-                d.repo_did = Some(info.did.clone());
-                d.repo_root = Some(info.root.clone());
+                d.repo_did = Some(handle.did.clone());
+                d.repo_root = Some(handle.root.clone());
+                d.repo_reopened = handle.reopened;
             }
 
             let head = crate::rpc::Head {
-                did: info.did,
-                root: info.root.clone(),
-                sig: info.commit_sig,
+                did: handle.did,
+                root: handle.root,
+                sig: handle.commit_sig,
             };
-            let handler = crate::rpc::RpcHandler::new(head);
+            let handler = crate::rpc::RpcHandler::new(head, handle.repo);
             let r = iroh::protocol::Router::builder(endpoint.clone())
                 .accept(crate::rpc::ALPN, handler)
                 .spawn();
             diag.lock().unwrap().rpc_serving = true;
             log::info!("curator rpc serving (alpn pin-keeper/0)");
 
-            // One-shot self-test: a throwaway client dials us and calls `head`.
-            match crate::rpc::self_test(endpoint.addr(), &info.root).await {
+            // One-shot self-test: a throwaway client dials us and calls head + record.
+            match crate::rpc::self_test(endpoint.addr(), &root).await {
                 Ok(msg) => {
                     log::info!("curator rpc self-test: {msg}");
                     diag.lock().unwrap().rpc_selftest = Some(msg);

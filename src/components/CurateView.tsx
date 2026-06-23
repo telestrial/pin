@@ -182,8 +182,13 @@ function Diagnostics({ status }: { status: CuratorStatus }) {
       </p>
 
       <div className="space-y-1 pt-1 border-t border-neutral-100">
-        <div className="text-xs font-medium text-neutral-500 pt-3">
-          Local repo
+        <div className="text-xs font-medium text-neutral-500 pt-3 flex items-center justify-between gap-2">
+          <span>Local repo</span>
+          {status.repoDid && !status.repoError && (
+            <span className="font-normal text-neutral-400">
+              {status.repoReopened ? 'reopened from disk' : 'created fresh'}
+            </span>
+          )}
         </div>
         {status.repoError ? (
           <code className="text-xs font-mono text-red-700 break-all block">
