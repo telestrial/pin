@@ -222,6 +222,14 @@ function Diagnostics({ status }: { status: CuratorStatus }) {
           label="Serving"
           value={status.rpcServing ? 'yes' : 'no'}
         />
+        <Field
+          label="Inbox"
+          value={
+            status.heyQueued === 1
+              ? '1 knock'
+              : `${status.heyQueued} knocks`
+          }
+        />
         {status.rpcSelftest && (
           <div className="text-xs text-neutral-400 break-all">
             self-test:{' '}

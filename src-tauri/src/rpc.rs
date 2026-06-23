@@ -4,21 +4,29 @@
 // request/response calls over a QUIC bidi stream — the serve half of the keeper
 // protocol. The verb set is head / record / diff / hey.
 //
-// Slice 5 adds `record`: a lookup of one record by (collection, rkey) against the
-// live repo, returning its CID and value. It's the first verb that touches repo
-// content rather than just the signed head, so the handler now holds the shared
-// repo (an async mutex — `get_raw` takes `&mut`) and `respond` is async. `diff`
-// and `hey` remain stubbed.
+// Slice 5 added `record`: a lookup of one record by (collection, rkey) against
+// the live repo, returning its CID and value — the first verb that touches repo
+// content, so the handler holds the shared repo (an async mutex — `get_raw` takes
+// `&mut`) and `respond` is async.
 //
-// The one-shot self-test on start now exercises both `head` (the signed root) and
-// `record` (the marker round-trips), over a throwaway client endpoint dialing the
-// node — the on-machine proof that serve + dial + a content read all work.
+// This slice adds `hey`: the inbox knock — the one PUSH verb in an otherwise
+// pull-shaped protocol (atproto has no "notify me" channel). A peer hands us
+// `{ from, sig, referent }` meaning "I did something about you, here's the
+// pointer"; we enqueue it. We do NOT verify the sig or fetch the referent yet —
+// that (and persisting/draining the queue) is the reconcile loop, a later slice.
+// The inbox is in-memory for now. `diff` (incremental block sync) is the last
+// remaining stub.
+//
+// The one-shot self-test on start exercises `head` (the signed root), `record`
+// (the marker round-trips), and `hey` (a knock is accepted), over a throwaway
+// client endpoint dialing the node — the on-machine proof that serve + dial +
+// a content read + an inbound knock all work.
 //
 // Wire format per call: the dialer opens a bidi stream, writes a JSON request,
 // finishes its send side; the server reads to end, writes a JSON response,
 // finishes. One request/response per stream.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use iroh::endpoint::{presets, Connection};
@@ -49,7 +57,33 @@ struct Request {
     /// `record`: the record key (e.g. "self").
     #[serde(default)]
     rkey: Option<String>,
+    /// `hey`: the knocking party (DID or node id).
+    #[serde(default)]
+    from: Option<String>,
+    /// `hey`: hex signature over the knock (not verified yet — that's reconcile).
+    #[serde(default)]
+    sig: Option<String>,
+    /// `hey`: the AT-URI the knock is about ("I did something about this").
+    #[serde(default)]
+    referent: Option<String>,
 }
+
+/// An inbound knock parked in the inbox until the reconcile loop drains it
+/// (fetch the referent, verify the sig, materialize an index record). None of
+/// that happens this slice — we just hold the pointer, so the fields are stored
+/// but not yet read (the reconcile slice is what reads them).
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct Knock {
+    pub from: String,
+    pub sig: String,
+    pub referent: String,
+}
+
+/// The `hey` inbox: knocks accepted but not yet reconciled. In-memory for now;
+/// persisting + draining it is the reconcile slice. A std mutex (not tokio) —
+/// it's only ever held for a push/read with no await in between.
+pub type HeyInbox = Arc<Mutex<Vec<Knock>>>;
 
 #[derive(Serialize)]
 struct HeadResponse<'a> {
@@ -68,6 +102,14 @@ struct RecordResponse {
     /// for the JSON-shaped records Pin writes; a verifiable-bytes form is a later
     /// refinement for real peer sync.
     value: Option<serde_json::Value>,
+}
+
+#[derive(Serialize)]
+struct HeyResponse {
+    accepted: bool,
+    /// Inbox depth after enqueuing — lets the knocker (and our diagnostics) see
+    /// the knock landed.
+    queued: usize,
 }
 
 #[derive(Serialize)]
@@ -91,13 +133,15 @@ fn hex_encode(bytes: &[u8]) -> String {
 pub struct RpcHandler {
     head: Arc<Head>,
     repo: SharedRepo,
+    inbox: HeyInbox,
 }
 
 impl RpcHandler {
-    pub fn new(head: Head, repo: SharedRepo) -> Self {
+    pub fn new(head: Head, repo: SharedRepo, inbox: HeyInbox) -> Self {
         Self {
             head: Arc::new(head),
             repo,
+            inbox,
         }
     }
 
@@ -114,7 +158,8 @@ impl RpcHandler {
             })
             .unwrap_or_else(|e| error_frame(&format!("encode: {e}"))),
             "record" => self.respond_record(req.collection, req.rkey).await,
-            "diff" | "hey" => error_frame(&format!("unimplemented: {}", req.verb)),
+            "hey" => self.respond_hey(req.from, req.sig, req.referent),
+            "diff" => error_frame("unimplemented: diff"),
             other => error_frame(&format!("unknown verb: {other}")),
         }
     }
@@ -148,6 +193,29 @@ impl RpcHandler {
         })
         .unwrap_or_else(|e| error_frame(&format!("encode: {e}")))
     }
+
+    fn respond_hey(
+        &self,
+        from: Option<String>,
+        sig: Option<String>,
+        referent: Option<String>,
+    ) -> Vec<u8> {
+        let (Some(from), Some(sig), Some(referent)) = (from, sig, referent) else {
+            return error_frame("hey requires from, sig, and referent");
+        };
+        // Park the knock. We don't verify the sig or fetch the referent here —
+        // that's the reconcile loop. Acceptance just means "received and queued."
+        let queued = {
+            let mut inbox = self.inbox.lock().unwrap();
+            inbox.push(Knock { from, sig, referent });
+            inbox.len()
+        };
+        serde_json::to_vec(&HeyResponse {
+            accepted: true,
+            queued,
+        })
+        .unwrap_or_else(|e| error_frame(&format!("encode: {e}")))
+    }
 }
 
 impl ProtocolHandler for RpcHandler {
@@ -175,9 +243,10 @@ impl ProtocolHandler for RpcHandler {
 }
 
 /// One-shot self-test: bind a throwaway client endpoint, dial the Curator's
-/// endpoint over the RPC ALPN, and confirm both `head` (root matches) and
-/// `record` (the marker is found) round-trip. Proves serve + dial + a content
-/// read end-to-end on one machine.
+/// endpoint over the RPC ALPN, and confirm `head` (root matches), `record` (the
+/// marker is found), and `hey` (a knock is accepted) round-trip. Proves serve +
+/// dial + a content read + an inbound knock end-to-end on one machine. The knock
+/// it sends is synthetic; the caller clears the inbox afterward.
 pub async fn self_test(server_addr: EndpointAddr, expected_root: &str) -> Result<String, String> {
     let client = Endpoint::bind(presets::N0)
         .await
@@ -212,15 +281,29 @@ async fn run_self_test(
     // record: the marker written at init must be found.
     let record = call(&conn, br#"{"verb":"record","collection":"dev.sia.pin.marker","rkey":"self"}"#)
         .await?;
-    conn.close(0u32.into(), b"bye");
     if record.get("found").and_then(|f| f.as_bool()) != Some(true) {
+        conn.close(0u32.into(), b"bye");
         return Err(match record.get("error").and_then(|e| e.as_str()) {
             Some(err) => format!("record server error: {err}"),
             None => "record not found".to_string(),
         });
     }
 
-    Ok("ok (head + record round-trip)".to_string())
+    // hey: a knock must be accepted (synthetic; the caller clears the inbox).
+    let hey = call(
+        &conn,
+        br#"{"verb":"hey","from":"did:self-test","sig":"00","referent":"at://self-test"}"#,
+    )
+    .await?;
+    conn.close(0u32.into(), b"bye");
+    if hey.get("accepted").and_then(|a| a.as_bool()) != Some(true) {
+        return Err(match hey.get("error").and_then(|e| e.as_str()) {
+            Some(err) => format!("hey server error: {err}"),
+            None => "hey not accepted".to_string(),
+        });
+    }
+
+    Ok("ok (head + record + hey round-trip)".to_string())
 }
 
 /// Issue one request on a fresh bidi stream and parse the JSON response.

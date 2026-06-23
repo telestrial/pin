@@ -60,6 +60,8 @@ pub struct CuratorStatus {
     pub rpc_serving: bool,
     /// Result of the one-shot RPC self-test: "ok …" or an error string.
     pub rpc_selftest: Option<String>,
+    /// Number of inbound `hey` knocks parked in the inbox awaiting reconcile.
+    pub hey_queued: u64,
     /// The last bind/runtime error, if the Curator failed.
     pub last_error: Option<String>,
 }
@@ -79,6 +81,7 @@ struct Diag {
     repo_error: Option<String>,
     rpc_serving: bool,
     rpc_selftest: Option<String>,
+    hey_queued: u64,
     last_error: Option<String>,
     started: Option<Instant>,
 }
@@ -98,6 +101,7 @@ impl Diag {
             repo_error: None,
             rpc_serving: false,
             rpc_selftest: None,
+            hey_queued: 0,
             last_error: None,
             started: None,
         }
@@ -136,6 +140,7 @@ impl CuratorState {
                     repo_error: d.repo_error.clone(),
                     rpc_serving: d.rpc_serving,
                     rpc_selftest: d.rpc_selftest.clone(),
+                    hey_queued: d.hey_queued,
                     last_error: d.last_error.clone(),
                 }
             }
@@ -154,6 +159,7 @@ impl CuratorState {
                 repo_error: None,
                 rpc_serving: false,
                 rpc_selftest: None,
+                hey_queued: 0,
                 last_error: None,
             },
         }
@@ -288,6 +294,7 @@ async fn curator_loop(running: Arc<AtomicBool>, diag: Arc<Mutex<Diag>>, data_dir
     // running and the error surfaces in diagnostics rather than killing the node.
     // On success, serve the RPC over iroh and self-test it.
     let mut router = None;
+    let mut hey_inbox: Option<crate::rpc::HeyInbox> = None;
     match crate::repo::init_repo(data_dir.as_deref()).await {
         Ok(handle) => {
             log::info!(
@@ -313,14 +320,17 @@ async fn curator_loop(running: Arc<AtomicBool>, diag: Arc<Mutex<Diag>>, data_dir
                 root: handle.root,
                 sig: handle.commit_sig,
             };
-            let handler = crate::rpc::RpcHandler::new(head, handle.repo);
+            let inbox: crate::rpc::HeyInbox = Arc::new(Mutex::new(Vec::new()));
+            let handler = crate::rpc::RpcHandler::new(head, handle.repo, inbox.clone());
             let r = iroh::protocol::Router::builder(endpoint.clone())
                 .accept(crate::rpc::ALPN, handler)
                 .spawn();
             diag.lock().unwrap().rpc_serving = true;
             log::info!("curator rpc serving (alpn pin-keeper/0)");
 
-            // One-shot self-test: a throwaway client dials us and calls head + record.
+            // One-shot self-test: a throwaway client dials us and calls head +
+            // record + hey. The hey it sends is synthetic, so clear the inbox
+            // afterward — real knocks should start the count from zero.
             match crate::rpc::self_test(endpoint.addr(), &root).await {
                 Ok(msg) => {
                     log::info!("curator rpc self-test: {msg}");
@@ -331,6 +341,8 @@ async fn curator_loop(running: Arc<AtomicBool>, diag: Arc<Mutex<Diag>>, data_dir
                     diag.lock().unwrap().rpc_selftest = Some(format!("failed: {e}"));
                 }
             }
+            inbox.lock().unwrap().clear();
+            hey_inbox = Some(inbox);
             router = Some(r);
         }
         Err(e) => {
@@ -357,12 +369,17 @@ async fn curator_loop(running: Arc<AtomicBool>, diag: Arc<Mutex<Diag>>, data_dir
             }
         }
         let online = !relays.is_empty();
+        let hey_queued = hey_inbox
+            .as_ref()
+            .map(|i| i.lock().unwrap().len() as u64)
+            .unwrap_or(0);
         {
             let mut d = diag.lock().unwrap();
             d.online = online;
             d.relays = relays;
             d.direct_addrs = direct;
             d.other_addrs = other;
+            d.hey_queued = hey_queued;
             d.phase = if online { "online" } else { "connecting" };
         }
 

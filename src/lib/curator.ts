@@ -38,6 +38,8 @@ export type CuratorReport = {
   rpcServing: boolean
   // Result of the one-shot RPC self-test ("ok …" or an error string).
   rpcSelftest: string | null
+  // Inbound `hey` knocks parked in the inbox awaiting reconcile.
+  heyQueued: number
   // Last bind/runtime error.
   lastError: string | null
 }
@@ -62,6 +64,7 @@ const OFFLINE: CuratorReport = {
   repoError: null,
   rpcServing: false,
   rpcSelftest: null,
+  heyQueued: 0,
   lastError: null,
 }
 
