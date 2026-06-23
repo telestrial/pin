@@ -53,6 +53,10 @@ pub struct CuratorStatus {
     pub repo_root: Option<String>,
     /// The repo engine error, if it failed to come up (iroh still runs).
     pub repo_error: Option<String>,
+    /// Whether the RPC server (ALPN pin-keeper/0) is accepting connections.
+    pub rpc_serving: bool,
+    /// Result of the one-shot RPC self-test: "ok …" or an error string.
+    pub rpc_selftest: Option<String>,
     /// The last bind/runtime error, if the Curator failed.
     pub last_error: Option<String>,
 }
@@ -69,6 +73,8 @@ struct Diag {
     repo_did: Option<String>,
     repo_root: Option<String>,
     repo_error: Option<String>,
+    rpc_serving: bool,
+    rpc_selftest: Option<String>,
     last_error: Option<String>,
     started: Option<Instant>,
 }
@@ -85,6 +91,8 @@ impl Diag {
             repo_did: None,
             repo_root: None,
             repo_error: None,
+            rpc_serving: false,
+            rpc_selftest: None,
             last_error: None,
             started: None,
         }
@@ -120,6 +128,8 @@ impl CuratorState {
                     repo_did: d.repo_did.clone(),
                     repo_root: d.repo_root.clone(),
                     repo_error: d.repo_error.clone(),
+                    rpc_serving: d.rpc_serving,
+                    rpc_selftest: d.rpc_selftest.clone(),
                     last_error: d.last_error.clone(),
                 }
             }
@@ -135,6 +145,8 @@ impl CuratorState {
                 repo_did: None,
                 repo_root: None,
                 repo_error: None,
+                rpc_serving: false,
+                rpc_selftest: None,
                 last_error: None,
             },
         }
@@ -268,12 +280,41 @@ async fn curator_loop(running: Arc<AtomicBool>, diag: Arc<Mutex<Diag>>, data_dir
 
     // Bring up the local repo engine. Best-effort: if it fails, iroh keeps
     // running and the error surfaces in diagnostics rather than killing the node.
+    // On success, serve the RPC over iroh and self-test it.
+    let mut router = None;
     match crate::repo::init_repo(repo_key_path.as_deref()).await {
         Ok(info) => {
             log::info!("curator repo online: did={} root={}", info.did, info.root);
-            let mut d = diag.lock().unwrap();
-            d.repo_did = Some(info.did);
-            d.repo_root = Some(info.root);
+            {
+                let mut d = diag.lock().unwrap();
+                d.repo_did = Some(info.did.clone());
+                d.repo_root = Some(info.root.clone());
+            }
+
+            let head = crate::rpc::Head {
+                did: info.did,
+                root: info.root.clone(),
+                sig: info.commit_sig,
+            };
+            let handler = crate::rpc::RpcHandler::new(head);
+            let r = iroh::protocol::Router::builder(endpoint.clone())
+                .accept(crate::rpc::ALPN, handler)
+                .spawn();
+            diag.lock().unwrap().rpc_serving = true;
+            log::info!("curator rpc serving (alpn pin-keeper/0)");
+
+            // One-shot self-test: a throwaway client dials us and calls `head`.
+            match crate::rpc::self_test(endpoint.addr(), &info.root).await {
+                Ok(msg) => {
+                    log::info!("curator rpc self-test: {msg}");
+                    diag.lock().unwrap().rpc_selftest = Some(msg);
+                }
+                Err(e) => {
+                    log::warn!("curator rpc self-test failed: {e}");
+                    diag.lock().unwrap().rpc_selftest = Some(format!("failed: {e}"));
+                }
+            }
+            router = Some(r);
         }
         Err(e) => {
             log::error!("curator repo engine failed: {e}");
@@ -320,6 +361,9 @@ async fn curator_loop(running: Arc<AtomicBool>, diag: Arc<Mutex<Diag>>, data_dir
     {
         let mut d = diag.lock().unwrap();
         d.phase = "stopping";
+    }
+    if let Some(r) = router {
+        r.shutdown().await.ok();
     }
     endpoint.close().await;
     log::info!("curator stopped");

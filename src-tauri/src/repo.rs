@@ -31,6 +31,8 @@ pub struct RepoInfo {
     pub did: String,
     /// The signed root commit CID after the marker write.
     pub root: String,
+    /// The signature over the current commit (served by the RPC `head` verb).
+    pub commit_sig: Vec<u8>,
 }
 
 /// A tiny marker record, written and read back to prove the engine round-trips
@@ -113,8 +115,11 @@ pub async fn init_repo(key_path: Option<&Path>) -> Result<RepoInfo, String> {
         return Err("marker record did not round-trip".to_string());
     }
 
+    let root = repo.root().to_string();
+    let commit_sig = repo.commit().sig().to_vec();
     Ok(RepoInfo {
         did: did_str,
-        root: repo.root().to_string(),
+        root,
+        commit_sig,
     })
 }
