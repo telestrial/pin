@@ -9,35 +9,54 @@
 // content, so the handler holds the shared repo (an async mutex — `get_raw` takes
 // `&mut`) and `respond` is async.
 //
-// This slice adds `hey`: the inbox knock — the one PUSH verb in an otherwise
-// pull-shaped protocol (atproto has no "notify me" channel). A peer hands us
-// `{ from, sig, referent }` meaning "I did something about you, here's the
-// pointer"; we enqueue it. We do NOT verify the sig or fetch the referent yet —
-// that (and persisting/draining the queue) is the reconcile loop, a later slice.
-// The inbox is in-memory for now. `diff` (incremental block sync) is the last
-// remaining stub.
+// The `hey` slice added the inbox knock — the one PUSH verb in an otherwise
+// pull-shaped protocol (atproto has no "notify me" channel): a peer hands us
+// `{ from, sig, referent }` and we enqueue it (no sig-verify / referent-fetch
+// yet — that's the reconcile loop).
 //
-// The one-shot self-test on start exercises `head` (the signed root), `record`
-// (the marker round-trips), and `hey` (a knock is accepted), over a throwaway
-// client endpoint dialing the node — the on-machine proof that serve + dial +
-// a content read + an inbound knock all work.
+// This slice adds `diff`, completing the verb set. `diff(since?)` is incremental
+// repo sync: it returns a CAR of just the blocks the caller needs to advance
+// from a commit they hold (`since`) to the current root — or the whole repo when
+// `since` is absent/unknown. The honest delta needs to walk an arbitrary old
+// root AND read raw blocks, neither of which the encapsulated live repo exposes,
+// so `diff` opens a FRESH read-only `CarStore` on `repo.car` (shared-read
+// alongside the live handle): export the CID set from the current root, export
+// it from `since`, subtract, and ship the difference as a CAR. `since ==`
+// current short-circuits to an empty CAR (up to date).
+//
+// The one-shot self-test on start exercises all four verbs over a throwaway
+// client endpoint dialing the node: `head` (signed root), `record` (the marker
+// round-trips), `hey` (a knock is accepted), and `diff` (the returned CAR
+// reopens into a repo whose marker reads back) — the on-machine proof that
+// serve + dial + content read + inbound knock + repo sync all work.
 //
 // Wire format per call: the dialer opens a bidi stream, writes a JSON request,
 // finishes its send side; the server reads to end, writes a JSON response,
 // finishes. One request/response per stream.
 
+use std::collections::HashSet;
+use std::io::Cursor;
+use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use atrium_repo::blockstore::{AsyncBlockStoreRead, AsyncBlockStoreWrite, CarStore, SHA2_256};
+use atrium_repo::{Cid, Repository};
 use iroh::endpoint::{presets, Connection};
 use iroh::protocol::{AcceptError, ProtocolHandler};
 use iroh::{Endpoint, EndpointAddr};
 use serde::{Deserialize, Serialize};
+use tokio::fs::OpenOptions;
 
 use crate::repo::SharedRepo;
 
 pub const ALPN: &[u8] = b"pin-keeper/0";
-const MAX_FRAME: usize = 64 * 1024;
+// Per-frame ceiling for both request and response reads. Generous because the
+// `diff` response carries a CAR; a small keeper repo is well under this. Very
+// large repos would need streaming instead of a single framed response — a
+// later refinement. Note: this is a read cap, not a pre-allocation.
+const MAX_FRAME: usize = 16 * 1024 * 1024;
 
 /// The repo's current signed head, served by the `head` verb. An immutable
 /// snapshot taken at start (the repo is static after init this cut).
@@ -66,6 +85,9 @@ struct Request {
     /// `hey`: the AT-URI the knock is about ("I did something about this").
     #[serde(default)]
     referent: Option<String>,
+    /// `diff`: the commit CID the caller already holds (absent = full repo).
+    #[serde(default)]
+    since: Option<String>,
 }
 
 /// An inbound knock parked in the inbox until the reconcile loop drains it
@@ -113,6 +135,17 @@ struct HeyResponse {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DiffResponse {
+    /// The current root commit CID the returned CAR advances to.
+    root: String,
+    /// True when `since` already equals the current root (empty CAR).
+    up_to_date: bool,
+    /// Hex-encoded CAR (roots = [root]) of the delta blocks. Empty when up to date.
+    car: String,
+}
+
+#[derive(Serialize)]
 struct ErrorResponse<'a> {
     error: &'a str,
 }
@@ -129,19 +162,31 @@ fn hex_encode(bytes: &[u8]) -> String {
     s
 }
 
+fn hex_decode(s: &str) -> Option<Vec<u8>> {
+    if s.len() % 2 != 0 {
+        return None;
+    }
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok())
+        .collect()
+}
+
 #[derive(Debug, Clone)]
 pub struct RpcHandler {
     head: Arc<Head>,
     repo: SharedRepo,
     inbox: HeyInbox,
+    car_path: PathBuf,
 }
 
 impl RpcHandler {
-    pub fn new(head: Head, repo: SharedRepo, inbox: HeyInbox) -> Self {
+    pub fn new(head: Head, repo: SharedRepo, inbox: HeyInbox, car_path: PathBuf) -> Self {
         Self {
             head: Arc::new(head),
             repo,
             inbox,
+            car_path,
         }
     }
 
@@ -159,7 +204,7 @@ impl RpcHandler {
             .unwrap_or_else(|e| error_frame(&format!("encode: {e}"))),
             "record" => self.respond_record(req.collection, req.rkey).await,
             "hey" => self.respond_hey(req.from, req.sig, req.referent),
-            "diff" => error_frame("unimplemented: diff"),
+            "diff" => self.respond_diff(req.since).await,
             other => error_frame(&format!("unknown verb: {other}")),
         }
     }
@@ -216,6 +261,97 @@ impl RpcHandler {
         })
         .unwrap_or_else(|e| error_frame(&format!("encode: {e}")))
     }
+
+    async fn respond_diff(&self, since: Option<String>) -> Vec<u8> {
+        match self.diff_inner(since).await {
+            Ok(frame) => frame,
+            Err(e) => error_frame(&format!("diff: {e}")),
+        }
+    }
+
+    async fn diff_inner(&self, since: Option<String>) -> Result<Vec<u8>, String> {
+        // Current root from the live repo — authoritative even once writers exist.
+        let current_root = { self.repo.lock().await.root() };
+
+        let since_cid = since.as_deref().and_then(|s| Cid::from_str(s).ok());
+        // Up-to-date short-circuit: the caller already holds the current root.
+        if since_cid == Some(current_root) {
+            return Ok(diff_frame(current_root, true, &[]));
+        }
+
+        // Fresh read-only view of the CAR: lets us walk an arbitrary old root AND
+        // read raw blocks (the live repo exposes neither). Shared-read alongside
+        // the live read+write handle. Re-indexes + hash-validates the whole CAR
+        // each call — fine at keeper scale; an index cache is a later refinement.
+        let file = OpenOptions::new()
+            .read(true)
+            .open(&self.car_path)
+            .await
+            .map_err(|e| format!("open car: {e}"))?;
+        let mut store = CarStore::open(file)
+            .await
+            .map_err(|e| format!("open car store: {e}"))?;
+
+        // CID set reachable from the current root. Collect into an owned local so
+        // the export iterator (which borrows `repo`) is consumed before `repo`
+        // drops at the block's end.
+        let current_cids: HashSet<Cid> = {
+            let mut repo = Repository::open(&mut store, current_root)
+                .await
+                .map_err(|e| format!("open current: {e}"))?;
+            let cids = repo
+                .export()
+                .await
+                .map_err(|e| format!("export current: {e}"))?
+                .collect::<HashSet<Cid>>();
+            cids
+        };
+
+        // CID set the caller already holds. If we don't have their commit, the
+        // set is empty and they get the full repo (a correct superset).
+        let old_cids: HashSet<Cid> = match since_cid {
+            Some(s) => match Repository::open(&mut store, s).await {
+                Ok(mut old) => {
+                    let cids = old
+                        .export()
+                        .await
+                        .map_err(|e| format!("export since: {e}"))?
+                        .collect::<HashSet<Cid>>();
+                    cids
+                }
+                Err(_) => HashSet::new(),
+            },
+            None => HashSet::new(),
+        };
+
+        // Ship a CAR (roots=[current_root]) of just the blocks they're missing.
+        let delta: Vec<Cid> = current_cids.difference(&old_cids).copied().collect();
+        let mut buf: Vec<u8> = Vec::new();
+        {
+            let mut out = CarStore::create_with_roots(Cursor::new(&mut buf), [current_root])
+                .await
+                .map_err(|e| format!("create car: {e}"))?;
+            for cid in &delta {
+                let bytes = store
+                    .read_block(*cid)
+                    .await
+                    .map_err(|e| format!("read block: {e}"))?;
+                out.write_block(cid.codec(), SHA2_256, &bytes)
+                    .await
+                    .map_err(|e| format!("write block: {e}"))?;
+            }
+        }
+        Ok(diff_frame(current_root, delta.is_empty(), &buf))
+    }
+}
+
+fn diff_frame(root: Cid, up_to_date: bool, car: &[u8]) -> Vec<u8> {
+    serde_json::to_vec(&DiffResponse {
+        root: root.to_string(),
+        up_to_date,
+        car: hex_encode(car),
+    })
+    .unwrap_or_else(|e| error_frame(&format!("encode: {e}")))
 }
 
 impl ProtocolHandler for RpcHandler {
@@ -295,15 +431,51 @@ async fn run_self_test(
         br#"{"verb":"hey","from":"did:self-test","sig":"00","referent":"at://self-test"}"#,
     )
     .await?;
-    conn.close(0u32.into(), b"bye");
     if hey.get("accepted").and_then(|a| a.as_bool()) != Some(true) {
+        conn.close(0u32.into(), b"bye");
         return Err(match hey.get("error").and_then(|e| e.as_str()) {
             Some(err) => format!("hey server error: {err}"),
             None => "hey not accepted".to_string(),
         });
     }
 
-    Ok("ok (head + record + hey round-trip)".to_string())
+    // diff (no `since` = full repo): the returned CAR must reopen into a repo
+    // whose marker reads back — proving diff emits a complete, syncable repo.
+    let diff = call(&conn, br#"{"verb":"diff"}"#).await?;
+    conn.close(0u32.into(), b"bye");
+    verify_diff(&diff, expected_root).await?;
+
+    Ok("ok (head + record + hey + diff round-trip)".to_string())
+}
+
+/// Verify a `diff` response: the hex CAR reopens at the advertised root and the
+/// marker record reads back out of it.
+async fn verify_diff(diff: &serde_json::Value, expected_root: &str) -> Result<(), String> {
+    if let Some(err) = diff.get("error").and_then(|e| e.as_str()) {
+        return Err(format!("diff server error: {err}"));
+    }
+    let root_str = diff.get("root").and_then(|r| r.as_str()).unwrap_or("");
+    if root_str != expected_root {
+        return Err(format!("diff root mismatch: got {root_str}"));
+    }
+    let car_hex = diff.get("car").and_then(|c| c.as_str()).unwrap_or("");
+    let car_bytes = hex_decode(car_hex).ok_or("diff: bad car hex")?;
+    let root_cid = Cid::from_str(root_str).map_err(|e| format!("diff root cid: {e}"))?;
+
+    let mut store = CarStore::open(Cursor::new(car_bytes))
+        .await
+        .map_err(|e| format!("diff car open: {e}"))?;
+    let mut repo = Repository::open(&mut store, root_cid)
+        .await
+        .map_err(|e| format!("diff repo open: {e}"))?;
+    let marker: Option<serde_json::Value> = repo
+        .get_raw("dev.sia.pin.marker/self")
+        .await
+        .map_err(|e| format!("diff marker read: {e}"))?;
+    if marker.is_none() {
+        return Err("diff CAR missing marker".to_string());
+    }
+    Ok(())
 }
 
 /// Issue one request on a fresh bidi stream and parse the JSON response.

@@ -23,7 +23,7 @@
 // and the CAR under `curator/` for the future encrypted local vault.
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -62,6 +62,10 @@ pub struct RepoHandle {
     /// True if the repo was reopened from an existing on-disk CAR, false if it
     /// was created fresh this run. Lets the UI show that content survived.
     pub reopened: bool,
+    /// Path to the on-disk CAR. The RPC `diff` verb opens a fresh read-only view
+    /// of it (shared-read alongside the live handle) to walk arbitrary roots and
+    /// read blocks — things the encapsulated live repo doesn't expose.
+    pub car_path: PathBuf,
 }
 
 /// A tiny marker record, written at creation and read back to prove the engine
@@ -135,6 +139,7 @@ pub async fn init_repo(data_dir: Option<&Path>) -> Result<RepoHandle, String> {
         root,
         commit_sig,
         reopened,
+        car_path,
     })
 }
 

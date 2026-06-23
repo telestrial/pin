@@ -321,7 +321,8 @@ async fn curator_loop(running: Arc<AtomicBool>, diag: Arc<Mutex<Diag>>, data_dir
                 sig: handle.commit_sig,
             };
             let inbox: crate::rpc::HeyInbox = Arc::new(Mutex::new(Vec::new()));
-            let handler = crate::rpc::RpcHandler::new(head, handle.repo, inbox.clone());
+            let handler =
+                crate::rpc::RpcHandler::new(head, handle.repo, inbox.clone(), handle.car_path);
             let r = iroh::protocol::Router::builder(endpoint.clone())
                 .accept(crate::rpc::ALPN, handler)
                 .spawn();
