@@ -5,6 +5,7 @@ import {
   stopCurator,
   type CuratorStatus,
 } from '../lib/curator'
+import { useAuthStore } from '../stores/auth'
 import { CopyButton } from './ui/CopyButton'
 
 // The Curate page (rendered inside a FormCard by Home). Reachable from the
@@ -44,7 +45,15 @@ export function CurateView() {
     setBusy(true)
     busyRef.current = true
     try {
-      const next = status.running ? await stopCurator() : await startCurator()
+      let next: CuratorStatus
+      if (status.running) {
+        next = await stopCurator()
+      } else {
+        // Hand the keeper the already-unlocked Sia identity so it can mirror the
+        // repo under the user's own scope.
+        const { storedKeyHex, indexerURL } = useAuthStore.getState()
+        next = await startCurator(storedKeyHex, indexerURL)
+      }
       setStatus(next)
     } finally {
       setBusy(false)
@@ -243,6 +252,35 @@ function Diagnostics({ status }: { status: CuratorStatus }) {
               {status.rpcSelftest}
             </span>
           </div>
+        )}
+      </div>
+
+      <div className="space-y-1 pt-1 border-t border-neutral-100">
+        <div className="text-xs font-medium text-neutral-500 pt-3">Sia mirror</div>
+        <Field label="State" value={status.mirrorState} />
+        {status.mirrorError ? (
+          <code className="text-xs font-mono text-red-700 break-all block">
+            {status.mirrorError}
+          </code>
+        ) : (
+          <>
+            {status.mirrorRoot && (
+              <div className="text-xs text-neutral-400 break-all">
+                root{' '}
+                <span className="font-mono text-neutral-500">
+                  {status.mirrorRoot}
+                </span>
+              </div>
+            )}
+            {status.mirrorUrl && (
+              <div className="flex items-start gap-2">
+                <code className="text-xs font-mono text-neutral-700 break-all flex-1">
+                  {status.mirrorUrl}
+                </code>
+                <CopyButton value={status.mirrorUrl} label="Mirror URL copied" />
+              </div>
+            )}
+          </>
         )}
       </div>
 

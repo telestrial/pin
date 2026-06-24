@@ -1,4 +1,5 @@
 mod curator;
+mod mirror;
 mod repo;
 mod rpc;
 

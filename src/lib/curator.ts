@@ -40,6 +40,14 @@ export type CuratorReport = {
   rpcSelftest: string | null
   // Inbound `hey` knocks parked in the inbox awaiting reconcile.
   heyQueued: number
+  // Sia mirror lifecycle: off | up-to-date | pushed | error | no-session.
+  mirrorState: string
+  // The repo root currently mirrored to Sia.
+  mirrorRoot: string | null
+  // The mirror object's share URL (a peer fallback-fetch address).
+  mirrorUrl: string | null
+  // The mirror error, if the push failed (node keeps running).
+  mirrorError: string | null
   // Last bind/runtime error.
   lastError: string | null
 }
@@ -65,6 +73,10 @@ const OFFLINE: CuratorReport = {
   rpcServing: false,
   rpcSelftest: null,
   heyQueued: 0,
+  mirrorState: 'off',
+  mirrorRoot: null,
+  mirrorUrl: null,
+  mirrorError: null,
   lastError: null,
 }
 
@@ -80,9 +92,21 @@ export async function curatorStatus(): Promise<CuratorStatus> {
   return { ...(await invokeCommand('curator_status')), available: true }
 }
 
-export async function startCurator(): Promise<CuratorStatus> {
+// The keeper runs inside an authenticated Pin instance, so we hand it the
+// already-unlocked Sia AppKey + indexer URL at start — that's how it mirrors the
+// repo under the user's own Sia scope. Both are needed; absent them, the keeper
+// runs without a mirror.
+export async function startCurator(
+  appKeyHex?: string | null,
+  indexerUrl?: string | null,
+): Promise<CuratorStatus> {
   if (!inTauri()) return UNAVAILABLE
-  return { ...(await invokeCommand('start_curator')), available: true }
+  const { invoke } = await import('@tauri-apps/api/core')
+  const report = await invoke<CuratorReport>('start_curator', {
+    appKeyHex: appKeyHex ?? null,
+    indexerUrl: indexerUrl ?? null,
+  })
+  return { ...report, available: true }
 }
 
 export async function stopCurator(): Promise<CuratorStatus> {

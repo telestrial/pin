@@ -62,6 +62,14 @@ pub struct CuratorStatus {
     pub rpc_selftest: Option<String>,
     /// Number of inbound `hey` knocks parked in the inbox awaiting reconcile.
     pub hey_queued: u64,
+    /// Sia mirror lifecycle: off | up-to-date | pushed | error | no-session.
+    pub mirror_state: String,
+    /// The repo root currently mirrored to Sia.
+    pub mirror_root: Option<String>,
+    /// The mirror object's share URL (where a peer fallback-fetch would read).
+    pub mirror_url: Option<String>,
+    /// The mirror error, if the push failed (the node keeps running).
+    pub mirror_error: Option<String>,
     /// The last bind/runtime error, if the Curator failed.
     pub last_error: Option<String>,
 }
@@ -82,6 +90,10 @@ struct Diag {
     rpc_serving: bool,
     rpc_selftest: Option<String>,
     hey_queued: u64,
+    mirror_state: &'static str,
+    mirror_root: Option<String>,
+    mirror_url: Option<String>,
+    mirror_error: Option<String>,
     last_error: Option<String>,
     started: Option<Instant>,
 }
@@ -102,6 +114,10 @@ impl Diag {
             rpc_serving: false,
             rpc_selftest: None,
             hey_queued: 0,
+            mirror_state: "off",
+            mirror_root: None,
+            mirror_url: None,
+            mirror_error: None,
             last_error: None,
             started: None,
         }
@@ -141,6 +157,10 @@ impl CuratorState {
                     rpc_serving: d.rpc_serving,
                     rpc_selftest: d.rpc_selftest.clone(),
                     hey_queued: d.hey_queued,
+                    mirror_state: d.mirror_state.to_string(),
+                    mirror_root: d.mirror_root.clone(),
+                    mirror_url: d.mirror_url.clone(),
+                    mirror_error: d.mirror_error.clone(),
                     last_error: d.last_error.clone(),
                 }
             }
@@ -160,18 +180,43 @@ impl CuratorState {
                 rpc_serving: false,
                 rpc_selftest: None,
                 hey_queued: 0,
+                mirror_state: "off".to_string(),
+                mirror_root: None,
+                mirror_url: None,
+                mirror_error: None,
                 last_error: None,
             },
         }
     }
 }
 
+/// The Sia identity the keeper mirrors under, handed over by the frontend (which
+/// already unlocked it). Both are needed; absent one, the mirror is disabled.
+pub struct SiaCreds {
+    pub app_key_hex: String,
+    pub indexer_url: String,
+}
+
 #[tauri::command]
-pub fn start_curator(app: tauri::AppHandle, state: tauri::State<CuratorState>) -> CuratorStatus {
+pub fn start_curator(
+    app: tauri::AppHandle,
+    state: tauri::State<CuratorState>,
+    app_key_hex: Option<String>,
+    indexer_url: Option<String>,
+) -> CuratorStatus {
     let mut inner = state.0.lock().unwrap();
     if inner.running.load(Ordering::SeqCst) {
         return CuratorState::snapshot(&inner);
     }
+    // The frontend passes the already-unlocked Sia AppKey + indexer URL so the
+    // keeper can mirror under the user's own identity. Both or neither.
+    let creds = match (app_key_hex, indexer_url) {
+        (Some(app_key_hex), Some(indexer_url)) if !app_key_hex.is_empty() => Some(SiaCreds {
+            app_key_hex,
+            indexer_url,
+        }),
+        _ => None,
+    };
     // Reap any previously-stopped thread before starting fresh.
     if let Some(handle) = inner.handle.take() {
         let _ = handle.join();
@@ -195,7 +240,7 @@ pub fn start_curator(app: tauri::AppHandle, state: tauri::State<CuratorState>) -
     }
     inner.running = running.clone();
     inner.diag = Some(diag.clone());
-    inner.handle = Some(thread::spawn(move || run_curator(running, diag, data_dir)));
+    inner.handle = Some(thread::spawn(move || run_curator(running, diag, data_dir, creds)));
 
     CuratorState::snapshot(&inner)
 }
@@ -217,7 +262,12 @@ pub fn curator_status(state: tauri::State<CuratorState>) -> CuratorStatus {
 
 /// Owns a dedicated tokio runtime for the Curator's lifetime and drives the
 /// async endpoint loop on it.
-fn run_curator(running: Arc<AtomicBool>, diag: Arc<Mutex<Diag>>, data_dir: Option<PathBuf>) {
+fn run_curator(
+    running: Arc<AtomicBool>,
+    diag: Arc<Mutex<Diag>>,
+    data_dir: Option<PathBuf>,
+    creds: Option<SiaCreds>,
+) {
     let rt = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -230,7 +280,7 @@ fn run_curator(running: Arc<AtomicBool>, diag: Arc<Mutex<Diag>>, data_dir: Optio
             return;
         }
     };
-    rt.block_on(curator_loop(running, diag, data_dir));
+    rt.block_on(curator_loop(running, diag, data_dir, creds));
 }
 
 /// Load the persisted iroh secret key, or generate one and persist it. The key
@@ -258,7 +308,62 @@ fn load_or_create_key(path: Option<&Path>) -> (SecretKey, bool) {
     (key, persisted)
 }
 
-async fn curator_loop(running: Arc<AtomicBool>, diag: Arc<Mutex<Diag>>, data_dir: Option<PathBuf>) {
+/// One-shot Sia mirror reconcile on load, surfacing the outcome in diagnostics.
+/// Best-effort: any failure is logged + shown but never stops the node. Needs
+/// both the handed-over Sia creds and a data dir; without either, the mirror is
+/// simply off (e.g. not signed into Sia).
+async fn run_mirror(
+    diag: &Arc<Mutex<Diag>>,
+    repo: &crate::repo::SharedRepo,
+    data_dir: Option<&Path>,
+    creds: Option<&SiaCreds>,
+) {
+    let (Some(creds), Some(dir)) = (creds, data_dir) else {
+        diag.lock().unwrap().mirror_state = "no-session";
+        return;
+    };
+    let sdk = match crate::mirror::connect_sdk(&creds.indexer_url, &creds.app_key_hex).await {
+        Ok(sdk) => sdk,
+        Err(e) => {
+            log::warn!("curator mirror: sia connect failed: {e}");
+            let mut d = diag.lock().unwrap();
+            d.mirror_state = "error";
+            d.mirror_error = Some(e);
+            return;
+        }
+    };
+    let mirror_path = dir.join("mirror.json");
+    match crate::mirror::mirror_if_stale(&sdk, repo, &mirror_path).await {
+        Ok(crate::mirror::MirrorOutcome::UpToDate) => {
+            log::info!("curator mirror: up to date");
+            let mut d = diag.lock().unwrap();
+            d.mirror_state = "up-to-date";
+            d.mirror_root = d.repo_root.clone();
+            d.mirror_error = None;
+        }
+        Ok(crate::mirror::MirrorOutcome::Pushed { url }) => {
+            log::info!("curator mirror: pushed ({url})");
+            let mut d = diag.lock().unwrap();
+            d.mirror_state = "pushed";
+            d.mirror_root = d.repo_root.clone();
+            d.mirror_url = Some(url);
+            d.mirror_error = None;
+        }
+        Err(e) => {
+            log::warn!("curator mirror: push failed: {e}");
+            let mut d = diag.lock().unwrap();
+            d.mirror_state = "error";
+            d.mirror_error = Some(e);
+        }
+    }
+}
+
+async fn curator_loop(
+    running: Arc<AtomicBool>,
+    diag: Arc<Mutex<Diag>>,
+    data_dir: Option<PathBuf>,
+    creds: Option<SiaCreds>,
+) {
     let node_key_path = data_dir.as_ref().map(|d| d.join("node_key"));
 
     let (secret, persisted) = load_or_create_key(node_key_path.as_deref());
@@ -321,8 +426,13 @@ async fn curator_loop(running: Arc<AtomicBool>, diag: Arc<Mutex<Diag>>, data_dir
                 sig: handle.commit_sig,
             };
             let inbox: crate::rpc::HeyInbox = Arc::new(Mutex::new(Vec::new()));
-            let handler =
-                crate::rpc::RpcHandler::new(head, handle.repo, inbox.clone(), handle.car_path);
+            // The mirror also needs the live repo, so the handler gets a clone.
+            let handler = crate::rpc::RpcHandler::new(
+                head,
+                handle.repo.clone(),
+                inbox.clone(),
+                handle.car_path,
+            );
             let r = iroh::protocol::Router::builder(endpoint.clone())
                 .accept(crate::rpc::ALPN, handler)
                 .spawn();
@@ -330,8 +440,8 @@ async fn curator_loop(running: Arc<AtomicBool>, diag: Arc<Mutex<Diag>>, data_dir
             log::info!("curator rpc serving (alpn pin-keeper/0)");
 
             // One-shot self-test: a throwaway client dials us and calls head +
-            // record + hey. The hey it sends is synthetic, so clear the inbox
-            // afterward — real knocks should start the count from zero.
+            // record + hey + diff. The hey it sends is synthetic, so clear the
+            // inbox afterward — real knocks should start the count from zero.
             match crate::rpc::self_test(endpoint.addr(), &root).await {
                 Ok(msg) => {
                     log::info!("curator rpc self-test: {msg}");
@@ -345,6 +455,12 @@ async fn curator_loop(running: Arc<AtomicBool>, diag: Arc<Mutex<Diag>>, data_dir
             inbox.lock().unwrap().clear();
             hey_inbox = Some(inbox);
             router = Some(r);
+
+            // Reconcile the Sia mirror (push-on-change, keyed on root CID). On a
+            // static post-init repo this pushes once on first run, then no-ops.
+            // Best-effort: a mirror failure surfaces in diagnostics but the node
+            // keeps serving. Needs the handed-over Sia creds + a data dir.
+            run_mirror(&diag, &handle.repo, data_dir.as_deref(), creds.as_ref()).await;
         }
         Err(e) => {
             log::error!("curator repo engine failed: {e}");
