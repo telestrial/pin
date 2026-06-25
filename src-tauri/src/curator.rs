@@ -47,7 +47,8 @@ pub struct CuratorStatus {
     pub other_addrs: Vec<String>,
     /// Seconds since the endpoint bound, if running.
     pub uptime_secs: Option<u64>,
-    /// The local repo's did:key (stable across restarts).
+    /// The local repo's did:key — derived from the recovery phrase, so stable
+    /// across restarts and recoverable on any device.
     pub repo_did: Option<String>,
     /// The local repo's signed root commit CID.
     pub repo_root: Option<String>,
@@ -400,7 +401,10 @@ async fn curator_loop(
     // On success, serve the RPC over iroh and self-test it.
     let mut router = None;
     let mut hey_inbox: Option<crate::rpc::HeyInbox> = None;
-    match crate::repo::init_repo(data_dir.as_deref()).await {
+    // The repo identity is derived from the Sia recovery phrase (via the AppKey the
+    // frontend handed over), so pass it through to the repo engine.
+    let app_key_hex = creds.as_ref().map(|c| c.app_key_hex.as_str());
+    match crate::repo::init_repo(data_dir.as_deref(), app_key_hex).await {
         Ok(handle) => {
             log::info!(
                 "curator repo online: did={} root={} ({})",

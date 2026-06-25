@@ -15,12 +15,15 @@
 // repo; otherwise we create a fresh one and write the marker. Finding the marker
 // after a reopen is the proof that content survived the restart.
 //
-// One deliberate scope limit still stands (flagged for the identity slice): the
-// signing key is a local stub (a persisted P-256 key → did:key). The REAL Pin
-// identity is did:plc (the atproto account), whose key lives at the PDS today;
-// binding the repo to that DID is the identity / bsky→keeper-migration slice.
-// Until then the repo runs under its own local key, kept beside the iroh node key
-// and the CAR under `curator/` for the future encrypted local vault.
+// Identity (rung 6a, native genesis): the repo's signing key is now DERIVED from
+// the Sia recovery phrase — HKDF-SHA256 over the AppKey bytes the frontend hands
+// over, info "pin:atproto-signing:v1" (the same one-root-secret move settings
+// encryption uses). So the repo's DID is recoverable on any device from the
+// recovery phrase alone, and nothing secret about the identity persists on disk —
+// the only stored secret is the per-device iroh node key. The DID is still encoded
+// as did:key for now (interim); choosing the resolvable DID method (did:plc as
+// genesis-author, or did:dht) is the next layer, where the loops need to resolve a
+// stranger's DID to a keeper's iroh address.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -28,10 +31,12 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use atrium_api::types::string::Did;
-use atrium_crypto::keypair::{Did as _, Export as _, P256Keypair};
+use atrium_crypto::keypair::{Did as _, P256Keypair};
 use atrium_repo::blockstore::CarStore;
 use atrium_repo::{Cid, Repository};
+use hkdf::Hkdf;
 use serde::{Deserialize, Serialize};
+use sha2::Sha256;
 use tokio::fs::{File, OpenOptions};
 use tokio::sync::Mutex;
 
@@ -52,8 +57,9 @@ const MARKER_PATH: &str = "dev.sia.pin.marker/self";
 pub struct RepoHandle {
     /// The live repo, shared with the RPC handler.
     pub repo: SharedRepo,
-    /// The repo's did:key (stable across restarts — derived from the persisted
-    /// signing key).
+    /// The repo's did:key — derived from the Sia recovery phrase (via the AppKey)
+    /// through HKDF, so it's stable across restarts and recoverable on any device
+    /// from the phrase alone.
     pub did: String,
     /// The signed root commit CID.
     pub root: String,
@@ -77,49 +83,101 @@ struct Marker {
     note: String,
 }
 
-/// Load the persisted P-256 signing key, or generate one and persist it. We own
-/// the raw key bytes (export/import) so it survives restarts — giving the repo a
-/// stable DID. Kept beside the iroh node key under `curator/` for the future
-/// encrypted local vault.
-fn load_or_create_signing_key(path: &Path) -> P256Keypair {
-    if let Ok(bytes) = fs::read(path) {
-        if let Ok(kp) = P256Keypair::import(&bytes) {
-            return kp;
+/// HKDF `info` for the repo signing key — domain-separates it from settings
+/// encryption (`pin:settings:v1`) and any other key derived from the same AppKey.
+const SIGNING_KEY_INFO: &[u8] = b"pin:atproto-signing:v1";
+
+/// Derive the repo's P-256 signing key from the Sia AppKey via HKDF-SHA256 — the
+/// "one root secret" move: recovery phrase → AppKey → signing key, deterministic,
+/// stored nowhere. Same key on every device that holds the phrase, so the repo's
+/// DID is recoverable rather than backed up.
+///
+/// This derives the DEFAULT identity. Multiple identities are NOT foreclosed:
+/// per-persona `info` variants yield independent, separately-recoverable DIDs
+/// (HD-wallet style) — the path for the parked persona-as-DID reframe — so the
+/// bare `info` here stays reserved for the default and must not be repurposed
+/// (changing it would move the default DID).
+///
+/// The bare `info` is the canonical derivation. A 32-byte HKDF output is a valid
+/// P-256 scalar with overwhelming probability (~1 - 2^-32); on the vanishing
+/// chance it isn't, we deterministically retry with a counter appended to `info`,
+/// so the derivation never fails on an unlucky AppKey.
+fn derive_signing_key(app_key: &[u8]) -> Result<P256Keypair, String> {
+    let hk = Hkdf::<Sha256>::new(None, app_key);
+    let mut okm = [0u8; 32];
+    hk.expand(SIGNING_KEY_INFO, &mut okm)
+        .map_err(|e| format!("hkdf expand: {e}"))?;
+    if let Ok(kp) = P256Keypair::import(&okm) {
+        return Ok(kp);
+    }
+    for counter in 0u8..=u8::MAX {
+        let mut info = SIGNING_KEY_INFO.to_vec();
+        info.push(counter);
+        hk.expand(&info, &mut okm)
+            .map_err(|e| format!("hkdf expand: {e}"))?;
+        if let Ok(kp) = P256Keypair::import(&okm) {
+            return Ok(kp);
         }
-        log::warn!("curator repo key malformed; regenerating");
     }
-    let kp = P256Keypair::create(&mut rand::thread_rng());
-    if fs::write(path, kp.export()).is_err() {
-        log::warn!("curator could not persist repo key at {}", path.display());
-    }
-    kp
+    Err("could not derive a valid P-256 signing key from the app key".to_string())
 }
 
-/// Bring up the local repo from `data_dir`: reopen the on-disk CAR if present,
-/// otherwise create a fresh one (and write the marker). Returns the live repo,
-/// its DID + signed root, and whether it was reopened.
-pub async fn init_repo(data_dir: Option<&Path>) -> Result<RepoHandle, String> {
+/// Decode the 32-byte Sia AppKey from its hex form (the IKM for `derive_signing_key`).
+fn decode_app_key(hex: &str) -> Option<[u8; 32]> {
+    if hex.len() != 64 {
+        return None;
+    }
+    let mut out = [0u8; 32];
+    for (i, b) in out.iter_mut().enumerate() {
+        *b = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).ok()?;
+    }
+    Some(out)
+}
+
+/// Bring up the local repo from `data_dir` under the identity derived from
+/// `app_key_hex` (the Sia recovery phrase, via the AppKey). Reopen the on-disk CAR
+/// if it was created under this same identity, otherwise create a fresh one (and
+/// write the marker). Returns the live repo, its DID + signed root, and whether it
+/// was reopened.
+pub async fn init_repo(
+    data_dir: Option<&Path>,
+    app_key_hex: Option<&str>,
+) -> Result<RepoHandle, String> {
     let dir = data_dir.ok_or_else(|| "no curator data dir; repo persistence unavailable".to_string())?;
     fs::create_dir_all(dir).map_err(|e| format!("create data dir: {e}"))?;
-    let key_path = dir.join("repo_key");
     let car_path = dir.join("repo.car");
     let root_path = dir.join("repo_root");
+    let did_path = dir.join("repo_did");
 
-    let keypair = load_or_create_signing_key(&key_path);
+    // The identity is derived from the recovery phrase (via the AppKey), not stored.
+    let app_key_hex = app_key_hex
+        .ok_or_else(|| "no Sia identity available to derive the repo signing key".to_string())?;
+    let app_key =
+        decode_app_key(app_key_hex).ok_or_else(|| "app key hex must be 32 bytes".to_string())?;
+    let keypair = derive_signing_key(&app_key)?;
     let did_str = keypair.did();
     let did = Did::new(did_str.clone()).map_err(|e| format!("did: {e}"))?;
 
-    // Reopen the existing repo if both the CAR and its root pointer are present
-    // and valid; otherwise create a fresh one under the (stable) signing key.
-    let (mut repo, reopened) = match open_existing(&car_path, &root_path).await {
-        Some((store, root)) => {
-            let repo = Repository::open(store, root)
-                .await
-                .map_err(|e| format!("open repo: {e}"))?;
-            (repo, true)
-        }
-        None => (create_fresh(&car_path, &root_path, did, &keypair).await?, false),
-    };
+    // A signing key stored by a pre-derivation build is now dead weight — the only
+    // persisted secret should be the per-device node key. Best-effort cleanup.
+    let _ = fs::remove_file(dir.join("repo_key"));
+
+    // Reopen only if the on-disk repo was created under THIS identity; a DID
+    // mismatch (e.g. the one-time switch off a random stub key) means the CAR is
+    // stale, so recreate fresh under the derived key.
+    let (mut repo, reopened) =
+        match open_existing(&car_path, &root_path, &did_path, &did_str).await {
+            Some((store, root)) => {
+                let repo = Repository::open(store, root)
+                    .await
+                    .map_err(|e| format!("open repo: {e}"))?;
+                (repo, true)
+            }
+            None => (
+                create_fresh(&car_path, &root_path, &did_path, did, &did_str, &keypair).await?,
+                false,
+            ),
+        };
 
     // The marker must round-trip: freshly written if created, survived the
     // restart if reopened. Either way, no marker means the engine is broken.
@@ -143,10 +201,20 @@ pub async fn init_repo(data_dir: Option<&Path>) -> Result<RepoHandle, String> {
     })
 }
 
-/// Open the on-disk CAR + its persisted root, if both are present and valid.
-/// Any missing/corrupt piece returns None, so the caller falls back to creating
-/// a fresh repo (a lost repo rebuilds rather than wedging).
-async fn open_existing(car_path: &Path, root_path: &Path) -> Option<(RepoStore, Cid)> {
+/// Open the on-disk CAR + its persisted root, if present, valid, AND created under
+/// `expected_did`. Any missing/corrupt/mismatched piece returns None, so the caller
+/// falls back to creating a fresh repo (a lost or re-keyed repo rebuilds rather
+/// than wedging or signing new commits under the wrong identity).
+async fn open_existing(
+    car_path: &Path,
+    root_path: &Path,
+    did_path: &Path,
+    expected_did: &str,
+) -> Option<(RepoStore, Cid)> {
+    // Reopen only if the persisted identity matches the derived one.
+    if fs::read_to_string(did_path).ok()?.trim() != expected_did {
+        return None;
+    }
     let root_str = fs::read_to_string(root_path).ok()?;
     let root = Cid::from_str(root_str.trim()).ok()?;
     // Read+write so subsequent commits can append; no `create`, so a missing
@@ -162,11 +230,13 @@ async fn open_existing(car_path: &Path, root_path: &Path) -> Option<(RepoStore, 
 }
 
 /// Create a fresh repo on disk: a new (truncated) CAR, a signed root commit, the
-/// marker record, and the persisted root pointer.
+/// marker record, and the persisted root + DID pointers.
 async fn create_fresh(
     car_path: &Path,
     root_path: &Path,
+    did_path: &Path,
     did: Did,
+    did_str: &str,
     keypair: &P256Keypair,
 ) -> Result<LiveRepo, String> {
     let file = OpenOptions::new()
@@ -211,6 +281,9 @@ async fn create_fresh(
         .map_err(|e| format!("finalize commit: {e}"))?;
 
     persist_root(root_path, &repo)?;
+    // Record the identity this CAR was created under, so a later reopen can confirm
+    // the derived key still matches before signing new commits over it.
+    fs::write(did_path, did_str).map_err(|e| format!("persist did: {e}"))?;
     Ok(repo)
 }
 
