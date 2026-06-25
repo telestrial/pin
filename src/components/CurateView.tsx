@@ -191,6 +191,25 @@ function Diagnostics({ status }: { status: CuratorStatus }) {
       </p>
 
       <div className="space-y-1 pt-1 border-t border-neutral-100">
+        <div className="text-xs font-medium text-neutral-500 pt-3">Identity</div>
+        {status.didDht ? (
+          <div className="flex items-start gap-2">
+            <code className="text-xs font-mono text-neutral-700 break-all flex-1">
+              {status.didDht}
+            </code>
+            <CopyButton value={status.didDht} label="did:dht copied" />
+          </div>
+        ) : (
+          <div className="text-xs text-neutral-400">—</div>
+        )}
+        <p className="text-xs text-neutral-400 leading-relaxed">
+          Your resolvable did:dht identity, derived from your recovery phrase — no
+          registry, no company. The repo's signing key below is carried in its
+          document as a verification method.
+        </p>
+      </div>
+
+      <div className="space-y-1 pt-1 border-t border-neutral-100">
         <div className="text-xs font-medium text-neutral-500 pt-3 flex items-center justify-between gap-2">
           <span>Local repo</span>
           {status.repoDid && !status.repoError && (

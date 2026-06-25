@@ -50,6 +50,9 @@ pub struct CuratorStatus {
     /// The local repo's did:key — derived from the recovery phrase, so stable
     /// across restarts and recoverable on any device.
     pub repo_did: Option<String>,
+    /// The keeper's resolvable `did:dht` identity (ed25519, same phrase). The
+    /// `repo_did` above is carried in this DID's document as a verification method.
+    pub did_dht: Option<String>,
     /// The local repo's signed root commit CID.
     pub repo_root: Option<String>,
     /// Whether the repo was reopened from an on-disk CAR (true) or created fresh
@@ -85,6 +88,7 @@ struct Diag {
     direct_addrs: Vec<String>,
     other_addrs: Vec<String>,
     repo_did: Option<String>,
+    did_dht: Option<String>,
     repo_root: Option<String>,
     repo_reopened: bool,
     repo_error: Option<String>,
@@ -109,6 +113,7 @@ impl Diag {
             direct_addrs: Vec::new(),
             other_addrs: Vec::new(),
             repo_did: None,
+            did_dht: None,
             repo_root: None,
             repo_reopened: false,
             repo_error: None,
@@ -152,6 +157,7 @@ impl CuratorState {
                     other_addrs: d.other_addrs.clone(),
                     uptime_secs: d.started.map(|t| t.elapsed().as_secs()),
                     repo_did: d.repo_did.clone(),
+                    did_dht: d.did_dht.clone(),
                     repo_root: d.repo_root.clone(),
                     repo_reopened: d.repo_reopened,
                     repo_error: d.repo_error.clone(),
@@ -175,6 +181,7 @@ impl CuratorState {
                 other_addrs: Vec::new(),
                 uptime_secs: None,
                 repo_did: None,
+                did_dht: None,
                 repo_root: None,
                 repo_reopened: false,
                 repo_error: None,
@@ -416,10 +423,12 @@ async fn curator_loop(
                     "created fresh"
                 }
             );
+            log::info!("curator did:dht identity: {}", handle.did_dht);
             let root = handle.root.clone();
             {
                 let mut d = diag.lock().unwrap();
                 d.repo_did = Some(handle.did.clone());
+                d.did_dht = Some(handle.did_dht.clone());
                 d.repo_root = Some(handle.root.clone());
                 d.repo_reopened = handle.reopened;
             }

@@ -27,6 +27,9 @@ export type CuratorReport = {
   uptimeSecs: number | null
   // The local repo's did:key (stable across restarts).
   repoDid: string | null
+  // The keeper's resolvable did:dht identity (ed25519, same phrase). repoDid is
+  // carried in this DID's document as a verification method.
+  didDht: string | null
   // The local repo's signed root commit CID.
   repoRoot: string | null
   // Whether the repo was reopened from an on-disk CAR (true) or created fresh
@@ -67,6 +70,7 @@ const OFFLINE: CuratorReport = {
   otherAddrs: [],
   uptimeSecs: null,
   repoDid: null,
+  didDht: null,
   repoRoot: null,
   repoReopened: false,
   repoError: null,

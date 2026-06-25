@@ -61,6 +61,10 @@ pub struct RepoHandle {
     /// through HKDF, so it's stable across restarts and recoverable on any device
     /// from the phrase alone.
     pub did: String,
+    /// The keeper's `did:dht` identifier (ed25519, derived from the same phrase) —
+    /// the resolvable decentralized identity. The P-256 `did` above will be carried
+    /// inside this DID's document as a verification method (publishing it is next).
+    pub did_dht: String,
     /// The signed root commit CID.
     pub root: String,
     /// The signature over the current commit (served by the RPC `head` verb).
@@ -158,6 +162,11 @@ pub async fn init_repo(
     let did_str = keypair.did();
     let did = Did::new(did_str.clone()).map_err(|e| format!("did: {e}"))?;
 
+    // The resolvable did:dht identity (ed25519), derived from the same phrase via a
+    // domain-separated HKDF info. The P-256 repo key above is carried in this DID's
+    // document as a verification method (publishing the doc is the next slice).
+    let did_dht = crate::identity::did_dht(&crate::identity::derive_identity(&app_key)?);
+
     // A signing key stored by a pre-derivation build is now dead weight — the only
     // persisted secret should be the per-device node key. Best-effort cleanup.
     let _ = fs::remove_file(dir.join("repo_key"));
@@ -194,6 +203,7 @@ pub async fn init_repo(
     Ok(RepoHandle {
         repo: Arc::new(Mutex::new(repo)),
         did: did_str,
+        did_dht,
         root,
         commit_sig,
         reopened,
