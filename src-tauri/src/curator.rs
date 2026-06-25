@@ -53,6 +53,9 @@ pub struct CuratorStatus {
     /// The keeper's resolvable `did:dht` identity (ed25519, same phrase). The
     /// `repo_did` above is carried in this DID's document as a verification method.
     pub did_dht: Option<String>,
+    /// Result of publishing the did:dht document to Mainline DHT + self-resolve
+    /// ("ok …" or "failed: …"); None if not attempted (e.g. repo down).
+    pub did_dht_published: Option<String>,
     /// The local repo's signed root commit CID.
     pub repo_root: Option<String>,
     /// Whether the repo was reopened from an on-disk CAR (true) or created fresh
@@ -89,6 +92,7 @@ struct Diag {
     other_addrs: Vec<String>,
     repo_did: Option<String>,
     did_dht: Option<String>,
+    did_dht_published: Option<String>,
     repo_root: Option<String>,
     repo_reopened: bool,
     repo_error: Option<String>,
@@ -114,6 +118,7 @@ impl Diag {
             other_addrs: Vec::new(),
             repo_did: None,
             did_dht: None,
+            did_dht_published: None,
             repo_root: None,
             repo_reopened: false,
             repo_error: None,
@@ -158,6 +163,7 @@ impl CuratorState {
                     uptime_secs: d.started.map(|t| t.elapsed().as_secs()),
                     repo_did: d.repo_did.clone(),
                     did_dht: d.did_dht.clone(),
+                    did_dht_published: d.did_dht_published.clone(),
                     repo_root: d.repo_root.clone(),
                     repo_reopened: d.repo_reopened,
                     repo_error: d.repo_error.clone(),
@@ -182,6 +188,7 @@ impl CuratorState {
                 uptime_secs: None,
                 repo_did: None,
                 did_dht: None,
+                did_dht_published: None,
                 repo_root: None,
                 repo_reopened: false,
                 repo_error: None,
@@ -425,6 +432,9 @@ async fn curator_loop(
             );
             log::info!("curator did:dht identity: {}", handle.did_dht);
             let root = handle.root.clone();
+            // Capture the repo's did:key before `handle.did` is moved into Head —
+            // it's the verification method we publish in the did:dht document.
+            let repo_did_str = handle.did.clone();
             {
                 let mut d = diag.lock().unwrap();
                 d.repo_did = Some(handle.did.clone());
@@ -474,6 +484,27 @@ async fn curator_loop(
             // Best-effort: a mirror failure surfaces in diagnostics but the node
             // keeps serving. Needs the handed-over Sia creds + a data dir.
             run_mirror(&diag, &handle.repo, data_dir.as_deref(), creds.as_ref()).await;
+
+            // Publish the did:dht document to Mainline DHT so the identity is
+            // resolvable, then self-resolve to verify. Compact doc: the iroh node
+            // id (where to dial) + the repo's did:key (verification method). The
+            // Sia mirror URL is omitted for now — long enough to strain a TXT
+            // string / the BEP44 packet-size limit; conveying it is a later slice.
+            // Best-effort: a failure leaves the node serving over iroh.
+            let records = vec![
+                ("_iroh".to_string(), endpoint.id().to_string()),
+                ("_vm".to_string(), repo_did_str),
+            ];
+            match crate::identity::publish_doc(&handle.identity, &records).await {
+                Ok(msg) => {
+                    log::info!("curator did:dht doc: {msg}");
+                    diag.lock().unwrap().did_dht_published = Some(msg);
+                }
+                Err(e) => {
+                    log::warn!("curator did:dht doc publish failed: {e}");
+                    diag.lock().unwrap().did_dht_published = Some(format!("failed: {e}"));
+                }
+            }
         }
         Err(e) => {
             log::error!("curator repo engine failed: {e}");

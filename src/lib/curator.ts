@@ -30,6 +30,9 @@ export type CuratorReport = {
   // The keeper's resolvable did:dht identity (ed25519, same phrase). repoDid is
   // carried in this DID's document as a verification method.
   didDht: string | null
+  // Result of publishing the did:dht document to Mainline DHT + self-resolve
+  // ("ok …" or "failed: …"); null if not attempted.
+  didDhtPublished: string | null
   // The local repo's signed root commit CID.
   repoRoot: string | null
   // Whether the repo was reopened from an on-disk CAR (true) or created fresh
@@ -71,6 +74,7 @@ const OFFLINE: CuratorReport = {
   uptimeSecs: null,
   repoDid: null,
   didDht: null,
+  didDhtPublished: null,
   repoRoot: null,
   repoReopened: false,
   repoError: null,

@@ -202,6 +202,20 @@ function Diagnostics({ status }: { status: CuratorStatus }) {
         ) : (
           <div className="text-xs text-neutral-400">—</div>
         )}
+        {status.didDhtPublished && (
+          <div className="text-xs text-neutral-400 break-all">
+            DHT:{' '}
+            <span
+              className={
+                status.didDhtPublished.startsWith('ok')
+                  ? 'text-green-600'
+                  : 'text-red-600'
+              }
+            >
+              {status.didDhtPublished}
+            </span>
+          </div>
+        )}
         <p className="text-xs text-neutral-400 leading-relaxed">
           Your resolvable did:dht identity, derived from your recovery phrase — no
           registry, no company. The repo's signing key below is carried in its

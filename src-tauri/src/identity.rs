@@ -11,8 +11,10 @@
 //! Slice A (here): derive the ed25519 identity key + compute the did:dht DID.
 //! Publishing the document to the DHT and resolving others' DIDs come next.
 
+use std::time::Duration;
+
 use hkdf::Hkdf;
-use pkarr::Keypair;
+use pkarr::{Client, Keypair, SignedPacket};
 use sha2::Sha256;
 
 /// HKDF `info` for the did:dht identity key — domain-separated from the repo
@@ -34,4 +36,55 @@ pub fn derive_identity(app_key: &[u8]) -> Result<Keypair, String> {
 /// The `did:dht:<zbase32(pubkey)>` identifier for this keypair.
 pub fn did_dht(keypair: &Keypair) -> String {
     format!("did:dht:{}", keypair.public_key())
+}
+
+/// Publish the keeper's DID document to the Mainline DHT and self-resolve it to
+/// verify. `records` are `(name, value)` TXT pairs — a pragmatic Pin convention
+/// (we resolve our own docs, so strict did:dht-spec DNS encoding can come later):
+/// e.g. `_iroh` = the keeper's iroh node id, `_vm` = the repo's did:key
+/// verification method, `_mirror` = the Sia mirror share URL.
+///
+/// DHT-only (`no_relays()`), so this proves the decentralized leg — no n0, no
+/// pkarr relay. Publish stores to the closest nodes (~seconds); a SEPARATE fresh
+/// client then resolves it back, so a hit proves the doc is genuinely on the DHT,
+/// not local cache. Best-effort from the caller's side — a failure leaves the node
+/// serving over iroh (peers handed the NodeAddr can still reach it).
+pub async fn publish_doc(keypair: &Keypair, records: &[(String, String)]) -> Result<String, String> {
+    let mut builder = SignedPacket::builder();
+    for (name, value) in records {
+        let n = name
+            .as_str()
+            .try_into()
+            .map_err(|_| format!("bad record name: {name}"))?;
+        let v = value
+            .as_str()
+            .try_into()
+            .map_err(|_| format!("bad record value: {value}"))?;
+        builder = builder.txt(n, v, 3600);
+    }
+    let packet = builder.sign(keypair).map_err(|e| format!("sign doc: {e}"))?;
+
+    let mut pb = Client::builder();
+    pb.no_relays();
+    let publisher = pb.build().map_err(|e| format!("dht client: {e}"))?;
+    publisher
+        .publish(&packet, None)
+        .await
+        .map_err(|e| format!("publish: {e}"))?;
+
+    // Verify from a SEPARATE fresh DHT-only client (empty cache → a hit came from
+    // the DHT). pkarr verifies the signature on resolve, so a returned packet is
+    // provably ours.
+    let mut rb = Client::builder();
+    rb.no_relays();
+    let resolver = rb.build().map_err(|e| format!("dht client: {e}"))?;
+    let pubkey = keypair.public_key();
+    for _ in 0..6 {
+        if let Some(sp) = resolver.resolve(&pubkey).await {
+            let n = sp.all_resource_records().count();
+            return Ok(format!("ok (published + self-resolved {n} records via Mainline DHT)"));
+        }
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
+    Err("published but could not self-resolve from the DHT".to_string())
 }
