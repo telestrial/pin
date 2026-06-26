@@ -14,7 +14,8 @@
 use std::time::Duration;
 
 use hkdf::Hkdf;
-use pkarr::{Client, Keypair, SignedPacket};
+use pkarr::dns::rdata::RData;
+use pkarr::{Client, Keypair, PublicKey, SignedPacket};
 use sha2::Sha256;
 
 /// HKDF `info` for the did:dht identity key — domain-separated from the repo
@@ -87,4 +88,65 @@ pub async fn publish_doc(keypair: &Keypair, records: &[(String, String)]) -> Res
         tokio::time::sleep(Duration::from_secs(2)).await;
     }
     Err("published but could not self-resolve from the DHT".to_string())
+}
+
+/// The coordinates a peer needs after resolving someone's did:dht: where to reach
+/// them + the key to verify their repo. Fields are `Option` because a document may
+/// omit records (and clients ignore record types they don't understand).
+#[derive(Debug, Clone)]
+pub struct ResolvedIdentity {
+    /// The iroh node id to dial (from the document's `_iroh` record).
+    pub iroh_node: Option<String>,
+    /// The repo's did:key verification method (from `_vm`) — verifies repo commits.
+    pub verification: Option<String>,
+}
+
+/// Resolve a peer's `did:dht` from the Mainline DHT into the coordinates to reach +
+/// verify them. DHT-only (no relays, no n0). pkarr verifies the packet signature on
+/// resolve, so the records are provably the DID owner's. This is the read side the
+/// pull/reconcile loops use to turn a follow's DID into a dial-able keeper.
+pub async fn resolve_did(did: &str) -> Result<ResolvedIdentity, String> {
+    let z = did
+        .strip_prefix("did:dht:")
+        .ok_or_else(|| format!("not a did:dht: {did}"))?;
+    let pubkey: PublicKey = z
+        .try_into()
+        .map_err(|_| format!("bad did:dht key: {did}"))?;
+
+    let mut rb = Client::builder();
+    rb.no_relays();
+    let resolver = rb.build().map_err(|e| format!("dht client: {e}"))?;
+
+    // DHT lookups from a cold client are timing-sensitive — a single attempt can
+    // miss a record that's actually present (a publish lands on the closest nodes;
+    // a fresh resolver's first lookup may not reach them yet). Retry a few times,
+    // same as the publish-side self-resolve.
+    let mut packet = None;
+    for _ in 0..6 {
+        if let Some(found) = resolver.resolve(&pubkey).await {
+            packet = Some(found);
+            break;
+        }
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
+    let sp = packet.ok_or_else(|| format!("did:dht not found on the DHT: {did}"))?;
+
+    let mut id = ResolvedIdentity {
+        iroh_node: None,
+        verification: None,
+    };
+    for rr in sp.all_resource_records() {
+        let RData::TXT(txt) = &rr.rdata else { continue };
+        let Ok(value) = String::try_from(txt.clone()) else {
+            continue;
+        };
+        // Record names resolve as "_iroh.<zbase32>", "_vm.<zbase32>", etc.
+        let label = rr.name.to_string();
+        if label.starts_with("_iroh") {
+            id.iroh_node = Some(value);
+        } else if label.starts_with("_vm") {
+            id.verification = Some(value);
+        }
+    }
+    Ok(id)
 }

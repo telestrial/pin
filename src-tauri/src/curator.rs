@@ -491,14 +491,36 @@ async fn curator_loop(
             // Sia mirror URL is omitted for now — long enough to strain a TXT
             // string / the BEP44 packet-size limit; conveying it is a later slice.
             // Best-effort: a failure leaves the node serving over iroh.
+            let node_id_str = endpoint.id().to_string();
             let records = vec![
-                ("_iroh".to_string(), endpoint.id().to_string()),
+                ("_iroh".to_string(), node_id_str.clone()),
                 ("_vm".to_string(), repo_did_str),
             ];
             match crate::identity::publish_doc(&handle.identity, &records).await {
                 Ok(msg) => {
                     log::info!("curator did:dht doc: {msg}");
-                    diag.lock().unwrap().did_dht_published = Some(msg);
+                    // Slice C: resolve our own DID back through the resolver the
+                    // loops will use, decoding it into reach + verify coordinates.
+                    let note = match crate::identity::resolve_did(&handle.did_dht).await {
+                        Ok(r) => {
+                            let node_ok = r.iroh_node.as_deref() == Some(node_id_str.as_str());
+                            log::info!(
+                                "curator did:dht resolver: iroh={:?} vm={:?} (node matches: {node_ok})",
+                                r.iroh_node,
+                                r.verification
+                            );
+                            format!(
+                                "; resolved back (iroh {}, vm {})",
+                                if r.iroh_node.is_some() { "ok" } else { "—" },
+                                if r.verification.is_some() { "ok" } else { "—" }
+                            )
+                        }
+                        Err(e) => {
+                            log::warn!("curator did:dht resolver failed: {e}");
+                            format!("; resolve failed: {e}")
+                        }
+                    };
+                    diag.lock().unwrap().did_dht_published = Some(format!("{msg}{note}"));
                 }
                 Err(e) => {
                     log::warn!("curator did:dht doc publish failed: {e}");
