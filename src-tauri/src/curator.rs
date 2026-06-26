@@ -421,7 +421,8 @@ async fn curator_loop(
     match crate::repo::init_repo(data_dir.as_deref(), app_key_hex).await {
         Ok(handle) => {
             log::info!(
-                "curator repo online: did={} root={} ({})",
+                "curator repo online: owner={} vm={} root={} ({})",
+                handle.did_dht,
                 handle.did,
                 handle.root,
                 if handle.reopened {
@@ -430,10 +431,8 @@ async fn curator_loop(
                     "created fresh"
                 }
             );
-            log::info!("curator did:dht identity: {}", handle.did_dht);
             let root = handle.root.clone();
-            // Capture the repo's did:key before `handle.did` is moved into Head —
-            // it's the verification method we publish in the did:dht document.
+            // The repo's did:key is the verification method we publish (`_vm`).
             let repo_did_str = handle.did.clone();
             {
                 let mut d = diag.lock().unwrap();
@@ -444,7 +443,10 @@ async fn curator_loop(
             }
 
             let head = crate::rpc::Head {
-                did: handle.did,
+                // The repo's owner DID is the did:dht — what a peer who resolved it
+                // expects head to claim. The P-256 did:key is the verification
+                // method (published as _vm), not the owner.
+                did: handle.did_dht.clone(),
                 root: handle.root,
                 sig: handle.commit_sig,
             };

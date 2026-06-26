@@ -20,10 +20,10 @@
 // over, info "pin:atproto-signing:v1" (the same one-root-secret move settings
 // encryption uses). So the repo's DID is recoverable on any device from the
 // recovery phrase alone, and nothing secret about the identity persists on disk —
-// the only stored secret is the per-device iroh node key. The DID is still encoded
-// as did:key for now (interim); choosing the resolvable DID method (did:plc as
-// genesis-author, or did:dht) is the next layer, where the loops need to resolve a
-// stranger's DID to a keeper's iroh address.
+// the only stored secret is the per-device iroh node key. The repo is authored
+// under the keeper's did:dht (see identity.rs) — that P-256 key signs commits and
+// is the did:dht document's verification method. Resolving a stranger's did:dht to
+// their keeper's iroh address is the resolver (identity.rs) + the pull loop.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -57,13 +57,13 @@ const MARKER_PATH: &str = "dev.sia.pin.marker/self";
 pub struct RepoHandle {
     /// The live repo, shared with the RPC handler.
     pub repo: SharedRepo,
-    /// The repo's did:key — derived from the Sia recovery phrase (via the AppKey)
-    /// through HKDF, so it's stable across restarts and recoverable on any device
-    /// from the phrase alone.
+    /// The repo's P-256 verification-method did:key (the commit-signing key,
+    /// derived from the recovery phrase via HKDF). The repo's OWNER DID is the
+    /// `did_dht` below; this key is what that DID's document authorizes to sign.
     pub did: String,
-    /// The keeper's `did:dht` identifier (ed25519, derived from the same phrase) —
-    /// the resolvable decentralized identity. The P-256 `did` above is carried
-    /// inside this DID's document as a verification method.
+    /// The keeper's `did:dht` identifier (ed25519, same phrase) — the resolvable
+    /// decentralized identity AND the repo's OWNER DID (the repo is authored under
+    /// it). The P-256 `did` above is its verification method.
     pub did_dht: String,
     /// The ed25519 did:dht keypair itself — needed to sign the DID document
     /// published to the DHT. Derived from the recovery phrase, held only in memory.
@@ -162,24 +162,27 @@ pub async fn init_repo(
     let app_key =
         decode_app_key(app_key_hex).ok_or_else(|| "app key hex must be 32 bytes".to_string())?;
     let keypair = derive_signing_key(&app_key)?;
-    let did_str = keypair.did();
-    let did = Did::new(did_str.clone()).map_err(|e| format!("did: {e}"))?;
+    // The P-256 did:key is now the repo's VERIFICATION METHOD, not its owner — the
+    // repo is authored under the did:dht below; this key signs commits and the
+    // did:dht document lists it as the verification method.
+    let verification_did = keypair.did();
 
-    // The resolvable did:dht identity (ed25519), derived from the same phrase via a
-    // domain-separated HKDF info. The P-256 repo key above is carried in this DID's
-    // document as a verification method.
+    // The repo's OWNER DID is the resolvable did:dht identity (ed25519, derived
+    // from the same phrase via a domain-separated HKDF info), so a peer who resolves
+    // this did:dht finds a repo that claims it.
     let identity = crate::identity::derive_identity(&app_key)?;
     let did_dht = crate::identity::did_dht(&identity);
+    let owner_did = Did::new(did_dht.clone()).map_err(|e| format!("did: {e}"))?;
 
     // A signing key stored by a pre-derivation build is now dead weight — the only
     // persisted secret should be the per-device node key. Best-effort cleanup.
     let _ = fs::remove_file(dir.join("repo_key"));
 
-    // Reopen only if the on-disk repo was created under THIS identity; a DID
-    // mismatch (e.g. the one-time switch off a random stub key) means the CAR is
-    // stale, so recreate fresh under the derived key.
+    // Reopen only if the on-disk repo was created under THIS owner DID; a mismatch
+    // (e.g. the one-time switch from did:key authoring to did:dht) means the CAR is
+    // stale, so recreate fresh under the did:dht.
     let (mut repo, reopened) =
-        match open_existing(&car_path, &root_path, &did_path, &did_str).await {
+        match open_existing(&car_path, &root_path, &did_path, &did_dht).await {
             Some((store, root)) => {
                 let repo = Repository::open(store, root)
                     .await
@@ -187,7 +190,7 @@ pub async fn init_repo(
                 (repo, true)
             }
             None => (
-                create_fresh(&car_path, &root_path, &did_path, did, &did_str, &keypair).await?,
+                create_fresh(&car_path, &root_path, &did_path, owner_did, &did_dht, &keypair).await?,
                 false,
             ),
         };
@@ -206,7 +209,7 @@ pub async fn init_repo(
     let commit_sig = repo.commit().sig().to_vec();
     Ok(RepoHandle {
         repo: Arc::new(Mutex::new(repo)),
-        did: did_str,
+        did: verification_did,
         did_dht,
         identity,
         root,
