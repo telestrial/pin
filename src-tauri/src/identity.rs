@@ -68,10 +68,29 @@ pub async fn publish_doc(keypair: &Keypair, records: &[(String, String)]) -> Res
     let mut pb = Client::builder();
     pb.no_relays();
     let publisher = pb.build().map_err(|e| format!("dht client: {e}"))?;
-    publisher
-        .publish(&packet, None)
-        .await
-        .map_err(|e| format!("publish: {e}"))?;
+
+    // Publishing is best-effort UDP to the Mainline DHT and fails transiently —
+    // especially from a freshly-bound node that hasn't warmed enough DHT contacts
+    // yet (e.g. a rapid keeper re-enable, observed 2026-07-08: first publish OK,
+    // immediate re-enable ~3s later failed). Retry a few times, the same posture the
+    // resolve side already takes — DHT ops are best-effort, always retry.
+    let mut published = false;
+    let mut last_err = String::new();
+    for attempt in 0..3 {
+        if attempt > 0 {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+        match publisher.publish(&packet, None).await {
+            Ok(()) => {
+                published = true;
+                break;
+            }
+            Err(e) => last_err = format!("publish: {e}"),
+        }
+    }
+    if !published {
+        return Err(last_err);
+    }
 
     // Verify from a SEPARATE fresh DHT-only client (empty cache → a hit came from
     // the DHT). pkarr verifies the signature on resolve, so a returned packet is
