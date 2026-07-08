@@ -415,6 +415,40 @@ async fn curator_loop(
     // On success, serve the RPC over iroh and self-test it.
     let mut router = None;
     let mut hey_inbox: Option<crate::rpc::HeyInbox> = None;
+    // The persistent iroh-docs engine on the keeper's endpoint (step 3a: alongside
+    // atrium, mounted on the same Router below). It doesn't depend on the atrium
+    // repo, so it comes up here; held for the loop's lifetime so its redb + fs blobs
+    // stores (FsStore owns its own runtime) stay open as long as the Router serves
+    // them. "reopened from disk" is the persistence proof — the marker written on
+    // first run survives restarts. Best-effort; needs the AppKey (the doc's identity
+    // derives from it) and a data dir.
+    let doc_engine: Option<crate::docstore::DocEngine> =
+        match (creds.as_ref(), data_dir.as_deref()) {
+            (Some(c), Some(dir)) => {
+                match crate::docstore::open_or_create(&endpoint, dir, &c.app_key_hex).await {
+                    Ok(engine) => {
+                        log::info!(
+                            "curator docs engine online: ns={} ({})",
+                            engine.namespace_id,
+                            if engine.reopened {
+                                "reopened from disk"
+                            } else {
+                                "created fresh"
+                            }
+                        );
+                        Some(engine)
+                    }
+                    Err(e) => {
+                        log::warn!("curator docs engine failed: {e}");
+                        None
+                    }
+                }
+            }
+            _ => {
+                log::info!("curator docs engine: skipped (no Sia session / data dir)");
+                None
+            }
+        };
     // The repo identity is derived from the Sia recovery phrase (via the AppKey the
     // frontend handed over), so pass it through to the repo engine.
     let app_key_hex = creds.as_ref().map(|c| c.app_key_hex.as_str());
@@ -458,9 +492,20 @@ async fn curator_loop(
                 inbox.clone(),
                 handle.car_path,
             );
-            let r = iroh::protocol::Router::builder(endpoint.clone())
-                .accept(crate::rpc::ALPN, handler)
-                .spawn();
+            // One ALPN-multiplexed Router carries the pin-keeper RPC plus, when the
+            // docs engine is up, the iroh-docs / blobs / gossip protocols.
+            let mut rb =
+                iroh::protocol::Router::builder(endpoint.clone()).accept(crate::rpc::ALPN, handler);
+            if let Some(engine) = doc_engine.as_ref() {
+                rb = rb
+                    .accept(
+                        iroh_blobs::ALPN,
+                        iroh_blobs::BlobsProtocol::new(&engine.blobs, None),
+                    )
+                    .accept(iroh_gossip::ALPN, engine.gossip.clone())
+                    .accept(iroh_docs::ALPN, engine.docs.clone());
+            }
+            let r = rb.spawn();
             diag.lock().unwrap().rpc_serving = true;
             log::info!("curator rpc serving (alpn pin-keeper/0)");
 
@@ -534,19 +579,6 @@ async fn curator_loop(
             log::error!("curator repo engine failed: {e}");
             diag.lock().unwrap().repo_error = Some(e);
         }
-    }
-
-    // Prove the iroh-docs engine surfaces network content inside the real keeper
-    // (two namespaces reconcile in-process, a live write propagates, a divergence
-    // ships only the delta). Step 2: runs alongside the atrium repo, in-memory,
-    // logged only — cutover to a persistent, endpoint-served store is next. Needs
-    // the AppKey (the doc's identity derives from it), so skip without a session.
-    match creds.as_ref() {
-        Some(c) => match crate::docstore::surfacing_self_test(&c.app_key_hex).await {
-            Ok(msg) => log::info!("curator docs surfacing: {msg}"),
-            Err(e) => log::warn!("curator docs surfacing failed: {e}"),
-        },
-        None => log::info!("curator docs surfacing: skipped (no Sia session)"),
     }
 
     // Poll the endpoint's address set so relay connection + discovered direct
