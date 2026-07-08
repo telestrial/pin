@@ -462,20 +462,29 @@ async fn curator_loop(
         let did_dht = crate::identity::did_dht(kp);
         diag.lock().unwrap().did_dht = Some(did_dht.clone());
         let node_id_str = endpoint.id().to_string();
-        let records = vec![("_iroh".to_string(), node_id_str.clone())];
+        // The doc's namespace id — what a peer resolving this DID needs to import +
+        // sync the keeper's iroh-docs replica (alongside `_iroh`, where to dial).
+        let namespace = doc_engine.as_ref().map(|e| e.namespace_id.clone());
+        let mut records = vec![("_iroh".to_string(), node_id_str.clone())];
+        if let Some(ns) = &namespace {
+            records.push(("_ns".to_string(), ns.clone()));
+        }
         match crate::identity::publish_doc(kp, &records).await {
             Ok(msg) => {
                 log::info!("curator did:dht doc: {msg}");
                 let note = match crate::identity::resolve_did(&did_dht).await {
                     Ok(r) => {
                         let node_ok = r.iroh_node.as_deref() == Some(node_id_str.as_str());
+                        let ns_ok = r.namespace == namespace;
                         log::info!(
-                            "curator did:dht resolver: iroh={:?} (node matches: {node_ok})",
-                            r.iroh_node
+                            "curator did:dht resolver: iroh={:?} ns={:?} (node matches: {node_ok}, ns matches: {ns_ok})",
+                            r.iroh_node,
+                            r.namespace
                         );
                         format!(
-                            "; resolved back (iroh {})",
-                            if r.iroh_node.is_some() { "ok" } else { "—" }
+                            "; resolved back (iroh {}, ns {})",
+                            if r.iroh_node.is_some() { "ok" } else { "—" },
+                            if r.namespace.is_some() { "ok" } else { "—" }
                         )
                     }
                     Err(e) => {

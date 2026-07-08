@@ -42,8 +42,8 @@ pub fn did_dht(keypair: &Keypair) -> String {
 /// Publish the keeper's DID document to the Mainline DHT and self-resolve it to
 /// verify. `records` are `(name, value)` TXT pairs — a pragmatic Pin convention
 /// (we resolve our own docs, so strict did:dht-spec DNS encoding can come later):
-/// e.g. `_iroh` = the keeper's iroh node id, `_vm` = the repo's did:key
-/// verification method, `_mirror` = the Sia mirror share URL.
+/// `_iroh` = the keeper's iroh node id (where to dial), `_ns` = the keeper's
+/// iroh-docs namespace id (which doc to import + sync).
 ///
 /// DHT-only (`no_relays()`), so this proves the decentralized leg — no n0, no
 /// pkarr relay. Publish stores to the closest nodes (~seconds); a SEPARATE fresh
@@ -64,6 +64,12 @@ pub async fn publish_doc(keypair: &Keypair, records: &[(String, String)]) -> Res
         builder = builder.txt(n, v, 3600);
     }
     let packet = builder.sign(keypair).map_err(|e| format!("sign doc: {e}"))?;
+    // What we're about to publish, independent of any DHT round-trip — separates a
+    // build problem (record dropped locally) from a read problem (stale DHT copy).
+    log::info!(
+        "did:dht doc: built {} records to publish",
+        packet.all_resource_records().count()
+    );
 
     let mut pb = Client::builder();
     pb.no_relays();
@@ -98,9 +104,13 @@ pub async fn publish_doc(keypair: &Keypair, records: &[(String, String)]) -> Res
     let mut rb = Client::builder();
     rb.no_relays();
     let resolver = rb.build().map_err(|e| format!("dht client: {e}"))?;
+    // resolve_most_recent (not resolve): the DHT can return a stale earlier packet
+    // for the same key from the first node hit (pkarr's documented "lost update"
+    // read hazard, which bites when we republish across runs). most_recent gathers
+    // the highest-timestamp packet across nodes.
     let pubkey = keypair.public_key();
     for _ in 0..6 {
-        if let Some(sp) = resolver.resolve(&pubkey).await {
+        if let Some(sp) = resolver.resolve_most_recent(&pubkey).await {
             let n = sp.all_resource_records().count();
             return Ok(format!("ok (published + self-resolved {n} records via Mainline DHT)"));
         }
@@ -110,14 +120,14 @@ pub async fn publish_doc(keypair: &Keypair, records: &[(String, String)]) -> Res
 }
 
 /// The coordinates a peer needs after resolving someone's did:dht: where to reach
-/// them + the key to verify their repo. Fields are `Option` because a document may
-/// omit records (and clients ignore record types they don't understand).
+/// them (iroh node) + which doc to sync (iroh-docs namespace). Fields are `Option`
+/// because a document may omit records (and clients ignore ones they don't grok).
 #[derive(Debug, Clone)]
 pub struct ResolvedIdentity {
     /// The iroh node id to dial (from the document's `_iroh` record).
     pub iroh_node: Option<String>,
-    /// The repo's did:key verification method (from `_vm`) — verifies repo commits.
-    pub verification: Option<String>,
+    /// The keeper's iroh-docs namespace id (from `_ns`) — the doc to import + sync.
+    pub namespace: Option<String>,
 }
 
 /// Resolve a peer's `did:dht` from the Mainline DHT into the coordinates to reach +
@@ -140,9 +150,12 @@ pub async fn resolve_did(did: &str) -> Result<ResolvedIdentity, String> {
     // miss a record that's actually present (a publish lands on the closest nodes;
     // a fresh resolver's first lookup may not reach them yet). Retry a few times,
     // same as the publish-side self-resolve.
+    // resolve_most_recent (not resolve): avoid a stale earlier packet from the first
+    // node hit (pkarr's documented "lost update" read hazard) — gather the
+    // highest-timestamp packet across nodes.
     let mut packet = None;
     for _ in 0..6 {
-        if let Some(found) = resolver.resolve(&pubkey).await {
+        if let Some(found) = resolver.resolve_most_recent(&pubkey).await {
             packet = Some(found);
             break;
         }
@@ -152,19 +165,19 @@ pub async fn resolve_did(did: &str) -> Result<ResolvedIdentity, String> {
 
     let mut id = ResolvedIdentity {
         iroh_node: None,
-        verification: None,
+        namespace: None,
     };
     for rr in sp.all_resource_records() {
         let RData::TXT(txt) = &rr.rdata else { continue };
         let Ok(value) = String::try_from(txt.clone()) else {
             continue;
         };
-        // Record names resolve as "_iroh.<zbase32>", "_vm.<zbase32>", etc.
+        // Record names resolve as "_iroh.<zbase32>", "_ns.<zbase32>", etc.
         let label = rr.name.to_string();
         if label.starts_with("_iroh") {
             id.iroh_node = Some(value);
-        } else if label.starts_with("_vm") {
-            id.verification = Some(value);
+        } else if label.starts_with("_ns") {
+            id.namespace = Some(value);
         }
     }
     Ok(id)
