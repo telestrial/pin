@@ -1,8 +1,6 @@
 mod curator;
 mod docstore;
 mod identity;
-mod mirror;
-mod repo;
 mod rpc;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

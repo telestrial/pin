@@ -45,8 +45,9 @@ fn hkdf32(ikm: &[u8], info: &[u8]) -> Result<[u8; 32], String> {
     Ok(okm)
 }
 
-/// Decode the 32-byte Sia AppKey from its hex form (the HKDF IKM).
-fn decode_app_key(hex: &str) -> Option<[u8; 32]> {
+/// Decode the 32-byte Sia AppKey from its hex form (the HKDF IKM). Shared with
+/// curator (it derives the did:dht identity from the same AppKey).
+pub(crate) fn decode_app_key(hex: &str) -> Option<[u8; 32]> {
     if hex.len() != 64 {
         return None;
     }

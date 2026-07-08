@@ -205,10 +205,13 @@ impl CuratorState {
     }
 }
 
-/// The Sia identity the keeper mirrors under, handed over by the frontend (which
-/// already unlocked it). Both are needed; absent one, the mirror is disabled.
+/// The Sia identity handed over by the frontend (which already unlocked it). The
+/// AppKey derives the docs namespace + the did:dht identity.
 pub struct SiaCreds {
     pub app_key_hex: String,
+    // Was used by the Sia mirror, removed at the iroh-docs cutover pending a rebuild
+    // against the doc format; kept plumbed so it returns without frontend churn.
+    #[allow(dead_code)]
     pub indexer_url: String,
 }
 
@@ -323,56 +326,6 @@ fn load_or_create_key(path: Option<&Path>) -> (SecretKey, bool) {
     (key, persisted)
 }
 
-/// One-shot Sia mirror reconcile on load, surfacing the outcome in diagnostics.
-/// Best-effort: any failure is logged + shown but never stops the node. Needs
-/// both the handed-over Sia creds and a data dir; without either, the mirror is
-/// simply off (e.g. not signed into Sia).
-async fn run_mirror(
-    diag: &Arc<Mutex<Diag>>,
-    repo: &crate::repo::SharedRepo,
-    data_dir: Option<&Path>,
-    creds: Option<&SiaCreds>,
-) {
-    let (Some(creds), Some(dir)) = (creds, data_dir) else {
-        diag.lock().unwrap().mirror_state = "no-session";
-        return;
-    };
-    let sdk = match crate::mirror::connect_sdk(&creds.indexer_url, &creds.app_key_hex).await {
-        Ok(sdk) => sdk,
-        Err(e) => {
-            log::warn!("curator mirror: sia connect failed: {e}");
-            let mut d = diag.lock().unwrap();
-            d.mirror_state = "error";
-            d.mirror_error = Some(e);
-            return;
-        }
-    };
-    let mirror_path = dir.join("mirror.json");
-    match crate::mirror::mirror_if_stale(&sdk, repo, &mirror_path).await {
-        Ok(crate::mirror::MirrorOutcome::UpToDate) => {
-            log::info!("curator mirror: up to date");
-            let mut d = diag.lock().unwrap();
-            d.mirror_state = "up-to-date";
-            d.mirror_root = d.repo_root.clone();
-            d.mirror_error = None;
-        }
-        Ok(crate::mirror::MirrorOutcome::Pushed { url }) => {
-            log::info!("curator mirror: pushed ({url})");
-            let mut d = diag.lock().unwrap();
-            d.mirror_state = "pushed";
-            d.mirror_root = d.repo_root.clone();
-            d.mirror_url = Some(url);
-            d.mirror_error = None;
-        }
-        Err(e) => {
-            log::warn!("curator mirror: push failed: {e}");
-            let mut d = diag.lock().unwrap();
-            d.mirror_state = "error";
-            d.mirror_error = Some(e);
-        }
-    }
-}
-
 async fn curator_loop(
     running: Arc<AtomicBool>,
     diag: Arc<Mutex<Diag>>,
@@ -410,11 +363,6 @@ async fn curator_loop(
         d.started = Some(Instant::now());
     }
 
-    // Bring up the local repo engine. Best-effort: if it fails, iroh keeps
-    // running and the error surfaces in diagnostics rather than killing the node.
-    // On success, serve the RPC over iroh and self-test it.
-    let mut router = None;
-    let mut hey_inbox: Option<crate::rpc::HeyInbox> = None;
     // The persistent iroh-docs engine on the keeper's endpoint (step 3a: alongside
     // atrium, mounted on the same Router below). It doesn't depend on the atrium
     // repo, so it comes up here; held for the loop's lifetime so its redb + fs blobs
@@ -449,135 +397,98 @@ async fn curator_loop(
                 None
             }
         };
-    // The repo identity is derived from the Sia recovery phrase (via the AppKey the
-    // frontend handed over), so pass it through to the repo engine.
-    let app_key_hex = creds.as_ref().map(|c| c.app_key_hex.as_str());
-    match crate::repo::init_repo(data_dir.as_deref(), app_key_hex).await {
-        Ok(handle) => {
-            log::info!(
-                "curator repo online: owner={} vm={} root={} ({})",
-                handle.did_dht,
-                handle.did,
-                handle.root,
-                if handle.reopened {
-                    "reopened from disk"
-                } else {
-                    "created fresh"
-                }
-            );
-            let root = handle.root.clone();
-            // The repo's did:key is the verification method we publish (`_vm`).
-            let repo_did_str = handle.did.clone();
-            {
-                let mut d = diag.lock().unwrap();
-                d.repo_did = Some(handle.did.clone());
-                d.did_dht = Some(handle.did_dht.clone());
-                d.repo_root = Some(handle.root.clone());
-                d.repo_reopened = handle.reopened;
-            }
+    // Feed the repo diagnostics from the docs engine. (These fields keep their
+    // atrium-era names — repo_root/repo_reopened — for now; a rename to docs_* is a
+    // follow-up. repo_root carries the doc namespace, repo_reopened whether it
+    // persisted.)
+    if let Some(engine) = doc_engine.as_ref() {
+        let mut d = diag.lock().unwrap();
+        d.repo_root = Some(engine.namespace_id.clone());
+        d.repo_reopened = engine.reopened;
+    }
 
-            let head = crate::rpc::Head {
-                // The repo's owner DID is the did:dht — what a peer who resolved it
-                // expects head to claim. The P-256 did:key is the verification
-                // method (published as _vm), not the owner.
-                did: handle.did_dht.clone(),
-                root: handle.root,
-                sig: handle.commit_sig,
-            };
-            let inbox: crate::rpc::HeyInbox = Arc::new(Mutex::new(Vec::new()));
-            // The mirror also needs the live repo, so the handler gets a clone.
-            let handler = crate::rpc::RpcHandler::new(
-                head,
-                handle.repo.clone(),
-                inbox.clone(),
-                handle.car_path,
-            );
-            // One ALPN-multiplexed Router carries the pin-keeper RPC plus, when the
-            // docs engine is up, the iroh-docs / blobs / gossip protocols.
-            let mut rb =
-                iroh::protocol::Router::builder(endpoint.clone()).accept(crate::rpc::ALPN, handler);
-            if let Some(engine) = doc_engine.as_ref() {
-                rb = rb
-                    .accept(
-                        iroh_blobs::ALPN,
-                        iroh_blobs::BlobsProtocol::new(&engine.blobs, None),
-                    )
-                    .accept(iroh_gossip::ALPN, engine.gossip.clone())
-                    .accept(iroh_docs::ALPN, engine.docs.clone());
-            }
-            let r = rb.spawn();
-            diag.lock().unwrap().rpc_serving = true;
-            log::info!("curator rpc serving (alpn pin-keeper/0)");
+    // Serve the /hey inbox over iroh, plus the iroh-docs / blobs / gossip protocols
+    // when the docs engine is up — one ALPN-multiplexed Router. The atrium repo and
+    // its head/record/diff verbs are gone; iroh-docs' own sync subsumes them.
+    let inbox: crate::rpc::HeyInbox = Arc::new(Mutex::new(Vec::new()));
+    let mut rb = iroh::protocol::Router::builder(endpoint.clone())
+        .accept(crate::rpc::ALPN, crate::rpc::HeyHandler::new(inbox.clone()));
+    if let Some(engine) = doc_engine.as_ref() {
+        rb = rb
+            .accept(
+                iroh_blobs::ALPN,
+                iroh_blobs::BlobsProtocol::new(&engine.blobs, None),
+            )
+            .accept(iroh_gossip::ALPN, engine.gossip.clone())
+            .accept(iroh_docs::ALPN, engine.docs.clone());
+    }
+    let r = rb.spawn();
+    diag.lock().unwrap().rpc_serving = true;
+    log::info!("curator serving (alpn pin-keeper/0: /hey; iroh-docs when up)");
 
-            // One-shot self-test: a throwaway client dials us and calls head +
-            // record + hey + diff. The hey it sends is synthetic, so clear the
-            // inbox afterward — real knocks should start the count from zero.
-            match crate::rpc::self_test(endpoint.addr(), &root).await {
-                Ok(msg) => {
-                    log::info!("curator rpc self-test: {msg}");
-                    diag.lock().unwrap().rpc_selftest = Some(msg);
-                }
-                Err(e) => {
-                    log::warn!("curator rpc self-test failed: {e}");
-                    diag.lock().unwrap().rpc_selftest = Some(format!("failed: {e}"));
-                }
-            }
-            inbox.lock().unwrap().clear();
-            hey_inbox = Some(inbox);
-            router = Some(r);
-
-            // Reconcile the Sia mirror (push-on-change, keyed on root CID). On a
-            // static post-init repo this pushes once on first run, then no-ops.
-            // Best-effort: a mirror failure surfaces in diagnostics but the node
-            // keeps serving. Needs the handed-over Sia creds + a data dir.
-            run_mirror(&diag, &handle.repo, data_dir.as_deref(), creds.as_ref()).await;
-
-            // Publish the did:dht document to Mainline DHT so the identity is
-            // resolvable, then self-resolve to verify. Compact doc: the iroh node
-            // id (where to dial) + the repo's did:key (verification method). The
-            // Sia mirror URL is omitted for now — long enough to strain a TXT
-            // string / the BEP44 packet-size limit; conveying it is a later slice.
-            // Best-effort: a failure leaves the node serving over iroh.
-            let node_id_str = endpoint.id().to_string();
-            let records = vec![
-                ("_iroh".to_string(), node_id_str.clone()),
-                ("_vm".to_string(), repo_did_str),
-            ];
-            match crate::identity::publish_doc(&handle.identity, &records).await {
-                Ok(msg) => {
-                    log::info!("curator did:dht doc: {msg}");
-                    // Slice C: resolve our own DID back through the resolver the
-                    // loops will use, decoding it into reach + verify coordinates.
-                    let note = match crate::identity::resolve_did(&handle.did_dht).await {
-                        Ok(r) => {
-                            let node_ok = r.iroh_node.as_deref() == Some(node_id_str.as_str());
-                            log::info!(
-                                "curator did:dht resolver: iroh={:?} vm={:?} (node matches: {node_ok})",
-                                r.iroh_node,
-                                r.verification
-                            );
-                            format!(
-                                "; resolved back (iroh {}, vm {})",
-                                if r.iroh_node.is_some() { "ok" } else { "—" },
-                                if r.verification.is_some() { "ok" } else { "—" }
-                            )
-                        }
-                        Err(e) => {
-                            log::warn!("curator did:dht resolver failed: {e}");
-                            format!("; resolve failed: {e}")
-                        }
-                    };
-                    diag.lock().unwrap().did_dht_published = Some(format!("{msg}{note}"));
-                }
-                Err(e) => {
-                    log::warn!("curator did:dht doc publish failed: {e}");
-                    diag.lock().unwrap().did_dht_published = Some(format!("failed: {e}"));
-                }
-            }
+    // One-shot self-test: a throwaway client dials us and sends a /hey knock. The
+    // knock is synthetic, so clear the inbox afterward — real knocks start from zero.
+    match crate::rpc::self_test(endpoint.addr()).await {
+        Ok(msg) => {
+            log::info!("curator hey self-test: {msg}");
+            diag.lock().unwrap().rpc_selftest = Some(msg);
         }
         Err(e) => {
-            log::error!("curator repo engine failed: {e}");
-            diag.lock().unwrap().repo_error = Some(e);
+            log::warn!("curator hey self-test failed: {e}");
+            diag.lock().unwrap().rpc_selftest = Some(format!("failed: {e}"));
+        }
+    }
+    inbox.lock().unwrap().clear();
+    // Held past here for the poll loop (inbox depth) and shutdown (router).
+    let hey_inbox = Some(inbox);
+    let router = Some(r);
+
+    // The keeper's did:dht identity (ed25519, derived from the AppKey) — was carried
+    // on the atrium repo handle; now derived directly, since identity is independent
+    // of the repo engine. Publish the DID document to Mainline DHT (just `_iroh`, the
+    // node to dial — binding the doc namespace via `_ns` is the next slice) and
+    // self-resolve to verify. Best-effort: a failure leaves the node serving.
+    let identity = creds
+        .as_ref()
+        .and_then(|c| crate::docstore::decode_app_key(&c.app_key_hex))
+        .and_then(|k| match crate::identity::derive_identity(&k) {
+            Ok(kp) => Some(kp),
+            Err(e) => {
+                log::warn!("curator identity derive failed: {e}");
+                None
+            }
+        });
+    if let Some(kp) = &identity {
+        let did_dht = crate::identity::did_dht(kp);
+        diag.lock().unwrap().did_dht = Some(did_dht.clone());
+        let node_id_str = endpoint.id().to_string();
+        let records = vec![("_iroh".to_string(), node_id_str.clone())];
+        match crate::identity::publish_doc(kp, &records).await {
+            Ok(msg) => {
+                log::info!("curator did:dht doc: {msg}");
+                let note = match crate::identity::resolve_did(&did_dht).await {
+                    Ok(r) => {
+                        let node_ok = r.iroh_node.as_deref() == Some(node_id_str.as_str());
+                        log::info!(
+                            "curator did:dht resolver: iroh={:?} (node matches: {node_ok})",
+                            r.iroh_node
+                        );
+                        format!(
+                            "; resolved back (iroh {})",
+                            if r.iroh_node.is_some() { "ok" } else { "—" }
+                        )
+                    }
+                    Err(e) => {
+                        log::warn!("curator did:dht resolver failed: {e}");
+                        format!("; resolve failed: {e}")
+                    }
+                };
+                diag.lock().unwrap().did_dht_published = Some(format!("{msg}{note}"));
+            }
+            Err(e) => {
+                log::warn!("curator did:dht doc publish failed: {e}");
+                diag.lock().unwrap().did_dht_published = Some(format!("failed: {e}"));
+            }
         }
     }
 
