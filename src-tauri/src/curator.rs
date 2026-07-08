@@ -536,6 +536,19 @@ async fn curator_loop(
         }
     }
 
+    // Prove the iroh-docs engine surfaces network content inside the real keeper
+    // (two namespaces reconcile in-process, a live write propagates, a divergence
+    // ships only the delta). Step 2: runs alongside the atrium repo, in-memory,
+    // logged only — cutover to a persistent, endpoint-served store is next. Needs
+    // the AppKey (the doc's identity derives from it), so skip without a session.
+    match creds.as_ref() {
+        Some(c) => match crate::docstore::surfacing_self_test(&c.app_key_hex).await {
+            Ok(msg) => log::info!("curator docs surfacing: {msg}"),
+            Err(e) => log::warn!("curator docs surfacing failed: {e}"),
+        },
+        None => log::info!("curator docs surfacing: skipped (no Sia session)"),
+    }
+
     // Poll the endpoint's address set so relay connection + discovered direct
     // addresses (LAN, then public via STUN) surface as they come up.
     while running.load(Ordering::SeqCst) {

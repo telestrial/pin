@@ -123,6 +123,7 @@ dependencies = [
  "atrium-api",
  "atrium-crypto",
  "atrium-repo",
+ "futures-lite",
  "hkdf",
  "iroh",
  "iroh-blobs",

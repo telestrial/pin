@@ -1,4 +1,5 @@
 mod curator;
+mod docstore;
 mod identity;
 mod mirror;
 mod repo;
