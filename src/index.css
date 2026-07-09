@@ -36,6 +36,51 @@ body {
   background: transparent;
 }
 
+/* ── Themes ──────────────────────────────────────────────────────────────
+   A theme is a named style bundle selected in Settings and applied via
+   data-theme on <html> (see App.tsx). 'rounded' is the default look and needs
+   no rules. 'corners' squares everything off. Themes are expected to grow more
+   knobs over time; add them under the matching [data-theme='…'] block. */
+
+/* Corners: no border radius anywhere. The blanket !important override beats
+   every Tailwind rounded-* utility in one place; the scrollbar thumb is a
+   pseudo-element (unaffected by the * rule) so it's squared explicitly. */
+[data-theme='corners'] *,
+[data-theme='corners'] *::before,
+[data-theme='corners'] *::after {
+  border-radius: 0 !important;
+}
+[data-theme='corners'] *::-webkit-scrollbar-thumb {
+  border-radius: 0;
+}
+
+/* Rounded, on the desktop shell only: round the OS window itself. Windows 10
+   has no DWM corner API, so the route is a transparent window (see
+   tauri.conf.json) with the opaque app painted on a clipped, rounded root.
+   The canvas background moves onto #app-shell so the now-transparent body
+   lets the desktop show through the four corner arcs. Radius matches the
+   card radius (rounded-lg = 8px). Trade-off: a transparent frameless window
+   has no native drop-shadow, and full-screen fixed overlays (lock fade, modal
+   backdrops) briefly square the corners since they escape the root's clip. */
+html[data-shell='desktop'][data-theme='rounded'],
+html[data-shell='desktop'][data-theme='rounded'] body {
+  background: transparent;
+}
+html[data-shell='desktop'][data-theme='rounded'] #app-shell {
+  background-color: #f4f4f5;
+  border-radius: 8px;
+  overflow: hidden;
+}
+/* The topmost child (the white navbar when connected, the auth surface
+   otherwise) paints to the very top edge. The root's rounded overflow clip
+   leaves a subpixel hairline of that child's square corner outside the arc,
+   so round the top corners of whatever sits at the top to match — the child
+   then simply doesn't paint those corner pixels. */
+html[data-shell='desktop'][data-theme='rounded'] #app-shell > :first-child {
+  border-top-left-radius: 8px;
+  border-top-right-radius: 8px;
+}
+
 @keyframes fade-in {
   from {
     opacity: 0;

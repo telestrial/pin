@@ -5,6 +5,7 @@ import { LockScreen } from './components/LockScreen'
 import { Navbar } from './components/Navbar'
 import { Toasts } from './components/ui/Toast'
 import { bootOauth } from './lib/atprotoClient'
+import { inTauri } from './lib/openExternal'
 import './lib/debug'
 import { useGhostReconciliation } from './lib/hooks/useGhostReconciliation'
 import { useHandleFollowReconciliation } from './lib/hooks/useHandleFollowReconciliation'
@@ -26,6 +27,7 @@ export default function App() {
   const step = useAuthStore((s) => s.step)
   const sdk = useAuthStore((s) => s.sdk)
   const locked = useAuthStore((s) => s.locked)
+  const theme = useAuthStore((s) => s.theme)
   const armedItem = useComposeStore((s) => s.armedItem)
   const [fading, setFading] = useState(false)
 
@@ -47,6 +49,17 @@ export default function App() {
       useAuthStore.getState().setLocked(false)
       setFading(false)
     }, FADE_MS)
+  }, [])
+
+  // Theme is a named style bundle applied globally via a data attribute on
+  // <html>; CSS keys off [data-theme]. data-shell tags the runtime (desktop
+  // vs web) so desktop-only styling — like the rounded window on the 'rounded'
+  // theme — can gate on it. inTauri() is a static check, so shell is set once.
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme
+  }, [theme])
+  useEffect(() => {
+    document.documentElement.dataset.shell = inTauri() ? 'desktop' : 'web'
   }, [])
 
   useJetstream()
@@ -113,7 +126,10 @@ export default function App() {
   const connected = step === 'connected'
 
   return (
-    <div className="min-h-screen lg:h-screen flex flex-col lg:overflow-hidden">
+    <div
+      id="app-shell"
+      className="min-h-screen lg:h-screen flex flex-col lg:overflow-hidden"
+    >
       {connected && !locked && <Navbar onLock={lock} />}
       {/* Desktop (lg+): the app is locked to the viewport — the navbar is a
           fixed-height flex child and this region fills the rest without

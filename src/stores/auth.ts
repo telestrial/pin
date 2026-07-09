@@ -2,7 +2,7 @@ import type { Agent } from '@atproto/api'
 import type { Sdk } from '@siafoundation/sia-storage'
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import type { OwnedChannel, SubscriptionRef } from '../core/types'
+import type { OwnedChannel, SubscriptionRef, ThemeMode } from '../core/types'
 import { APP_KEY } from '../lib/constants'
 import { useFeedStore } from './feed'
 import { usePinStore } from './pin'
@@ -18,6 +18,11 @@ export type AuthStep =
   | 'connected'
 
 export type FeedSortOrder = 'oldest' | 'newest'
+
+// Re-exported so existing `import { ThemeMode } from '../stores/auth'` sites
+// keep working; the type itself lives in core/types (used by the settings
+// serializer, which mustn't import a store).
+export type { ThemeMode }
 
 type AuthState = {
   sdk: Sdk | null
@@ -39,6 +44,7 @@ type AuthState = {
   atprotoDID: string | null
   atprotoHandle: string | null
   feedSortOrder: FeedSortOrder
+  theme: ThemeMode
   settingsObjectID: string | null
   // CID of the current dev.sia.pin.settings/self record — the compare-and-swap
   // guard for the next write. Runtime-only (re-fetched on load), not persisted.
@@ -73,10 +79,12 @@ type AuthState = {
   ) => void
   setATProtoHandle: (handle: string) => void
   setFeedSortOrder: (order: FeedSortOrder) => void
+  setTheme: (theme: ThemeMode) => void
   hydrateSettings: (
     myChannels: OwnedChannel[],
     subscriptions: SubscriptionRef[],
     dismissedAutoWatch: string[],
+    theme: ThemeMode,
     cid: string,
   ) => void
   setSettingsObjectID: (id: string) => void
@@ -103,6 +111,7 @@ export const useAuthStore = create<AuthState>()(
       atprotoDID: null,
       atprotoHandle: null,
       feedSortOrder: 'newest',
+      theme: 'rounded',
       settingsObjectID: null,
       settingsRecordCid: null,
       settingsLoaded: false,
@@ -182,11 +191,19 @@ export const useAuthStore = create<AuthState>()(
         })),
       setATProtoHandle: (atprotoHandle) => set({ atprotoHandle }),
       setFeedSortOrder: (feedSortOrder) => set({ feedSortOrder }),
-      hydrateSettings: (myChannels, subscriptions, dismissedAutoWatch, cid) =>
+      setTheme: (theme) => set({ theme }),
+      hydrateSettings: (
+        myChannels,
+        subscriptions,
+        dismissedAutoWatch,
+        theme,
+        cid,
+      ) =>
         set({
           myChannels,
           subscriptions,
           dismissedAutoWatch,
+          theme,
           settingsRecordCid: cid,
           settingsLoaded: true,
         }),
@@ -230,6 +247,7 @@ export const useAuthStore = create<AuthState>()(
         atprotoDID: state.atprotoDID,
         atprotoHandle: state.atprotoHandle,
         feedSortOrder: state.feedSortOrder,
+        theme: state.theme,
         settingsObjectID: state.settingsObjectID,
         settingsDirty: state.settingsDirty,
       }),

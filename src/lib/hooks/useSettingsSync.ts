@@ -104,6 +104,7 @@ export function useSettingsSync() {
               result.settings.myChannels,
               result.settings.subscriptions,
               result.settings.dismissedAutoWatch ?? [],
+              result.settings.theme ?? useAuthStore.getState().theme,
               result.cid,
             )
         } else {
@@ -143,13 +144,7 @@ export function useSettingsSync() {
         (initial.myChannels.length > 0 ||
           initial.subscriptions.length > 0 ||
           initial.dismissedAutoWatch.length > 0))
-    let lastSerialized = needsPush
-      ? '__push__'
-      : serialize(
-          initial.myChannels,
-          initial.subscriptions,
-          initial.dismissedAutoWatch,
-        )
+    let lastSerialized = needsPush ? '__push__' : serialize(initial)
 
     const runSave = async () => {
       let key = settingsKeyRef.current
@@ -163,11 +158,7 @@ export function useSettingsSync() {
       }
 
       const state = useAuthStore.getState()
-      const serialized = serialize(
-        state.myChannels,
-        state.subscriptions,
-        state.dismissedAutoWatch,
-      )
+      const serialized = serialize(state)
       if (serialized === lastSerialized) return
       lastSerialized = serialized
 
@@ -179,6 +170,7 @@ export function useSettingsSync() {
           myChannels: state.myChannels,
           subscriptions: state.subscriptions,
           dismissedAutoWatch: state.dismissedAutoWatch,
+          theme: state.theme,
           updatedAt: new Date().toISOString(),
         }
         const cid = await saveSettingsRecord(
@@ -191,13 +183,7 @@ export function useSettingsSync() {
         // Caught up — but only if nothing changed during the write. If state
         // drifted, the next runSave clears dirty when it catches up.
         const after = useAuthStore.getState()
-        if (
-          serialize(
-            after.myChannels,
-            after.subscriptions,
-            after.dismissedAutoWatch,
-          ) === lastSerialized
-        ) {
+        if (serialize(after) === lastSerialized) {
           useAuthStore.getState().setSettingsDirty(false)
         }
       } catch (e) {
@@ -228,7 +214,8 @@ export function useSettingsSync() {
       if (
         state.myChannels === prev.myChannels &&
         state.subscriptions === prev.subscriptions &&
-        state.dismissedAutoWatch === prev.dismissedAutoWatch
+        state.dismissedAutoWatch === prev.dismissedAutoWatch &&
+        state.theme === prev.theme
       ) {
         return
       }
@@ -241,13 +228,7 @@ export function useSettingsSync() {
       // Wait for any in-flight save, then save if anything is still pending.
       while (saving) await new Promise((r) => setTimeout(r, 50))
       const state = useAuthStore.getState()
-      if (
-        serialize(
-          state.myChannels,
-          state.subscriptions,
-          state.dismissedAutoWatch,
-        ) !== lastSerialized
-      ) {
+      if (serialize(state) !== lastSerialized) {
         await runSave()
       }
     }
@@ -259,12 +240,14 @@ export function useSettingsSync() {
   }, [agent, settingsLoaded])
 }
 
-function serialize(
-  myChannels: ReturnType<typeof useAuthStore.getState>['myChannels'],
-  subscriptions: ReturnType<typeof useAuthStore.getState>['subscriptions'],
-  dismissedAutoWatch: ReturnType<
-    typeof useAuthStore.getState
-  >['dismissedAutoWatch'],
-): string {
-  return JSON.stringify({ myChannels, subscriptions, dismissedAutoWatch })
+// Change-detection fingerprint of the synced slice. Takes the whole store
+// state so adding a synced field only touches this function, not every call
+// site.
+function serialize(s: ReturnType<typeof useAuthStore.getState>): string {
+  return JSON.stringify({
+    myChannels: s.myChannels,
+    subscriptions: s.subscriptions,
+    dismissedAutoWatch: s.dismissedAutoWatch,
+    theme: s.theme,
+  })
 }

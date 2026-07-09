@@ -1,12 +1,14 @@
 import { useMemo, useState } from 'react'
 import { fullReset } from '../lib/fullReset'
-import { useAuthStore } from '../stores/auth'
+import { type ThemeMode, useAuthStore } from '../stores/auth'
 import { CopyButton } from './ui/CopyButton'
 
 // Settings page (rendered inside a FormCard by Home). The author public key
 // and the danger-zone full reset.
 export function SettingsView() {
   const sdk = useAuthStore((s) => s.sdk)
+  const theme = useAuthStore((s) => s.theme)
+  const setTheme = useAuthStore((s) => s.setTheme)
   const [resetting, setResetting] = useState(false)
 
   const publicKey = useMemo(() => {
@@ -33,6 +35,23 @@ export function SettingsView() {
   return (
     <div className="space-y-6">
       <h1 className="text-lg font-semibold text-neutral-900">Settings</h1>
+
+      <section className="border border-neutral-200 rounded-lg p-4 space-y-2">
+        <h2 className="text-sm font-semibold text-neutral-900">Theme</h2>
+        <p className="text-xs text-neutral-500 leading-relaxed">
+          The overall look. Rounded uses gentle corners throughout; Corners
+          squares everything off. On the desktop app, Rounded also rounds the
+          window itself.
+        </p>
+        <select
+          value={theme}
+          onChange={(e) => setTheme(e.target.value as ThemeMode)}
+          className="w-full sm:w-56 border border-neutral-200 rounded-md bg-white px-3 py-2 text-sm text-neutral-900 cursor-pointer"
+        >
+          <option value="rounded">Rounded</option>
+          <option value="corners">Corners</option>
+        </select>
+      </section>
 
       {publicKey && (
         <section className="border border-neutral-200 rounded-lg p-4 space-y-2">

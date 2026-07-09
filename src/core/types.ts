@@ -1,6 +1,11 @@
 export const CHANNEL_MANIFEST_VERSION = 1
 export const SUBSCRIPTIONS_VERSION = 1
 
+// Visual theme — a named style bundle synced identity-wide via the settings
+// record. 'rounded' is the gentle-radius default; 'corners' squares everything
+// off. Lives in core so both the store and the settings serializer can name it.
+export type ThemeMode = 'rounded' | 'corners'
+
 export type ItemType = 'text' | 'image' | 'audio' | 'video' | 'file' | 'app'
 
 export type AttachmentRef = {
