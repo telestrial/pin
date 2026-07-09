@@ -226,7 +226,7 @@ export function PinSidebar({
   }
 
   return (
-    <aside className="w-full lg:w-64 lg:ml-auto shrink-0 border border-neutral-200 rounded-lg bg-white p-3 space-y-5">
+    <aside className="w-full lg:w-64 lg:ml-auto shrink-0 border border-neutral-200 rounded-lg bg-white p-3 space-y-5 lg:max-h-full lg:overflow-y-auto">
       <section>
         {/* biome-ignore lint/a11y/useSemanticElements: clickable region wraps a heading + progress bar; a button element would nest a heading inside an interactive control */}
         <div

@@ -73,10 +73,10 @@ export function ReadText({
   )
 
   return (
-    <div className="flex-1 p-6">
-      <div className="flex flex-col lg:flex-row lg:items-start gap-6">
+    <div className="flex-1 p-6 lg:min-h-0">
+      <div className="flex flex-col gap-6 lg:h-full lg:min-h-0 lg:flex-row lg:items-start">
         {sidebar}
-        <article className="flex-1 min-w-0 bg-white border border-neutral-200 rounded-lg p-5 space-y-5">
+        <article className="flex-1 min-w-0 bg-white border border-neutral-200 rounded-lg p-5 space-y-5 lg:max-h-full lg:overflow-y-auto">
           <div className="flex items-center justify-between gap-2">
             <button
               type="button"

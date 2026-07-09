@@ -99,7 +99,7 @@ export function Sidebar({
   }
 
   return (
-    <aside className="w-full lg:w-60 shrink-0 border border-neutral-200 rounded-lg bg-white p-3">
+    <aside className="w-full lg:w-60 shrink-0 border border-neutral-200 rounded-lg bg-white p-3 lg:max-h-full lg:overflow-y-auto">
       <section>
         <button
           type="button"

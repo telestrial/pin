@@ -113,9 +113,14 @@ export default function App() {
   const connected = step === 'connected'
 
   return (
-    <div className="min-h-screen flex flex-col">
+    <div className="min-h-screen lg:h-screen flex flex-col lg:overflow-hidden">
       {connected && !locked && <Navbar onLock={lock} />}
-      <div className="flex-1 flex flex-col">
+      {/* Desktop (lg+): the app is locked to the viewport — the navbar is a
+          fixed-height flex child and this region fills the rest without
+          scrolling itself (lg:overflow-hidden). Each column inside then
+          scrolls internally, so there's no page-level scrollbar. Mobile
+          (<lg): the columns stack and the document scrolls normally. */}
+      <div className="flex-1 flex flex-col lg:min-h-0 lg:overflow-hidden">
         {connected ? (
           locked ? (
             <LockScreen onContinue={unlock} />

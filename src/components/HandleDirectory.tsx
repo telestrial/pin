@@ -186,10 +186,10 @@ export function HandleDirectory({
   ) : null
 
   return (
-    <div className="flex-1 p-6">
-      <div className="flex flex-col lg:flex-row lg:items-start gap-6">
+    <div className="flex-1 p-6 lg:min-h-0">
+      <div className="flex flex-col gap-6 lg:h-full lg:min-h-0 lg:flex-row lg:items-start">
         {sidebar}
-        <div className="flex-1 min-w-0 space-y-5">
+        <div className="flex-1 min-w-0 space-y-5 lg:max-h-full lg:overflow-y-auto">
           {state.kind === 'loading' && (
             <div className="bg-white border border-neutral-200 rounded-lg p-5 flex flex-col gap-4">
               {inlineBackButton}

@@ -97,10 +97,10 @@ export function ChannelView({
   const description = manifest?.description ?? ''
 
   return (
-    <div className="flex-1 p-6">
-      <div className="flex flex-col lg:flex-row lg:items-start gap-6">
+    <div className="flex-1 p-6 lg:min-h-0">
+      <div className="flex flex-col gap-6 lg:h-full lg:min-h-0 lg:flex-row lg:items-start">
         {sidebar}
-        <div className="flex-1 space-y-5 min-w-0">
+        <div className="flex-1 space-y-5 min-w-0 lg:max-h-full lg:overflow-y-auto">
           <div className="border border-neutral-200 rounded-lg bg-white overflow-hidden">
             {/* Cover banner full-bleed at the card top; Back overlaid
                 top-left. Mirrors the My Profile (HandleDirectory) header. */}
