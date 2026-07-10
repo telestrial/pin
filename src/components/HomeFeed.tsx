@@ -1,6 +1,7 @@
 import { useEffect, useMemo } from 'react'
 import type { FeedEntry } from '../core/feed'
 import type { ItemRef } from '../core/types'
+import { useAuthorName } from '../lib/hooks/useAuthorName'
 import { renderMarkdown } from '../lib/markdown'
 import { formatAbsolute, formatRelativeShort } from '../lib/time'
 import { useAuthStore } from '../stores/auth'
@@ -207,6 +208,7 @@ export function FeedRow({
   onHandleClick: (handle: string) => void
 }) {
   const { item, channel } = entry
+  const authorName = useAuthorName(channel.authorHandle)
 
   const handleChannelClick = (e: React.MouseEvent | React.KeyboardEvent) => {
     e.stopPropagation()
@@ -262,7 +264,7 @@ export function FeedRow({
                   onClick={handleAuthorClick}
                   className="block max-w-full text-xs text-neutral-500 truncate hover:underline cursor-pointer text-left"
                 >
-                  @{channel.authorHandle}
+                  @{authorName}
                 </button>
               </div>
               <div className="flex items-center gap-1.5 shrink-0">

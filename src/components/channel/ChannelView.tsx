@@ -2,6 +2,7 @@ import { useEffect, useMemo } from 'react'
 import type { FeedEntry } from '../../core/feed'
 import type { ChannelImage } from '../../core/types'
 import { renderMarkdown } from '../../lib/markdown'
+import { useAuthorName } from '../../lib/hooks/useAuthorName'
 import { useChannelClaim } from '../../lib/hooks/useChannelClaim'
 import { useItemBlobURL } from '../../lib/hooks/useItemBytes'
 import { useAuthStore } from '../../stores/auth'
@@ -46,6 +47,7 @@ export function ChannelView({
     ),
   )
   const sortOrder = useAuthStore((s) => s.feedSortOrder)
+  const authorName = useAuthorName(authorHandle)
   const setSortOrder = useAuthStore((s) => s.setFeedSortOrder)
   const myDID = useAuthStore((s) => s.atprotoDID)
   const entries = useFeedStore((s) => s.entries)
@@ -147,7 +149,7 @@ export function ChannelView({
                       onClick={() => onHandleClick(authorHandle)}
                       className="block max-w-full text-sm text-neutral-500 truncate hover:underline cursor-pointer text-left"
                     >
-                      @{authorHandle}
+                      @{authorName}
                     </button>
                   </div>
                   {/* Actions: below the cover, upper-right, even with the

@@ -6,6 +6,7 @@ import { listFollows, parseChannelAtURI } from '../core/follow'
 import { getProfileRecord, type ProfileRecord } from '../core/profile'
 import type { ChannelManifest } from '../core/types'
 import { formatBytes } from '../lib/format'
+import { useAuthorName } from '../lib/hooks/useAuthorName'
 import { useItemBlobURL } from '../lib/hooks/useItemBytes'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
@@ -607,6 +608,7 @@ function ChannelRow({
   onChannelClick: (authorHandle: string, channelID: string) => void
   onHandleClick: (handle: string) => void
 }) {
+  const authorName = useAuthorName(entry.authorHandle)
   const onRowClick = () =>
     onChannelClick(entry.authorHandle, entry.channelID)
   const onAuthorClick = (e: React.MouseEvent) => {
@@ -644,7 +646,7 @@ function ChannelRow({
             onClick={onAuthorClick}
             className="block max-w-full text-xs text-neutral-500 truncate hover:underline cursor-pointer text-left"
           >
-            @{entry.authorHandle}
+            @{authorName}
           </button>
         )}
         {entry.manifest.description && (
