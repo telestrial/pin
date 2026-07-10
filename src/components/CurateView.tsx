@@ -5,6 +5,7 @@ import {
   stopCurator,
   type CuratorStatus,
 } from '../lib/curator'
+import { useReachablePeople } from '../lib/hooks/useReachablePeople'
 import { useAuthStore } from '../stores/auth'
 import { CopyButton } from './ui/CopyButton'
 
@@ -81,6 +82,8 @@ export function CurateView() {
         </p>
       </section>
 
+      <NetworkReach />
+
       {available ? (
         <>
           <section className="border border-neutral-200 rounded-lg p-4 space-y-3">
@@ -140,6 +143,48 @@ export function CurateView() {
         </section>
       )}
     </div>
+  )
+}
+
+// How many distinct identities you can reach through your network — the people
+// you directly hold plus the people they follow, one hop out. Client-side (a
+// bounded walk of public follow records), so it renders on web and desktop
+// alike, keeper or not. Today it's just the raw number; a search over these
+// people is the eventual follow-on. ("People" is loose — the true unit is
+// distinct identities/DIDs; personas mean it can't collapse to humans — but
+// it's the warm word, and easily relabeled.)
+function NetworkReach() {
+  const { reach, loading, error } = useReachablePeople()
+  return (
+    <section className="border border-neutral-200 rounded-lg p-4 space-y-1">
+      <h2 className="text-sm font-semibold text-neutral-900">Your network</h2>
+      {error ? (
+        <p className="text-xs text-neutral-400">
+          Couldn't reach the network right now.
+        </p>
+      ) : loading && !reach ? (
+        <p className="text-sm text-neutral-500">Counting…</p>
+      ) : reach && reach.total > 0 ? (
+        <>
+          <div className="text-3xl font-bold text-neutral-900">
+            {reach.total}
+          </div>
+          <p className="text-xs text-neutral-500">
+            people you know
+            {reach.extended > 0 && (
+              <>
+                {' '}
+                · {reach.direct} directly, {reach.extended} through them
+              </>
+            )}
+          </p>
+        </>
+      ) : (
+        <p className="text-sm text-neutral-500">
+          Follow some channels to start building your network.
+        </p>
+      )}
+    </section>
   )
 }
 

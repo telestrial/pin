@@ -201,6 +201,40 @@ export function reachableChannels(
   return result
 }
 
+// Person-level reachability — the distinct identities (DIDs) a viewer can reach
+// within `hops` follow-hops, where one hop is "subscribes to a channel owned
+// by." hop 1 = owners of channels the viewer subscribes to (the person-level
+// analog of reachableChannels — call it R0); hop 2 = owners THOSE people
+// subscribe to (R1); and so on outward. The viewer is always excluded. This is
+// the independent oracle that countReachablePeople (which walks public follow
+// records instead of reading the graph directly) is validated against.
+export function reachablePeople(
+  viewerDID: string,
+  graph: SyntheticGraph,
+  hops = 1,
+): string[] {
+  const byDID = new Map(graph.users.map((u) => [u.did, u]))
+  const reached = new Set<string>()
+  let frontier: string[] = [viewerDID]
+  for (let h = 0; h < hops; h++) {
+    const next: string[] = []
+    for (const cur of frontier) {
+      const u = byDID.get(cur)
+      if (!u) continue
+      for (const sub of u.subscriptions) {
+        const owner = sub.authorDID
+        if (owner === viewerDID) continue
+        if (!reached.has(owner)) {
+          reached.add(owner)
+          next.push(owner)
+        }
+      }
+    }
+    frontier = next
+  }
+  return [...reached]
+}
+
 export type SearchMatch = 'title' | 'body' | 'channelName'
 
 export type SearchResult = {
