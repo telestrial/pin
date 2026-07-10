@@ -1,6 +1,7 @@
 import { type ChangeEvent, useEffect, useState } from 'react'
 import {
   getProfileRecord,
+  normalizeUsername,
   type ProfilePatch,
   type ProfileRecord,
   putProfileRecord,
@@ -31,6 +32,7 @@ export function EditProfile({
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [original, setOriginal] = useState<ProfileRecord | null>(null)
+  const [username, setUsername] = useState('')
   const [displayName, setDisplayName] = useState('')
   const [bio, setBio] = useState('')
   const [submitting, setSubmitting] = useState(false)
@@ -61,6 +63,7 @@ export function EditProfile({
       .then((profile) => {
         if (cancelled) return
         setOriginal(profile)
+        setUsername(profile?.username ?? '')
         setDisplayName(profile?.displayName ?? '')
         setBio(profile?.bio ?? '')
         setLoading(false)
@@ -155,6 +158,7 @@ export function EditProfile({
     setError(null)
     try {
       const patch: ProfilePatch = {
+        username: normalizeUsername(username) || undefined,
         displayName: displayName.trim() || undefined,
         bio: bio.trim() || undefined,
       }
@@ -228,12 +232,36 @@ export function EditProfile({
           {original ? 'Edit profile' : 'Set up your profile'}
         </h1>
         <p className="text-neutral-500 text-sm">
-          Identity is your atproto handle. This is what people see when
-          they click your @handle anywhere in the app.
+          Pick the name that represents you. This is what people see when
+          they click your @handle anywhere in the app. Your atproto handle
+          stays your permanent address underneath.
         </p>
       </div>
 
       <div className="space-y-3">
+        <label className="block space-y-1">
+          <span className="text-xs font-medium text-neutral-700 uppercase tracking-wider">
+            Handle <span className="text-neutral-400">(optional)</span>
+          </span>
+          <div className="flex items-center gap-1.5 px-3 py-2 bg-white border border-neutral-300 rounded-lg focus-within:border-green-600">
+            <span className="text-sm text-neutral-400 select-none">@</span>
+            <input
+              type="text"
+              value={username}
+              onChange={(e) =>
+                setUsername(e.target.value.replace(/^@+/, '').replace(/\s+/g, ''))
+              }
+              disabled={submitting}
+              placeholder="yourname"
+              className="flex-1 min-w-0 bg-transparent text-sm text-neutral-900 placeholder-neutral-400 focus:outline-none disabled:text-neutral-500"
+            />
+          </div>
+          <p className="text-xs text-neutral-400">
+            Your @name — pick anything. It doesn't have to be unique, and you
+            can change it whenever.
+          </p>
+        </label>
+
         <label className="block space-y-1">
           <span className="text-xs font-medium text-neutral-700 uppercase tracking-wider">
             Display name <span className="text-neutral-400">(optional)</span>

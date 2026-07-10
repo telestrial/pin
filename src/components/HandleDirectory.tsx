@@ -424,10 +424,22 @@ function ProfileHeader({
             <div className="min-w-0 flex items-center gap-5">
               <div className="min-w-0 space-y-0.5">
                 <div className="text-lg font-semibold text-neutral-900 truncate">
-                  {profile?.displayName || `@${handle}`}
+                  {profile?.displayName ||
+                    (profile?.username ? `@${profile.username}` : `@${handle}`)}
                 </div>
+                {/* The chosen @-name is the handle people read; the atproto
+                    handle recedes to a muted address suffix (still the router,
+                    just no longer the identity on show). Falls back to the
+                    atproto handle when no Pin username is set. */}
                 <div className="text-sm text-neutral-500 truncate">
-                  @{handle}
+                  {profile?.username ? (
+                    <>
+                      @{profile.username}{' '}
+                      <span className="text-neutral-400">· {handle}</span>
+                    </>
+                  ) : (
+                    <>@{handle}</>
+                  )}
                 </div>
               </div>
               <Stat value={followingCount} label="Following" />
