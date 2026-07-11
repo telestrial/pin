@@ -8,7 +8,13 @@ import {
   type SyntheticGraph,
 } from '../test/socialGraph'
 import { channelAtURI } from './follow'
-import { countReachablePeople, type FollowsFetcher } from './network'
+import {
+  buildReachablePeople,
+  countReachablePeople,
+  type FollowsFetcher,
+  type IdentityResolver,
+  walkReachable,
+} from './network'
 
 const chan = (authorDID: string, cid = 'c1') =>
   `at://${authorDID}/dev.sia.pin.channel/${cid}`
@@ -157,4 +163,83 @@ describe('countReachablePeople against the socialGraph harness', () => {
       expect(elapsedMs).toBeLessThan(2000)
     },
   )
+})
+
+describe('walkReachable', () => {
+  it('keeps R0 people at distance 0 even if also reached one hop out', async () => {
+    // a follows b (also R0) and c. b must not be demoted to distance 1.
+    const dist = await walkReachable('me', ['a', 'b'], {
+      listFollows: fakeFollows({ a: ['b', 'c'] }),
+    })
+    expect(dist.get('a')).toBe(0)
+    expect(dist.get('b')).toBe(0)
+    expect(dist.get('c')).toBe(1)
+  })
+
+  it('hops:0 returns only R0', async () => {
+    const dist = await walkReachable('me', ['a'], {
+      listFollows: fakeFollows({ a: ['b'] }),
+      hops: 0,
+    })
+    expect([...dist.keys()]).toEqual(['a'])
+  })
+
+  it('hops:2 reaches two rings out with increasing distance', async () => {
+    const dist = await walkReachable('me', ['a'], {
+      listFollows: fakeFollows({ a: ['b'], b: ['c'] }),
+      hops: 2,
+    })
+    expect(dist.get('a')).toBe(0)
+    expect(dist.get('b')).toBe(1)
+    expect(dist.get('c')).toBe(2)
+  })
+})
+
+// The picker's candidate provider — walk + identity resolution — against the
+// harness, with a graph-backed resolver standing in for describeRepo/profile.
+function graphResolver(graph: SyntheticGraph): IdentityResolver {
+  const byDID = new Map(graph.users.map((u) => [u.did, u]))
+  return async (did) => {
+    const u = byDID.get(did)
+    return u ? { handle: u.handle } : null
+  }
+}
+
+describe('buildReachablePeople', () => {
+  const me = 'did:test:alice'
+
+  it('resolves the reachable set with correct distances (STANDARD_GRAPH)', async () => {
+    const people = await buildReachablePeople(me, r0Of(STANDARD_GRAPH, me), {
+      listFollows: graphListFollows(STANDARD_GRAPH),
+      resolve: graphResolver(STANDARD_GRAPH),
+    })
+    expect(people.map((p) => p.did).sort()).toEqual(
+      ['did:test:bob', 'did:test:carol', 'did:test:dan'].sort(),
+    )
+    const dist = Object.fromEntries(people.map((p) => [p.did, p.distance]))
+    expect(dist['did:test:bob']).toBe(0) // R0
+    expect(dist['did:test:carol']).toBe(0) // R0
+    expect(dist['did:test:dan']).toBe(1) // R1 via carol
+    expect(people.find((p) => p.did === 'did:test:bob')?.handle).toBe('bob')
+  })
+
+  it('sorts nearest-first (non-decreasing distance)', async () => {
+    const people = await buildReachablePeople(me, r0Of(STANDARD_GRAPH, me), {
+      listFollows: graphListFollows(STANDARD_GRAPH),
+      resolve: graphResolver(STANDARD_GRAPH),
+    })
+    for (let i = 1; i < people.length; i++) {
+      expect(people[i - 1]!.distance).toBeLessThanOrEqual(people[i]!.distance)
+    }
+  })
+
+  it('drops people the resolver can’t resolve', async () => {
+    const resolve: IdentityResolver = async (did) =>
+      did === 'did:test:dan' ? null : { handle: did.replace('did:test:', '') }
+    const people = await buildReachablePeople(me, r0Of(STANDARD_GRAPH, me), {
+      listFollows: graphListFollows(STANDARD_GRAPH),
+      resolve,
+    })
+    expect(people.map((p) => p.did)).not.toContain('did:test:dan')
+  })
 })

@@ -39,6 +39,32 @@ export function isValidAttachment(a: unknown): a is AttachmentRef {
   )
 }
 
+// A mention of a person, embedded in a facet feature. The DID is the canonical
+// identity anchor (a non-unique @-name can't be resolved back to a person, so
+// the DID has to travel with the mention). `handle` is a cached convenience for
+// navigation/display fallback — same pattern as SubscriptionRef caching the
+// handle beside the DID. The name the reader SEES is the literal body text under
+// the facet's range (a snapshot of what the author picked), not re-resolved.
+export type MentionFeature = {
+  $type: 'pin.mention'
+  did: string
+  handle?: string
+}
+
+// A facet feature — a typed annotation over a byte range. A union of one member
+// today; forward-compat for pin.itemLink / pin.tag / etc. Clients ignore
+// feature types they don't understand.
+export type FacetFeature = MentionFeature
+
+// Bluesky-style facet: a byte range over an item's plaintext body carrying one
+// or more features. Reach-independent (a mention stores a DID regardless of how
+// far out the author found the person). Offsets are UTF-8 byte indices
+// (TextEncoder), the Bluesky convention, so multibyte/emoji bodies stay correct.
+export type Facet = {
+  index: { byteStart: number; byteEnd: number }
+  features: FacetFeature[]
+}
+
 export type ItemRef = {
   id: string
   itemURL: string
@@ -51,6 +77,10 @@ export type ItemRef = {
   durationMs?: number
   filename?: string
   attachments?: AttachmentRef[]
+  // Bluesky-style annotations over the plaintext body — mentions today,
+  // pin.itemLink / pin.tag later. Optional: absent on posts written before
+  // facets existed and on posts with no mentions.
+  facets?: Facet[]
   // See AttachmentRef.contentHash. Stable across repack (which rewrites
   // id + itemURL but preserves plaintext bytes) and across encryption
   // regime changes.
