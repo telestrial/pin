@@ -28,6 +28,7 @@ import {
   type ChannelImage,
   type ChannelManifest,
   type ChannelVisibility,
+  type Facet,
   isValidAttachment,
   type ItemRef,
   type ItemType,
@@ -100,6 +101,9 @@ export type ItemPayload = {
   filename?: string
   attachments?: AttachmentRef[]
   attachmentSources?: AttachmentSource[]
+  // Mention (and future pin.itemLink) annotations over the body. Carried onto
+  // the ItemRef by buildItemRef; the edit path preserves them via the passed ref.
+  facets?: Facet[]
 }
 
 export async function createChannel(
@@ -312,6 +316,7 @@ export function buildItemRef(
     durationMs: payload.durationMs,
     filename: payload.filename,
     attachments: payload.attachments,
+    facets: payload.facets,
     contentHash: uploaded.contentHash,
   }
 }

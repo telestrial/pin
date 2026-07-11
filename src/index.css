@@ -160,6 +160,17 @@ html[data-shell='desktop'][data-theme='rounded'] #app-shell > :first-child {
 .markdown a:hover {
   color: #166534;
 }
+/* Mentions read as a person-link, not a URL: green, medium weight, no rest
+   underline (distinguishes them from ordinary links). Underline on hover. */
+.markdown a.mention {
+  color: #15803d;
+  font-weight: 500;
+  text-decoration: none;
+  cursor: pointer;
+}
+.markdown a.mention:hover {
+  text-decoration: underline;
+}
 .markdown ul {
   list-style: disc;
   padding-left: 1.5rem;

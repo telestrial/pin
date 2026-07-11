@@ -623,7 +623,14 @@ export function Home() {
     if (item.type === 'video') return <ReadVideo {...readerProps} />
     if (item.type === 'file') return <ReadFile {...readerProps} />
     if (item.type === 'app') return <ReadApp {...readerProps} />
-    return <ReadText {...readerProps} />
+    return (
+      <ReadText
+        {...readerProps}
+        onHandleClick={(handle) =>
+          setView({ kind: 'handle-directory', handle, returnTo: readingView })
+        }
+      />
+    )
   }
 
   const composerSlot = (() => {

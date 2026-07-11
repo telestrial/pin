@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import type { ItemRef } from '../../core/types'
-import { renderMarkdown } from '../../lib/markdown'
+import { renderPostBody } from '../../lib/markdown'
 import { formatAbsolute, formatRelative } from '../../lib/time'
 import { useItemBytes } from '../../lib/hooks/useItemBytes'
 import { usePinState } from '../../lib/hooks/usePinState'
@@ -19,6 +19,7 @@ export function ReadText({
   rightSidebar,
   pinInput,
   onEdit,
+  onHandleClick,
 }: {
   item: ItemRef
   channelName: string
@@ -28,6 +29,7 @@ export function ReadText({
   rightSidebar: React.ReactNode
   pinInput: PinInput
   onEdit?: () => void
+  onHandleClick: (handle: string) => void
 }) {
   const channelID = pinInput.channel.channelID
   const pinState = usePinState(item, channelID)
@@ -68,9 +70,20 @@ export function ReadText({
     displayItem.contentHash,
   )
   const html = useMemo(
-    () => (bytes ? renderMarkdown(new TextDecoder().decode(bytes)) : null),
-    [bytes],
+    () =>
+      bytes
+        ? renderPostBody(new TextDecoder().decode(bytes), displayItem.facets)
+        : null,
+    [bytes, displayItem.facets],
   )
+
+  const handleBodyClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    const a = (e.target as HTMLElement).closest('a[data-mention-handle]')
+    if (!a) return
+    e.preventDefault()
+    const handle = a.getAttribute('data-mention-handle') ?? ''
+    if (handle) onHandleClick(handle)
+  }
 
   return (
     <div className="flex-1 p-6 lg:min-h-0">
@@ -160,6 +173,8 @@ export function ReadText({
           ) : (
             <div
               className="markdown wrap-break-word text-base sm:text-lg"
+              onClick={handleBodyClick}
+              // biome-ignore lint/a11y/useKeyWithClickEvents: delegates to nested <a> mentions, which are natively keyboard-accessible
               // biome-ignore lint/security/noDangerouslySetInnerHtml: HTML is sanitized via DOMPurify
               dangerouslySetInnerHTML={{ __html: html }}
             />

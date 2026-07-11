@@ -2,7 +2,7 @@ import { useEffect, useMemo } from 'react'
 import type { FeedEntry } from '../core/feed'
 import type { ItemRef } from '../core/types'
 import { useAuthorName } from '../lib/hooks/useAuthorName'
-import { renderMarkdown } from '../lib/markdown'
+import { renderPostBody } from '../lib/markdown'
 import { formatAbsolute, formatRelativeShort } from '../lib/time'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
@@ -171,15 +171,41 @@ export function HomeFeed({
   )
 }
 
-function PostBody({ item, channelID }: { item: ItemRef; channelID: string }) {
-  const html = useMemo(() => renderMarkdown(item.summary ?? ''), [item.summary])
+function PostBody({
+  item,
+  channelID,
+  onHandleClick,
+}: {
+  item: ItemRef
+  channelID: string
+  onHandleClick: (handle: string) => void
+}) {
+  const html = useMemo(
+    () => renderPostBody(item.summary ?? '', item.facets),
+    [item.summary, item.facets],
+  )
   const hasBody = !!item.summary && item.summary.length > 0
   const hasAttachments = !!item.attachments && item.attachments.length > 0
+
+  // Delegated: a click on an injected mention anchor navigates to that handle's
+  // directory and is kept from bubbling to the row's open-post click. The
+  // anchors are native <a>, so keyboard activation works through them.
+  const handleClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    const a = (e.target as HTMLElement).closest('a[data-mention-handle]')
+    if (!a) return
+    e.preventDefault()
+    e.stopPropagation()
+    const handle = a.getAttribute('data-mention-handle') ?? ''
+    if (handle) onHandleClick(handle)
+  }
+
   return (
     <>
       {hasBody && (
         <div
           className="markdown wrap-break-word text-sm text-neutral-900"
+          onClick={handleClick}
+          // biome-ignore lint/a11y/useKeyWithClickEvents: delegates to nested <a> mentions, which are natively keyboard-accessible
           // biome-ignore lint/security/noDangerouslySetInnerHtml: HTML is sanitized via DOMPurify
           dangerouslySetInnerHTML={{ __html: html }}
         />
@@ -292,7 +318,11 @@ export function FeedRow({
                 />
               </div>
             </div>
-            <PostBody item={item} channelID={channel.channelID} />
+            <PostBody
+              item={item}
+              channelID={channel.channelID}
+              onHandleClick={onHandleClick}
+            />
           </div>
         </div>
       </div>
