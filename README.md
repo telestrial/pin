@@ -83,7 +83,8 @@ Item bytes (per item)              Channel state (per channel)
 
 **Identity layer.** A person's address is their handle on atproto (`john.bsky.social`, `johnwilliams.codes`, whatever) — universal, no Pin in the path. Pin builds on top:
 
-- **Profile record** at `at://<did>/dev.sia.pin.profile/self`, well-known rkey parallel to `app.bsky.actor.profile/self`. Body: optional `displayName`, `bio`, `avatarURL` (Sia share URL with per-object key in fragment), `coverURL`, plus `updatedAt`. Pure identity — no channel list, no follow list. Discoverability happens via separate follow records.
+- **Profile record** at `at://<did>/dev.sia.pin.profile/self`, well-known rkey parallel to `app.bsky.actor.profile/self`. Body: optional `username` (a self-chosen `@handle`), `displayName`, `bio`, `avatarURL` (Sia share URL with per-object key in fragment), `coverURL`, plus `updatedAt`. Pure identity — no channel list, no follow list. Discoverability happens via separate follow records.
+- **Self-chosen handle.** The profile's `username` is the name a person picks for themselves — shown as `@name` across feeds, channel headers, and the directory, with the atproto handle receding to a muted address beside it. It's deliberately **non-unique and mutable**: identity is the DID, so the handle carries no structural weight — channel IDs, subscribe URLs, and follow records all key on the DID or `K`, never the handle string. Two people can hold the same `@name`; you tell them apart by context, and the atproto handle stays underneath as the permanent, resolvable address. Where a person hasn't set a Pin handle, their atproto handle is shown instead.
 - **Public follow records** under each follower's repo at `at://<follower-did>/dev.sia.pin.subscription/<rkey>` with body `{ subject: <channel AT-URI>, createdAt }`. Same stand-off pattern Bluesky uses for likes / follows / reposts — each follow is its own record, no central index. The rkey is `base32(sha256(subject))[:16]` so re-following is idempotent and unfollow is a single `deleteRecord` call without a list-then-find scan.
 - **Handle directory.** Clicking any `@handle` anywhere opens that handle's directory: profile header up top (avatar + cover + displayName + bio with @handle fallback), then two sections derived from the same public-follow walk — **Their voices** lists channels they publicly follow whose `authorDID` matches their own (the channel-as-voice claim of authorship), and **Following** lists everyone else they follow. Reached via in-app navigation; the directory is *how Pin renders any handle a user encounters in-app*, not a paste-this-URL surface.
 - **Watch vs Follow.** Subscribing via the `pin://<handle>#k=<K>` URL is Watch — purely local state, no record under your repo, works for both obscure and public channels. Clicking Follow on a public channel page additionally writes a `dev.sia.pin.subscription` record under your DID; that's the signal the directory page walks. Two psychological commitments, two real verbs.
@@ -188,7 +189,13 @@ If an author retracts a post, subscribers' pinned copies persist. The Read page 
 
 Identity, deliberately: a post is matched to its prior version by the preserved `publishedAt` on the same channel, not via a separate persistent identifier. No `logicalID` primitive — that would let share URLs silently follow author edits, shifting power against the "what you share is what you share" trust contract. Records, not logical posts.
 
-## Tests
+## Mentions
+
+Typing `@` in the composer opens a picker of people reachable through your network — the authors of channels you hold (call it R0), plus the people *they* follow (R1, walked from public follow records). Pick someone and it splices `@name` into the body and records a **facet**: a byte range on the `ItemRef` annotated with `{ $type: 'pin.mention', did }`. Because Pin handles are non-unique, a name alone can't identify a person — so the DID travels with the mention. The picker disambiguates candidates by name and stores the key.
+
+The body stays clean plaintext (`@name`); the facet is parallel side-data. At render, each facet's range becomes a tappable green `@name` link over the markdown — the visible text is a snapshot of what the author picked (it isn't re-resolved, so it can't break when someone renames), and clicking navigates by handle to that person's directory. Navigation everywhere keys on the DID/handle, never the non-unique display name.
+
+Reach is a parameter: the network walk carries a hop depth (R0 + R1 today), so widening discovery later doesn't change the picker or the stored facet. Notifying the mentioned person is future work; the facet authored now is the foundation it builds on.
 
 Three-tier pyramid. `bun run test` runs all three; each tier also has its own command.
 
