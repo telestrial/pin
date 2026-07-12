@@ -1,13 +1,23 @@
 import { Check, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import type { AttachmentSource } from '../core/channels'
+import type { ReachablePerson } from '../core/network'
 import {
   isValidAttachment,
   type ItemRef,
   type OwnedChannel,
 } from '../core/types'
 import { NOTE_CHAR_LIMIT } from '../lib/constants'
+import {
+  buildMentionFacets,
+  byteToChar,
+  type DraftMention,
+} from '../lib/facets'
 import { useItemBlobURL } from '../lib/hooks/useItemBytes'
+import {
+  filterMentionCandidates,
+  useMentionCandidates,
+} from '../lib/hooks/useMentionCandidates'
 import { useAuthStore } from '../stores/auth'
 import { useComposeStore } from '../stores/compose'
 import { useFeedStore } from '../stores/feed'
@@ -67,6 +77,11 @@ export function Compose({
   const armedItem = useComposeStore((s) => s.armedItem)
   const disarm = useComposeStore((s) => s.disarm)
   const manifests = useFeedStore((s) => s.manifests)
+  const {
+    candidates,
+    loading: candidatesLoading,
+    ensureLoaded: ensureMentionCandidates,
+  } = useMentionCandidates()
 
   const [selectedID, setSelectedID] = useState(
     editing?.channelID ?? channels[0]?.channelID ?? '',
@@ -75,6 +90,33 @@ export function Compose({
   const [error, setError] = useState<string | null>(null)
   const [expanded, setExpanded] = useState(!!editing)
   const [voiceOpen, setVoiceOpen] = useState(false)
+
+  // Mentions captured during composition, in insertion order. Resolved to
+  // byte-range facets against the final body at submit (buildMentionFacets),
+  // so editing text around a mention doesn't need per-keystroke re-anchoring.
+  // On edit, preload from the post's existing facets (surface = the body text
+  // under each range) so untouched mentions survive a re-save.
+  const [mentions, setMentions] = useState<DraftMention[]>(() => {
+    const facets = editing?.item.facets
+    const summary = editing?.item.summary ?? ''
+    if (!facets) return []
+    const out: DraftMention[] = []
+    for (const f of facets) {
+      const mf = f.features.find((x) => x.$type === 'pin.mention')
+      if (!mf) continue
+      const cs = byteToChar(summary, f.index.byteStart)
+      const ce = byteToChar(summary, f.index.byteEnd)
+      out.push({ did: mf.did, handle: mf.handle ?? '', surface: summary.slice(cs, ce) })
+    }
+    return out
+  })
+  // The active `@…` token at the caret (char indices), or null. Drives the picker.
+  const [mentionQuery, setMentionQuery] = useState<{
+    text: string
+    start: number
+    end: number
+  } | null>(null)
+  const [pickerIndex, setPickerIndex] = useState(0)
   const [attachments, setAttachments] = useState<AttachmentDraft[]>(() => {
     if (!editing?.item.attachments) return []
     return editing.item.attachments.filter(isValidAttachment).map((a) => ({
@@ -204,6 +246,68 @@ export function Compose({
     })
   }
 
+  // Recompute the active mention token from the live textarea value + caret.
+  // A token is an `@` at start-of-string or after whitespace, followed by
+  // non-whitespace up to the caret. Opening one lazily loads the candidate pool.
+  function updateMentionQuery(value: string, caret: number) {
+    const m = value.slice(0, caret).match(/(^|\s)@(\S*)$/)
+    if (!m) {
+      setMentionQuery(null)
+      return
+    }
+    setMentionQuery({
+      text: m[2],
+      start: (m.index ?? 0) + m[1].length,
+      end: caret,
+    })
+    setPickerIndex(0)
+    ensureMentionCandidates()
+  }
+
+  function selectMention(person: ReachablePerson) {
+    if (!mentionQuery) return
+    const surface = `@${person.username || person.handle}`
+    const inserted = `${surface} `
+    const next =
+      body.slice(0, mentionQuery.start) + inserted + body.slice(mentionQuery.end)
+    const caret = mentionQuery.start + inserted.length
+    setBody(next)
+    setMentions((prev) => [
+      ...prev,
+      { did: person.did, handle: person.handle, surface },
+    ])
+    setMentionQuery(null)
+    // Restore focus + caret after React re-renders with the new value.
+    requestAnimationFrame(() => {
+      const ta = textareaRef.current
+      if (ta) {
+        ta.focus()
+        ta.setSelectionRange(caret, caret)
+      }
+    })
+  }
+
+  function handleTextareaKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (!mentionQuery) return
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      setMentionQuery(null)
+      return
+    }
+    const filtered = filterMentionCandidates(candidates, mentionQuery.text)
+    if (filtered.length === 0) return
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      setPickerIndex((i) => (i + 1) % filtered.length)
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      setPickerIndex((i) => (i - 1 + filtered.length) % filtered.length)
+    } else if (e.key === 'Enter' || e.key === 'Tab') {
+      e.preventDefault()
+      selectMention(filtered[Math.min(pickerIndex, filtered.length - 1)]!)
+    }
+  }
+
   function isAttachZoneInteractive(target: EventTarget | null): boolean {
     if (!(target instanceof Element)) return true
     return !!target.closest(
@@ -293,6 +397,9 @@ export function Compose({
     const bodyBytes = trimmed
       ? new TextEncoder().encode(trimmed)
       : new Uint8Array([0x20])
+    // Resolve mentions to byte-range facets against the final (trimmed) body,
+    // which is exactly what gets stored as summary + uploaded — so offsets align.
+    const facets = buildMentionFacets(trimmed, mentions)
     enqueue({
       payload: {
         type: 'text',
@@ -302,6 +409,7 @@ export function Compose({
         bytes: bodyBytes,
         attachmentSources:
           attachmentSources.length > 0 ? attachmentSources : undefined,
+        facets: facets.length > 0 ? facets : undefined,
       },
       channelIDs: [channel.channelID],
       editingItemID: editing?.item.id,
@@ -316,6 +424,8 @@ export function Compose({
     } else {
       setBody('')
       setAttachments([])
+      setMentions([])
+      setMentionQuery(null)
       setExpanded(false)
     }
   }
@@ -426,7 +536,20 @@ export function Compose({
           <textarea
             ref={textareaRef}
             value={body}
-            onChange={(e) => setBody(e.target.value)}
+            onChange={(e) => {
+              setBody(e.target.value)
+              updateMentionQuery(
+                e.target.value,
+                e.target.selectionStart ?? e.target.value.length,
+              )
+            }}
+            onSelect={(e) =>
+              updateMentionQuery(
+                e.currentTarget.value,
+                e.currentTarget.selectionStart ?? 0,
+              )
+            }
+            onKeyDown={handleTextareaKeyDown}
             onPaste={handleTextareaPaste}
             onFocus={() => setExpanded(true)}
             rows={1}
@@ -454,6 +577,15 @@ export function Compose({
             />
           ))}
         </div>
+      )}
+
+      {mentionQuery && (
+        <MentionPicker
+          candidates={filterMentionCandidates(candidates, mentionQuery.text)}
+          loading={candidatesLoading}
+          activeIndex={pickerIndex}
+          onPick={selectMention}
+        />
       )}
 
       <div
@@ -504,6 +636,68 @@ export function Compose({
         </div>
       </div>
     </form>
+  )
+}
+
+function MentionPicker({
+  candidates,
+  loading,
+  activeIndex,
+  onPick,
+}: {
+  candidates: ReachablePerson[]
+  loading: boolean
+  activeIndex: number
+  onPick: (person: ReachablePerson) => void
+}) {
+  if (candidates.length === 0) {
+    return (
+      <div className="mt-2 border border-neutral-200 rounded-lg bg-white p-3 text-xs text-neutral-500">
+        {loading
+          ? 'Searching your network…'
+          : 'No one in your network matches.'}
+      </div>
+    )
+  }
+  return (
+    <div
+      // biome-ignore lint/a11y/useSemanticElements: listbox of buttons; a native <select> can't render these rows
+      role="listbox"
+      className="mt-2 border border-neutral-200 rounded-lg bg-white py-1 max-h-64 overflow-y-auto shadow-sm"
+    >
+      {candidates.map((p, i) => {
+        const name = p.username || p.handle
+        const active = i === activeIndex
+        return (
+          <button
+            key={p.did}
+            type="button"
+            role="option"
+            aria-selected={active}
+            // mousedown (not click) so selection fires before the textarea
+            // blur, keeping focus/caret handling clean; preventDefault stops
+            // the blur entirely.
+            onMouseDown={(e) => {
+              e.preventDefault()
+              onPick(p)
+            }}
+            className={`w-full flex items-center gap-2 px-3 py-1.5 text-left cursor-pointer ${
+              active ? 'bg-neutral-100' : 'hover:bg-neutral-50'
+            }`}
+          >
+            <span className="min-w-0 flex-1 truncate text-sm text-neutral-900">
+              @{name}
+              {p.username && (
+                <span className="text-neutral-400"> · {p.handle}</span>
+              )}
+            </span>
+            <span className="shrink-0 text-[10px] uppercase tracking-wide text-neutral-400">
+              {p.distance === 0 ? 'following' : 'network'}
+            </span>
+          </button>
+        )
+      })}
+    </div>
   )
 }
 
