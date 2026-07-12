@@ -1,8 +1,8 @@
 import { Agent, AtpAgent } from '@atproto/api'
 import {
   BrowserOAuthClient,
-  type OAuthSession,
   buildAtprotoLoopbackClientId,
+  type OAuthSession,
 } from '@atproto/oauth-client-browser'
 import { useAuthStore } from '../stores/auth'
 

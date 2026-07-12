@@ -1,13 +1,17 @@
 import { useState } from 'react'
 import { deletePublishedItem } from '../../core/channels'
-import { useActionStore } from '../../stores/actionQueue'
 import { formatBytes } from '../../lib/format'
-import { objectIDsInManifests } from '../../lib/scopeRefs'
 import { itemPinByteSize } from '../../lib/hooks/useChannelPinState'
 import { usePinState } from '../../lib/hooks/usePinState'
+import { objectIDsInManifests } from '../../lib/scopeRefs'
+import { useActionStore } from '../../stores/actionQueue'
 import { useAuthStore } from '../../stores/auth'
 import { useFeedStore } from '../../stores/feed'
-import { objectIDsReferencedBy, type PinInput, usePinStore } from '../../stores/pin'
+import {
+  objectIDsReferencedBy,
+  type PinInput,
+  usePinStore,
+} from '../../stores/pin'
 import { useToastStore } from '../../stores/toast'
 import { PinIcon } from './PinIcon'
 

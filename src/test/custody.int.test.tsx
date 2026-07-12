@@ -7,27 +7,24 @@
 // stewardship of those bytes. Author edits and retracts don't reach into
 // your library — your snapshot persists.
 
-import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-vi.mock(
-  '@atproto/api',
-  async () => (await import('./fakeModules')).fakeAtprotoApiModule(),
+vi.mock('@atproto/api', async () =>
+  (await import('./fakeModules')).fakeAtprotoApiModule(),
 )
-vi.mock(
-  '../core/jetstream',
-  async () => (await import('./fakeModules')).fakeJetstreamModule(),
+vi.mock('../core/jetstream', async () =>
+  (await import('./fakeModules')).fakeJetstreamModule(),
 )
-vi.mock(
-  '@siafoundation/sia-storage',
-  async () => (await import('./fakeModules')).fakeSiaStorageModule(),
+vi.mock('@siafoundation/sia-storage', async () =>
+  (await import('./fakeModules')).fakeSiaStorageModule(),
 )
 
 import type { Agent } from '@atproto/api'
+import { HomeFeed } from '../components/HomeFeed'
 import { deletePublishedItem } from '../core/channels'
 import type { SubscriptionRef } from '../core/types'
-import { HomeFeed } from '../components/HomeFeed'
 import { useFeedStore } from '../stores/feed'
 import { usePinStore } from '../stores/pin'
 import {
@@ -92,7 +89,13 @@ describe('integration: custody', () => {
   it("Bob pins Alice's post; bytes appear in bob's scope and pinStore", async () => {
     const { alice, bob, postBody } = await setupAlicePublishesBobSubscribes()
 
-    render(<HomeFeed onItemClick={() => {}} onChannelClick={() => {}} onHandleClick={() => {}} />)
+    render(
+      <HomeFeed
+        onItemClick={() => {}}
+        onChannelClick={() => {}}
+        onHandleClick={() => {}}
+      />,
+    )
     await waitFor(() => {
       expect(screen.getByText(postBody)).toBeInTheDocument()
     })
@@ -140,7 +143,13 @@ describe('integration: custody', () => {
     const { alice, channel, sub, postItemID } =
       await setupAlicePublishesBobSubscribes()
 
-    render(<HomeFeed onItemClick={() => {}} onChannelClick={() => {}} onHandleClick={() => {}} />)
+    render(
+      <HomeFeed
+        onItemClick={() => {}}
+        onChannelClick={() => {}}
+        onHandleClick={() => {}}
+      />,
+    )
     await waitFor(() =>
       expect(screen.getByText('hello from alice')).toBeInTheDocument(),
     )
@@ -148,9 +157,7 @@ describe('integration: custody', () => {
     // Bob pins the original.
     const initialPin = screen.getByTitle(/Pin to your storage/)
     await userEvent.click(initialPin)
-    await waitFor(() =>
-      expect(usePinStore.getState().pinned).toHaveLength(1),
-    )
+    await waitFor(() => expect(usePinStore.getState().pinned).toHaveLength(1))
     const originalPinnedURL = usePinStore.getState().pinned[0].item.itemURL
 
     // Alice edits the post (new bytes, new URL, new contentHash; same
@@ -185,15 +192,19 @@ describe('integration: custody', () => {
     const { alice, channel, sub, postItemID } =
       await setupAlicePublishesBobSubscribes()
 
-    render(<HomeFeed onItemClick={() => {}} onChannelClick={() => {}} onHandleClick={() => {}} />)
+    render(
+      <HomeFeed
+        onItemClick={() => {}}
+        onChannelClick={() => {}}
+        onHandleClick={() => {}}
+      />,
+    )
     await waitFor(() =>
       expect(screen.getByText('hello from alice')).toBeInTheDocument(),
     )
 
     await userEvent.click(screen.getByTitle(/Pin to your storage/))
-    await waitFor(() =>
-      expect(usePinStore.getState().pinned).toHaveLength(1),
-    )
+    await waitFor(() => expect(usePinStore.getState().pinned).toHaveLength(1))
     const originalPinnedURL = usePinStore.getState().pinned[0].item.itemURL
 
     await editTextPost(alice, channel, postItemID, 'v2 body')
@@ -227,16 +238,20 @@ describe('integration: custody', () => {
     const { alice, channel, sub, postItemID } =
       await setupAlicePublishesBobSubscribes()
 
-    render(<HomeFeed onItemClick={() => {}} onChannelClick={() => {}} onHandleClick={() => {}} />)
+    render(
+      <HomeFeed
+        onItemClick={() => {}}
+        onChannelClick={() => {}}
+        onHandleClick={() => {}}
+      />,
+    )
     await waitFor(() =>
       expect(screen.getByText('hello from alice')).toBeInTheDocument(),
     )
 
     // Bob pins, gets custody.
     await userEvent.click(screen.getByTitle(/Pin to your storage/))
-    await waitFor(() =>
-      expect(usePinStore.getState().pinned).toHaveLength(1),
-    )
+    await waitFor(() => expect(usePinStore.getState().pinned).toHaveLength(1))
 
     // Alice retracts. core/channels.deletePublishedItem filters the item from
     // her manifest and returns the orphaned bytes for the journal to reclaim.

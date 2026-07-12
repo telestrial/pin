@@ -17,9 +17,7 @@ export function useFadeCancelUnpin(opts?: { fadeMs?: number }) {
 
   const fadeMs = opts?.fadeMs ?? DEFAULT_FADE_MS
 
-  const [removingURLs, setRemovingURLs] = useState<Set<string>>(
-    () => new Set(),
-  )
+  const [removingURLs, setRemovingURLs] = useState<Set<string>>(() => new Set())
   const removeTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(
     new Map(),
   )

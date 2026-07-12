@@ -1,5 +1,5 @@
-import { useEffect, useRef } from 'react'
 import { AppKey, Builder, initSia } from '@siafoundation/sia-storage'
+import { useEffect, useRef } from 'react'
 import { bootOauth } from '../../lib/atprotoClient'
 import { APP_META, DEFAULT_INDEXER_URL } from '../../lib/constants'
 import { useAuthStore } from '../../stores/auth'

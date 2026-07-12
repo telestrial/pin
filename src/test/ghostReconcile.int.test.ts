@@ -5,21 +5,22 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-vi.mock(
-  '@atproto/api',
-  async () => (await import('./fakeModules')).fakeAtprotoApiModule(),
+vi.mock('@atproto/api', async () =>
+  (await import('./fakeModules')).fakeAtprotoApiModule(),
 )
-vi.mock(
-  '../core/jetstream',
-  async () => (await import('./fakeModules')).fakeJetstreamModule(),
+vi.mock('../core/jetstream', async () =>
+  (await import('./fakeModules')).fakeJetstreamModule(),
 )
-vi.mock(
-  '@siafoundation/sia-storage',
-  async () => (await import('./fakeModules')).fakeSiaStorageModule(),
+vi.mock('@siafoundation/sia-storage', async () =>
+  (await import('./fakeModules')).fakeSiaStorageModule(),
 )
 
 import { reconcileGhostChannels } from '../core/channels'
-import { authorCreateChannel, createFakeApp, resetAllStores } from './setupFakeApp'
+import {
+  authorCreateChannel,
+  createFakeApp,
+  resetAllStores,
+} from './setupFakeApp'
 
 describe('integration: ghost reconciliation', () => {
   beforeEach(() => {
@@ -28,7 +29,10 @@ describe('integration: ghost reconciliation', () => {
 
   it('flags only the channel whose record is missing', async () => {
     const app = createFakeApp()
-    const alice = app.createAccount({ did: 'did:plc:alice', handle: 'alice.test' })
+    const alice = app.createAccount({
+      did: 'did:plc:alice',
+      handle: 'alice.test',
+    })
     const real = await authorCreateChannel(alice, { name: 'real channel' })
 
     const ghostID = 'ghostrkey00000000'
@@ -42,7 +46,10 @@ describe('integration: ghost reconciliation', () => {
 
   it('flags nothing when every record exists', async () => {
     const app = createFakeApp()
-    const alice = app.createAccount({ did: 'did:plc:alice', handle: 'alice.test' })
+    const alice = app.createAccount({
+      did: 'did:plc:alice',
+      handle: 'alice.test',
+    })
     const a = await authorCreateChannel(alice, { name: 'a' })
     const b = await authorCreateChannel(alice, { name: 'b' })
 
@@ -56,9 +63,15 @@ describe('integration: ghost reconciliation', () => {
 
   it('flags all when none exist (fully-orphaned settings)', async () => {
     const app = createFakeApp()
-    const alice = app.createAccount({ did: 'did:plc:alice', handle: 'alice.test' })
+    const alice = app.createAccount({
+      did: 'did:plc:alice',
+      handle: 'alice.test',
+    })
 
-    const ghosts = await reconcileGhostChannels(alice.did, ['g1aaaaaaaaaaaaaa', 'g2bbbbbbbbbbbbbb'])
+    const ghosts = await reconcileGhostChannels(alice.did, [
+      'g1aaaaaaaaaaaaaa',
+      'g2bbbbbbbbbbbbbb',
+    ])
 
     expect(ghosts.sort()).toEqual(['g1aaaaaaaaaaaaaa', 'g2bbbbbbbbbbbbbb'])
   })

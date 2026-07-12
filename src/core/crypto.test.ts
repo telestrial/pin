@@ -153,8 +153,12 @@ describe('deriveSettingsKey', () => {
   })
 
   it('differs for different AppKey bytes', async () => {
-    const a = await deriveSettingsKey(crypto.getRandomValues(new Uint8Array(32)))
-    const b = await deriveSettingsKey(crypto.getRandomValues(new Uint8Array(32)))
+    const a = await deriveSettingsKey(
+      crypto.getRandomValues(new Uint8Array(32)),
+    )
+    const b = await deriveSettingsKey(
+      crypto.getRandomValues(new Uint8Array(32)),
+    )
     expect(a).not.toEqual(b)
   })
 

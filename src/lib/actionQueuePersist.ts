@@ -99,9 +99,7 @@ export async function loadPersistedActions(): Promise<Action[]> {
   try {
     const db = await openDB()
     const tx = db.transaction(STORE, 'readonly')
-    const all = (await reqAsPromise(
-      tx.objectStore(STORE).getAll(),
-    )) as Action[]
+    const all = (await reqAsPromise(tx.objectStore(STORE).getAll())) as Action[]
     await txDone(tx)
     return all
   } catch {

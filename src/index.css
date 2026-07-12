@@ -45,12 +45,12 @@ body {
 /* Corners: no border radius anywhere. The blanket !important override beats
    every Tailwind rounded-* utility in one place; the scrollbar thumb is a
    pseudo-element (unaffected by the * rule) so it's squared explicitly. */
-[data-theme='corners'] *,
-[data-theme='corners'] *::before,
-[data-theme='corners'] *::after {
+[data-theme="corners"] *,
+[data-theme="corners"] *::before,
+[data-theme="corners"] *::after {
   border-radius: 0 !important;
 }
-[data-theme='corners'] *::-webkit-scrollbar-thumb {
+[data-theme="corners"] *::-webkit-scrollbar-thumb {
   border-radius: 0;
 }
 
@@ -62,11 +62,11 @@ body {
    card radius (rounded-lg = 8px). Trade-off: a transparent frameless window
    has no native drop-shadow, and full-screen fixed overlays (lock fade, modal
    backdrops) briefly square the corners since they escape the root's clip. */
-html[data-shell='desktop'][data-theme='rounded'],
-html[data-shell='desktop'][data-theme='rounded'] body {
+html[data-shell="desktop"][data-theme="rounded"],
+html[data-shell="desktop"][data-theme="rounded"] body {
   background: transparent;
 }
-html[data-shell='desktop'][data-theme='rounded'] #app-shell {
+html[data-shell="desktop"][data-theme="rounded"] #app-shell {
   background-color: #f4f4f5;
   border-radius: 8px;
   overflow: hidden;
@@ -76,7 +76,7 @@ html[data-shell='desktop'][data-theme='rounded'] #app-shell {
    leaves a subpixel hairline of that child's square corner outside the arc,
    so round the top corners of whatever sits at the top to match — the child
    then simply doesn't paint those corner pixels. */
-html[data-shell='desktop'][data-theme='rounded'] #app-shell > :first-child {
+html[data-shell="desktop"][data-theme="rounded"] #app-shell > :first-child {
   border-top-left-radius: 8px;
   border-top-right-radius: 8px;
 }
@@ -226,7 +226,10 @@ html[data-shell='desktop'][data-theme='rounded'] #app-shell > :first-child {
    per-element cursor rules (Tailwind cursor-pointer on buttons, text on
    inputs, etc) — when armed, the pointer is *always* green. SVG hotspot
    `2 1` aligns with the arrow's tip. */
-body[data-armed-link='true'],
-body[data-armed-link='true'] * {
-  cursor: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='22' height='22' viewBox='0 0 22 22'><path d='M2,1 L2,17 L6.5,13 L9.5,19 L12.5,18 L9.5,12 L15,12 Z' fill='%2316a34a' stroke='white' stroke-width='1' stroke-linejoin='round'/></svg>") 2 1, pointer !important;
+body[data-armed-link="true"],
+body[data-armed-link="true"] * {
+  cursor:
+    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='22' height='22' viewBox='0 0 22 22'><path d='M2,1 L2,17 L6.5,13 L9.5,19 L12.5,18 L9.5,12 L15,12 Z' fill='%2316a34a' stroke='white' stroke-width='1' stroke-linejoin='round'/></svg>")
+    2 1,
+    pointer !important;
 }

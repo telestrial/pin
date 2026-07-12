@@ -76,9 +76,13 @@ describe('computePinState', () => {
     expect(computePinState(item, CHANNEL, [], [pin])).toBe('pinnable')
   })
 
-  it("a pin on a different channel does not match (same publishedAt, different channelID)", () => {
+  it('a pin on a different channel does not match (same publishedAt, different channelID)', () => {
     const pin = makePin({
-      channel: { authorHandle: 'bob.test', channelID: OTHER_CHANNEL, name: 'Bob' },
+      channel: {
+        authorHandle: 'bob.test',
+        channelID: OTHER_CHANNEL,
+        name: 'Bob',
+      },
     })
     expect(computePinState(makeItem(), CHANNEL, [], [pin])).toBe('pinnable')
   })
@@ -99,7 +103,7 @@ describe('computePinState', () => {
     expect(computePinState(item, CHANNEL, [], [pin])).toBe('pinned')
   })
 
-  it("ownership shortcut wins over a pin record with drift on the same channel", () => {
+  it('ownership shortcut wins over a pin record with drift on the same channel', () => {
     // If somehow an owned channel also appears in pinned[] with different
     // contentHash, ownership wins and we still get 'pinned' (not 'edited').
     const item = makeItem({ contentHash: 'cid-new' })

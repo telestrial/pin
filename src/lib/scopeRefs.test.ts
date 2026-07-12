@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest'
 import type { ChannelManifest, ItemRef } from '../core/types'
 import { objectIDsInManifests } from './scopeRefs'
 
-function item(id: string, attachmentObjectIDs: (string | undefined)[] = []): ItemRef {
+function item(
+  id: string,
+  attachmentObjectIDs: (string | undefined)[] = [],
+): ItemRef {
   return {
     id,
     itemURL: `url-${id}`,
@@ -35,7 +38,12 @@ function manifest(items: ItemRef[]): ChannelManifest {
 describe('objectIDsInManifests', () => {
   it('collects item body ids + attachment objectIDs', () => {
     const m = { c1: manifest([item('b1', ['a1', 'a2']), item('b2')]) }
-    expect([...objectIDsInManifests(m)].sort()).toEqual(['a1', 'a2', 'b1', 'b2'])
+    expect([...objectIDsInManifests(m)].sort()).toEqual([
+      'a1',
+      'a2',
+      'b1',
+      'b2',
+    ])
   })
 
   it('excludes the named channel', () => {

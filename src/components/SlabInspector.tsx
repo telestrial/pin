@@ -54,11 +54,8 @@ async function buildLabelMap(
   const pin = usePinStore.getState()
 
   const myChannelIDSet = new Set(auth.myChannels.map((c) => c.channelID))
-  const titleOf = (item: {
-    title?: string
-    summary?: string
-    type: string
-  }) => item.title || (item.summary ?? '').slice(0, 40) || `(${item.type})`
+  const titleOf = (item: { title?: string; summary?: string; type: string }) =>
+    item.title || (item.summary ?? '').slice(0, 40) || `(${item.type})`
 
   for (const e of feed.entries) {
     if (!myChannelIDSet.has(e.channel.channelID)) continue
@@ -123,7 +120,8 @@ export function SlabInspector() {
           if (events.length === 0) break
           for (const ev of events) {
             const prev = latestByID.get(ev.id)
-            if (!prev || ev.updatedAt > prev.updatedAt) latestByID.set(ev.id, ev)
+            if (!prev || ev.updatedAt > prev.updatedAt)
+              latestByID.set(ev.id, ev)
           }
           if (events.length < EVENTS_PAGE_LIMIT) break
           const last = events[events.length - 1]
@@ -167,7 +165,12 @@ export function SlabInspector() {
               groups.set(s.encryptionKey, g)
             }
             g.bytesUsed += s.length
-            g.pieces.push({ objectID: id, label, offset: s.offset, length: s.length })
+            g.pieces.push({
+              objectID: id,
+              label,
+              offset: s.offset,
+              length: s.length,
+            })
           }
         }
         if (cancelled) return

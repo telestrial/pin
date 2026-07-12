@@ -9,9 +9,9 @@ describe('itemRefFromAttachment', () => {
     expect(itemRefFromAttachment({ ...base, mimeType: 'image/png' }).type).toBe(
       'image',
     )
-    expect(itemRefFromAttachment({ ...base, mimeType: 'audio/mpeg' }).type).toBe(
-      'audio',
-    )
+    expect(
+      itemRefFromAttachment({ ...base, mimeType: 'audio/mpeg' }).type,
+    ).toBe('audio')
     expect(itemRefFromAttachment({ ...base, mimeType: 'video/mp4' }).type).toBe(
       'video',
     )

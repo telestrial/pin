@@ -1,4 +1,4 @@
-import { Agent, AtpAgent } from '@atproto/api'
+import { type Agent, AtpAgent } from '@atproto/api'
 import { CHANNEL_LEXICON } from './atproto'
 import { deriveAtRkey } from './crypto'
 
@@ -137,7 +137,9 @@ export function parseChannelAtURI(
   uri: string,
 ): { authorDID: string; channelID: string } | null {
   const m = uri.match(
-    new RegExp(`^at://([^/]+)/${CHANNEL_LEXICON.replace(/\./g, '\\.')}/([^/]+)$`),
+    new RegExp(
+      `^at://([^/]+)/${CHANNEL_LEXICON.replace(/\./g, '\\.')}/([^/]+)$`,
+    ),
   )
   if (!m) return null
   return { authorDID: m[1], channelID: m[2] }

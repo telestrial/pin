@@ -6,8 +6,8 @@ import {
   LARGE_GRAPH,
   MEDIUM_GRAPH,
   reachableChannels,
-  search,
   STANDARD_GRAPH,
+  search,
 } from './socialGraph'
 
 describe('STANDARD_GRAPH', () => {

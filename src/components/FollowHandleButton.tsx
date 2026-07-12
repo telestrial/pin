@@ -50,7 +50,8 @@ export function FollowHandleButton({
   }, [myDID, subjectDID])
 
   // No session, self, or unknown state → no button.
-  if (!agent || !myDID || myDID === subjectDID || following === null) return null
+  if (!agent || !myDID || myDID === subjectDID || following === null)
+    return null
 
   async function handleClick() {
     if (!agent || busy) return

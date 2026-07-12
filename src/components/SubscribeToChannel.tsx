@@ -87,48 +87,44 @@ export function SubscribeToChannel({
   }
 
   return (
-    <FormCard
-      sidebar={sidebar}
-      rightSidebar={rightSidebar}
-      onBack={onCancel}
-    >
+    <FormCard sidebar={sidebar} rightSidebar={rightSidebar} onBack={onCancel}>
       <form onSubmit={handleSubmit} className="space-y-5">
-      <div className="space-y-1">
-        <h1 className="text-xl font-semibold text-neutral-900">
-          Subscribe to a channel
-        </h1>
-        <p className="text-neutral-500 text-sm">
-          Paste a Pin subscribe URL. The URL contains the author's handle, the
-          channel handle, and the decryption key.
-        </p>
-      </div>
+        <div className="space-y-1">
+          <h1 className="text-xl font-semibold text-neutral-900">
+            Subscribe to a channel
+          </h1>
+          <p className="text-neutral-500 text-sm">
+            Paste a Pin subscribe URL. The URL contains the author's handle, the
+            channel handle, and the decryption key.
+          </p>
+        </div>
 
-      <label className="block space-y-1">
-        <span className="text-xs font-medium text-neutral-700 uppercase tracking-wider">
-          Subscribe URL
-        </span>
-        <textarea
-          value={url}
-          onChange={(e) => setUrl(e.target.value)}
-          disabled={submitting}
-          required
-          rows={3}
-          placeholder="pin://author.bsky.social#k=..."
-          className="w-full px-3 py-2 bg-white border border-neutral-300 rounded-lg text-[11px] font-mono text-neutral-900 placeholder-neutral-400 focus:outline-none focus:border-green-600 disabled:bg-neutral-50 disabled:text-neutral-500"
-        />
-      </label>
+        <label className="block space-y-1">
+          <span className="text-xs font-medium text-neutral-700 uppercase tracking-wider">
+            Subscribe URL
+          </span>
+          <textarea
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            disabled={submitting}
+            required
+            rows={3}
+            placeholder="pin://author.bsky.social#k=..."
+            className="w-full px-3 py-2 bg-white border border-neutral-300 rounded-lg text-[11px] font-mono text-neutral-900 placeholder-neutral-400 focus:outline-none focus:border-green-600 disabled:bg-neutral-50 disabled:text-neutral-500"
+          />
+        </label>
 
-      {error && (
-        <p className="text-red-600 text-sm wrap-break-word">{error}</p>
-      )}
+        {error && (
+          <p className="text-red-600 text-sm wrap-break-word">{error}</p>
+        )}
 
-      <button
-        type="submit"
-        disabled={submitting || !url.trim()}
-        className="w-full px-4 py-2.5 bg-green-600 hover:bg-green-700 disabled:bg-neutral-200 disabled:text-neutral-400 text-white text-sm font-medium rounded-lg transition-colors"
-      >
-        {submitting ? 'Subscribing…' : 'Subscribe'}
-      </button>
+        <button
+          type="submit"
+          disabled={submitting || !url.trim()}
+          className="w-full px-4 py-2.5 bg-green-600 hover:bg-green-700 disabled:bg-neutral-200 disabled:text-neutral-400 text-white text-sm font-medium rounded-lg transition-colors"
+        >
+          {submitting ? 'Subscribing…' : 'Subscribe'}
+        </button>
       </form>
     </FormCard>
   )

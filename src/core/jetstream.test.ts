@@ -41,7 +41,7 @@ describe('pickJetstreamEndpoint', () => {
     expect(pickJetstreamEndpoint('Asia/Tokyo')).toMatch(/^wss:\/\//)
   })
 
-  it("falls back to us-east for unknown / empty / garbage timezone strings", () => {
+  it('falls back to us-east for unknown / empty / garbage timezone strings', () => {
     expect(pickJetstreamEndpoint('')).toContain('us-east')
     expect(pickJetstreamEndpoint('not-a-real-tz')).toContain('us-east')
     expect(pickJetstreamEndpoint('Mars/Olympus_Mons')).toContain('us-east')

@@ -1,4 +1,4 @@
-import { Agent, AtpAgent } from '@atproto/api'
+import { type Agent, AtpAgent } from '@atproto/api'
 import { getChannelRecord } from './atproto'
 import { deriveAtRkey } from './crypto'
 import { listFollows, parseChannelAtURI } from './follow'
@@ -21,7 +21,9 @@ export type HandleFollowRecord = {
 // already-followed person is an idempotent putRecord (no duplicate), and
 // unfollow is a single deleteRecord by the same derivation (no list-then-find).
 // Mirrors rkeyForSubject in follow.ts.
-export async function rkeyForHandleSubject(subjectDID: string): Promise<string> {
+export async function rkeyForHandleSubject(
+  subjectDID: string,
+): Promise<string> {
   return deriveAtRkey(subjectDID)
 }
 
@@ -122,7 +124,9 @@ export async function resolveAutoWatchCandidates(
   let handle = followedDID
   try {
     const unauthed = new AtpAgent({ service: DEFAULT_SERVICE })
-    const r = await unauthed.com.atproto.repo.describeRepo({ repo: followedDID })
+    const r = await unauthed.com.atproto.repo.describeRepo({
+      repo: followedDID,
+    })
     handle = r.data.handle
   } catch {
     // Fall back to the DID as the handle slot — fetchChannel/JetStream key
@@ -143,21 +147,23 @@ export async function resolveAutoWatchCandidates(
 
   const addedAt = new Date().toISOString()
   const candidates = await Promise.all(
-    claimedChannelIDs.map(async (channelID): Promise<SubscriptionRef | null> => {
-      try {
-        const record = await getChannelRecord(followedDID, channelID)
-        if (!record.key) return null // obscure — no key to Watch with
-        return {
-          authorHandle: handle,
-          authorDID: followedDID,
-          channelID,
-          channelKey: record.key,
-          addedAt,
+    claimedChannelIDs.map(
+      async (channelID): Promise<SubscriptionRef | null> => {
+        try {
+          const record = await getChannelRecord(followedDID, channelID)
+          if (!record.key) return null // obscure — no key to Watch with
+          return {
+            authorHandle: handle,
+            authorDID: followedDID,
+            channelID,
+            channelKey: record.key,
+            addedAt,
+          }
+        } catch {
+          return null // unreadable record — skip, next reconcile retries
         }
-      } catch {
-        return null // unreadable record — skip, next reconcile retries
-      }
-    }),
+      },
+    ),
   )
   return candidates.filter((c): c is SubscriptionRef => c !== null)
 }

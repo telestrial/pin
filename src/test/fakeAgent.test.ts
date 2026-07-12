@@ -186,7 +186,12 @@ describe('FakeAgent', () => {
         record: { v: 1 },
       })
       expect(events).toEqual([
-        { did: ALICE, collection: COLLECTION, rkey: 'first', operation: 'create' },
+        {
+          did: ALICE,
+          collection: COLLECTION,
+          rkey: 'first',
+          operation: 'create',
+        },
       ])
     })
 

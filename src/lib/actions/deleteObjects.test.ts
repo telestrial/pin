@@ -29,9 +29,7 @@ function fakeSdk(
   > = {},
 ) {
   const deleteObject = vi.fn().mockResolvedValue(undefined)
-  const sharedObject = vi
-    .fn()
-    .mockResolvedValue({ id: () => 'resolved-id' })
+  const sharedObject = vi.fn().mockResolvedValue({ id: () => 'resolved-id' })
   const pruneSlabs = vi.fn().mockResolvedValue(undefined)
   return {
     sdk: { deleteObject, sharedObject, pruneSlabs, ...over } as unknown as Sdk,

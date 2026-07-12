@@ -14,7 +14,10 @@ afterEach(() => {
 // jsdom's Blob doesn't ship .stream(); core/sia.ts uses
 // `new Blob([bytes]).stream()` to feed sdk.upload. Polyfill it with a
 // minimal ReadableStream that emits the blob's bytes in one chunk.
-if (typeof Blob !== 'undefined' && typeof Blob.prototype.stream !== 'function') {
+if (
+  typeof Blob !== 'undefined' &&
+  typeof Blob.prototype.stream !== 'function'
+) {
   Object.defineProperty(Blob.prototype, 'stream', {
     configurable: true,
     writable: true,

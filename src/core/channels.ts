@@ -29,9 +29,9 @@ import {
   type ChannelManifest,
   type ChannelVisibility,
   type Facet,
-  isValidAttachment,
   type ItemRef,
   type ItemType,
+  isValidAttachment,
 } from './types'
 
 // Object IDs that survive an edit/retract and must therefore NOT be deleted:
@@ -187,7 +187,11 @@ export async function createChannel(
     })
   }
 
-  await agent.com.atproto.repo.applyWrites({ repo: did, validate: false, writes })
+  await agent.com.atproto.repo.applyWrites({
+    repo: did,
+    validate: false,
+    writes,
+  })
 
   return {
     channelID,
@@ -214,11 +218,7 @@ export async function editChannel(
 ): Promise<{ manifest: ChannelManifest; reclaimURLs: string[] }> {
   const did = agent.assertDid
 
-  const current = await fetchChannel(
-    did,
-    channel.channelID,
-    channel.channelKey,
-  )
+  const current = await fetchChannel(did, channel.channelID, channel.channelKey)
 
   let avatar: ChannelImage | undefined = current.avatar
   if (patch.removeAvatar) {
@@ -431,11 +431,7 @@ export async function deletePublishedItem(
 ): Promise<{ manifest: ChannelManifest; orphanedObjectIDs: string[] }> {
   const did = agent.assertDid
 
-  const current = await fetchChannel(
-    did,
-    channel.channelID,
-    channel.channelKey,
-  )
+  const current = await fetchChannel(did, channel.channelID, channel.channelKey)
   const removed = current.items.find((i) => i.id === itemID)
 
   const updated: ChannelManifest = {
@@ -490,11 +486,7 @@ export async function removeAttachmentFromItem(
 }> {
   const did = agent.assertDid
 
-  const current = await fetchChannel(
-    did,
-    channel.channelID,
-    channel.channelKey,
-  )
+  const current = await fetchChannel(did, channel.channelID, channel.channelKey)
   const index = current.items.findIndex((i) => i.id === itemID)
   if (index === -1) throw new Error('Item not found in channel')
   const item = current.items[index]
@@ -556,11 +548,7 @@ export async function editItem(
 }> {
   const did = agent.assertDid
 
-  const current = await fetchChannel(
-    did,
-    channel.channelID,
-    channel.channelKey,
-  )
+  const current = await fetchChannel(did, channel.channelID, channel.channelKey)
   const oldIndex = current.items.findIndex((i) => i.id === oldItemID)
   if (oldIndex === -1) throw new Error('Item not found in channel')
   const oldItem = current.items[oldIndex]
@@ -602,11 +590,7 @@ export async function appendItemToChannel(
 ): Promise<ChannelManifest> {
   const did = agent.assertDid
 
-  const current = await fetchChannel(
-    did,
-    channel.channelID,
-    channel.channelKey,
-  )
+  const current = await fetchChannel(did, channel.channelID, channel.channelKey)
 
   const updated: ChannelManifest = {
     ...current,
@@ -647,9 +631,7 @@ export async function parseSubscribeURL(url: string): Promise<{
 }> {
   const m = url.trim().match(/^pin:\/\/([^#/]+)#k=(.+)$/)
   if (!m) {
-    throw new Error(
-      'Invalid subscribe URL (expected pin://<handle>#k=<key>)',
-    )
+    throw new Error('Invalid subscribe URL (expected pin://<handle>#k=<key>)')
   }
   const [, authorHandle, channelKey] = m
   const keyBytes = channelKeyFromBase64(channelKey)

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { CHANNEL_LEXICON } from '../core/atproto'
 import { FakeAgent } from './fakeAgent'
-import { connectFakeJetstream, type CommitEvent } from './fakeJetstream'
+import { type CommitEvent, connectFakeJetstream } from './fakeJetstream'
 import { createFakeWorld } from './fakeSdk'
 
 const ALICE = 'did:plc:alice'
@@ -36,7 +36,7 @@ describe('connectFakeJetstream', () => {
     expect(onConnected).not.toHaveBeenCalled()
   })
 
-  it("fires onCommit when a watched DID writes a channel record", async () => {
+  it('fires onCommit when a watched DID writes a channel record', async () => {
     const { store, alice } = setup()
     const events: CommitEvent[] = []
     connectFakeJetstream(store, [ALICE], {
@@ -48,12 +48,10 @@ describe('connectFakeJetstream', () => {
       rkey: 'r1',
       record: {},
     })
-    expect(events).toEqual([
-      { did: ALICE, rkey: 'r1', operation: 'create' },
-    ])
+    expect(events).toEqual([{ did: ALICE, rkey: 'r1', operation: 'create' }])
   })
 
-  it("does not fire for DIDs outside the filter", async () => {
+  it('does not fire for DIDs outside the filter', async () => {
     const { store, alice, bob } = setup()
     const events: CommitEvent[] = []
     connectFakeJetstream(store, [BOB], {

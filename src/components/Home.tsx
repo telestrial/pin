@@ -10,27 +10,27 @@ import { useFeedStore } from '../stores/feed'
 import { objectIDsReferencedBy, usePinStore } from '../stores/pin'
 import { useToastStore } from '../stores/toast'
 import { BlueskyLoginScreen } from './auth/BlueskyLoginScreen'
+import { Compose } from './Compose'
+import { CurateView } from './CurateView'
 import { ChannelsView } from './channel/ChannelsView'
 import { ChannelView } from './channel/ChannelView'
-import { Compose } from './Compose'
 import { CreateChannel } from './channel/CreateChannel'
 import { EditChannel } from './channel/EditChannel'
 import { EditProfile } from './EditProfile'
-import { FormCard } from './ui/FormCard'
 import { HandleDirectory } from './HandleDirectory'
 import { HomeFeed } from './HomeFeed'
-import { SettingsView } from './SettingsView'
-import { CurateView } from './CurateView'
 import { MyStorage } from './MyStorage'
+import { PinSidebar } from './pin/PinSidebar'
 import { ReadApp } from './read/ReadApp'
 import { ReadAudio } from './read/ReadAudio'
 import { ReadFile } from './read/ReadFile'
 import { ReadImage } from './read/ReadImage'
 import { ReadText } from './read/ReadText'
 import { ReadVideo } from './read/ReadVideo'
-import { PinSidebar } from './pin/PinSidebar'
+import { SettingsView } from './SettingsView'
 import { Sidebar } from './Sidebar'
 import { SubscribeToChannel } from './SubscribeToChannel'
+import { FormCard } from './ui/FormCard'
 
 type View =
   | { kind: 'idle' }
@@ -269,10 +269,7 @@ export function Home() {
 
   if (view.kind === 'created') {
     return (
-      <FormCard
-        sidebar={renderSidebar()}
-        rightSidebar={renderPinSidebar()}
-      >
+      <FormCard sidebar={renderSidebar()} rightSidebar={renderPinSidebar()}>
         <div className="text-center space-y-5">
           <div className="space-y-1">
             <h1 className="text-xl font-semibold text-neutral-900">
@@ -286,9 +283,7 @@ export function Home() {
           <div className="flex flex-col sm:flex-row gap-2 sm:justify-center">
             <button
               type="button"
-              onClick={() =>
-                copyURL(view.subscribeURL, 'Subscribe URL copied')
-              }
+              onClick={() => copyURL(view.subscribeURL, 'Subscribe URL copied')}
               className="px-4 py-2.5 bg-green-600 hover:bg-green-700 text-white text-sm font-medium rounded-lg transition-colors"
             >
               Copy subscribe URL
@@ -380,19 +375,19 @@ export function Home() {
   if (view.kind === 'viewing-channel') {
     const channelView = view
     const owned = myChannels.find((c) => c.channelID === view.channelID)
-    const channelComposerSlot = owned
-      ? atprotoAgent
-        ? <Compose channels={[owned]} />
-        : (
-            <button
-              type="button"
-              onClick={gotoBlueskyLogin}
-              className="w-full text-left px-4 py-3 border border-neutral-200 rounded-lg bg-white text-sm text-neutral-500 hover:text-neutral-900 hover:bg-neutral-50 transition-colors cursor-pointer"
-            >
-              Sign in to Bluesky to publish →
-            </button>
-          )
-      : undefined
+    const channelComposerSlot = owned ? (
+      atprotoAgent ? (
+        <Compose channels={[owned]} />
+      ) : (
+        <button
+          type="button"
+          onClick={gotoBlueskyLogin}
+          className="w-full text-left px-4 py-3 border border-neutral-200 rounded-lg bg-white text-sm text-neutral-500 hover:text-neutral-900 hover:bg-neutral-50 transition-colors cursor-pointer"
+        >
+          Sign in to Bluesky to publish →
+        </button>
+      )
+    ) : undefined
     const handleUnpinChannel = async () => {
       const sdk = useAuthStore.getState().sdk
       const agent = useAuthStore.getState().atprotoAgent
@@ -412,7 +407,11 @@ export function Home() {
           ...objectIDsReferencedBy(usePinStore.getState().pinned),
         ])
         // Reliable leg: the record is dropped inside unpinChannel.
-        const { objectIDs, urls } = await unpinChannel(agent, owned, protectedIDs)
+        const { objectIDs, urls } = await unpinChannel(
+          agent,
+          owned,
+          protectedIDs,
+        )
         useAuthStore.getState().removeMyChannel(owned.channelID)
         useAuthStore.getState().removeSubscription(owned.channelID)
         useFeedStore.getState().removeChannel(owned.channelID)
@@ -422,13 +421,11 @@ export function Home() {
         await flushSettingsBestEffort()
         // Byte cleanup as a durable, retried journal action — not a
         // fire-and-forget delete a QUIC blip could silently drop.
-        useActionStore
-          .getState()
-          .enqueueDeleteObjects({
-            objectIDs,
-            urls,
-            label: `Reclaiming “${owned.name}”`,
-          })
+        useActionStore.getState().enqueueDeleteObjects({
+          objectIDs,
+          urls,
+          label: `Reclaiming “${owned.name}”`,
+        })
         usePinStore.getState().refreshAccount(sdk)
         addToast(`Unpinned “${owned.name}”`)
         setView({ kind: 'idle' })

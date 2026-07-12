@@ -20,9 +20,7 @@ let reconciled = false
 // Add the candidates not already held and not tombstoned, then persist.
 // Shared by the boot reconcile and the follow-time reconcile. Returns the
 // number actually added.
-async function applyAutoWatch(
-  candidates: SubscriptionRef[],
-): Promise<number> {
+async function applyAutoWatch(candidates: SubscriptionRef[]): Promise<number> {
   const auth = useAuthStore.getState()
   const subscribedChannelIDs = new Set(
     auth.subscriptions.map((s) => s.channelID),
@@ -42,9 +40,7 @@ async function applyAutoWatch(
 // Resolve one followed person's claimed channels and auto-Watch the new ones
 // immediately. Called at follow time so their voices appear without waiting
 // for the next boot. Returns how many were added.
-export async function reconcileOneHandle(
-  followedDID: string,
-): Promise<number> {
+export async function reconcileOneHandle(followedDID: string): Promise<number> {
   const candidates = await resolveAutoWatchCandidates(followedDID)
   return applyAutoWatch(candidates)
 }
@@ -54,9 +50,7 @@ export async function reconcileOneHandle(
 // channels), matching the literal intent — including a channel I'd also
 // subscribed to manually. Clears the tombstones for the swept channels too, so
 // a later re-follow re-adds them fresh. Returns how many were removed.
-export async function sweepHandleFollow(
-  followedDID: string,
-): Promise<number> {
+export async function sweepHandleFollow(followedDID: string): Promise<number> {
   const candidates = await resolveAutoWatchCandidates(followedDID)
   const claimedIDs = candidates.map((c) => c.channelID)
   if (claimedIDs.length === 0) return 0

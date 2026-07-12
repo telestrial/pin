@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it } from 'vitest'
-import { loadPersistedActions } from '../lib/actionQueuePersist'
 import type { ItemRef } from '../core/types'
+import { loadPersistedActions } from '../lib/actionQueuePersist'
 import {
-  type PublishAction,
   checkpointedObjectIDs,
+  type PublishAction,
   useActionStore,
 } from './actionQueue'
 
@@ -118,9 +118,11 @@ describe('delete-objects actions', () => {
   })
 
   it('enqueues a silent pending action carrying the intent', () => {
-    const id = useActionStore
-      .getState()
-      .enqueueDeleteObjects({ objectIDs: ['a'], urls: ['u'], label: 'Reclaiming' })
+    const id = useActionStore.getState().enqueueDeleteObjects({
+      objectIDs: ['a'],
+      urls: ['u'],
+      label: 'Reclaiming',
+    })
     const a = useActionStore.getState().actions.find((a) => a.id === id)
     expect(a?.kind).toBe('delete-objects')
     expect(a?.silent).toBe(true)
@@ -210,7 +212,10 @@ describe('checkpointedObjectIDs (hygiene-runner protection set)', () => {
 
   it('unions across multiple checkpointed actions (e.g. one failed, one pending)', () => {
     const ids = checkpointedObjectIDs([
-      action({ id: 'a', ledger: { uploadedItemRef: { ...itemRef, id: 'body-a' } } }),
+      action({
+        id: 'a',
+        ledger: { uploadedItemRef: { ...itemRef, id: 'body-a' } },
+      }),
       action({
         id: 'b',
         state: 'failed',

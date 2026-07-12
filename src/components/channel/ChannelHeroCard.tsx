@@ -91,7 +91,9 @@ function HeroCover({
     cover.contentHash,
   )
   if (error || !url) return <IdentityGradient channelID={channelID} />
-  return <img src={url} alt="" className="absolute inset-0 size-full object-cover" />
+  return (
+    <img src={url} alt="" className="absolute inset-0 size-full object-cover" />
+  )
 }
 
 // No-cover fallback: a diagonal gradient from the channel's identity palette

@@ -50,21 +50,16 @@ export function BlueskyLoginScreen({
   }
 
   return (
-    <FormCard
-      sidebar={sidebar}
-      rightSidebar={rightSidebar}
-      onBack={onCancel}
-    >
+    <FormCard sidebar={sidebar} rightSidebar={rightSidebar} onBack={onCancel}>
       <form onSubmit={handleSubmit} className="space-y-5">
         <div className="space-y-1">
           <h1 className="text-xl font-semibold text-neutral-900">
             Sign in with Bluesky
           </h1>
           <p className="text-neutral-500 text-sm">
-            Pin publishes channel records to your ATProto repo. Sign in
-            through Bluesky — we'll redirect you to your PDS, you log in
-            there, and you come back authorized. Pin never sees your
-            password.
+            Pin publishes channel records to your ATProto repo. Sign in through
+            Bluesky — we'll redirect you to your PDS, you log in there, and you
+            come back authorized. Pin never sees your password.
           </p>
         </div>
 
@@ -84,7 +79,9 @@ export function BlueskyLoginScreen({
           />
         </label>
 
-        {error && <p className="text-red-600 text-sm wrap-break-word">{error}</p>}
+        {error && (
+          <p className="text-red-600 text-sm wrap-break-word">{error}</p>
+        )}
 
         <button
           type="submit"

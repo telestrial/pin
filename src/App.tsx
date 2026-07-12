@@ -7,15 +7,15 @@ import { Toasts } from './components/ui/Toast'
 import { bootOauth } from './lib/atprotoClient'
 import { inTauri } from './lib/openExternal'
 import './lib/debug'
+import {
+  useActionQueueHydration,
+  useActionRunner,
+} from './lib/hooks/useActionRunner'
 import { useGhostReconciliation } from './lib/hooks/useGhostReconciliation'
 import { useHandleFollowReconciliation } from './lib/hooks/useHandleFollowReconciliation'
 import { useJetstream } from './lib/hooks/useJetstream'
 import { useRepackRunner } from './lib/hooks/useRepackRunner'
 import { useSettingsSync } from './lib/hooks/useSettingsSync'
-import {
-  useActionQueueHydration,
-  useActionRunner,
-} from './lib/hooks/useActionRunner'
 import { useAuthStore } from './stores/auth'
 import { useComposeStore } from './stores/compose'
 import { usePinStore } from './stores/pin'

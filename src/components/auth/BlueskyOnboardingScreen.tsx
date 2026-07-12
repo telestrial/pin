@@ -49,10 +49,9 @@ export function BlueskyOnboardingScreen({
           Sign in with Bluesky
         </h1>
         <p className="text-neutral-600 text-sm leading-relaxed">
-          Pin publishes channel records to your ATProto repo. Sign in
-          through Bluesky — we'll redirect you to your PDS, you log in
-          there, and you come back authorized. Pin never sees your
-          password.
+          Pin publishes channel records to your ATProto repo. Sign in through
+          Bluesky — we'll redirect you to your PDS, you log in there, and you
+          come back authorized. Pin never sees your password.
         </p>
       </div>
 

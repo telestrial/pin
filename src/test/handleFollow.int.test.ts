@@ -6,22 +6,19 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-vi.mock(
-  '@atproto/api',
-  async () => (await import('./fakeModules')).fakeAtprotoApiModule(),
+vi.mock('@atproto/api', async () =>
+  (await import('./fakeModules')).fakeAtprotoApiModule(),
 )
-vi.mock(
-  '../core/jetstream',
-  async () => (await import('./fakeModules')).fakeJetstreamModule(),
+vi.mock('../core/jetstream', async () =>
+  (await import('./fakeModules')).fakeJetstreamModule(),
 )
-vi.mock(
-  '@siafoundation/sia-storage',
-  async () => (await import('./fakeModules')).fakeSiaStorageModule(),
+vi.mock('@siafoundation/sia-storage', async () =>
+  (await import('./fakeModules')).fakeSiaStorageModule(),
 )
 
 import type { Agent } from '@atproto/api'
-import { followHandle, unfollowHandle } from '../core/handleFollow'
 import type { CreatedChannel } from '../core/channels'
+import { followHandle, unfollowHandle } from '../core/handleFollow'
 import {
   reconcileOneHandle,
   sweepHandleFollow,
@@ -105,9 +102,9 @@ describe('handle-follow auto-Watch (integration)', () => {
     // Reconciling again must NOT resurrect it; ch2 stays.
     const added = await reconcileOneHandle(bob.did)
     expect(added).toBe(0)
-    expect(useAuthStore.getState().subscriptions.map((s) => s.channelID)).toEqual(
-      [ch2.channelID],
-    )
+    expect(
+      useAuthStore.getState().subscriptions.map((s) => s.channelID),
+    ).toEqual([ch2.channelID])
   })
 
   it('unfollowing sweeps all their feeds out and clears tombstones for a clean re-follow', async () => {

@@ -52,7 +52,10 @@ async function drainCleanups(sdk: Sdk): Promise<void> {
     .getState()
     .actions.filter((a) => a.kind === 'delete-objects' && a.state === 'pending')
   for (const a of pending) {
-    await runDeleteObjects(a as DeleteObjectsAction, { sdk, markDone: () => {} })
+    await runDeleteObjects(a as DeleteObjectsAction, {
+      sdk,
+      markDone: () => {},
+    })
     useActionStore.getState().remove(a.id)
   }
 }

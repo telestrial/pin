@@ -2,16 +2,16 @@ import type { Agent } from '@atproto/api'
 import { describe, expect, it } from 'vitest'
 import { FakeAgent, FakeRecordStore } from '../test/fakeAgent'
 import { FakeWorld } from '../test/fakeSdk'
-import type { SubscriptionRef } from './types'
 import {
-  HANDLEFOLLOW_LEXICON,
-  type HandleFollowRecord,
   autoWatchAdditions,
   autoWatchRemovals,
   followHandle,
+  HANDLEFOLLOW_LEXICON,
+  type HandleFollowRecord,
   rkeyForHandleSubject,
   unfollowHandle,
 } from './handleFollow'
+import type { SubscriptionRef } from './types'
 
 function sub(channelID: string): SubscriptionRef {
   return {

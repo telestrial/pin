@@ -1,18 +1,22 @@
 import { useEffect } from 'react'
 import {
-  type Action,
   ACTION_KINDS,
+  type Action,
   useActionStore,
 } from '../../stores/actionQueue'
 import { useAuthStore } from '../../stores/auth'
 import { usePinStore } from '../../stores/pin'
 import { useToastStore } from '../../stores/toast'
+import { loadPersistedActions } from '../actionQueuePersist'
 import {
   type DeleteObjectsContext,
   runDeleteObjects,
 } from '../actions/deleteObjects'
-import { type PublishContext, runPublish, SilentActionError } from '../actions/publish'
-import { loadPersistedActions } from '../actionQueuePersist'
+import {
+  type PublishContext,
+  runPublish,
+  SilentActionError,
+} from '../actions/publish'
 
 const SUCCESS_AUTO_REMOVE_MS = 4000
 
@@ -111,7 +115,8 @@ export function useActionRunner() {
         await dispatch(action)
         store.setProgress(action.id, 100)
         store.setState(action.id, 'success', undefined)
-        if (!action.silent) toast.addToast(`${action.successLabel} “${action.title}”`)
+        if (!action.silent)
+          toast.addToast(`${action.successLabel} “${action.title}”`)
         // A completed byte reclaim changed Sia storage — refresh the meter.
         if (action.kind === 'delete-objects') {
           usePinStore.getState().refreshAccount(sdk)

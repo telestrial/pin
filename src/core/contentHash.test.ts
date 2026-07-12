@@ -26,17 +26,23 @@ describe('computeContentHash', () => {
   // future change to the hash + base32 + multibase pipeline will break them.
   it('matches the fixed CID for the empty input', async () => {
     const cid = await computeContentHash(new Uint8Array(0))
-    expect(cid).toBe('bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku')
+    expect(cid).toBe(
+      'bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku',
+    )
   })
 
   it("matches the fixed CID for 'hello'", async () => {
     const cid = await computeContentHash(ENCODER.encode('hello'))
-    expect(cid).toBe('bafkreibm6jg3ux5qumhcn2b3flc3tyu6dmlb4xa7u5bf44yegnrjhc4yeq')
+    expect(cid).toBe(
+      'bafkreibm6jg3ux5qumhcn2b3flc3tyu6dmlb4xa7u5bf44yegnrjhc4yeq',
+    )
   })
 
   it("matches the fixed CID for 'hello world'", async () => {
     const cid = await computeContentHash(ENCODER.encode('hello world'))
-    expect(cid).toBe('bafkreifzjut3te2nhyekklss27nh3k72ysco7y32koao5eei66wof36n5e')
+    expect(cid).toBe(
+      'bafkreifzjut3te2nhyekklss27nh3k72ysco7y32koao5eei66wof36n5e',
+    )
   })
 
   it('returns the same CID for a sliced Uint8Array as for the slice copied into a fresh buffer', async () => {

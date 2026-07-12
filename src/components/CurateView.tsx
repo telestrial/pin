@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import {
+  type CuratorStatus,
   curatorStatus,
   startCurator,
   stopCurator,
-  type CuratorStatus,
 } from '../lib/curator'
 import { useReachablePeople } from '../lib/hooks/useReachablePeople'
 import { useAuthStore } from '../stores/auth'
@@ -222,7 +222,10 @@ function Diagnostics({ status }: { status: CuratorStatus }) {
         )}
       </div>
 
-      <AddrList label="Direct addresses · preferred path" addrs={status.directAddrs} />
+      <AddrList
+        label="Direct addresses · preferred path"
+        addrs={status.directAddrs}
+      />
       <AddrList label="Relay · fallback only" addrs={status.relays} />
       {status.otherAddrs.length > 0 && (
         <AddrList label="Other addresses" addrs={status.otherAddrs} />
@@ -236,7 +239,9 @@ function Diagnostics({ status }: { status: CuratorStatus }) {
       </p>
 
       <div className="space-y-1 pt-1 border-t border-neutral-100">
-        <div className="text-xs font-medium text-neutral-500 pt-3">Identity</div>
+        <div className="text-xs font-medium text-neutral-500 pt-3">
+          Identity
+        </div>
         {status.didDht ? (
           <div className="flex items-start gap-2">
             <code className="text-xs font-mono text-neutral-700 break-all flex-1">
@@ -262,9 +267,9 @@ function Diagnostics({ status }: { status: CuratorStatus }) {
           </div>
         )}
         <p className="text-xs text-neutral-400 leading-relaxed">
-          Your resolvable did:dht identity, derived from your recovery phrase — no
-          registry, no company. The repo's signing key below is carried in its
-          document as a verification method.
+          Your resolvable did:dht identity, derived from your recovery phrase —
+          no registry, no company. The repo's signing key below is carried in
+          its document as a verification method.
         </p>
       </div>
 
@@ -305,16 +310,11 @@ function Diagnostics({ status }: { status: CuratorStatus }) {
         <div className="text-xs font-medium text-neutral-500">
           RPC <span className="font-normal text-neutral-400">pin-keeper/0</span>
         </div>
-        <Field
-          label="Serving"
-          value={status.rpcServing ? 'yes' : 'no'}
-        />
+        <Field label="Serving" value={status.rpcServing ? 'yes' : 'no'} />
         <Field
           label="Inbox"
           value={
-            status.heyQueued === 1
-              ? '1 knock'
-              : `${status.heyQueued} knocks`
+            status.heyQueued === 1 ? '1 knock' : `${status.heyQueued} knocks`
           }
         />
         {status.rpcSelftest && (
@@ -334,7 +334,9 @@ function Diagnostics({ status }: { status: CuratorStatus }) {
       </div>
 
       <div className="space-y-1 pt-1 border-t border-neutral-100">
-        <div className="text-xs font-medium text-neutral-500 pt-3">Sia mirror</div>
+        <div className="text-xs font-medium text-neutral-500 pt-3">
+          Sia mirror
+        </div>
         <Field label="State" value={status.mirrorState} />
         {status.mirrorError ? (
           <code className="text-xs font-mono text-red-700 break-all block">
@@ -355,7 +357,10 @@ function Diagnostics({ status }: { status: CuratorStatus }) {
                 <code className="text-xs font-mono text-neutral-700 break-all flex-1">
                   {status.mirrorUrl}
                 </code>
-                <CopyButton value={status.mirrorUrl} label="Mirror URL copied" />
+                <CopyButton
+                  value={status.mirrorUrl}
+                  label="Mirror URL copied"
+                />
               </div>
             )}
           </>

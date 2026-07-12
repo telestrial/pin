@@ -1,11 +1,11 @@
 import { useState } from 'react'
 import { removeAttachmentFromItem } from '../../core/channels'
-import { useActionStore } from '../../stores/actionQueue'
 import type { AttachmentRef } from '../../core/types'
 import { itemRefFromAttachment } from '../../lib/filePin'
 import { formatBytes } from '../../lib/format'
 import { LIBRARY_CHANNEL } from '../../lib/pinUpload'
 import { objectIDsInManifests } from '../../lib/scopeRefs'
+import { useActionStore } from '../../stores/actionQueue'
 import { useAuthStore } from '../../stores/auth'
 import { useFeedStore } from '../../stores/feed'
 import { objectIDsReferencedBy, usePinStore } from '../../stores/pin'
@@ -81,7 +81,9 @@ export function FilePinButton({
         objectIDs: orphanedObjectIDs,
         label: `Reclaiming ${attachment.filename || 'file'}`,
       })
-      const sub = subscriptions.find((s) => s.channelID === ownedChannel.channelID)
+      const sub = subscriptions.find(
+        (s) => s.channelID === ownedChannel.channelID,
+      )
       if (sub) await refreshChannel(sub)
       usePinStore.getState().refreshAccount(sdk)
       addToast('File removed from the post')

@@ -3,8 +3,8 @@ import { useEffect, useRef, useState } from 'react'
 import type { AttachmentSource } from '../core/channels'
 import type { ReachablePerson } from '../core/network'
 import {
-  isValidAttachment,
   type ItemRef,
+  isValidAttachment,
   type OwnedChannel,
 } from '../core/types'
 import { NOTE_CHAR_LIMIT } from '../lib/constants'
@@ -18,11 +18,11 @@ import {
   filterMentionCandidates,
   useMentionCandidates,
 } from '../lib/hooks/useMentionCandidates'
+import { useActionStore } from '../stores/actionQueue'
 import { useAuthStore } from '../stores/auth'
 import { useComposeStore } from '../stores/compose'
 import { useFeedStore } from '../stores/feed'
 import { useToastStore } from '../stores/toast'
-import { useActionStore } from '../stores/actionQueue'
 import {
   type AttachmentKind,
   kindForMime,
@@ -106,7 +106,11 @@ export function Compose({
       if (!mf) continue
       const cs = byteToChar(summary, f.index.byteStart)
       const ce = byteToChar(summary, f.index.byteEnd)
-      out.push({ did: mf.did, handle: mf.handle ?? '', surface: summary.slice(cs, ce) })
+      out.push({
+        did: mf.did,
+        handle: mf.handle ?? '',
+        surface: summary.slice(cs, ce),
+      })
     }
     return out
   })
@@ -269,7 +273,9 @@ export function Compose({
     const surface = `@${person.username || person.handle}`
     const inserted = `${surface} `
     const next =
-      body.slice(0, mentionQuery.start) + inserted + body.slice(mentionQuery.end)
+      body.slice(0, mentionQuery.start) +
+      inserted +
+      body.slice(mentionQuery.end)
     const caret = mentionQuery.start + inserted.length
     setBody(next)
     setMentions((prev) => [
@@ -413,7 +419,9 @@ export function Compose({
       },
       channelIDs: [channel.channelID],
       editingItemID: editing?.item.id,
-      removedAttachmentObjectIDs: editing ? removedOriginalObjectIDs : undefined,
+      removedAttachmentObjectIDs: editing
+        ? removedOriginalObjectIDs
+        : undefined,
     })
     addToast(editing ? 'Queued for save' : 'Queued for publish')
     for (const a of attachments) {
@@ -454,9 +462,7 @@ export function Compose({
     >
       {isDragging && (
         <div className="absolute inset-0 z-10 rounded-lg bg-green-50/90 flex items-center justify-center pointer-events-none">
-          <p className="text-sm font-medium text-green-700">
-            Drop to attach
-          </p>
+          <p className="text-sm font-medium text-green-700">Drop to attach</p>
         </div>
       )}
 
@@ -529,10 +535,7 @@ export function Compose({
         </div>
 
         {/* biome-ignore lint/a11y/useKeyWithClickEvents: textarea inside handles keyboard */}
-        <div
-          className="flex-1 min-w-0"
-          onClick={handleAttachZoneClick}
-        >
+        <div className="flex-1 min-w-0" onClick={handleAttachZoneClick}>
           <textarea
             ref={textareaRef}
             value={body}
@@ -555,9 +558,7 @@ export function Compose({
             rows={1}
             placeholder="What are you thinking about?"
             className={`block w-full mt-1.5 bg-transparent text-lg text-black placeholder-neutral-400 focus:outline-none resize-none border-0 p-0 field-sizing-content transition-[max-height] duration-300 ease-out ${
-              expanded
-                ? 'max-h-80 overflow-y-auto'
-                : 'max-h-7 overflow-hidden'
+              expanded ? 'max-h-80 overflow-y-auto' : 'max-h-7 overflow-hidden'
             }`}
           />
         </div>
@@ -598,9 +599,7 @@ export function Compose({
       >
         <div className="overflow-hidden">
           {error && (
-            <p className="text-red-600 text-sm wrap-break-word mb-2">
-              {error}
-            </p>
+            <p className="text-red-600 text-sm wrap-break-word mb-2">{error}</p>
           )}
 
           <div className="flex items-center justify-end gap-2">

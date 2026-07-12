@@ -107,7 +107,9 @@ export function EditProfile({
       return
     }
     if (!ACCEPTED_IMAGE_MIMES.includes(f.type)) {
-      setError(`Unsupported avatar type: ${f.type || 'unknown'}. Use JPEG, PNG, or WebP.`)
+      setError(
+        `Unsupported avatar type: ${f.type || 'unknown'}. Use JPEG, PNG, or WebP.`,
+      )
       setNewAvatarFile(null)
       return
     }
@@ -128,7 +130,9 @@ export function EditProfile({
       return
     }
     if (!ACCEPTED_IMAGE_MIMES.includes(f.type)) {
-      setError(`Unsupported cover type: ${f.type || 'unknown'}. Use JPEG, PNG, or WebP.`)
+      setError(
+        `Unsupported cover type: ${f.type || 'unknown'}. Use JPEG, PNG, or WebP.`,
+      )
       setNewCoverFile(null)
       return
     }
@@ -145,9 +149,7 @@ export function EditProfile({
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     if (!agent) {
-      setError(
-        'Bluesky session not active. Cancel and try again to sign in.',
-      )
+      setError('Bluesky session not active. Cancel and try again to sign in.')
       return
     }
     if (!sdk) {
@@ -232,9 +234,9 @@ export function EditProfile({
           {original ? 'Edit profile' : 'Set up your profile'}
         </h1>
         <p className="text-neutral-500 text-sm">
-          Pick the name that represents you. This is what people see when
-          they click your @handle anywhere in the app. Your atproto handle
-          stays your permanent address underneath.
+          Pick the name that represents you. This is what people see when they
+          click your @handle anywhere in the app. Your atproto handle stays your
+          permanent address underneath.
         </p>
       </div>
 
@@ -249,7 +251,9 @@ export function EditProfile({
               type="text"
               value={username}
               onChange={(e) =>
-                setUsername(e.target.value.replace(/^@+/, '').replace(/\s+/g, ''))
+                setUsername(
+                  e.target.value.replace(/^@+/, '').replace(/\s+/g, ''),
+                )
               }
               disabled={submitting}
               placeholder="yourname"
@@ -295,9 +299,7 @@ export function EditProfile({
             Avatar <span className="text-neutral-400">(optional)</span>
           </span>
           <AvatarPicker
-            existingURL={
-              removeExistingAvatar ? undefined : original?.avatarURL
-            }
+            existingURL={removeExistingAvatar ? undefined : original?.avatarURL}
             newPreviewURL={newAvatarPreviewURL}
             hasExisting={!!original?.avatarURL && !removeExistingAvatar}
             removed={removeExistingAvatar}
@@ -327,8 +329,8 @@ export function EditProfile({
 
       {submitting && (newAvatarFile || newCoverFile) && (
         <p className="text-neutral-500 text-xs">
-          Uploading image bytes to Sia (~20 seconds per file), then writing
-          your profile record to ATProto.
+          Uploading image bytes to Sia (~20 seconds per file), then writing your
+          profile record to ATProto.
         </p>
       )}
 

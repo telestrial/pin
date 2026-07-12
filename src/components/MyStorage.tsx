@@ -1,19 +1,19 @@
 import { X } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import type { ItemRef } from '../core/types'
+import { formatBytes } from '../lib/format'
+import { useFadeCancelUnpin } from '../lib/hooks/useFadeCancelUnpin'
+import { LIBRARY_CHANNEL } from '../lib/pinUpload'
+import { useActionStore } from '../stores/actionQueue'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
-import { LIBRARY_CHANNEL } from '../lib/pinUpload'
 import { type PinnedItemRef, usePinStore } from '../stores/pin'
 import { useToastStore } from '../stores/toast'
-import { useActionStore } from '../stores/actionQueue'
-import { formatBytes } from '../lib/format'
 import { kindForMime } from './AttachmentMedia'
-import { ChannelHeroCard } from './channel/ChannelHeroCard'
 import { ChannelStorageDetail } from './ChannelStorageDetail'
-import { useFadeCancelUnpin } from '../lib/hooks/useFadeCancelUnpin'
-import { ItemTile } from './ItemTile'
+import { ChannelHeroCard } from './channel/ChannelHeroCard'
 import type { TileChannel, TileSource } from './ItemTile'
+import { ItemTile } from './ItemTile'
 import { PIN_ITEM_DRAG_TYPE } from './pin/PinSidebar'
 import { SlabInspector } from './SlabInspector'
 import { TabButton } from './ui/TabButton'
@@ -248,120 +248,120 @@ export function MyStorage({
               onHandleClick={onHandleClick}
             />
           ) : (
-          <div
-            {...dragProps}
-            className={`relative bg-white border rounded-lg p-5 space-y-5 transition-colors ${
-              isDragging
-                ? 'border-green-600 ring-2 ring-green-600/30'
-                : 'border-neutral-200'
-            }`}
-          >
-            {isDragging && (
-              <div className="absolute inset-0 z-10 rounded-lg bg-green-50/90 flex items-center justify-center pointer-events-none">
-                <p className="text-sm font-medium text-green-700">
-                  Drop to add to your library
-                </p>
-              </div>
-            )}
-            <div className="flex items-start justify-between gap-4">
-              <h1 className="text-2xl font-semibold text-neutral-900">
-                My Storage
-              </h1>
-              <button
-                type="button"
-                onClick={onClose}
-                aria-label="Close"
-                className="p-1.5 rounded-full text-neutral-500 hover:text-neutral-900 hover:bg-neutral-100 transition-colors cursor-pointer shrink-0"
-              >
-                <X className="size-5" aria-hidden="true" />
-              </button>
-            </div>
-
-            <div className="flex gap-4 border-b border-neutral-200">
-              <TabButton
-                active={topTab === 'files'}
-                onClick={() => selectTopTab('files')}
-              >
-                My Files
-              </TabButton>
-              <TabButton
-                active={topTab === 'channels'}
-                onClick={() => selectTopTab('channels')}
-              >
-                My Channels
-              </TabButton>
-            </div>
-
-            {topTab === 'files' ? (
-              <>
-                {flatEntries.length === 0 ? (
-                  <p className="text-sm text-neutral-500 py-8 text-center">
-                    Pin items to keep them here.
+            <div
+              {...dragProps}
+              className={`relative bg-white border rounded-lg p-5 space-y-5 transition-colors ${
+                isDragging
+                  ? 'border-green-600 ring-2 ring-green-600/30'
+                  : 'border-neutral-200'
+              }`}
+            >
+              {isDragging && (
+                <div className="absolute inset-0 z-10 rounded-lg bg-green-50/90 flex items-center justify-center pointer-events-none">
+                  <p className="text-sm font-medium text-green-700">
+                    Drop to add to your library
                   </p>
-                ) : (
-                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
-                    {flatEntries.map((entry) => {
-                      const url = entry.item.itemURL
-                      const canUnpin = !!entry.objectID
-                      return (
-                        <ItemTile
-                          key={`${entry.channel.channelID}:${entry.item.publishedAt}`}
-                          item={entry.item}
-                          channel={entry.channel}
-                          source={entry.source}
-                          removing={removingURLs.has(url)}
-                          busy={isPinning(url)}
-                          onOpen={() =>
-                            onItemClick({
-                              item: entry.item,
-                              channel: entry.channel,
-                              objectID: entry.objectID ?? '',
-                              pinnedAt: entry.pinnedAt ?? '',
-                            })
-                          }
-                          onUnpin={
-                            canUnpin ? () => handleUnpinClick(url) : undefined
-                          }
-                          onDragStart={
-                            entry.item.type === 'text'
-                              ? undefined
-                              : buildDragHandler(entry)
-                          }
-                        />
-                      )
-                    })}
-                  </div>
-                )}
+                </div>
+              )}
+              <div className="flex items-start justify-between gap-4">
+                <h1 className="text-2xl font-semibold text-neutral-900">
+                  My Storage
+                </h1>
+                <button
+                  type="button"
+                  onClick={onClose}
+                  aria-label="Close"
+                  className="p-1.5 rounded-full text-neutral-500 hover:text-neutral-900 hover:bg-neutral-100 transition-colors cursor-pointer shrink-0"
+                >
+                  <X className="size-5" aria-hidden="true" />
+                </button>
+              </div>
 
-                {/* Inspection view — debug-shape, not final UX. Surfaces the
+              <div className="flex gap-4 border-b border-neutral-200">
+                <TabButton
+                  active={topTab === 'files'}
+                  onClick={() => selectTopTab('files')}
+                >
+                  My Files
+                </TabButton>
+                <TabButton
+                  active={topTab === 'channels'}
+                  onClick={() => selectTopTab('channels')}
+                >
+                  My Channels
+                </TabButton>
+              </div>
+
+              {topTab === 'files' ? (
+                <>
+                  {flatEntries.length === 0 ? (
+                    <p className="text-sm text-neutral-500 py-8 text-center">
+                      Pin items to keep them here.
+                    </p>
+                  ) : (
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+                      {flatEntries.map((entry) => {
+                        const url = entry.item.itemURL
+                        const canUnpin = !!entry.objectID
+                        return (
+                          <ItemTile
+                            key={`${entry.channel.channelID}:${entry.item.publishedAt}`}
+                            item={entry.item}
+                            channel={entry.channel}
+                            source={entry.source}
+                            removing={removingURLs.has(url)}
+                            busy={isPinning(url)}
+                            onOpen={() =>
+                              onItemClick({
+                                item: entry.item,
+                                channel: entry.channel,
+                                objectID: entry.objectID ?? '',
+                                pinnedAt: entry.pinnedAt ?? '',
+                              })
+                            }
+                            onUnpin={
+                              canUnpin ? () => handleUnpinClick(url) : undefined
+                            }
+                            onDragStart={
+                              entry.item.type === 'text'
+                                ? undefined
+                                : buildDragHandler(entry)
+                            }
+                          />
+                        )
+                      })}
+                    </div>
+                  )}
+
+                  {/* Inspection view — debug-shape, not final UX. Surfaces the
                     actual slab landscape so we can see what the repacker sees
                     and what's left as orphans. Remove when packing is settled. */}
-                <div className="pt-5 border-t border-neutral-200">
-                  <SlabInspector />
+                  <div className="pt-5 border-t border-neutral-200">
+                    <SlabInspector />
+                  </div>
+                </>
+              ) : ownedChannelCards.length === 0 ? (
+                <p className="text-sm text-neutral-500 py-8 text-center">
+                  Channels you create show up here.
+                </p>
+              ) : (
+                <div className="space-y-3">
+                  {ownedChannelCards.map((c) => (
+                    <ChannelHeroCard
+                      key={c.channel.channelID}
+                      channelID={c.channel.channelID}
+                      channelName={c.channel.name}
+                      authorHandle={c.authorHandle}
+                      avatar={c.avatar}
+                      cover={c.cover}
+                      description={c.description}
+                      badge={`${c.itemCount} ${c.itemCount === 1 ? 'item' : 'items'} · ${formatBytes(c.bytes)}`}
+                      onClick={() => setSelectedChannelID(c.channel.channelID)}
+                    />
+                  ))}
                 </div>
-              </>
-            ) : ownedChannelCards.length === 0 ? (
-              <p className="text-sm text-neutral-500 py-8 text-center">
-                Channels you create show up here.
-              </p>
-            ) : (
-              <div className="space-y-3">
-                {ownedChannelCards.map((c) => (
-                  <ChannelHeroCard
-                    key={c.channel.channelID}
-                    channelID={c.channel.channelID}
-                    channelName={c.channel.name}
-                    authorHandle={c.authorHandle}
-                    avatar={c.avatar}
-                    cover={c.cover}
-                    description={c.description}
-                    badge={`${c.itemCount} ${c.itemCount === 1 ? 'item' : 'items'} · ${formatBytes(c.bytes)}`}
-                    onClick={() => setSelectedChannelID(c.channel.channelID)}
-                  />
-                ))}
-              </div>
-            )}
-          </div>
+              )}
+            </div>
           )}
         </div>
         {rightSidebar}

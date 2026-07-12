@@ -365,7 +365,10 @@ export const useActionStore = create<ActionQueueState>()((set) => ({
     set((s) => {
       const actions = s.actions.map((a) =>
         a.id === id && a.kind === 'delete-objects'
-          ? { ...a, ledger: { ...a.ledger, done: [...(a.ledger.done ?? []), key] } }
+          ? {
+              ...a,
+              ledger: { ...a.ledger, done: [...(a.ledger.done ?? []), key] },
+            }
           : a,
       )
       const updated = actions.find((a) => a.id === id)

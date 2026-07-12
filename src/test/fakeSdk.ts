@@ -36,7 +36,9 @@ export class FakePinnedObject {
 
   encodedSize(): number {
     // 3× redundancy is the real SDK's default (10 data + 20 parity shards).
-    return Math.max(1, Math.ceil(this._bytes.length / SLAB_BYTES)) * SLAB_BYTES * 3
+    return (
+      Math.max(1, Math.ceil(this._bytes.length / SLAB_BYTES)) * SLAB_BYTES * 3
+    )
   }
 
   // Real SDK returns per-object slab inventory; entries' `length` field

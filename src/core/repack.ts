@@ -148,9 +148,7 @@ export async function runRepackBatch(
   // If any object lives in an own channel, we need an agent to rewrite that
   // channel's manifest. Without one, drop channel objects from this batch
   // and only pack library + external. Keeps Just-Reading users productive.
-  const filteredRefs = agent
-    ? refs
-    : refs.filter((r) => r.source !== 'channel')
+  const filteredRefs = agent ? refs : refs.filter((r) => r.source !== 'channel')
   if (filteredRefs.length === 0) return null
 
   // Download bytes for each — uses the existing useItemBytes cache path
@@ -190,10 +188,9 @@ export async function runRepackBatch(
   const affectedChannelIDs: string[] = []
   for (const [channelID, channelMappings] of channelGroups) {
     if (!agent) continue // shouldn't reach here per filter above
-    const channelKey = (channelMappings[0].oldRef as Extract<
-      ScopeRef,
-      { source: 'channel' }
-    >).channelKey
+    const channelKey = (
+      channelMappings[0].oldRef as Extract<ScopeRef, { source: 'channel' }>
+    ).channelKey
     const did = agent.assertDid
 
     const manifest = await fetchChannel(did, channelID, channelKey)
@@ -250,7 +247,9 @@ export async function runRepackBatch(
     const swapImage = (image: ChannelManifest['avatar']) => {
       if (!image) return image
       const r = replacementsByURL.get(image.itemURL)
-      return r ? { ...image, itemURL: r.url, contentHash: r.contentHash } : image
+      return r
+        ? { ...image, itemURL: r.url, contentHash: r.contentHash }
+        : image
     }
 
     const updated: ChannelManifest = {

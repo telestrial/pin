@@ -221,7 +221,6 @@ function PostBody({
   )
 }
 
-
 export function FeedRow({
   entry,
   onItemClick,

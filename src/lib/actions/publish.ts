@@ -6,10 +6,10 @@ import {
 } from '../../core/channels'
 import { uploadItemsPacked } from '../../core/sia'
 import type { AttachmentRef, ItemRef } from '../../core/types'
+import { type PublishAction, useActionStore } from '../../stores/actionQueue'
 import { useAuthStore } from '../../stores/auth'
 import { useFeedStore } from '../../stores/feed'
 import { usePinStore } from '../../stores/pin'
-import { type PublishAction, useActionStore } from '../../stores/actionQueue'
 import { LIBRARY_CHANNEL } from '../pinUpload'
 
 const SLAB_DATA_BYTES = 10 * 4 * 1024 * 1024 // 10 data shards × 4 MiB each

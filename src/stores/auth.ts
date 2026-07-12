@@ -4,9 +4,9 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { OwnedChannel, SubscriptionRef, ThemeMode } from '../core/types'
 import { APP_KEY } from '../lib/constants'
+import { useActionStore } from './actionQueue'
 import { useFeedStore } from './feed'
 import { usePinStore } from './pin'
-import { useActionStore } from './actionQueue'
 
 export type AuthStep =
   | 'loading'

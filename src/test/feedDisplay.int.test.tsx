@@ -10,27 +10,24 @@
 // the feed populates from the encrypted ATProto record and the post body
 // renders inline.
 
-import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 // vi.mock must come before the imports below — Vitest hoists these calls.
 // The factories use dynamic import() so the helper module is loaded lazily
 // at runtime (after hoist), when getCurrentWorld() can return a live world.
-vi.mock(
-  '@atproto/api',
-  async () => (await import('./fakeModules')).fakeAtprotoApiModule(),
+vi.mock('@atproto/api', async () =>
+  (await import('./fakeModules')).fakeAtprotoApiModule(),
 )
-vi.mock(
-  '../core/jetstream',
-  async () => (await import('./fakeModules')).fakeJetstreamModule(),
+vi.mock('../core/jetstream', async () =>
+  (await import('./fakeModules')).fakeJetstreamModule(),
 )
-vi.mock(
-  '@siafoundation/sia-storage',
-  async () => (await import('./fakeModules')).fakeSiaStorageModule(),
+vi.mock('@siafoundation/sia-storage', async () =>
+  (await import('./fakeModules')).fakeSiaStorageModule(),
 )
 
-import type { SubscriptionRef } from '../core/types'
 import { HomeFeed } from '../components/HomeFeed'
+import type { SubscriptionRef } from '../core/types'
 import {
   authorCreateChannel,
   createFakeApp,

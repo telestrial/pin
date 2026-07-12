@@ -78,11 +78,7 @@ describe('computeChannelPinState', () => {
 
   it('a fully-drifted channel reads edited, not pinnable', () => {
     // Held everything, but every held copy is an old version.
-    const pinned = [
-      pin(CH, a, 'old'),
-      pin(CH, b, 'old'),
-      pin(CH, c, 'old'),
-    ]
+    const pinned = [pin(CH, a, 'old'), pin(CH, b, 'old'), pin(CH, c, 'old')]
     expect(computeChannelPinState([a, b, c], CH, pinned)).toBe('edited')
   })
 })
@@ -127,7 +123,10 @@ describe('channelPinByteSize', () => {
   })
 
   it('treats legacy items without byteSize as 0', () => {
-    const legacyItem = { ...item('1'), byteSize: undefined as unknown as number }
+    const legacyItem = {
+      ...item('1'),
+      byteSize: undefined as unknown as number,
+    }
     expect(channelPinByteSize(manifest({ items: [legacyItem] }))).toBe(0)
   })
 

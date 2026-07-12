@@ -1,14 +1,14 @@
 import { Box, CheckCircle2, HardDrive, RotateCw, Search, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { type PinnedItemRef, usePinStore } from '../../stores/pin'
 import type { ItemRef } from '../../core/types'
+import { formatBytes } from '../../lib/format'
+import { useFadeCancelUnpin } from '../../lib/hooks/useFadeCancelUnpin'
+import { type Action, useActionStore } from '../../stores/actionQueue'
 import { useAuthStore } from '../../stores/auth'
 import { useComposeStore } from '../../stores/compose'
 import { useFeedStore } from '../../stores/feed'
-import { type Action, useActionStore } from '../../stores/actionQueue'
+import { type PinnedItemRef, usePinStore } from '../../stores/pin'
 import { useStorageActivityStore } from '../../stores/storageActivity'
-import { formatBytes } from '../../lib/format'
-import { useFadeCancelUnpin } from '../../lib/hooks/useFadeCancelUnpin'
 import { PinIcon } from './PinIcon'
 
 function itemTitle(item: ItemRef): string {
@@ -167,11 +167,13 @@ export function PinSidebar({
       ]
       return fields.some((f) => f.toLowerCase().includes(q))
     }
-    return [...externalPins, ...ownItems].filter(matches).sort((a, b) =>
-      (b.pinnedAt ?? b.item.publishedAt).localeCompare(
-        a.pinnedAt ?? a.item.publishedAt,
-      ),
-    )
+    return [...externalPins, ...ownItems]
+      .filter(matches)
+      .sort((a, b) =>
+        (b.pinnedAt ?? b.item.publishedAt).localeCompare(
+          a.pinnedAt ?? a.item.publishedAt,
+        ),
+      )
   }, [q, externalPins, ownItems])
 
   // rawContentBytes is the actual byte total across every pinned object in
@@ -308,8 +310,8 @@ export function PinSidebar({
                       {job.channelName}
                     </p>
                     <p className="text-[10px] text-neutral-500 truncate">
-                      {job.mode === 'unpin' ? 'Unpinning' : 'Pinning'} {job.done}
-                      /{job.total}
+                      {job.mode === 'unpin' ? 'Unpinning' : 'Pinning'}{' '}
+                      {job.done}/{job.total}
                     </p>
                   </div>
                   <div className="h-1 rounded-full bg-neutral-200 overflow-hidden">
@@ -370,16 +372,16 @@ export function PinSidebar({
                         </button>
                       )}
                       {task.state !== 'running' && (
-                          <button
-                            type="button"
-                            onClick={() => removeTask(task.id)}
-                            title="Dismiss"
-                            aria-label={`Dismiss ${task.title}`}
-                            className="p-1 rounded text-neutral-400 hover:text-neutral-900 hover:bg-neutral-100"
-                          >
-                            <X className="size-3" aria-hidden="true" />
-                          </button>
-                        )}
+                        <button
+                          type="button"
+                          onClick={() => removeTask(task.id)}
+                          title="Dismiss"
+                          aria-label={`Dismiss ${task.title}`}
+                          className="p-1 rounded text-neutral-400 hover:text-neutral-900 hover:bg-neutral-100"
+                        >
+                          <X className="size-3" aria-hidden="true" />
+                        </button>
+                      )}
                     </div>
                   </div>
                   {showProgress && (

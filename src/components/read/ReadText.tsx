@@ -1,9 +1,9 @@
 import { useMemo, useState } from 'react'
 import type { ItemRef } from '../../core/types'
-import { renderPostBody } from '../../lib/markdown'
-import { formatAbsolute, formatRelative } from '../../lib/time'
 import { useItemBytes } from '../../lib/hooks/useItemBytes'
 import { usePinState } from '../../lib/hooks/usePinState'
+import { renderPostBody } from '../../lib/markdown'
+import { formatAbsolute, formatRelative } from '../../lib/time'
 import { useAuthStore } from '../../stores/auth'
 import { useFeedStore } from '../../stores/feed'
 import { type PinInput, usePinStore } from '../../stores/pin'
@@ -62,8 +62,7 @@ export function ReadText({
   const driftedPin = pinState === 'edited' ? pinForThis : undefined
   const [viewYours, setViewYours] = useState(false)
   const showYours = isRetracted || (viewYours && !!driftedPin)
-  const displayItem =
-    showYours && pinForThis ? pinForThis.item : item
+  const displayItem = showYours && pinForThis ? pinForThis.item : item
 
   const { bytes, error } = useItemBytes(
     displayItem.itemURL,
@@ -132,8 +131,8 @@ export function ReadText({
             )}
             {isRetracted ? (
               <p className="text-sm italic text-neutral-500">
-                This post was retracted by the author. You're viewing
-                your pinned copy.
+                This post was retracted by the author. You're viewing your
+                pinned copy.
               </p>
             ) : (
               driftedPin && (

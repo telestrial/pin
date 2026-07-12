@@ -10,17 +10,14 @@
 import { render, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-vi.mock(
-  '@atproto/api',
-  async () => (await import('./fakeModules')).fakeAtprotoApiModule(),
+vi.mock('@atproto/api', async () =>
+  (await import('./fakeModules')).fakeAtprotoApiModule(),
 )
-vi.mock(
-  '../core/jetstream',
-  async () => (await import('./fakeModules')).fakeJetstreamModule(),
+vi.mock('../core/jetstream', async () =>
+  (await import('./fakeModules')).fakeJetstreamModule(),
 )
-vi.mock(
-  '@siafoundation/sia-storage',
-  async () => (await import('./fakeModules')).fakeSiaStorageModule(),
+vi.mock('@siafoundation/sia-storage', async () =>
+  (await import('./fakeModules')).fakeSiaStorageModule(),
 )
 
 import type { Sdk } from '@siafoundation/sia-storage'
@@ -50,11 +47,18 @@ describe('integration: action journal resume', () => {
 
   it('publishes through the runner, recording a checkpoint + published channel', async () => {
     const app = createFakeApp()
-    const alice = app.createAccount({ did: 'did:plc:alice', handle: 'alice.test' })
+    const alice = app.createAccount({
+      did: 'did:plc:alice',
+      handle: 'alice.test',
+    })
     const channel = await authorCreateChannel(alice, { name: 'voice' })
     mountAs(alice, {
       myChannels: [
-        { channelID: channel.channelID, channelKey: channel.channelKey, name: 'voice' },
+        {
+          channelID: channel.channelID,
+          channelKey: channel.channelKey,
+          name: 'voice',
+        },
       ],
     })
 
@@ -94,7 +98,10 @@ describe('integration: action journal resume', () => {
 
   it('resumes a checkpointed action without re-uploading', async () => {
     const app = createFakeApp()
-    const alice = app.createAccount({ did: 'did:plc:alice', handle: 'alice.test' })
+    const alice = app.createAccount({
+      did: 'did:plc:alice',
+      handle: 'alice.test',
+    })
     const channel = await authorCreateChannel(alice, { name: 'voice' })
 
     // Simulate the upload having completed in a prior session: bytes are on
@@ -112,7 +119,11 @@ describe('integration: action journal resume', () => {
 
     mountAs(alice, {
       myChannels: [
-        { channelID: channel.channelID, channelKey: channel.channelKey, name: 'voice' },
+        {
+          channelID: channel.channelID,
+          channelKey: channel.channelKey,
+          name: 'voice',
+        },
       ],
     })
 
@@ -148,7 +159,9 @@ describe('integration: action journal resume', () => {
     render(<RunnerHarness />)
 
     await waitFor(() => {
-      const a = useActionStore.getState().actions.find((a) => a.id === 'resume-1')
+      const a = useActionStore
+        .getState()
+        .actions.find((a) => a.id === 'resume-1')
       expect(!a || a.state === 'success').toBe(true)
     })
 

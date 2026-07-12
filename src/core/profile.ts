@@ -1,4 +1,4 @@
-import { Agent, AtpAgent } from '@atproto/api'
+import { type Agent, AtpAgent } from '@atproto/api'
 
 export const PROFILE_LEXICON = 'dev.sia.pin.profile'
 // Well-known rkey, parallel to app.bsky.actor.profile/self.
@@ -43,11 +43,7 @@ export type ProfilePatch = {
 // plaintext parsing, so there's no tokenizer that needs a restricted alphabet.
 // Non-uniqueness is not checked here (or anywhere) — it's unenforced by design.
 export function normalizeUsername(raw: string): string {
-  return raw
-    .trim()
-    .replace(/^@+/, '')
-    .replace(/\s+/g, '')
-    .slice(0, 30)
+  return raw.trim().replace(/^@+/, '').replace(/\s+/g, '').slice(0, 30)
 }
 
 export async function getProfileRecord(

@@ -28,8 +28,11 @@ export async function resolveChannelImageIDs(
   manifests: Record<string, ChannelManifest>,
 ): Promise<ChannelImageResolveResult> {
   const resolved: ChannelImageResolution[] = []
-  const failed: { channelID: string; kind: ChannelImageKind; error: unknown }[] =
-    []
+  const failed: {
+    channelID: string
+    kind: ChannelImageKind
+    error: unknown
+  }[] = []
 
   await Promise.all(
     channels.map(async (channel) => {

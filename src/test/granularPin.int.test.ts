@@ -10,17 +10,14 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-vi.mock(
-  '@atproto/api',
-  async () => (await import('./fakeModules')).fakeAtprotoApiModule(),
+vi.mock('@atproto/api', async () =>
+  (await import('./fakeModules')).fakeAtprotoApiModule(),
 )
-vi.mock(
-  '../core/jetstream',
-  async () => (await import('./fakeModules')).fakeJetstreamModule(),
+vi.mock('../core/jetstream', async () =>
+  (await import('./fakeModules')).fakeJetstreamModule(),
 )
-vi.mock(
-  '@siafoundation/sia-storage',
-  async () => (await import('./fakeModules')).fakeSiaStorageModule(),
+vi.mock('@siafoundation/sia-storage', async () =>
+  (await import('./fakeModules')).fakeSiaStorageModule(),
 )
 
 import type { Agent } from '@atproto/api'
@@ -50,7 +47,11 @@ async function publishPostWithAttachments(
   channel: { channelID: string; channelKey: string },
   body: string,
   files: { mime: string; size: number }[],
-): Promise<{ item: ItemRef; bodyObjectID: string; attachmentObjectIDs: string[] }> {
+): Promise<{
+  item: ItemRef
+  bodyObjectID: string
+  attachmentObjectIDs: string[]
+}> {
   const sdk = author.sdk as unknown as Sdk
   const agent = author.agent as unknown as Agent
 
@@ -91,7 +92,10 @@ describe('integration: author-side granular pinning', () => {
 
   async function setup() {
     const app = createFakeApp()
-    const alice = app.createAccount({ did: 'did:plc:alice', handle: 'alice.test' })
+    const alice = app.createAccount({
+      did: 'did:plc:alice',
+      handle: 'alice.test',
+    })
     const channel = await authorCreateChannel(alice, { name: "Alice's voice" })
     return { app, alice, channel }
   }

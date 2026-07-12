@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
 import type { Builder } from '@siafoundation/sia-storage'
+import { useEffect, useRef, useState } from 'react'
 import { inTauri, openExternal } from '../../lib/openExternal'
 import { useAuthStore } from '../../stores/auth'
 

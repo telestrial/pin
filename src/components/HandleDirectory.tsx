@@ -524,11 +524,7 @@ function CoverBanner({
     return <div className="h-32 bg-neutral-100" />
   }
   return (
-    <img
-      src={url}
-      alt=""
-      className="w-full h-32 object-cover bg-neutral-100"
-    />
+    <img src={url} alt="" className="w-full h-32 object-cover bg-neutral-100" />
   )
 }
 
@@ -609,8 +605,7 @@ function ChannelRow({
   onHandleClick: (handle: string) => void
 }) {
   const authorName = useAuthorName(entry.authorHandle)
-  const onRowClick = () =>
-    onChannelClick(entry.authorHandle, entry.channelID)
+  const onRowClick = () => onChannelClick(entry.authorHandle, entry.channelID)
   const onAuthorClick = (e: React.MouseEvent) => {
     e.stopPropagation()
     onHandleClick(entry.authorHandle)

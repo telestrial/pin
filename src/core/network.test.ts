@@ -137,32 +137,52 @@ describe('countReachablePeople against the socialGraph harness', () => {
   // hold (R0), not by total network size, so it stays flat as the graph grows;
   // the tripwire fails loudly if that ever stops being true. 2000ms is generous
   // headroom against CI variance, not a benchmark — don't raise it to pass.
-  const REACH_CASES: { name: string; graph: SyntheticGraph; viewer: string }[] = [
-    { name: 'STANDARD (~5 users)', graph: STANDARD_GRAPH, viewer: 'did:test:alice' },
-    { name: 'MEDIUM (~50 users, +1 OOM)', graph: MEDIUM_GRAPH, viewer: 'did:test:user0' },
-    { name: 'LARGE (~500 users, +2 OOM)', graph: LARGE_GRAPH, viewer: 'did:test:user0' },
-    { name: 'HUGE (~10K users, +3 OOM)', graph: HUGE_GRAPH, viewer: 'did:test:user0' },
-  ]
+  const REACH_CASES: { name: string; graph: SyntheticGraph; viewer: string }[] =
+    [
+      {
+        name: 'STANDARD (~5 users)',
+        graph: STANDARD_GRAPH,
+        viewer: 'did:test:alice',
+      },
+      {
+        name: 'MEDIUM (~50 users, +1 OOM)',
+        graph: MEDIUM_GRAPH,
+        viewer: 'did:test:user0',
+      },
+      {
+        name: 'LARGE (~500 users, +2 OOM)',
+        graph: LARGE_GRAPH,
+        viewer: 'did:test:user0',
+      },
+      {
+        name: 'HUGE (~10K users, +3 OOM)',
+        graph: HUGE_GRAPH,
+        viewer: 'did:test:user0',
+      },
+    ]
 
-  it.each(REACH_CASES)(
-    '$name matches the oracle within 2 seconds',
-    async (c) => {
-      const start = performance.now()
-      const reach = await countReachablePeople(c.viewer, r0Of(c.graph, c.viewer), {
+  it.each(
+    REACH_CASES,
+  )('$name matches the oracle within 2 seconds', async (c) => {
+    const start = performance.now()
+    const reach = await countReachablePeople(
+      c.viewer,
+      r0Of(c.graph, c.viewer),
+      {
         listFollows: graphListFollows(c.graph),
-      })
-      const elapsedMs = performance.now() - start
+      },
+    )
+    const elapsedMs = performance.now() - start
 
-      // Correctness gate — a perf check that doesn't assert the right answer is
-      // a perf check silently passing on broken code.
-      expect(reach.total).toBeGreaterThan(0)
-      expect(reach.direct).toBe(reachablePeople(c.viewer, c.graph, 1).length)
-      expect(reach.total).toBe(reachablePeople(c.viewer, c.graph, 2).length)
-      expect(reach.extended).toBe(reach.total - reach.direct)
+    // Correctness gate — a perf check that doesn't assert the right answer is
+    // a perf check silently passing on broken code.
+    expect(reach.total).toBeGreaterThan(0)
+    expect(reach.direct).toBe(reachablePeople(c.viewer, c.graph, 1).length)
+    expect(reach.total).toBe(reachablePeople(c.viewer, c.graph, 2).length)
+    expect(reach.extended).toBe(reach.total - reach.direct)
 
-      expect(elapsedMs).toBeLessThan(2000)
-    },
-  )
+    expect(elapsedMs).toBeLessThan(2000)
+  })
 })
 
 describe('walkReachable', () => {

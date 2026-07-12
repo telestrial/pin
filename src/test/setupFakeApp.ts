@@ -5,15 +5,6 @@
 
 import type { Agent } from '@atproto/api'
 import type { Sdk } from '@siafoundation/sia-storage'
-import { FakeAgent, FakeRecordStore } from './fakeAgent'
-import { createFakeWorld, FakeSdk, type FakeWorld } from './fakeSdk'
-import { setCurrentWorld } from './fakeModules'
-import { useAuthStore } from '../stores/auth'
-import { useComposeStore } from '../stores/compose'
-import { useFeedStore } from '../stores/feed'
-import { usePinStore } from '../stores/pin'
-import { useToastStore } from '../stores/toast'
-import { useActionStore } from '../stores/actionQueue'
 import {
   appendItemToChannel,
   buildItemRef,
@@ -23,6 +14,15 @@ import {
 } from '../core/channels'
 import { uploadItem } from '../core/sia'
 import type { ItemRef, SubscriptionRef } from '../core/types'
+import { useActionStore } from '../stores/actionQueue'
+import { useAuthStore } from '../stores/auth'
+import { useComposeStore } from '../stores/compose'
+import { useFeedStore } from '../stores/feed'
+import { usePinStore } from '../stores/pin'
+import { useToastStore } from '../stores/toast'
+import { FakeAgent, FakeRecordStore } from './fakeAgent'
+import { setCurrentWorld } from './fakeModules'
+import { createFakeWorld, FakeSdk, type FakeWorld } from './fakeSdk'
 
 export type FakeAccount = {
   sdk: FakeSdk

@@ -42,8 +42,7 @@ export function installAppBridge(
 
     const req = e.data
     const storageKey = `${STORAGE_PREFIX}:${appID}:${req.key}`
-    const post = (msg: unknown) =>
-      iframe.contentWindow?.postMessage(msg, '*')
+    const post = (msg: unknown) => iframe.contentWindow?.postMessage(msg, '*')
 
     if (req.type === 'dispatch:state.get') {
       const stored = localStorage.getItem(storageKey)

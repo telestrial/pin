@@ -1,5 +1,5 @@
-import { CHANNEL_MANIFEST_VERSION } from '../core/types'
 import type { ChannelManifest, ItemRef, SubscriptionRef } from '../core/types'
+import { CHANNEL_MANIFEST_VERSION } from '../core/types'
 
 // A purely synthetic social graph for testing reachability and discovery.
 // No SDK, no network, no real DIDs — just JS objects shaped like what
@@ -159,9 +159,7 @@ export function buildGraph(): GraphBuilder {
       const viewer = userOrThrow(viewerHandle)
       const owner = userOrThrow(ownerHandle)
       const channel = channelOrThrow(owner, channelName)
-      if (
-        viewer.subscriptions.some((s) => s.channelID === channel.channelID)
-      ) {
+      if (viewer.subscriptions.some((s) => s.channelID === channel.channelID)) {
         return builder
       }
       viewer.subscriptions.push({
@@ -319,8 +317,7 @@ export function buildScaledGraph(spec: ScaledGraphSpec): SyntheticGraph {
   for (let i = 0; i < spec.userCount; i++) {
     for (let c = 0; c < spec.channelsPerUser; c++) {
       for (let it = 0; it < spec.itemsPerChannel; it++) {
-        const keyword =
-          KEYWORD_POOL[Math.floor(rand() * KEYWORD_POOL.length)]!
+        const keyword = KEYWORD_POOL[Math.floor(rand() * KEYWORD_POOL.length)]!
         builder.publish(
           `user${i}`,
           `ch${c}`,
@@ -333,10 +330,7 @@ export function buildScaledGraph(spec: ScaledGraphSpec): SyntheticGraph {
     const claimed = new Set<string>()
     const maxAttempts = spec.subscriptionsPerUser * 5
     let attempts = 0
-    while (
-      claimed.size < spec.subscriptionsPerUser &&
-      attempts < maxAttempts
-    ) {
+    while (claimed.size < spec.subscriptionsPerUser && attempts < maxAttempts) {
       attempts++
       const targetUser = Math.floor(rand() * spec.userCount)
       if (targetUser === i) continue

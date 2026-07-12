@@ -55,7 +55,10 @@ describe('manifest round-trip through fake ATProto + AES-GCM', () => {
     }
 
     // Alice publishes: encrypt + write to her own repo at the derived rkey.
-    const ciphertext = await encryptForChannel(keyBytes, JSON.stringify(manifest))
+    const ciphertext = await encryptForChannel(
+      keyBytes,
+      JSON.stringify(manifest),
+    )
     await alice.com.atproto.repo.putRecord({
       repo: ALICE,
       collection: CHANNEL_LEXICON,
@@ -76,14 +79,17 @@ describe('manifest round-trip through fake ATProto + AES-GCM', () => {
     }
     expect(record.$type).toBe(CHANNEL_LEXICON)
 
-    const plaintext = await decryptForChannel(keyBytes, record.encryptedManifest)
+    const plaintext = await decryptForChannel(
+      keyBytes,
+      record.encryptedManifest,
+    )
     const parsed = JSON.parse(plaintext) as ChannelManifest
 
     expect(parsed).toEqual(manifest)
     expect(parsed.items[0].itemURL).toBe('sia://fake/0001#k=0001')
   })
 
-  it("Bob cannot decrypt without K (the record body looks like opaque base64)", async () => {
+  it('Bob cannot decrypt without K (the record body looks like opaque base64)', async () => {
     const world = createFakeWorld()
     const alice = new FakeAgent(ALICE, world)
     const bob = new FakeAgent(BOB, world)

@@ -165,11 +165,7 @@ export function EditChannel({
   }
 
   const card = (content: React.ReactNode) => (
-    <FormCard
-      sidebar={sidebar}
-      rightSidebar={rightSidebar}
-      onBack={onCancel}
-    >
+    <FormCard sidebar={sidebar} rightSidebar={rightSidebar} onBack={onCancel}>
       {content}
     </FormCard>
   )
@@ -233,7 +229,12 @@ export function EditChannel({
             newPreviewURL={avatarPreviewURL}
             removed={removeAvatar}
             onPick={(e) =>
-              pickImage(e, setNewAvatarFile, () => setRemoveAvatar(false), 'avatar')
+              pickImage(
+                e,
+                setNewAvatarFile,
+                () => setRemoveAvatar(false),
+                'avatar',
+              )
             }
             onRemove={() => {
               setNewAvatarFile(null)
@@ -253,7 +254,12 @@ export function EditChannel({
             newPreviewURL={coverPreviewURL}
             removed={removeCover}
             onPick={(e) =>
-              pickImage(e, setNewCoverFile, () => setRemoveCover(false), 'cover')
+              pickImage(
+                e,
+                setNewCoverFile,
+                () => setRemoveCover(false),
+                'cover',
+              )
             }
             onRemove={() => {
               setNewCoverFile(null)
@@ -378,7 +384,9 @@ function ImagePreview({
     return <img src={newPreviewURL} alt="preview" className={imgCls} />
   }
   if (existing) {
-    return <ExistingImage image={existing} imgCls={imgCls} emptyCls={emptyCls} />
+    return (
+      <ExistingImage image={existing} imgCls={imgCls} emptyCls={emptyCls} />
+    )
   }
   return <div className={emptyCls} />
 }
@@ -392,7 +400,11 @@ function ExistingImage({
   imgCls: string
   emptyCls: string
 }) {
-  const { url } = useItemBlobURL(image.itemURL, image.mimeType, image.contentHash)
+  const { url } = useItemBlobURL(
+    image.itemURL,
+    image.mimeType,
+    image.contentHash,
+  )
   if (!url) {
     return <div className={`${emptyCls} animate-pulse`} />
   }

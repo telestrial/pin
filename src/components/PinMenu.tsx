@@ -1,5 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
-import { closeWindow, minimizeWindow, isFullscreen, toggleFullscreen } from '../lib/desktop'
+import {
+  closeWindow,
+  isFullscreen,
+  minimizeWindow,
+  toggleFullscreen,
+} from '../lib/desktop'
 import { inTauri } from '../lib/openExternal'
 import { PinIcon } from './pin/PinIcon'
 
@@ -128,7 +133,9 @@ function MenuItem({
       role="menuitem"
       onClick={onClick}
       className={`w-full text-left px-3 py-1.5 text-xs font-medium cursor-pointer ${
-        danger ? 'text-red-600 hover:bg-red-50' : 'text-neutral-700 hover:bg-neutral-50'
+        danger
+          ? 'text-red-600 hover:bg-red-50'
+          : 'text-neutral-700 hover:bg-neutral-50'
       }`}
     >
       {children}

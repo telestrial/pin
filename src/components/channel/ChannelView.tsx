@@ -1,18 +1,18 @@
 import { useEffect, useMemo } from 'react'
 import type { FeedEntry } from '../../core/feed'
 import type { ChannelImage } from '../../core/types'
-import { renderMarkdown } from '../../lib/markdown'
 import { useAuthorName } from '../../lib/hooks/useAuthorName'
 import { useChannelClaim } from '../../lib/hooks/useChannelClaim'
 import { useItemBlobURL } from '../../lib/hooks/useItemBytes'
+import { renderMarkdown } from '../../lib/markdown'
 import { useAuthStore } from '../../stores/auth'
 import { useFeedStore } from '../../stores/feed'
-import { ChannelAvatar } from './ChannelAvatar'
-import { ChannelOwnerMenu } from './ChannelOwnerMenu'
-import { ChannelPinButton } from '../pin/ChannelPinButton'
 import { FollowButton } from '../FollowButton'
 import { FeedRow } from '../HomeFeed'
+import { ChannelPinButton } from '../pin/ChannelPinButton'
 import { PinIcon } from '../pin/PinIcon'
+import { ChannelAvatar } from './ChannelAvatar'
+import { ChannelOwnerMenu } from './ChannelOwnerMenu'
 
 export function ChannelView({
   authorHandle,

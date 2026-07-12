@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest'
 import type { Sdk } from '@siafoundation/sia-storage'
+import { describe, expect, it } from 'vitest'
+import { createFakeWorld, FakeSdk } from '../test/fakeSdk'
 import {
   fetchAccountSnapshot,
   fetchRawContentBytes,
@@ -7,7 +8,6 @@ import {
   unpinItemBytes,
 } from './pin'
 import type { ItemRef } from './types'
-import { createFakeWorld, FakeSdk } from '../test/fakeSdk'
 
 function asSdk(fake: FakeSdk): Sdk {
   return fake as unknown as Sdk

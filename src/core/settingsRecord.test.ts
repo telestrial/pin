@@ -6,9 +6,9 @@ import { deriveSettingsKey } from './crypto'
 import { type DispatchSettings, SETTINGS_VERSION } from './settings'
 import {
   loadSettingsRecord,
-  saveSettingsRecord,
   SETTINGS_LEXICON,
   SETTINGS_RKEY,
+  saveSettingsRecord,
 } from './settingsRecord'
 
 const ALICE = 'did:plc:alice'
@@ -17,11 +17,18 @@ function agentFor(world: FakeWorld, did = ALICE): Agent {
   return new FakeAgent(did, world) as unknown as Agent
 }
 
-function sampleSettings(overrides: Partial<DispatchSettings> = {}): DispatchSettings {
+function sampleSettings(
+  overrides: Partial<DispatchSettings> = {},
+): DispatchSettings {
   return {
     version: SETTINGS_VERSION,
     myChannels: [
-      { channelID: 'chan0000000000aa', channelKey: 'aGVsbG8=', name: 'Mine', createdAt: '2026-01-01T00:00:00.000Z' },
+      {
+        channelID: 'chan0000000000aa',
+        channelKey: 'aGVsbG8=',
+        name: 'Mine',
+        createdAt: '2026-01-01T00:00:00.000Z',
+      },
     ],
     subscriptions: [
       {
@@ -104,7 +111,12 @@ describe('settingsRecord', () => {
 
     const cid1 = await saveSettingsRecord(agent, key, sampleSettings(), null)
     // A concurrent writer advances the record past cid1.
-    await saveSettingsRecord(agent, key, sampleSettings({ updatedAt: '2026-03-01T00:00:00.000Z' }), cid1)
+    await saveSettingsRecord(
+      agent,
+      key,
+      sampleSettings({ updatedAt: '2026-03-01T00:00:00.000Z' }),
+      cid1,
+    )
 
     // A direct putRecord using the now-stale cid1 must be rejected by the fake.
     await expect(
@@ -125,7 +137,12 @@ describe('settingsRecord', () => {
 
     const cid1 = await saveSettingsRecord(agent, key, sampleSettings(), null)
     // Another writer advances the record, so cid1 is now stale.
-    await saveSettingsRecord(agent, key, sampleSettings({ updatedAt: '2026-04-01T00:00:00.000Z' }), cid1)
+    await saveSettingsRecord(
+      agent,
+      key,
+      sampleSettings({ updatedAt: '2026-04-01T00:00:00.000Z' }),
+      cid1,
+    )
 
     // Saving with the stale cid1 should NOT throw — it retries against the
     // fresh CID and lands (last-writer-wins).

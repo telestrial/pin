@@ -20,11 +20,7 @@ function itemTitle(item: ItemRef): string {
 }
 
 function ImageVisual({ item }: { item: ItemRef }) {
-  const { url } = useItemBlobURL(
-    item.itemURL,
-    item.mimeType,
-    item.contentHash,
-  )
+  const { url } = useItemBlobURL(item.itemURL, item.mimeType, item.contentHash)
   if (!url) {
     return <div className="w-full h-full bg-neutral-100 animate-pulse" />
   }
@@ -54,13 +50,7 @@ function TextVisual({ item }: { item: ItemRef }) {
   )
 }
 
-function IconVisual({
-  Icon,
-  label,
-}: {
-  Icon: typeof Play
-  label?: string
-}) {
+function IconVisual({ Icon, label }: { Icon: typeof Play; label?: string }) {
   return (
     <div className="w-full h-full flex flex-col items-center justify-center gap-2 text-neutral-500">
       <Icon className="size-10" aria-hidden="true" />
@@ -164,9 +154,7 @@ export function ItemTile({
           }}
           disabled={busy}
           title={removing ? 'Click to undo' : 'Unpin'}
-          aria-label={
-            removing ? `Re-pin ${title}` : `Unpin ${title}`
-          }
+          aria-label={removing ? `Re-pin ${title}` : `Unpin ${title}`}
           className="absolute top-1.5 right-1.5 inline-flex items-center justify-center size-7 rounded-full bg-white/80 backdrop-blur-sm text-green-600 hover:bg-white opacity-0 group-hover:opacity-100 focus:opacity-100 transition-[opacity,background-color] cursor-pointer disabled:opacity-50"
         >
           <PinIcon

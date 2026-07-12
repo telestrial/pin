@@ -1,10 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { buildHomeFeed, type FetchChannel } from './feed'
-import type {
-  ChannelManifest,
-  ItemRef,
-  SubscriptionRef,
-} from './types'
+import type { ChannelManifest, ItemRef, SubscriptionRef } from './types'
 
 function sub(overrides: Partial<SubscriptionRef> = {}): SubscriptionRef {
   return {
@@ -72,7 +68,9 @@ describe('buildHomeFeed', () => {
       name: 'Alice',
       avatar: { itemURL: 'https://sia.test/avatar', mimeType: 'image/jpeg' },
     })
-    expect(result.entries[0].item.summary).toBe('body at 2026-05-01T10:00:00.000Z')
+    expect(result.entries[0].item.summary).toBe(
+      'body at 2026-05-01T10:00:00.000Z',
+    )
   })
 
   it('sorts entries newest-first by publishedAt across multiple channels', async () => {
@@ -122,12 +120,18 @@ describe('buildHomeFeed', () => {
   it('captures a fetch failure as an error entry without breaking the others', async () => {
     const fetcher: FetchChannel = vi
       .fn()
-      .mockResolvedValueOnce(manifest('Alice', [item('2026-05-01T00:00:00.000Z')]))
+      .mockResolvedValueOnce(
+        manifest('Alice', [item('2026-05-01T00:00:00.000Z')]),
+      )
       .mockRejectedValueOnce(new Error('record not found'))
     const result = await buildHomeFeed(
       [
         sub({ channelID: 'aaaa' }),
-        sub({ authorHandle: 'broken.test', channelID: 'bbbb', label: 'Broken' }),
+        sub({
+          authorHandle: 'broken.test',
+          channelID: 'bbbb',
+          label: 'Broken',
+        }),
       ],
       fetcher,
     )
@@ -146,13 +150,17 @@ describe('buildHomeFeed', () => {
   })
 
   it('coerces non-Error rejections to a string', async () => {
-    const fetcher: FetchChannel = vi.fn().mockRejectedValue('plain string failure')
+    const fetcher: FetchChannel = vi
+      .fn()
+      .mockRejectedValue('plain string failure')
     const result = await buildHomeFeed([sub()], fetcher)
     expect(result.errors[0].error).toBe('plain string failure')
   })
 
   it('prefers authorDID over authorHandle when calling the fetcher', async () => {
-    const fetcher: FetchChannel = vi.fn().mockResolvedValue(manifest('Alice', []))
+    const fetcher: FetchChannel = vi
+      .fn()
+      .mockResolvedValue(manifest('Alice', []))
     await buildHomeFeed(
       [
         sub({
@@ -170,7 +178,9 @@ describe('buildHomeFeed', () => {
   })
 
   it('falls back to authorHandle when authorDID is empty', async () => {
-    const fetcher: FetchChannel = vi.fn().mockResolvedValue(manifest('Alice', []))
+    const fetcher: FetchChannel = vi
+      .fn()
+      .mockResolvedValue(manifest('Alice', []))
     await buildHomeFeed(
       [
         sub({

@@ -1,9 +1,9 @@
-import { useState } from 'react'
 import {
   type Builder,
   generateRecoveryPhrase,
   validateRecoveryPhrase,
 } from '@siafoundation/sia-storage'
+import { useState } from 'react'
 import { useAuthStore } from '../../stores/auth'
 import { CopyButton } from '../ui/CopyButton'
 
@@ -73,8 +73,8 @@ export function RecoveryScreen({
             Your custody key
           </h1>
           <p className="text-neutral-600 text-sm leading-relaxed">
-            A 12-word phrase that controls your Pin account. Anyone with it
-            can read and publish your channels — keep it private.
+            A 12-word phrase that controls your Pin account. Anyone with it can
+            read and publish your channels — keep it private.
           </p>
         </div>
 

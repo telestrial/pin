@@ -1,4 +1,4 @@
-import { Agent, AtpAgent } from '@atproto/api'
+import { type Agent, AtpAgent } from '@atproto/api'
 
 export const CHANNEL_LEXICON = 'dev.sia.pin.channel'
 

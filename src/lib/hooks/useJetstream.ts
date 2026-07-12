@@ -9,9 +9,7 @@ export function useJetstream() {
   useEffect(() => {
     const dids = [
       ...new Set(
-        subscriptions
-          .map((s) => s.authorDID)
-          .filter((d): d is string => !!d),
+        subscriptions.map((s) => s.authorDID).filter((d): d is string => !!d),
       ),
     ]
     if (dids.length === 0) return

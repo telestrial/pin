@@ -38,7 +38,9 @@ export async function deriveChannelID(key: Uint8Array): Promise<string> {
 // = subject AT-URI) so re-following an already-followed channel rewrites
 // the same record (idempotent put) and unfollow is a single deleteRecord
 // call rather than a list-then-find scan.
-export async function deriveAtRkey(input: Uint8Array | string): Promise<string> {
+export async function deriveAtRkey(
+  input: Uint8Array | string,
+): Promise<string> {
   const bytes =
     typeof input === 'string' ? new TextEncoder().encode(input) : input
   const hash = new Uint8Array(
@@ -76,7 +78,9 @@ async function decryptBytes(
 ): Promise<Uint8Array> {
   const all = base64Decode(base64Ciphertext)
   if (all.length < 1 + IV_BYTES + 16) {
-    throw new Error('Encrypted blob too short to contain version + IV + auth tag')
+    throw new Error(
+      'Encrypted blob too short to contain version + IV + auth tag',
+    )
   }
   const version = all[0]
   if (version !== ENCRYPTION_VERSION) {

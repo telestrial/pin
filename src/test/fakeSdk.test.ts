@@ -46,7 +46,7 @@ describe('FakeSdk', () => {
       )
     })
 
-    it("download returns a stream of the originally-uploaded bytes", async () => {
+    it('download returns a stream of the originally-uploaded bytes', async () => {
       const world = createFakeWorld()
       const sdk = new FakeSdk('alice', world)
 
@@ -67,7 +67,10 @@ describe('FakeSdk', () => {
     it('sharedObject(URL) resolves back to a handle with the same bytes', async () => {
       const world = createFakeWorld()
       const sdk = new FakeSdk('alice', world)
-      const original = await sdk.upload({}, streamOf(ENCODER.encode('original')))
+      const original = await sdk.upload(
+        {},
+        streamOf(ENCODER.encode('original')),
+      )
       const url = sdk.shareObject(original, new Date('9999-12-31'))
 
       const resolved = await sdk.sharedObject(url)
@@ -128,7 +131,10 @@ describe('FakeSdk', () => {
       const alice = new FakeSdk('alice', world)
       const bob = new FakeSdk('bob', world)
 
-      const obj = await alice.upload({}, streamOf(ENCODER.encode("Alice's post")))
+      const obj = await alice.upload(
+        {},
+        streamOf(ENCODER.encode("Alice's post")),
+      )
       const url = alice.shareObject(obj, new Date('9999-12-31'))
 
       const handle = await bob.sharedObject(url)
@@ -176,7 +182,7 @@ describe('FakeSdk', () => {
       expect(text).toBe('captured')
     })
 
-    it("when the last pinner deletes, bytes drop from the universe", async () => {
+    it('when the last pinner deletes, bytes drop from the universe', async () => {
       const world = createFakeWorld()
       const alice = new FakeSdk('alice', world)
       const bob = new FakeSdk('bob', world)
