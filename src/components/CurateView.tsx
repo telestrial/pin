@@ -268,39 +268,27 @@ function Diagnostics({ status }: { status: CuratorStatus }) {
         )}
         <p className="text-xs text-neutral-400 leading-relaxed">
           Your resolvable did:dht identity, derived from your recovery phrase —
-          no registry, no company. The repo's signing key below is carried in
-          its document as a verification method.
+          no registry, no company. Its document points at your iroh node and the
+          repo namespace peers sync from.
         </p>
       </div>
 
       <div className="space-y-1 pt-1 border-t border-neutral-100">
         <div className="text-xs font-medium text-neutral-500 pt-3 flex items-center justify-between gap-2">
           <span>Local repo</span>
-          {status.repoDid && !status.repoError && (
+          {status.docsNamespace && (
             <span className="font-normal text-neutral-400">
-              {status.repoReopened ? 'reopened from disk' : 'created fresh'}
+              {status.docsReopened ? 'reopened from disk' : 'created fresh'}
             </span>
           )}
         </div>
-        {status.repoError ? (
-          <code className="text-xs font-mono text-red-700 break-all block">
-            {status.repoError}
-          </code>
-        ) : status.repoDid ? (
-          <>
-            <div className="flex items-start gap-2">
-              <code className="text-xs font-mono text-neutral-700 break-all flex-1">
-                {status.repoDid}
-              </code>
-              <CopyButton value={status.repoDid} label="Repo DID copied" />
-            </div>
-            <div className="text-xs text-neutral-400 break-all">
-              root commit{' '}
-              <span className="font-mono text-neutral-500">
-                {status.repoRoot}
-              </span>
-            </div>
-          </>
+        {status.docsNamespace ? (
+          <div className="flex items-start gap-2">
+            <code className="text-xs font-mono text-neutral-700 break-all flex-1">
+              {status.docsNamespace}
+            </code>
+            <CopyButton value={status.docsNamespace} label="Namespace copied" />
+          </div>
         ) : (
           <div className="text-xs text-neutral-400">—</div>
         )}

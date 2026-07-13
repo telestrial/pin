@@ -47,22 +47,17 @@ pub struct CuratorStatus {
     pub other_addrs: Vec<String>,
     /// Seconds since the endpoint bound, if running.
     pub uptime_secs: Option<u64>,
-    /// The local repo's did:key — derived from the recovery phrase, so stable
-    /// across restarts and recoverable on any device.
-    pub repo_did: Option<String>,
-    /// The keeper's resolvable `did:dht` identity (ed25519, same phrase). The
-    /// `repo_did` above is carried in this DID's document as a verification method.
+    /// The keeper's resolvable `did:dht` identity (ed25519, derived from the
+    /// recovery phrase — stable across restarts, recoverable on any device).
     pub did_dht: Option<String>,
     /// Result of publishing the did:dht document to Mainline DHT + self-resolve
-    /// ("ok …" or "failed: …"); None if not attempted (e.g. repo down).
+    /// ("ok …" or "failed: …"); None if not attempted (e.g. docs engine down).
     pub did_dht_published: Option<String>,
-    /// The local repo's signed root commit CID.
-    pub repo_root: Option<String>,
-    /// Whether the repo was reopened from an on-disk CAR (true) or created fresh
-    /// this run (false) — the visible proof that content survives a restart.
-    pub repo_reopened: bool,
-    /// The repo engine error, if it failed to come up (iroh still runs).
-    pub repo_error: Option<String>,
+    /// The iroh-docs replica namespace ID (the local repo's identifier).
+    pub docs_namespace: Option<String>,
+    /// Whether the docs store was reopened from disk (true) or created fresh this
+    /// run (false) — the visible proof that content survives a restart.
+    pub docs_reopened: bool,
     /// Whether the RPC server (ALPN pin-keeper/0) is accepting connections.
     pub rpc_serving: bool,
     /// Result of the one-shot RPC self-test: "ok …" or an error string.
@@ -90,12 +85,10 @@ struct Diag {
     relays: Vec<String>,
     direct_addrs: Vec<String>,
     other_addrs: Vec<String>,
-    repo_did: Option<String>,
     did_dht: Option<String>,
     did_dht_published: Option<String>,
-    repo_root: Option<String>,
-    repo_reopened: bool,
-    repo_error: Option<String>,
+    docs_namespace: Option<String>,
+    docs_reopened: bool,
     rpc_serving: bool,
     rpc_selftest: Option<String>,
     hey_queued: u64,
@@ -116,12 +109,10 @@ impl Diag {
             relays: Vec::new(),
             direct_addrs: Vec::new(),
             other_addrs: Vec::new(),
-            repo_did: None,
             did_dht: None,
             did_dht_published: None,
-            repo_root: None,
-            repo_reopened: false,
-            repo_error: None,
+            docs_namespace: None,
+            docs_reopened: false,
             rpc_serving: false,
             rpc_selftest: None,
             hey_queued: 0,
@@ -161,12 +152,10 @@ impl CuratorState {
                     direct_addrs: d.direct_addrs.clone(),
                     other_addrs: d.other_addrs.clone(),
                     uptime_secs: d.started.map(|t| t.elapsed().as_secs()),
-                    repo_did: d.repo_did.clone(),
                     did_dht: d.did_dht.clone(),
                     did_dht_published: d.did_dht_published.clone(),
-                    repo_root: d.repo_root.clone(),
-                    repo_reopened: d.repo_reopened,
-                    repo_error: d.repo_error.clone(),
+                    docs_namespace: d.docs_namespace.clone(),
+                    docs_reopened: d.docs_reopened,
                     rpc_serving: d.rpc_serving,
                     rpc_selftest: d.rpc_selftest.clone(),
                     hey_queued: d.hey_queued,
@@ -186,12 +175,10 @@ impl CuratorState {
                 direct_addrs: Vec::new(),
                 other_addrs: Vec::new(),
                 uptime_secs: None,
-                repo_did: None,
                 did_dht: None,
                 did_dht_published: None,
-                repo_root: None,
-                repo_reopened: false,
-                repo_error: None,
+                docs_namespace: None,
+                docs_reopened: false,
                 rpc_serving: false,
                 rpc_selftest: None,
                 hey_queued: 0,
@@ -397,14 +384,11 @@ async fn curator_loop(
                 None
             }
         };
-    // Feed the repo diagnostics from the docs engine. (These fields keep their
-    // atrium-era names — repo_root/repo_reopened — for now; a rename to docs_* is a
-    // follow-up. repo_root carries the doc namespace, repo_reopened whether it
-    // persisted.)
+    // Feed the repo diagnostics from the docs engine.
     if let Some(engine) = doc_engine.as_ref() {
         let mut d = diag.lock().unwrap();
-        d.repo_root = Some(engine.namespace_id.clone());
-        d.repo_reopened = engine.reopened;
+        d.docs_namespace = Some(engine.namespace_id.clone());
+        d.docs_reopened = engine.reopened;
     }
 
     // Serve the /hey inbox over iroh, plus the iroh-docs / blobs / gossip protocols

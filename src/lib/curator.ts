@@ -25,21 +25,17 @@ export type CuratorReport = {
   otherAddrs: string[]
   // Seconds since the endpoint bound.
   uptimeSecs: number | null
-  // The local repo's did:key (stable across restarts).
-  repoDid: string | null
-  // The keeper's resolvable did:dht identity (ed25519, same phrase). repoDid is
-  // carried in this DID's document as a verification method.
+  // The keeper's resolvable did:dht identity (ed25519, derived from the
+  // recovery phrase — stable across restarts, recoverable on any device).
   didDht: string | null
   // Result of publishing the did:dht document to Mainline DHT + self-resolve
   // ("ok …" or "failed: …"); null if not attempted.
   didDhtPublished: string | null
-  // The local repo's signed root commit CID.
-  repoRoot: string | null
-  // Whether the repo was reopened from an on-disk CAR (true) or created fresh
-  // this run (false) — proof that content survives a restart.
-  repoReopened: boolean
-  // The repo engine error, if it failed to come up (iroh still runs).
-  repoError: string | null
+  // The iroh-docs replica namespace ID (the local repo's identifier).
+  docsNamespace: string | null
+  // Whether the docs store was reopened from disk (true) or created fresh this
+  // run (false) — proof that content survives a restart.
+  docsReopened: boolean
   // Whether the RPC server (ALPN pin-keeper/0) is accepting connections.
   rpcServing: boolean
   // Result of the one-shot RPC self-test ("ok …" or an error string).
@@ -72,12 +68,10 @@ const OFFLINE: CuratorReport = {
   directAddrs: [],
   otherAddrs: [],
   uptimeSecs: null,
-  repoDid: null,
   didDht: null,
   didDhtPublished: null,
-  repoRoot: null,
-  repoReopened: false,
-  repoError: null,
+  docsNamespace: null,
+  docsReopened: false,
   rpcServing: false,
   rpcSelftest: null,
   heyQueued: 0,
