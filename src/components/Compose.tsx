@@ -242,9 +242,8 @@ export function Compose({
         target.objectID &&
         originalAttachmentObjectIDs.has(target.objectID)
       ) {
-        setRemovedOriginalObjectIDs((r) =>
-          r.includes(target.objectID!) ? r : [...r, target.objectID!],
-        )
+        const oid = target.objectID
+        setRemovedOriginalObjectIDs((r) => (r.includes(oid) ? r : [...r, oid]))
       }
       return prev.filter((a) => a.tempID !== tempID)
     })
@@ -310,7 +309,8 @@ export function Compose({
       setPickerIndex((i) => (i - 1 + filtered.length) % filtered.length)
     } else if (e.key === 'Enter' || e.key === 'Tab') {
       e.preventDefault()
-      selectMention(filtered[Math.min(pickerIndex, filtered.length - 1)]!)
+      const pick = filtered[Math.min(pickerIndex, filtered.length - 1)]
+      if (pick) selectMention(pick)
     }
   }
 
@@ -374,7 +374,7 @@ export function Compose({
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     if (!sdk || !canSubmit) return
-    if (!agent || !agent.did) {
+    if (!agent?.did) {
       setError('Bluesky session not active. Cancel and try again to sign in.')
       return
     }
@@ -534,6 +534,7 @@ export function Compose({
           )}
         </div>
 
+        {/* biome-ignore lint/a11y/noStaticElementInteractions: textarea inside handles keyboard */}
         {/* biome-ignore lint/a11y/useKeyWithClickEvents: textarea inside handles keyboard */}
         <div className="flex-1 min-w-0" onClick={handleAttachZoneClick}>
           <textarea
@@ -660,7 +661,6 @@ function MentionPicker({
   }
   return (
     <div
-      // biome-ignore lint/a11y/useSemanticElements: listbox of buttons; a native <select> can't render these rows
       role="listbox"
       className="mt-2 border border-neutral-200 rounded-lg bg-white py-1 max-h-64 overflow-y-auto shadow-sm"
     >

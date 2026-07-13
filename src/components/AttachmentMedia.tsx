@@ -45,6 +45,7 @@ export function MediaPreview({
       <div className="p-3 space-y-1.5">
         <p className="text-xs text-neutral-700 truncate">{filename}</p>
         {previewURL ? (
+          // biome-ignore lint/a11y/useMediaCaption: user-uploaded audio has no caption track to provide
           <audio
             src={previewURL}
             controls
@@ -62,6 +63,7 @@ export function MediaPreview({
       return <div className="w-full h-48 bg-neutral-100 animate-pulse" />
     }
     return (
+      // biome-ignore lint/a11y/useMediaCaption: user-uploaded video has no caption track to provide
       <video
         src={previewURL}
         controls
@@ -209,7 +211,6 @@ export function AttachmentGrid({
     >
       {visible.map((a, i) => (
         <AttachmentTile
-          // biome-ignore lint/suspicious/noArrayIndexKey: attachments is a stable manifest array
           key={i}
           attachment={a}
           channelID={channelID}

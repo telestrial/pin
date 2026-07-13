@@ -62,13 +62,12 @@ export function ReadVideo({
           ) : videoURL === null ? (
             <p className="text-neutral-500 text-sm">Loading…</p>
           ) : (
+            // biome-ignore lint/a11y/useMediaCaption: user-uploaded video has no caption track to provide
             <video
               src={videoURL}
               controls
               className="w-full rounded-lg border border-neutral-200 bg-black"
-            >
-              <track kind="captions" />
-            </video>
+            />
           )}
         </article>
         {rightSidebar}

@@ -48,6 +48,7 @@ body {
 [data-theme="corners"] *,
 [data-theme="corners"] *::before,
 [data-theme="corners"] *::after {
+  /* biome-ignore lint/complexity/noImportantStyles: must override every Tailwind rounded-* utility globally */
   border-radius: 0 !important;
 }
 [data-theme="corners"] *::-webkit-scrollbar-thumb {
@@ -231,5 +232,6 @@ body[data-armed-link="true"] * {
   cursor:
     url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='22' height='22' viewBox='0 0 22 22'><path d='M2,1 L2,17 L6.5,13 L9.5,19 L12.5,18 L9.5,12 L15,12 Z' fill='%2316a34a' stroke='white' stroke-width='1' stroke-linejoin='round'/></svg>")
     2 1,
+    /* biome-ignore lint/complexity/noImportantStyles: armed-link cursor must win over every element's own cursor */
     pointer !important;
 }

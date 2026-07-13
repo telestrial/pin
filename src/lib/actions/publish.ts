@@ -144,8 +144,11 @@ export async function runPublish(
     // pinStore dedups library pins by URL, so a resumed pin is idempotent.
     await pin.pin(sdk, { item: itemRef, channel: LIBRARY_CHANNEL })
   } else {
-    // Non-null per the agent guard above for channel destinations.
-    const agent = auth.atprotoAgent!
+    // Guaranteed by the channel-destination agent guard above; re-narrowed
+    // here so the type holds without a non-null assertion.
+    const agent = auth.atprotoAgent
+    if (!agent)
+      throw new SilentActionError('Sign in to Bluesky to publish to a channel')
     const alreadyPublished = new Set(action.ledger.publishedChannelIDs ?? [])
     // Old-version bytes an edit orphans (same body objectID across channels →
     // deduped before journaling).

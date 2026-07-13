@@ -202,10 +202,11 @@ function PostBody({
   return (
     <>
       {hasBody && (
+        // biome-ignore lint/a11y/noStaticElementInteractions: click delegates to nested <a> mentions, which are natively interactive
+        // biome-ignore lint/a11y/useKeyWithClickEvents: delegates to nested <a> mentions, which are natively keyboard-accessible
         <div
           className="markdown wrap-break-word text-sm text-neutral-900"
           onClick={handleClick}
-          // biome-ignore lint/a11y/useKeyWithClickEvents: delegates to nested <a> mentions, which are natively keyboard-accessible
           // biome-ignore lint/security/noDangerouslySetInnerHtml: HTML is sanitized via DOMPurify
           dangerouslySetInnerHTML={{ __html: html }}
         />

@@ -170,10 +170,11 @@ export function ReadText({
           ) : html === null ? (
             <p className="text-neutral-500 text-sm">Loading…</p>
           ) : (
+            // biome-ignore lint/a11y/noStaticElementInteractions: click delegates to nested <a> mentions, which are natively interactive
+            // biome-ignore lint/a11y/useKeyWithClickEvents: delegates to nested <a> mentions, which are natively keyboard-accessible
             <div
               className="markdown wrap-break-word text-base sm:text-lg"
               onClick={handleBodyClick}
-              // biome-ignore lint/a11y/useKeyWithClickEvents: delegates to nested <a> mentions, which are natively keyboard-accessible
               // biome-ignore lint/security/noDangerouslySetInnerHtml: HTML is sanitized via DOMPurify
               dangerouslySetInnerHTML={{ __html: html }}
             />

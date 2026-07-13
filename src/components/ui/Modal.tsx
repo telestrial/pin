@@ -45,7 +45,6 @@ export function Modal({
         onClick={onClose}
         className="absolute inset-0 bg-black/40 backdrop-blur-sm cursor-default"
       />
-      {/* biome-ignore lint/a11y/noNoninteractiveTabindex: the dialog card is focused on open so keyboard events land inside the modal */}
       <div
         ref={cardRef}
         role="dialog"

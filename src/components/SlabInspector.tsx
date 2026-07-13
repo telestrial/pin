@@ -97,6 +97,7 @@ export function SlabInspector() {
   const [loading, setLoading] = useState(false)
   const [refreshTick, setRefreshTick] = useState(0)
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: refreshTick is a manual-refresh trigger — bumping it re-runs the fetch
   useEffect(() => {
     if (!sdk) return
     let cancelled = false

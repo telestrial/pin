@@ -155,7 +155,7 @@ export function useRepackRunner() {
           const scope = await buildScope(sdk)
           if (scope.length === 0) break
 
-          let result
+          let result: Awaited<ReturnType<typeof runRepackBatch>>
           try {
             result = await runRepackBatch(sdk, auth.atprotoAgent, scope)
           } catch (e) {

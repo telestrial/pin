@@ -62,9 +62,8 @@ export function ReadAudio({
           ) : audioURL === null ? (
             <p className="text-neutral-500 text-sm">Loading…</p>
           ) : (
-            <audio src={audioURL} controls className="w-full">
-              <track kind="captions" />
-            </audio>
+            // biome-ignore lint/a11y/useMediaCaption: user-uploaded audio has no caption track to provide
+            <audio src={audioURL} controls className="w-full" />
           )}
         </article>
         {rightSidebar}
