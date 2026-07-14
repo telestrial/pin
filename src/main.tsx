@@ -24,6 +24,7 @@ if (import.meta.env.DEV) {
     __pinMirrorWrite?: (text: string) => Promise<string>
     __pinMirrorRead?: () => Promise<string>
     __pinSettingsDocsCheck?: () => Promise<string>
+    __pinDocsList?: () => Promise<string>
   }
   g.__pinMirrorWrite = async (text: string) => {
     const { sdk, hex } = await session()
@@ -63,6 +64,19 @@ if (import.meta.env.DEV) {
       await decryptSettings(key, new TextDecoder().decode(raw)),
     )
     return `hydrated ${n}; settings/self: ${s.myChannels?.length ?? 0} channels, ${s.subscriptions?.length ?? 0} subs, theme=${s.theme}`
+  }
+  // Phase C inc.2 proof: what's in the doc after hydrating from Sia? Lists every
+  // record key (settings/self, channel/<id>, ...) — proves channels are mirrored
+  // + durable across a reload.
+  g.__pinDocsList = async () => {
+    const { sdk, hex } = await session()
+    if (!sdk || !hex) return 'not signed in'
+    const { openDocs, listAll } = await import('./lib/docs')
+    const { hydrateFromSia } = await import('./lib/docsMirror')
+    await openDocs(hex)
+    const n = await hydrateFromSia(sdk, hexToBytes(hex))
+    const keys = await listAll()
+    return `hydrated ${n} record(s):\n${keys.map((k) => `  ${k.collection}/${k.rkey}`).join('\n')}`
   }
 }
 

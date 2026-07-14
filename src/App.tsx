@@ -11,6 +11,7 @@ import {
   useActionQueueHydration,
   useActionRunner,
 } from './lib/hooks/useActionRunner'
+import { useChannelDocsMirror } from './lib/hooks/useChannelDocsMirror'
 import { useGhostReconciliation } from './lib/hooks/useGhostReconciliation'
 import { useHandleFollowReconciliation } from './lib/hooks/useHandleFollowReconciliation'
 import { useJetstream } from './lib/hooks/useJetstream'
@@ -69,6 +70,7 @@ export default function App() {
   useRepackRunner()
   useSettingsSync()
   useSettingsDocsMirror()
+  useChannelDocsMirror()
   useGhostReconciliation()
   useHandleFollowReconciliation()
 
