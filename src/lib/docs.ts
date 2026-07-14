@@ -10,6 +10,7 @@ import initWasm, {
   open as coreOpen,
   delete_record,
   get_record,
+  list_all,
   list_records,
   put_record,
 } from '../../crates/pin-core/pkg/pin_core.js'
@@ -55,6 +56,19 @@ export async function deleteRecord(
 export async function listRecords(collection: string): Promise<string[]> {
   await ensureReady()
   return (await list_records(collection)) as string[]
+}
+
+/** Every record across all collections, as {collection, rkey} pairs. Used to
+ *  snapshot the whole doc (docsMirror). */
+export async function listAll(): Promise<
+  Array<{ collection: string; rkey: string }>
+> {
+  await ensureReady()
+  const keys = (await list_all()) as string[]
+  return keys.map((key) => {
+    const i = key.indexOf('/')
+    return { collection: key.slice(0, i), rkey: key.slice(i + 1) }
+  })
 }
 
 /** Dev-only Vite⨉wasm proof: open + put + get + list + delete roundtrip through the

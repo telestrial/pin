@@ -131,12 +131,13 @@ export const SETTINGS_PAD_SIZE = 128 * 1024
 const SETTINGS_LENGTH_HEADER_BYTES = 4
 const SETTINGS_KEY_INFO = 'pin:settings:v1'
 
-// HKDF-SHA256 over the raw AppKey bytes (domain-separated from the ed25519
-// signing use via `info`). Deterministic, so it's re-derivable from the Sia
-// recovery phrase alone after a localStorage wipe — the recovery path for
-// settings.
-export async function deriveSettingsKey(
+// HKDF-SHA256 over the raw AppKey bytes, domain-separated by `info`. Deterministic,
+// so every derived subkey is re-derivable from the Sia recovery phrase alone after
+// a localStorage wipe — the recovery path. (Domain-separated from the ed25519
+// signing use, which lives in the keeper.)
+async function deriveAppSubkey(
   appKeyBytes: Uint8Array,
+  info: string,
 ): Promise<Uint8Array> {
   const hkdfKey = await crypto.subtle.importKey(
     'raw',
@@ -150,12 +151,28 @@ export async function deriveSettingsKey(
       name: 'HKDF',
       hash: 'SHA-256',
       salt: new Uint8Array(0),
-      info: new TextEncoder().encode(SETTINGS_KEY_INFO),
+      info: new TextEncoder().encode(info),
     },
     hkdfKey,
     KEY_BYTES * 8,
   )
   return new Uint8Array(bits)
+}
+
+export async function deriveSettingsKey(
+  appKeyBytes: Uint8Array,
+): Promise<Uint8Array> {
+  return deriveAppSubkey(appKeyBytes, SETTINGS_KEY_INFO)
+}
+
+// docsMirror snapshot key — the whole-doc Sia snapshot is encrypted under this
+// (its record keys would otherwise leak channel/collection structure). Same
+// derivation family as settings, different domain. Never shared.
+const SNAPSHOT_KEY_INFO = 'pin:docsnapshot:v1'
+export async function deriveSnapshotKey(
+  appKeyBytes: Uint8Array,
+): Promise<Uint8Array> {
+  return deriveAppSubkey(appKeyBytes, SNAPSHOT_KEY_INFO)
 }
 
 export async function encryptSettings(
