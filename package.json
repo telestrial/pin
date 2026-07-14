@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "wasm": "bash scripts/build-wasm.sh",
     "preview": "vite preview",
     "check": "biome check .",
     "test": "bun run test:unit && bun run test:int && bun run test:e2e",

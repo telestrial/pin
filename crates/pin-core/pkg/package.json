@@ -1,0 +1,15 @@
+{
+  "name": "pin-core",
+  "type": "module",
+  "version": "0.1.0",
+  "files": [
+    "pin_core_bg.wasm",
+    "pin_core.js",
+    "pin_core.d.ts"
+  ],
+  "main": "pin_core.js",
+  "types": "pin_core.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}

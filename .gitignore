@@ -25,5 +25,5 @@ SDK.md
 
 # Rust / Cargo (repo-root workspace)
 /target/
-# wasm-pack output for crates (generated)
-crates/*/pkg/
+# crates/pin-core/pkg (wasm-pack output) is intentionally committed so the deploy
+# (no Rust toolchain) can build the frontend — rebuild it with `bun run wasm`.
