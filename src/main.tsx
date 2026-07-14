@@ -23,6 +23,7 @@ if (import.meta.env.DEV) {
   const g = window as unknown as {
     __pinMirrorWrite?: (text: string) => Promise<string>
     __pinMirrorRead?: () => Promise<string>
+    __pinSettingsDocsCheck?: () => Promise<string>
   }
   g.__pinMirrorWrite = async (text: string) => {
     const { sdk, hex } = await session()
@@ -43,6 +44,25 @@ if (import.meta.env.DEV) {
     const n = await hydrateFromSia(sdk, hexToBytes(hex))
     const v = await getRecord('probe', 'persist')
     return `hydrated ${n} record(s); probe/persist = ${v ? new TextDecoder().decode(v) : 'MISSING'}`
+  }
+  // Phase C inc.1 proof: are settings dual-written into iroh-docs + durable via
+  // Sia? Change a setting (subscribe / theme), wait ~2s, RELOAD, run this — it
+  // hydrates from Sia and reads settings/self back out of the doc.
+  g.__pinSettingsDocsCheck = async () => {
+    const { sdk, hex } = await session()
+    if (!sdk || !hex) return 'not signed in'
+    const { openDocs, getRecord } = await import('./lib/docs')
+    const { hydrateFromSia } = await import('./lib/docsMirror')
+    const { deriveSettingsKey, decryptSettings } = await import('./core/crypto')
+    await openDocs(hex)
+    const n = await hydrateFromSia(sdk, hexToBytes(hex))
+    const raw = await getRecord('settings', 'self')
+    if (!raw) return `hydrated ${n} record(s); no settings/self in the doc yet`
+    const key = await deriveSettingsKey(hexToBytes(hex))
+    const s = JSON.parse(
+      await decryptSettings(key, new TextDecoder().decode(raw)),
+    )
+    return `hydrated ${n}; settings/self: ${s.myChannels?.length ?? 0} channels, ${s.subscriptions?.length ?? 0} subs, theme=${s.theme}`
   }
 }
 

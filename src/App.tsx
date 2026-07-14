@@ -15,6 +15,7 @@ import { useGhostReconciliation } from './lib/hooks/useGhostReconciliation'
 import { useHandleFollowReconciliation } from './lib/hooks/useHandleFollowReconciliation'
 import { useJetstream } from './lib/hooks/useJetstream'
 import { useRepackRunner } from './lib/hooks/useRepackRunner'
+import { useSettingsDocsMirror } from './lib/hooks/useSettingsDocsMirror'
 import { useSettingsSync } from './lib/hooks/useSettingsSync'
 import { useAuthStore } from './stores/auth'
 import { useComposeStore } from './stores/compose'
@@ -67,6 +68,7 @@ export default function App() {
   useActionRunner()
   useRepackRunner()
   useSettingsSync()
+  useSettingsDocsMirror()
   useGhostReconciliation()
   useHandleFollowReconciliation()
 
