@@ -1,0 +1,9 @@
+# Repo-root Cargo workspace (2026-07-14) — introduced for the atproto->iroh-docs
+# jump. `crates/pin-core` is the shared doc engine, compiled two ways: native (the
+# desktop keeper, via src-tauri) and wasm32 (the browser, via wasm-pack). The v3
+# MSRV-aware resolver + the 1.82 floor live here now (moved up from src-tauri) —
+# needed so the iroh -> netwatch -> wmi chain resolves a consistent windows-core
+# alongside Tauri's windows deps.
+[workspace]
+resolver = "3"
+members = ["src-tauri", "crates/pin-core"]

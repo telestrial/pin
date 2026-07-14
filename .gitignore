@@ -22,3 +22,8 @@ playwright/.cache/
 # Planning docs — local-only, not for public repo
 CLAUDE.md
 SDK.md
+
+# Rust / Cargo (repo-root workspace)
+/target/
+# wasm-pack output for crates (generated)
+crates/*/pkg/

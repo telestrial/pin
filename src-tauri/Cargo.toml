@@ -1,9 +1,7 @@
-# Standalone workspace so we can opt into the v3 (MSRV-aware) dependency
-# resolver — it picks a consistent windows-core for the iroh→netwatch→wmi chain
-# alongside Tauri's windows deps, which resolver 2 splits and fails to compile.
-[workspace]
-resolver = "3"
-
+# Member of the repo-root Cargo workspace (../Cargo.toml). The v3 MSRV-aware
+# resolver + the 1.82 floor live at the workspace root now — needed for the
+# iroh→netwatch→wmi chain to resolve a consistent windows-core alongside Tauri's
+# windows deps (resolver 2 splits it and fails to compile).
 [package]
 name = "app"
 version = "0.1.0"
