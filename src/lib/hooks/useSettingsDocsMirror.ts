@@ -5,21 +5,52 @@ import { useAuthStore } from '../../stores/auth'
 import { openDocs, putRecord } from '../docs'
 import { snapshotToSia } from '../docsMirror'
 
-// Phase C, increment 1 — DUAL-WRITE settings into iroh-docs + Sia mirror,
-// alongside the atproto settings record (which stays the source of truth). This
-// hook is deliberately SEPARATE from useSettingsSync and touches nothing it does:
-// it just shadows the same store slice into the doc engine so iroh-docs gets
-// populated for real, end to end, at zero risk to the working atproto path. Later
-// increments flip reads onto the doc, then drop the atproto write.
+// Phase C — mirror the user's settings into iroh-docs + Sia, alongside the atproto
+// settings record. Increment 1 made this a best-effort shadow; increment 4(a)
+// HARDENS it to atproto-write reliability, because it's about to become a (or the)
+// source of truth once the atproto write is dropped in 4(b).
 //
-// It runs for anyone with a Sia AppKey — including just-reading users (no atproto
-// session), who thereby get durable settings via Sia they don't have today.
+// Reliability model: a localStorage FINGERPRINT records the settings content last
+// SUCCESSFULLY mirrored. The mirror only writes when the current content differs
+// from the fingerprint, and only advances the fingerprint on success. So:
+//   - a failed write leaves the fingerprint stale -> it retries on the next change
+//     AND on the next boot (self-healing boot catch-up), so no change is silently
+//     lost even without an atproto backstop;
+//   - a matching fingerprint short-circuits BEFORE openDocs, so pin-core's wasm +
+//     relay stay unloaded when there's nothing new to mirror (lazy cost preserved).
 //
-// Cost is deferred: pin-core's wasm + the iroh relay bind happen lazily on the
-// FIRST settings change (openDocs inside the mirror), so a session that never
-// touches settings never loads any of it.
+// atproto is still the source of truth through 4(a) — this is purely making the
+// doc/Sia write trustworthy before 4(b) relies on it.
 
 const DEBOUNCE_MS = 2000
+const FINGERPRINT_KEY = 'pin:docsnapshot:settingsFingerprint'
+
+function settingsFingerprint(): string {
+  const s = useAuthStore.getState()
+  return JSON.stringify({
+    myChannels: s.myChannels,
+    subscriptions: s.subscriptions,
+    dismissedAutoWatch: s.dismissedAutoWatch,
+    theme: s.theme,
+  })
+}
+
+function readFingerprint(): string | null {
+  try {
+    return localStorage.getItem(FINGERPRINT_KEY)
+  } catch {
+    return null
+  }
+}
+
+function writeFingerprint(fp: string): void {
+  try {
+    localStorage.setItem(FINGERPRINT_KEY, fp)
+  } catch {
+    // localStorage unavailable — the fingerprint is an optimization; without it
+    // the mirror just runs every boot/change (correct, only less cheap).
+  }
+}
 
 export function useSettingsDocsMirror() {
   const sdk = useAuthStore((s) => s.sdk)
@@ -43,6 +74,9 @@ export function useSettingsDocsMirror() {
     }
 
     const mirror = async () => {
+      const fp = settingsFingerprint()
+      // Already mirrored this exact content — skip before touching pin-core.
+      if (fp === readFingerprint()) return
       saving = true
       try {
         await ensureOpen()
@@ -60,15 +94,16 @@ export function useSettingsDocsMirror() {
         const enc = await encryptSettings(key, JSON.stringify(settings))
         await putRecord('settings', 'self', new TextEncoder().encode(enc))
         await snapshotToSia(sdk, appKeyBytes)
+        // Only advance the fingerprint on full success — a failure leaves it
+        // stale so the next change/boot retries (no silent loss).
+        writeFingerprint(fp)
       } catch (e) {
-        // Best-effort: atproto is still the source of truth. A failed mirror
-        // just leaves the doc/Sia copy behind; the next change re-mirrors.
-        console.warn('settings docs-mirror failed:', e)
+        console.warn('settings docs-mirror failed (will retry):', e)
       } finally {
         saving = false
         if (pending && !cancelled) {
           pending = false
-          void mirror()
+          schedule()
         }
       }
     }
@@ -92,6 +127,11 @@ export function useSettingsDocsMirror() {
       }
       schedule()
     })
+
+    // Boot catch-up: if local settings differ from what we last mirrored (a
+    // failed write last session, or first run), re-mirror. mirror() self-skips
+    // when the fingerprint already matches, so this is free when up to date.
+    if (settingsFingerprint() !== readFingerprint()) schedule()
 
     return () => {
       cancelled = true
