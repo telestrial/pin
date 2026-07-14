@@ -85,7 +85,9 @@ type AuthState = {
     subscriptions: SubscriptionRef[],
     dismissedAutoWatch: string[],
     theme: ThemeMode,
-    cid: string,
+    // null when the freshest settings came from the Sia snapshot with no atproto
+    // record (no CID to CAS against — the next save is a fresh create).
+    cid: string | null,
   ) => void
   setSettingsObjectID: (id: string) => void
   setSettingsRecordCid: (cid: string | null) => void

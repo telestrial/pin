@@ -1,5 +1,6 @@
+import type { Sdk } from '@siafoundation/sia-storage'
 import { useEffect, useRef } from 'react'
-import { deriveSettingsKey } from '../../core/crypto'
+import { decryptSettings, deriveSettingsKey } from '../../core/crypto'
 import { type DispatchSettings, SETTINGS_VERSION } from '../../core/settings'
 import {
   loadSettingsRecord,
@@ -7,6 +8,7 @@ import {
 } from '../../core/settingsRecord'
 import { useAuthStore } from '../../stores/auth'
 import { useStorageActivityStore } from '../../stores/storageActivity'
+import { readRecordFromSnapshot } from '../docsMirror'
 
 // Wedge-guard: if an authenticated user's atproto agent never restores (OAuth
 // failure) on a fresh origin with no cached channels, don't pin the UI on the
@@ -95,17 +97,28 @@ export function useSettingsSync() {
           return
         }
 
-        const result = await loadSettingsRecord(agent, key)
+        // Read atproto (still the write target) and the Sia snapshot (the doc's
+        // durable projection) in parallel; take whichever settings are fresher by
+        // updatedAt. During dual-write atproto is awaited (fresher) so it keeps
+        // winning — zero behavior change; the snapshot takes over only when
+        // atproto is absent or older (i.e. once its write is dropped). The
+        // snapshot read is cheap — a Sia download + decrypt, no pin-core engine.
+        const appKeyBytes = Uint8Array.fromHex(storedKeyHex)
+        const [atp, snap] = await Promise.all([
+          loadSettingsRecord(agent, key).catch(() => null),
+          readSettingsFromSnapshot(sdk, appKeyBytes, key).catch(() => null),
+        ])
         if (cancelled) return
-        if (result) {
+        const chosen = freshestSettings(atp?.settings ?? null, snap)
+        if (chosen) {
           useAuthStore
             .getState()
             .hydrateSettings(
-              result.settings.myChannels,
-              result.settings.subscriptions,
-              result.settings.dismissedAutoWatch ?? [],
-              result.settings.theme ?? useAuthStore.getState().theme,
-              result.cid,
+              chosen.myChannels,
+              chosen.subscriptions,
+              chosen.dismissedAutoWatch ?? [],
+              chosen.theme ?? useAuthStore.getState().theme,
+              atp?.cid ?? null,
             )
         } else {
           // Nothing anywhere — first user mutation creates the record.
@@ -238,6 +251,36 @@ export function useSettingsSync() {
       unsub()
     }
   }, [agent, settingsLoaded])
+}
+
+// Read + decrypt settings/self straight from the latest Sia snapshot (the doc's
+// durable projection), without the pin-core engine. Returns null if there's no
+// snapshot, no settings entry, or a version mismatch.
+async function readSettingsFromSnapshot(
+  sdk: Sdk,
+  appKeyBytes: Uint8Array,
+  key: Uint8Array,
+): Promise<DispatchSettings | null> {
+  const bytes = await readRecordFromSnapshot(
+    sdk,
+    appKeyBytes,
+    'settings',
+    'self',
+  )
+  if (!bytes) return null
+  const json = await decryptSettings(key, new TextDecoder().decode(bytes))
+  const s = JSON.parse(json) as DispatchSettings
+  return s.version === SETTINGS_VERSION ? s : null
+}
+
+// The fresher of two settings by updatedAt (ISO-8601, lexicographic = chrono).
+function freshestSettings(
+  a: DispatchSettings | null,
+  b: DispatchSettings | null,
+): DispatchSettings | null {
+  if (!a) return b
+  if (!b) return a
+  return (a.updatedAt ?? '') >= (b.updatedAt ?? '') ? a : b
 }
 
 // Change-detection fingerprint of the synced slice. Takes the whole store

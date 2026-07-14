@@ -25,6 +25,7 @@ if (import.meta.env.DEV) {
     __pinMirrorRead?: () => Promise<string>
     __pinSettingsDocsCheck?: () => Promise<string>
     __pinDocsList?: () => Promise<string>
+    __pinSettingsFromSnapshot?: () => Promise<string>
   }
   g.__pinMirrorWrite = async (text: string) => {
     const { sdk, hex } = await session()
@@ -77,6 +78,28 @@ if (import.meta.env.DEV) {
     const n = await hydrateFromSia(sdk, hexToBytes(hex))
     const keys = await listAll()
     return `hydrated ${n} record(s):\n${keys.map((k) => `  ${k.collection}/${k.rkey}`).join('\n')}`
+  }
+  // Phase C inc.3 proof: exercises the EXACT snapshot-read path the settings load
+  // uses (readRecordFromSnapshot + decryptSettings, no pin-core). freshest-wins
+  // means atproto usually wins on load, so this is how we confirm the snapshot
+  // source itself is valid before inc.4 drops atproto and relies on it.
+  g.__pinSettingsFromSnapshot = async () => {
+    const { sdk, hex } = await session()
+    if (!sdk || !hex) return 'not signed in'
+    const { readRecordFromSnapshot } = await import('./lib/docsMirror')
+    const { deriveSettingsKey, decryptSettings } = await import('./core/crypto')
+    const bytes = await readRecordFromSnapshot(
+      sdk,
+      hexToBytes(hex),
+      'settings',
+      'self',
+    )
+    if (!bytes) return 'no settings/self in the Sia snapshot'
+    const key = await deriveSettingsKey(hexToBytes(hex))
+    const s = JSON.parse(
+      await decryptSettings(key, new TextDecoder().decode(bytes)),
+    )
+    return `snapshot settings: ${s.myChannels?.length ?? 0} channels, ${s.subscriptions?.length ?? 0} subs, theme=${s.theme}, updatedAt=${s.updatedAt}`
   }
 }
 
