@@ -191,3 +191,17 @@ pub async fn list_records(collection: String) -> Result<JsValue, JsValue> {
     }
     Ok(arr.into())
 }
+
+/// List every record's full key (`collection/rkey`) across all collections.
+/// Returns a JS array of strings. Used to snapshot the whole doc (docsMirror).
+#[wasm_bindgen]
+pub async fn list_all() -> Result<JsValue, JsValue> {
+    let eng = engine()?;
+    let mut stream = Box::pin(eng.doc.get_many(Query::all().build()).await.map_err(je)?);
+    let arr = js_sys::Array::new();
+    while let Some(res) = stream.next().await {
+        let entry = res.map_err(je)?;
+        arr.push(&JsValue::from_str(&String::from_utf8_lossy(entry.key())));
+    }
+    Ok(arr.into())
+}

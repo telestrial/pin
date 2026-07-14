@@ -47,6 +47,12 @@ export function delete_record(collection: string, rkey: string): Promise<void>;
 export function get_record(collection: string, rkey: string): Promise<Uint8Array | undefined>;
 
 /**
+ * List every record's full key (`collection/rkey`) across all collections.
+ * Returns a JS array of strings. Used to snapshot the whole doc (docsMirror).
+ */
+export function list_all(): Promise<any>;
+
+/**
  * List the rkeys under a collection (entries whose key starts with `collection/`).
  * Returns a JS array of strings.
  */
@@ -71,6 +77,7 @@ export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly delete_record: (a: number, b: number, c: number, d: number) => any;
     readonly get_record: (a: number, b: number, c: number, d: number) => any;
+    readonly list_all: () => any;
     readonly list_records: (a: number, b: number) => any;
     readonly open: (a: number, b: number) => any;
     readonly put_record: (a: number, b: number, c: number, d: number, e: number, f: number) => any;

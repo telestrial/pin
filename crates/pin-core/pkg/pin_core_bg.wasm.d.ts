@@ -3,6 +3,7 @@
 export const memory: WebAssembly.Memory;
 export const delete_record: (a: number, b: number, c: number, d: number) => any;
 export const get_record: (a: number, b: number, c: number, d: number) => any;
+export const list_all: () => any;
 export const list_records: (a: number, b: number) => any;
 export const open: (a: number, b: number) => any;
 export const put_record: (a: number, b: number, c: number, d: number, e: number, f: number) => any;
