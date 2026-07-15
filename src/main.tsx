@@ -26,6 +26,8 @@ if (import.meta.env.DEV) {
     __pinSettingsDocsCheck?: () => Promise<string>
     __pinDocsList?: () => Promise<string>
     __pinSettingsFromSnapshot?: () => Promise<string>
+    __pinDidDht?: () => Promise<string>
+    __pinPkarrRoundTrip?: () => Promise<string>
   }
   g.__pinMirrorWrite = async (text: string) => {
     const { sdk, hex } = await session()
@@ -100,6 +102,38 @@ if (import.meta.env.DEV) {
       await decryptSettings(key, new TextDecoder().decode(bytes)),
     )
     return `snapshot settings: ${s.myChannels?.length ?? 0} channels, ${s.subscriptions?.length ?? 0} subs, theme=${s.theme}, updatedAt=${s.updatedAt}`
+  }
+  // Phase D step-1 proof: derive this browser's did:dht from the Sia AppKey. MUST
+  // equal the keeper's did:dht for the same account (rung-6a Rust identity.rs) —
+  // that's the whole point (one identity across browser + keeper). Compare the
+  // output to the keeper's logged DID.
+  g.__pinDidDht = async () => {
+    const { hex } = await session()
+    if (!hex) return 'not signed in'
+    const { deriveDidDht } = await import('./lib/pkarr')
+    const { did } = await deriveDidDht(hexToBytes(hex))
+    return did
+  }
+  // Phase D step-1 proof: the vendored pkarr wasm publishes + resolves from the app
+  // bundle. Uses a THROWAWAY random key (never the real identity — publishing under
+  // it would overwrite the keeper's DID document on the DHT). ~5s publish + retryless
+  // resolve; expect the round-tripped value to match.
+  g.__pinPkarrRoundTrip = async () => {
+    const { deriveDidDht, publishRecords, resolveDidDht } = await import(
+      './lib/pkarr'
+    )
+    // A throwaway identity from random bytes — never the real one, so publishing
+    // can't overwrite the keeper's DID document.
+    const throwaway = await deriveDidDht(
+      crypto.getRandomValues(new Uint8Array(32)),
+    )
+    const value = `roundtrip-${Date.now()}`
+    await publishRecords(throwaway.keypair, [{ name: '_pin', value }])
+    const records = await resolveDidDht(throwaway.did)
+    const got = records.find((r) => r.name.startsWith('_pin'))?.value
+    return got === value
+      ? `OK — published + resolved "${got}" from a fresh key`
+      : `MISMATCH — got "${got ?? '(none)'}", expected "${value}"`
   }
 }
 
