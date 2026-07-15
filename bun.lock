@@ -8,6 +8,7 @@
         "@atproto/api": "^0.19.11",
         "@atproto/oauth-client-browser": "^0.3.42",
         "@siafoundation/sia-storage": "^0.0.12",
+        "@synonymdev/pkarr": "0.1.4",
         "@tauri-apps/api": "^2.11.1",
         "@tauri-apps/plugin-opener": "^2.5.4",
         "dompurify": "^3.4.1",
@@ -297,6 +298,8 @@
     "@siafoundation/sia-storage-win32-x64-msvc": ["@siafoundation/sia-storage-win32-x64-msvc@0.0.12", "", { "os": "win32", "cpu": "x64" }, "sha512-PfCbnI+bq+FuxFg5kzth0BDqcpKar8GX1rzzBhSU9yLuThAxvJfamFhKyvcwyRYLVsJKLVYcb0N/ODzn9gPi5g=="],
 
     "@standard-schema/spec": ["@standard-schema/spec@1.1.0", "", {}, "sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w=="],
+
+    "@synonymdev/pkarr": ["@synonymdev/pkarr@0.1.4", "", {}, "sha512-q4CU1IMYl9n6znJnGQlE+Su/67E7AvHWr7Q8ugXheA8MDI5up+rH4Ct5Jl/l+H/PhkmFDNbnamVWlMrxhlo73A=="],
 
     "@tailwindcss/node": ["@tailwindcss/node@4.2.4", "", { "dependencies": { "@jridgewell/remapping": "^2.3.5", "enhanced-resolve": "^5.19.0", "jiti": "^2.6.1", "lightningcss": "1.32.0", "magic-string": "^0.30.21", "source-map-js": "^1.2.1", "tailwindcss": "4.2.4" } }, "sha512-Ai7+yQPxz3ddrDQzFfBKdHEVBg0w3Zl83jnjuwxnZOsnH9pGn93QHQtpU0p/8rYWxvbFZHneni6p1BSLK4DkGA=="],
 
