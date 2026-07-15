@@ -175,6 +175,20 @@ export async function deriveSnapshotKey(
   return deriveAppSubkey(appKeyBytes, SNAPSHOT_KEY_INFO)
 }
 
+// The 32-byte ed25519 seed for this identity's did:dht key. MUST match the Rust
+// keeper's derivation byte-for-byte (identity.rs: HKDF-SHA256, empty salt, info
+// `pin:did-dht:v1`) so the browser's pkarr identity IS the keeper's did:dht — one
+// identity across both. Web Crypto's empty-salt HKDF equals Rust's `Hkdf::new(None,
+// …)` (HMAC pads any sub-block-size key with zeros, so empty == HashLen-zeros salt).
+// The seed feeds pkarr's `Keypair.from_secret_key` (in lib/pkarr.ts, needs the wasm);
+// kept here as the pure, testable derivation half.
+const DID_DHT_KEY_INFO = 'pin:did-dht:v1'
+export async function deriveDidDhtSeed(
+  appKeyBytes: Uint8Array,
+): Promise<Uint8Array> {
+  return deriveAppSubkey(appKeyBytes, DID_DHT_KEY_INFO)
+}
+
 export async function encryptSettings(
   key: Uint8Array,
   plaintext: string,

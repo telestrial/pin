@@ -5,6 +5,7 @@ import {
   decryptForChannel,
   decryptSettings,
   deriveChannelID,
+  deriveDidDhtSeed,
   deriveSettingsKey,
   encryptForChannel,
   encryptSettings,
@@ -174,6 +175,37 @@ describe('deriveSettingsKey', () => {
     const derived = await deriveSettingsKey(new Uint8Array(32))
     expect(toHex(derived)).toBe(
       '4f2fe2ca11018b920f3f99673cae4afab82044351d3de01a784a598d1b199aa2',
+    )
+  })
+})
+
+describe('deriveDidDhtSeed', () => {
+  it('produces a 32-byte ed25519 seed', async () => {
+    const seed = await deriveDidDhtSeed(new Uint8Array(32))
+    expect(seed.length).toBe(32)
+  })
+
+  it('is deterministic for the same AppKey bytes', async () => {
+    const appKey = crypto.getRandomValues(new Uint8Array(32))
+    const a = await deriveDidDhtSeed(appKey)
+    const b = await deriveDidDhtSeed(appKey)
+    expect(a).toEqual(b)
+  })
+
+  it('differs from the settings key for the same AppKey (domain separation)', async () => {
+    const appKey = new Uint8Array(32).fill(9)
+    const seed = await deriveDidDhtSeed(appKey)
+    const settings = await deriveSettingsKey(appKey)
+    expect(seed).not.toEqual(settings)
+  })
+
+  it('matches a fixed value for the all-zeros AppKey (regression lock)', async () => {
+    // Locks salt='' + info='pin:did-dht:v1' + SHA-256, which MUST equal the Rust
+    // keeper's HKDF (identity.rs) so the browser derives the SAME did:dht. A silent
+    // change here would split the browser identity from the keeper's.
+    const seed = await deriveDidDhtSeed(new Uint8Array(32))
+    expect(toHex(seed)).toBe(
+      '30ff7f7764196617f118404f0b5b1c98298adf7aafcd54a86c92173d06682256',
     )
   })
 })
