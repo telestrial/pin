@@ -189,6 +189,19 @@ export async function deriveDidDhtSeed(
   return deriveAppSubkey(appKeyBytes, DID_DHT_KEY_INFO)
 }
 
+// The 32-byte ed25519 seed for a channel's pkarr LOCATOR key — derived from the
+// channel key K (NOT the AppKey), because a reader only holds K (from the subscribe
+// URL) and must derive the same locator to resolve the channel's Sia pointer. So K
+// both locates (this key → pkarr record → Sia URL) and decrypts (the manifest). This
+// is the canonical definition; a future keeper that publishes channel locators must
+// match it. Same HKDF family, different `info` + a different IKM (K, not AppKey).
+const CHANNEL_LOCATOR_KEY_INFO = 'pin:channel-locator:v1'
+export async function deriveChannelLocatorSeed(
+  channelKeyBytes: Uint8Array,
+): Promise<Uint8Array> {
+  return deriveAppSubkey(channelKeyBytes, CHANNEL_LOCATOR_KEY_INFO)
+}
+
 export async function encryptSettings(
   key: Uint8Array,
   plaintext: string,

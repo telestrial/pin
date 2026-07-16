@@ -5,6 +5,7 @@ import {
   decryptForChannel,
   decryptSettings,
   deriveChannelID,
+  deriveChannelLocatorSeed,
   deriveDidDhtSeed,
   deriveSettingsKey,
   encryptForChannel,
@@ -206,6 +207,42 @@ describe('deriveDidDhtSeed', () => {
     const seed = await deriveDidDhtSeed(new Uint8Array(32))
     expect(toHex(seed)).toBe(
       '30ff7f7764196617f118404f0b5b1c98298adf7aafcd54a86c92173d06682256',
+    )
+  })
+})
+
+describe('deriveChannelLocatorSeed', () => {
+  it('produces a 32-byte ed25519 seed', async () => {
+    const seed = await deriveChannelLocatorSeed(new Uint8Array(32))
+    expect(seed.length).toBe(32)
+  })
+
+  it('is deterministic for the same channel key', async () => {
+    const k = await generateChannelKey()
+    expect(await deriveChannelLocatorSeed(k)).toEqual(
+      await deriveChannelLocatorSeed(k),
+    )
+  })
+
+  it('differs per channel key (each channel has its own locator)', async () => {
+    const a = await deriveChannelLocatorSeed(await generateChannelKey())
+    const b = await deriveChannelLocatorSeed(await generateChannelKey())
+    expect(a).not.toEqual(b)
+  })
+
+  it('differs from the did:dht seed for the same bytes (domain separation)', async () => {
+    const bytes = new Uint8Array(32).fill(5)
+    expect(await deriveChannelLocatorSeed(bytes)).not.toEqual(
+      await deriveDidDhtSeed(bytes),
+    )
+  })
+
+  it('matches a fixed value for the all-zeros key (regression lock)', async () => {
+    // Locks salt='' + info='pin:channel-locator:v1' + SHA-256 — the canonical
+    // channel-locator derivation a reader (and any future keeper) must reproduce.
+    const seed = await deriveChannelLocatorSeed(new Uint8Array(32))
+    expect(toHex(seed)).toBe(
+      '78aa2d69cfe77badc0d0d7cd976e0c1b6c3fe4964958145793d153b03a3442eb',
     )
   })
 })
