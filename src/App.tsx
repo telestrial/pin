@@ -12,6 +12,8 @@ import {
   useActionRunner,
 } from './lib/hooks/useActionRunner'
 import { useChannelDocsMirror } from './lib/hooks/useChannelDocsMirror'
+import { useChannelLocatorPublish } from './lib/hooks/useChannelLocatorPublish'
+import { useChannelReader } from './lib/hooks/useChannelReader'
 import { useGhostReconciliation } from './lib/hooks/useGhostReconciliation'
 import { useHandleFollowReconciliation } from './lib/hooks/useHandleFollowReconciliation'
 import { useJetstream } from './lib/hooks/useJetstream'
@@ -71,6 +73,8 @@ export default function App() {
   useSettingsSync()
   useSettingsDocsMirror()
   useChannelDocsMirror()
+  useChannelReader()
+  useChannelLocatorPublish()
   useGhostReconciliation()
   useHandleFollowReconciliation()
 

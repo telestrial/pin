@@ -4,6 +4,7 @@ import {
   buildHomeFeed,
   type FeedEntry,
   type FeedFetchError,
+  type FetchChannel,
 } from '../core/feed'
 import type { ChannelManifest, SubscriptionRef } from '../core/types'
 
@@ -14,6 +15,12 @@ type FeedState = {
   loading: boolean
   lastRefreshedAt: string | null
   live: boolean
+  // How channels are read. Defaults to the atproto fetch; App injects the
+  // locator-first reader (pkarr → Sia → atproto fallback) once the sdk exists.
+  // Pluggable here (not imported) to keep this store off the auth store — auth
+  // already imports feed, so the reverse would be a circular import.
+  channelReader: FetchChannel
+  setChannelReader: (reader: FetchChannel) => void
   refresh: (subscriptions: SubscriptionRef[]) => Promise<void>
   refreshChannel: (sub: SubscriptionRef) => Promise<void>
   setManifest: (channelID: string, manifest: ChannelManifest) => void
@@ -22,16 +29,18 @@ type FeedState = {
   reset: () => void
 }
 
-export const useFeedStore = create<FeedState>()((set) => ({
+export const useFeedStore = create<FeedState>()((set, get) => ({
   entries: [],
   errors: [],
   manifests: {},
   loading: false,
   lastRefreshedAt: null,
   live: false,
+  channelReader: fetchChannel,
+  setChannelReader: (reader) => set({ channelReader: reader }),
   refresh: async (subscriptions) => {
     set({ loading: true })
-    const result = await buildHomeFeed(subscriptions)
+    const result = await buildHomeFeed(subscriptions, get().channelReader)
     set({
       entries: result.entries,
       errors: result.errors,
@@ -42,7 +51,7 @@ export const useFeedStore = create<FeedState>()((set) => ({
   },
   refreshChannel: async (sub) => {
     try {
-      const manifest = await fetchChannel(
+      const manifest = await get().channelReader(
         sub.authorDID || sub.authorHandle,
         sub.channelID,
         sub.channelKey,

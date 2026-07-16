@@ -11,12 +11,14 @@
 // can't derive a channel's locator without its K.
 
 import type { Sdk } from '@siafoundation/sia-storage'
+import { fetchChannel } from '../core/channels'
 import {
   channelKeyFromBase64,
   decryptForChannel,
   deriveChannelLocatorSeed,
   encryptForChannel,
 } from '../core/crypto'
+import type { FetchChannel } from '../core/feed'
 import { downloadItem, uploadItem } from '../core/sia'
 import { CHANNEL_MANIFEST_VERSION, type ChannelManifest } from '../core/types'
 import {
@@ -34,13 +36,13 @@ const POINTER_PREFIX = '_c'
  *  the pointer to that object under the channel's K-derived pkarr locator. Call
  *  (background) whenever the manifest changes. ~5s (Mainline store latency).
  *
- *  Returns the locator key + Sia URL. Old-object cleanup (delete the superseded Sia
- *  object) is deferred to the live-edit wiring (step 4), same as docsMirror. */
+ *  Returns the locator key + the Sia object's id/URL. The caller (the publish hook)
+ *  deletes the superseded object using the returned id. */
 export async function publishChannelLocator(
   sdk: Sdk,
   channelKeyB64: string,
   manifest: ChannelManifest,
-): Promise<{ locatorKey: string; url: string }> {
+): Promise<{ locatorKey: string; id: string; url: string }> {
   const kBytes = channelKeyFromBase64(channelKeyB64)
   const ciphertext = await encryptForChannel(kBytes, JSON.stringify(manifest))
   const uploaded = await uploadItem(sdk, new TextEncoder().encode(ciphertext))
@@ -49,7 +51,7 @@ export async function publishChannelLocator(
     await deriveChannelLocatorSeed(kBytes),
   )
   await publishRecords(keypair, chunkForTxt(POINTER_PREFIX, uploaded.itemURL))
-  return { locatorKey: publicKey, url: uploaded.itemURL }
+  return { locatorKey: publicKey, id: uploaded.id, url: uploaded.itemURL }
 }
 
 /** Reader side: resolve a channel from its K alone (no atproto, no author handle).
@@ -79,4 +81,21 @@ export async function resolveChannelViaLocator(
     )
   }
   return manifest as ChannelManifest
+}
+
+/** A `FetchChannel` that reads a channel from its pkarr locator (no atproto) and
+ *  falls back to the atproto record when the locator isn't resolvable / errors.
+ *  This is the step-4a read flip: locator-first, atproto as the safety net. The sdk
+ *  is closed over (the FetchChannel signature stays atproto-shaped), so it drops in
+ *  wherever `buildHomeFeed`'s fetcher is injected. */
+export function makeLocatorFirstReader(sdk: Sdk): FetchChannel {
+  return async (authorHandleOrDID, channelID, channelKey) => {
+    try {
+      const viaLocator = await resolveChannelViaLocator(sdk, channelKey)
+      if (viaLocator) return viaLocator
+    } catch (e) {
+      console.warn(`locator read failed for ${channelID}, using atproto:`, e)
+    }
+    return fetchChannel(authorHandleOrDID, channelID, channelKey)
+  }
 }

@@ -26,11 +26,21 @@ function ensureReady(): Promise<void> {
   return ready
 }
 
-let client: Client | null = null
-async function getClient(): Promise<Client> {
+// Resolve gets a short timeout so a MISS (no locator published yet) falls back to
+// atproto promptly instead of stalling a feed read for the client's 30s default. A
+// hit is ~150ms (spike). Publish keeps the long default (Mainline store is ~5s).
+const RESOLVE_TIMEOUT_MS = 4000
+let publishClient: Client | null = null
+let resolveClient: Client | null = null
+async function getPublishClient(): Promise<Client> {
   await ensureReady()
-  if (!client) client = new Client()
-  return client
+  if (!publishClient) publishClient = new Client()
+  return publishClient
+}
+async function getResolveClient(): Promise<Client> {
+  await ensureReady()
+  if (!resolveClient) resolveClient = new Client(undefined, RESOLVE_TIMEOUT_MS)
+  return resolveClient
 }
 
 /** A name/value pair to publish as a TXT record in a pkarr document. */
@@ -110,7 +120,7 @@ export async function publishRecords(
     builder.addTxtRecord(name, value, 3600)
   }
   const packet = builder.buildAndSign(keypair)
-  const c = await getClient()
+  const c = await getPublishClient()
   await c.publish(packet)
 }
 
@@ -120,7 +130,7 @@ export async function resolveDidDht(didOrKey: string): Promise<PkarrTxt[]> {
   const publicKey = didOrKey.startsWith('did:dht:')
     ? didOrKey.slice('did:dht:'.length)
     : didOrKey
-  const c = await getClient()
+  const c = await getResolveClient()
   const packet = await c.resolveMostRecent(publicKey)
   if (!packet) return []
   return packet.records
