@@ -28,6 +28,7 @@ if (import.meta.env.DEV) {
     __pinSettingsFromSnapshot?: () => Promise<string>
     __pinDidDht?: () => Promise<string>
     __pinPkarrRoundTrip?: () => Promise<string>
+    __pinChannelLocatorRoundTrip?: () => Promise<string>
   }
   g.__pinMirrorWrite = async (text: string) => {
     const { sdk, hex } = await session()
@@ -134,6 +135,28 @@ if (import.meta.env.DEV) {
     return got === value
       ? `OK — published + resolved "${got}" from a fresh key`
       : `MISMATCH — got "${got ?? '(none)'}", expected "${value}"`
+  }
+  // Phase D step-2 proof: the per-channel read surface end-to-end. Publishes one
+  // owned channel's locator (Sia object under K + K-derived pkarr pointer), then
+  // resolves it back FROM K ALONE — exactly what a cross-user reader does, no atproto,
+  // no author handle. Uses a real owned channel (publishes a real Sia object + DHT
+  // record; old-object cleanup lands with the live wiring in step 4).
+  g.__pinChannelLocatorRoundTrip = async () => {
+    const { useAuthStore } = await import('./stores/auth')
+    const { useFeedStore } = await import('./stores/feed')
+    const auth = useAuthStore.getState()
+    const ch = auth.myChannels[0]
+    if (!auth.sdk || !ch) return 'no sdk / no owned channel'
+    const manifest = useFeedStore.getState().manifests[ch.channelID]
+    if (!manifest) return `manifest for ${ch.channelID} not loaded yet`
+    const { publishChannelLocator, resolveChannelViaLocator } = await import(
+      './lib/channelLocator'
+    )
+    const pub = await publishChannelLocator(auth.sdk, ch.channelKey, manifest)
+    const got = await resolveChannelViaLocator(auth.sdk, ch.channelKey)
+    const match =
+      got?.name === manifest.name && got?.items.length === manifest.items.length
+    return `locator ${pub.locatorKey.slice(0, 12)}… → reader resolved "${got?.name}" (${got?.items.length ?? 0}/${manifest.items.length} items) — ${match ? 'MATCH' : 'MISMATCH'}`
   }
 }
 
