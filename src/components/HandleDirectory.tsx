@@ -5,7 +5,9 @@ import { fetchChannel } from '../core/channels'
 import { listFollows, parseChannelAtURI } from '../core/follow'
 import { getProfileRecord, type ProfileRecord } from '../core/profile'
 import type { ChannelManifest } from '../core/types'
+import { resolveChannelViaLocator } from '../lib/channelLocator'
 import { formatBytes } from '../lib/format'
+import { resolveIdentityDoc } from '../lib/identityDoc'
 import { useAuthorName } from '../lib/hooks/useAuthorName'
 import { useItemBlobURL } from '../lib/hooks/useItemBytes'
 import { useAuthStore } from '../stores/auth'
@@ -77,6 +79,52 @@ export function HandleDirectory({
     setState({ kind: 'loading' })
 
     async function load() {
+      // did:dht identity — resolve the identity-doc off atproto (pkarr → Sia):
+      // profile + the author's advertised public channels (each resolved via its
+      // locator). The Following section is omitted here: the identity-doc's follows
+      // are atproto AT-URIs that don't carry the followed channel's did:dht+K, so
+      // they can't be resolved off atproto yet (the follow-graph representation is
+      // the remaining piece). Legacy handles fall through to the atproto path below.
+      if (handle.startsWith('did:dht:')) {
+        const sdk = useAuthStore.getState().sdk
+        if (!sdk) {
+          if (!cancelled) setState({ kind: 'not-found' })
+          return
+        }
+        const doc = await resolveIdentityDoc(sdk, handle)
+        if (!doc) {
+          if (!cancelled) setState({ kind: 'not-found' })
+          return
+        }
+        const resolved = await Promise.all(
+          doc.channels.map(async (c): Promise<ChannelEntry | null> => {
+            try {
+              const manifest = await resolveChannelViaLocator(sdk, c.key)
+              return manifest
+                ? {
+                    authorDID: '',
+                    authorHandle: '',
+                    channelID: c.channelID,
+                    manifest,
+                  }
+                : null
+            } catch {
+              return null
+            }
+          }),
+        )
+        if (!cancelled) {
+          setState({
+            kind: 'loaded',
+            did: handle,
+            profile: doc.profile,
+            ownChannels: resolved.filter((c): c is ChannelEntry => c !== null),
+            followedChannels: [],
+          })
+        }
+        return
+      }
+
       const unauthed = new AtpAgent({ service: 'https://bsky.social' })
 
       // Resolve handle → DID. describeRepo is the unauthenticated path
@@ -232,6 +280,7 @@ export function HandleDirectory({
             <LoadedDirectory
               handle={handle}
               did={state.did}
+              isDidDht={handle.startsWith('did:dht:')}
               isSelf={isSelf}
               profile={state.profile}
               ownChannels={state.ownChannels}
@@ -253,6 +302,7 @@ export function HandleDirectory({
 function LoadedDirectory({
   handle,
   did,
+  isDidDht,
   isSelf,
   profile,
   ownChannels,
@@ -265,6 +315,7 @@ function LoadedDirectory({
 }: {
   handle: string
   did: string
+  isDidDht: boolean
   isSelf: boolean
   profile: ProfileRecord | null
   ownChannels: ChannelEntry[]
@@ -283,6 +334,7 @@ function LoadedDirectory({
       <ProfileHeader
         handle={handle}
         did={did}
+        isDidDht={isDidDht}
         isSelf={isSelf}
         profile={profile}
         followingCount={followedChannels.length}
@@ -369,6 +421,7 @@ function Stat({ value, label }: { value: number; label: string }) {
 function ProfileHeader({
   handle,
   did,
+  isDidDht,
   isSelf,
   profile,
   followingCount,
@@ -377,12 +430,18 @@ function ProfileHeader({
 }: {
   handle: string
   did: string
+  isDidDht: boolean
   isSelf: boolean
   profile: ProfileRecord | null
   followingCount: number
   onBack?: () => void
   onEdit?: () => void
 }) {
+  // For a did:dht identity the "handle" is a long key — show a short, readable
+  // form (`did:dht:…db4o`) as the fallback label, and no atproto-address suffix.
+  const handleLabel = isDidDht
+    ? `did:dht:…${handle.replace(/^did:dht:/, '').slice(-6)}`
+    : handle
   // Twitter/Bluesky-shape layout: cover banner at the top of the card
   // (full-bleed thanks to the card's overflow-hidden), avatar overlapping
   // the cover's bottom edge with a white ring, then identity row + Edit
@@ -426,20 +485,24 @@ function ProfileHeader({
               <div className="min-w-0 space-y-0.5">
                 <div className="text-lg font-semibold text-neutral-900 truncate">
                   {profile?.displayName ||
-                    (profile?.username ? `@${profile.username}` : `@${handle}`)}
+                    (profile?.username
+                      ? `@${profile.username}`
+                      : `@${handleLabel}`)}
                 </div>
-                {/* The chosen @-name is the handle people read; the atproto
-                    handle recedes to a muted address suffix (still the router,
-                    just no longer the identity on show). Falls back to the
-                    atproto handle when no Pin username is set. */}
+                {/* The chosen @-name is the handle people read; for a legacy
+                    atproto identity the handle recedes to a muted address suffix
+                    (still the router). did:dht identities have no atproto address,
+                    so no suffix — just the @-name (or the short did fallback). */}
                 <div className="text-sm text-neutral-500 truncate">
                   {profile?.username ? (
                     <>
-                      @{profile.username}{' '}
-                      <span className="text-neutral-400">· {handle}</span>
+                      @{profile.username}
+                      {!isDidDht && (
+                        <span className="text-neutral-400"> · {handle}</span>
+                      )}
                     </>
                   ) : (
-                    <>@{handle}</>
+                    <>@{handleLabel}</>
                   )}
                 </div>
               </div>
@@ -454,7 +517,9 @@ function ProfileHeader({
                 {profile ? 'Edit profile' : 'Set up profile'}
               </button>
             )}
-            {!isSelf && (
+            {/* Follow is an atproto primitive (dev.sia.pin.subscription); it
+                doesn't apply to a did:dht identity yet, so suppress it there. */}
+            {!isSelf && !isDidDht && (
               <div className="shrink-0">
                 <FollowHandleButton subjectDID={did} subjectHandle={handle} />
               </div>

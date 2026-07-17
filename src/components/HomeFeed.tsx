@@ -2,6 +2,7 @@ import { useEffect, useMemo } from 'react'
 import type { FeedEntry } from '../core/feed'
 import type { ItemRef } from '../core/types'
 import { useAuthorName } from '../lib/hooks/useAuthorName'
+import { useIdentityName } from '../lib/hooks/useIdentityName'
 import { renderPostBody } from '../lib/markdown'
 import { formatAbsolute, formatRelativeShort } from '../lib/time'
 import { useAuthStore } from '../stores/auth'
@@ -234,7 +235,12 @@ export function FeedRow({
   onHandleClick: (handle: string) => void
 }) {
   const { item, channel } = entry
-  const authorName = useAuthorName(channel.authorHandle)
+  // did:dht subs display + navigate by identity-doc; legacy handle subs by atproto.
+  // Both hooks run unconditionally (hook rules); we pick by which id the sub carries.
+  const handleName = useAuthorName(channel.authorHandle)
+  const identityName = useIdentityName(channel.authorDidDht ?? '')
+  const authorName = channel.authorDidDht ? identityName : handleName
+  const authorId = channel.authorDidDht || channel.authorHandle
 
   const handleChannelClick = (e: React.MouseEvent | React.KeyboardEvent) => {
     e.stopPropagation()
@@ -243,7 +249,7 @@ export function FeedRow({
 
   const handleAuthorClick = (e: React.MouseEvent) => {
     e.stopPropagation()
-    onHandleClick(channel.authorHandle)
+    onHandleClick(authorId)
   }
 
   return (
@@ -285,10 +291,9 @@ export function FeedRow({
                 >
                   {channel.name}
                 </button>
-                {/* did:dht subs carry no atproto handle (authorHandle ''); the
-                    author display name comes from the identity-doc in 5b. Until
-                    then, hide the line rather than render a bare "@". */}
-                {channel.authorHandle && (
+                {/* did:dht subs display the identity-doc username; legacy subs the
+                    atproto handle. Hidden only if neither identifier exists. */}
+                {authorId && (
                   <button
                     type="button"
                     onClick={handleAuthorClick}

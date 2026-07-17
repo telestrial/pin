@@ -72,6 +72,7 @@ export function SubscribeToChannel({
         item,
         channel: {
           authorHandle: parsed.authorHandle,
+          authorDidDht: parsed.didDht,
           channelID: parsed.channelID,
           name: manifest.name,
           avatar: manifest.avatar,

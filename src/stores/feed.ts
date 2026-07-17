@@ -68,6 +68,7 @@ export const useFeedStore = create<FeedState>()((set, get) => ({
           item,
           channel: {
             authorHandle: sub.authorHandle,
+            authorDidDht: sub.didDht,
             channelID: sub.channelID,
             name: manifest.name,
             avatar: manifest.avatar,

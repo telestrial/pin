@@ -10,6 +10,10 @@ export type FeedEntry = {
   item: ItemRef
   channel: {
     authorHandle: string
+    // The author's did:dht when the subscription is did:dht-native (Phase D).
+    // Present → display name + directory nav resolve via the identity-doc off
+    // atproto; absent → legacy atproto handle path.
+    authorDidDht?: string
     channelID: string
     name: string
     // Round avatar for the feed-row identity (banner cover isn't shown here).
@@ -61,6 +65,7 @@ export async function buildHomeFeed(
           item,
           channel: {
             authorHandle: sub.authorHandle,
+            authorDidDht: sub.didDht,
             channelID: sub.channelID,
             name: manifest.name,
             avatar: manifest.avatar,
