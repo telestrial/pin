@@ -16,6 +16,7 @@ import { useChannelLocatorPublish } from './lib/hooks/useChannelLocatorPublish'
 import { useChannelReader } from './lib/hooks/useChannelReader'
 import { useGhostReconciliation } from './lib/hooks/useGhostReconciliation'
 import { useHandleFollowReconciliation } from './lib/hooks/useHandleFollowReconciliation'
+import { useIdentityDocPublish } from './lib/hooks/useIdentityDocPublish'
 import { useJetstream } from './lib/hooks/useJetstream'
 import { useRepackRunner } from './lib/hooks/useRepackRunner'
 import { useSettingsDocsMirror } from './lib/hooks/useSettingsDocsMirror'
@@ -75,6 +76,7 @@ export default function App() {
   useChannelDocsMirror()
   useChannelReader()
   useChannelLocatorPublish()
+  useIdentityDocPublish()
   useGhostReconciliation()
   useHandleFollowReconciliation()
 
