@@ -1,6 +1,7 @@
 import { useState } from 'react'
-import { fetchChannel, parseSubscribeURL } from '../core/channels'
+import { parseSubscribeURL } from '../core/channels'
 import type { FeedEntry } from '../core/feed'
+import { makeLocatorFirstReader } from '../lib/channelLocator'
 import { flushSettingsBestEffort } from '../lib/hooks/useSettingsSync'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
@@ -19,6 +20,7 @@ export function SubscribeToChannel({
 }) {
   const subscriptions = useAuthStore((s) => s.subscriptions)
   const addSubscription = useAuthStore((s) => s.addSubscription)
+  const sdk = useAuthStore((s) => s.sdk)
 
   const [url, setUrl] = useState('')
   const [submitting, setSubmitting] = useState(false)
@@ -29,6 +31,10 @@ export function SubscribeToChannel({
     const trimmed = url.trim()
     if (!trimmed) return
 
+    if (!sdk) {
+      setError('Not connected to Sia yet.')
+      return
+    }
     setSubmitting(true)
     setError(null)
     try {
@@ -44,7 +50,10 @@ export function SubscribeToChannel({
         setSubmitting(false)
         return
       }
-      const manifest = await fetchChannel(
+      // Locator-first (via K from the URL), atproto fallback — same reader as the
+      // feed (step 4a). authorATProtoDID for the subscription comes off the manifest
+      // either way, so the sub is built the same regardless of read path.
+      const manifest = await makeLocatorFirstReader(sdk)(
         parsed.authorHandle,
         parsed.channelID,
         parsed.channelKey,
