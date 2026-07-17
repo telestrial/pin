@@ -134,8 +134,15 @@ export type ChannelManifest = {
 }
 
 export type SubscriptionRef = {
+  // The author's atproto handle — legacy/transition identifier, used for
+  // display + JetStream + the atproto read-fallback. Empty ('') for a
+  // subscription made from a did:dht subscribe URL (which carries no handle).
   authorHandle: string
   authorDID: string
+  // The author's self-sovereign did:dht identity (Phase D). Present when the
+  // subscription came from a `pin://<did:dht>#k=…` URL; the stable, atproto-free
+  // way to resolve the author's identity-doc. Absent on legacy handle subs.
+  didDht?: string
   channelID: string // base32(sha256(K)).slice(0,16); ATProto rkey
   channelKey: string
   label?: string

@@ -72,7 +72,9 @@ export type CreatedChannel = {
   channelID: string
   channelKey: string // base64
   manifest: ChannelManifest
-  subscribeURL: string
+  // No subscribeURL — the did:dht form needs the author's identity key (pkarr
+  // wasm, not available in core), so the caller builds it via lib/pkarr +
+  // buildSubscribeURL.
 }
 
 export type AttachmentSource =
@@ -109,7 +111,6 @@ export type ItemPayload = {
 export async function createChannel(
   sdk: Sdk,
   agent: Agent,
-  authorHandle: string,
   args: {
     name: string
     description: string
@@ -193,12 +194,7 @@ export async function createChannel(
     writes,
   })
 
-  return {
-    channelID,
-    channelKey,
-    manifest,
-    subscribeURL: buildSubscribeURL(authorHandle, channelKey),
-  }
+  return { channelID, channelKey, manifest }
 }
 
 export type EditChannelPatch = {
@@ -617,24 +613,36 @@ export async function downloadItemBytes(
   return downloadItem(sdk, itemURL)
 }
 
+// Phase D: the shared capability link carries the author's stable did:dht
+// (`pin://<did:dht>#k=<K>`), not the atproto handle — the identity resolves without
+// atproto, and non-unique self-asserted handles couldn't resolve globally anyway.
+// The `author` slot is either a did:dht or (legacy) an atproto handle.
 export function buildSubscribeURL(
-  authorHandle: string,
+  author: string,
   channelKey: string,
 ): string {
-  return `pin://${authorHandle}#k=${channelKey}`
+  return `pin://${author}#k=${channelKey}`
 }
 
 export async function parseSubscribeURL(url: string): Promise<{
+  // Exactly one of these is set. did:dht form is the Phase D shape; the handle
+  // form is still accepted so already-shared links (and the running app's stored
+  // subs) keep working through the transition.
   authorHandle: string
+  didDht?: string
   channelID: string
   channelKey: string
 }> {
   const m = url.trim().match(/^pin:\/\/([^#/]+)#k=(.+)$/)
   if (!m) {
-    throw new Error('Invalid subscribe URL (expected pin://<handle>#k=<key>)')
+    throw new Error(
+      'Invalid subscribe URL (expected pin://<did:dht|handle>#k=<key>)',
+    )
   }
-  const [, authorHandle, channelKey] = m
+  const [, author, channelKey] = m
   const keyBytes = channelKeyFromBase64(channelKey)
   const channelID = await deriveChannelID(keyBytes)
-  return { authorHandle, channelID, channelKey }
+  return author.startsWith('did:dht:')
+    ? { authorHandle: '', didDht: author, channelID, channelKey }
+    : { authorHandle: author, channelID, channelKey }
 }

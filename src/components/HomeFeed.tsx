@@ -285,13 +285,18 @@ export function FeedRow({
                 >
                   {channel.name}
                 </button>
-                <button
-                  type="button"
-                  onClick={handleAuthorClick}
-                  className="block max-w-full text-xs text-neutral-500 truncate hover:underline cursor-pointer text-left"
-                >
-                  @{authorName}
-                </button>
+                {/* did:dht subs carry no atproto handle (authorHandle ''); the
+                    author display name comes from the identity-doc in 5b. Until
+                    then, hide the line rather than render a bare "@". */}
+                {channel.authorHandle && (
+                  <button
+                    type="button"
+                    onClick={handleAuthorClick}
+                    className="block max-w-full text-xs text-neutral-500 truncate hover:underline cursor-pointer text-left"
+                  >
+                    @{authorName}
+                  </button>
+                )}
               </div>
               <div className="flex items-center gap-1.5 shrink-0">
                 <p

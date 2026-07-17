@@ -144,13 +144,17 @@ export function ChannelView({
                         </span>
                       )}
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => onHandleClick(authorHandle)}
-                      className="block max-w-full text-sm text-neutral-500 truncate hover:underline cursor-pointer text-left"
-                    >
-                      @{authorName}
-                    </button>
+                    {/* did:dht channels carry no atproto handle; hide the line
+                        rather than render a bare "@" (identity-doc display = 5b). */}
+                    {authorHandle && (
+                      <button
+                        type="button"
+                        onClick={() => onHandleClick(authorHandle)}
+                        className="block max-w-full text-sm text-neutral-500 truncate hover:underline cursor-pointer text-left"
+                      >
+                        @{authorName}
+                      </button>
+                    )}
                   </div>
                   {/* Actions: below the cover, upper-right, even with the
                       name/Unclaimed row. */}

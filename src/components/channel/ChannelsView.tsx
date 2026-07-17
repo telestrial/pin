@@ -1,4 +1,6 @@
+import { useEffect, useState } from 'react'
 import { buildSubscribeURL } from '../../core/channels'
+import { deriveDidDht } from '../../lib/pkarr'
 import { useAuthStore } from '../../stores/auth'
 import { useFeedStore } from '../../stores/feed'
 import { CopyButton } from '../ui/CopyButton'
@@ -22,7 +24,24 @@ export function ChannelsView({
   const myChannels = useAuthStore((s) => s.myChannels)
   const subscriptions = useAuthStore((s) => s.subscriptions)
   const atprotoHandle = useAuthStore((s) => s.atprotoHandle)
+  const storedKeyHex = useAuthStore((s) => s.storedKeyHex)
   const errors = useFeedStore((s) => s.errors)
+
+  // Our own did:dht (from the AppKey) for the subscribe URLs — derived once; the
+  // copy affordance waits for it. Same identity for every channel we own.
+  const [didDht, setDidDht] = useState<string | null>(null)
+  useEffect(() => {
+    if (!storedKeyHex) return
+    let live = true
+    deriveDidDht(Uint8Array.fromHex(storedKeyHex))
+      .then(({ did }) => {
+        if (live) setDidDht(did)
+      })
+      .catch(() => {})
+    return () => {
+      live = false
+    }
+  }, [storedKeyHex])
 
   return (
     <FormCard sidebar={sidebar} rightSidebar={rightSidebar} onBack={onCancel}>
@@ -61,10 +80,10 @@ export function ChannelsView({
                       {c.channelID}
                     </p>
                   </button>
-                  {atprotoHandle && (
+                  {didDht && (
                     <div className="shrink-0">
                       <CopyButton
-                        value={buildSubscribeURL(atprotoHandle, c.channelKey)}
+                        value={buildSubscribeURL(didDht, c.channelKey)}
                         label="Subscribe URL copied"
                       />
                     </div>

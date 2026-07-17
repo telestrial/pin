@@ -125,12 +125,10 @@ export async function authorCreateChannel(
   author: FakeAccount,
   args: { name: string; description?: string } = { name: 'Channel' },
 ): Promise<CreatedChannel> {
-  return createChannel(
-    author.sdk as unknown as Sdk,
-    author.agent as unknown as Agent,
-    author.handle,
-    { name: args.name, description: args.description ?? '' },
-  )
+  return createChannel(author.sdk as unknown as Sdk, author.agent as unknown as Agent, {
+    name: args.name,
+    description: args.description ?? '',
+  })
 }
 
 export function mountAs(

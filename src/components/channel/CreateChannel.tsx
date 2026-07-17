@@ -1,7 +1,8 @@
 import { type ChangeEvent, useEffect, useState } from 'react'
-import { createChannel } from '../../core/channels'
+import { buildSubscribeURL, createChannel } from '../../core/channels'
 import type { ChannelVisibility } from '../../core/types'
 import { flushSettingsBestEffort } from '../../lib/hooks/useSettingsSync'
+import { deriveDidDht } from '../../lib/pkarr'
 import { useAuthStore } from '../../stores/auth'
 import { useFeedStore } from '../../stores/feed'
 import { FormCard } from '../ui/FormCard'
@@ -23,6 +24,7 @@ export function CreateChannel({
   const agent = useAuthStore((s) => s.atprotoAgent)
   const atprotoDID = useAuthStore((s) => s.atprotoDID)
   const atprotoHandle = useAuthStore((s) => s.atprotoHandle)
+  const storedKeyHex = useAuthStore((s) => s.storedKeyHex)
   const addMyChannel = useAuthStore((s) => s.addMyChannel)
   const addSubscription = useAuthStore((s) => s.addSubscription)
   const setManifest = useFeedStore((s) => s.setManifest)
@@ -80,7 +82,7 @@ export function CreateChannel({
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    if (!sdk) return
+    if (!sdk || !storedKeyHex) return
     if (!agent || !atprotoDID || !atprotoHandle) {
       setError('Bluesky session not active. Cancel and try again to sign in.')
       return
@@ -97,13 +99,17 @@ export function CreateChannel({
               mimeType: f.type,
             }
           : undefined
-      const result = await createChannel(sdk, agent, atprotoHandle, {
+      const result = await createChannel(sdk, agent, {
         name: trimmedName,
         description: description.trim(),
         visibility,
         avatarImage: await toImage(avatarFile),
         coverImage: await toImage(coverFile),
       })
+      // The shareable capability link carries our own did:dht (derived from the
+      // AppKey — same identity the keeper/identity-doc use), not the atproto handle.
+      const { did } = await deriveDidDht(Uint8Array.fromHex(storedKeyHex))
+      const subscribeURL = buildSubscribeURL(did, result.channelKey)
       addMyChannel({
         channelID: result.channelID,
         channelKey: result.channelKey,
@@ -113,6 +119,7 @@ export function CreateChannel({
       addSubscription({
         authorHandle: atprotoHandle,
         authorDID: atprotoDID,
+        didDht: did,
         channelID: result.channelID,
         channelKey: result.channelKey,
         cachedName: result.manifest.name,
@@ -125,7 +132,7 @@ export function CreateChannel({
       // before the background debounce loses it from the local list (the
       // atproto record survives, but the channel falls off "Your channels").
       await flushSettingsBestEffort()
-      onCreated(result.subscribeURL, result.manifest.name)
+      onCreated(subscribeURL, result.manifest.name)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to create channel')
       setSubmitting(false)
