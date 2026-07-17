@@ -118,6 +118,8 @@ export function useSettingsSync() {
               chosen.subscriptions,
               chosen.dismissedAutoWatch ?? [],
               chosen.theme ?? useAuthStore.getState().theme,
+              chosen.follows ?? [],
+              chosen.handleFollows ?? [],
               atp?.cid ?? null,
             )
         } else {
@@ -156,7 +158,9 @@ export function useSettingsSync() {
       (initial.settingsRecordCid === null &&
         (initial.myChannels.length > 0 ||
           initial.subscriptions.length > 0 ||
-          initial.dismissedAutoWatch.length > 0))
+          initial.dismissedAutoWatch.length > 0 ||
+          initial.follows.length > 0 ||
+          initial.handleFollows.length > 0))
     let lastSerialized = needsPush ? '__push__' : serialize(initial)
 
     const runSave = async () => {
@@ -184,6 +188,8 @@ export function useSettingsSync() {
           subscriptions: state.subscriptions,
           dismissedAutoWatch: state.dismissedAutoWatch,
           theme: state.theme,
+          follows: state.follows,
+          handleFollows: state.handleFollows,
           updatedAt: new Date().toISOString(),
         }
         const cid = await saveSettingsRecord(
@@ -228,7 +234,9 @@ export function useSettingsSync() {
         state.myChannels === prev.myChannels &&
         state.subscriptions === prev.subscriptions &&
         state.dismissedAutoWatch === prev.dismissedAutoWatch &&
-        state.theme === prev.theme
+        state.theme === prev.theme &&
+        state.follows === prev.follows &&
+        state.handleFollows === prev.handleFollows
       ) {
         return
       }
@@ -292,5 +300,7 @@ function serialize(s: ReturnType<typeof useAuthStore.getState>): string {
     subscriptions: s.subscriptions,
     dismissedAutoWatch: s.dismissedAutoWatch,
     theme: s.theme,
+    follows: s.follows,
+    handleFollows: s.handleFollows,
   })
 }

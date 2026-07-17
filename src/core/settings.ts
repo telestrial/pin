@@ -1,4 +1,9 @@
-import type { OwnedChannel, SubscriptionRef, ThemeMode } from './types'
+import type {
+  FollowEdge,
+  OwnedChannel,
+  SubscriptionRef,
+  ThemeMode,
+} from './types'
 
 export const SETTINGS_VERSION = 1
 
@@ -16,5 +21,11 @@ export type DispatchSettings = {
   // and writes it back, resurrecting it everywhere. Optional for back-compat
   // with settings written before the field existed (treated empty).
   dismissedAutoWatch?: string[]
+  // Public follow graph (Phase D step 6, atproto-free). `follows` = channel-follows
+  // as did:dht-native edges (replacing dev.sia.pin.subscription records);
+  // `handleFollows` = handle-follows as target did:dhts (replacing
+  // dev.sia.pin.handlefollow). Both optional for back-compat (treated empty).
+  follows?: FollowEdge[]
+  handleFollows?: string[]
   updatedAt: string
 }

@@ -150,6 +150,20 @@ export type SubscriptionRef = {
   addedAt: string
 }
 
+// A public follow of a single channel — the atproto-free replacement for a
+// dev.sia.pin.subscription record (Phase D step 6). Points via the author's
+// did:dht (their self-sovereign identity) + the channelID; carries NO K (it's
+// a public discovery edge). A resolver takes didDht → the author's identity-doc
+// → looks up channelID in advertisedChannels → gets K there (public channels
+// advertise their K; obscure channels aren't advertised, so following one stays
+// an opaque, correctly-unreadable pointer). `name` is a display cache so a row
+// renders without a resolve.
+export type FollowEdge = {
+  didDht: string
+  channelID: string
+  name?: string
+}
+
 export type OwnedChannel = {
   channelID: string
   channelKey: string

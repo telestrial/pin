@@ -2,7 +2,12 @@ import type { Agent } from '@atproto/api'
 import type { Sdk } from '@siafoundation/sia-storage'
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import type { OwnedChannel, SubscriptionRef, ThemeMode } from '../core/types'
+import type {
+  FollowEdge,
+  OwnedChannel,
+  SubscriptionRef,
+  ThemeMode,
+} from '../core/types'
 import { APP_KEY } from '../lib/constants'
 import { useActionStore } from './actionQueue'
 import { useFeedStore } from './feed'
@@ -40,6 +45,12 @@ type AuthState = {
   // Driven uniformly by add/removeSubscription — no handle-follow
   // special-casing; it's just "channels I deliberately dropped".
   dismissedAutoWatch: string[]
+  // Public follow graph (Phase D step 6). `follows` = channel-follows as
+  // did:dht-native edges; `handleFollows` = handle-follows as target did:dhts.
+  // Local source of truth (mirrored into the identity-doc + settings record),
+  // replacing the atproto dev.sia.pin.subscription / .handlefollow records.
+  follows: FollowEdge[]
+  handleFollows: string[]
   atprotoAgent: Agent | null
   atprotoDID: string | null
   atprotoHandle: string | null
@@ -72,6 +83,10 @@ type AuthState = {
   // Clears tombstones for the given channelIDs (used on handle-unfollow,
   // which sweeps a person's channels — a later re-follow then re-adds fresh).
   clearDismissedAutoWatch: (channelIDs: string[]) => void
+  addFollow: (edge: FollowEdge) => void
+  removeFollow: (channelID: string) => void
+  addHandleFollow: (didDht: string) => void
+  removeHandleFollow: (didDht: string) => void
   setATProtoIdentity: (
     agent: Agent | null,
     did: string | null,
@@ -85,6 +100,8 @@ type AuthState = {
     subscriptions: SubscriptionRef[],
     dismissedAutoWatch: string[],
     theme: ThemeMode,
+    follows: FollowEdge[],
+    handleFollows: string[],
     // null when the freshest settings came from the Sia snapshot with no atproto
     // record (no CID to CAS against — the next save is a fresh create).
     cid: string | null,
@@ -109,6 +126,8 @@ export const useAuthStore = create<AuthState>()(
       myChannels: [],
       subscriptions: [],
       dismissedAutoWatch: [],
+      follows: [],
+      handleFollows: [],
       atprotoAgent: null,
       atprotoDID: null,
       atprotoHandle: null,
@@ -179,6 +198,26 @@ export const useAuthStore = create<AuthState>()(
             ),
           }
         }),
+      addFollow: (edge) =>
+        set((s) =>
+          s.follows.some((f) => f.channelID === edge.channelID)
+            ? s
+            : { follows: [...s.follows, edge] },
+        ),
+      removeFollow: (channelID) =>
+        set((s) => ({
+          follows: s.follows.filter((f) => f.channelID !== channelID),
+        })),
+      addHandleFollow: (didDht) =>
+        set((s) =>
+          s.handleFollows.includes(didDht)
+            ? s
+            : { handleFollows: [...s.handleFollows, didDht] },
+        ),
+      removeHandleFollow: (didDht) =>
+        set((s) => ({
+          handleFollows: s.handleFollows.filter((d) => d !== didDht),
+        })),
       setATProtoIdentity: (atprotoAgent, atprotoDID, atprotoHandle) =>
         // Don't overwrite an already-cached handle with null. The OAuth
         // scope doesn't permit app.bsky.actor.getProfile, so doBoot can
@@ -199,6 +238,8 @@ export const useAuthStore = create<AuthState>()(
         subscriptions,
         dismissedAutoWatch,
         theme,
+        follows,
+        handleFollows,
         cid,
       ) =>
         set({
@@ -206,6 +247,8 @@ export const useAuthStore = create<AuthState>()(
           subscriptions,
           dismissedAutoWatch,
           theme,
+          follows,
+          handleFollows,
           settingsRecordCid: cid,
           settingsLoaded: true,
         }),
@@ -227,6 +270,8 @@ export const useAuthStore = create<AuthState>()(
           myChannels: [],
           subscriptions: [],
           dismissedAutoWatch: [],
+          follows: [],
+          handleFollows: [],
           atprotoAgent: null,
           atprotoDID: null,
           atprotoHandle: null,
@@ -246,6 +291,8 @@ export const useAuthStore = create<AuthState>()(
         myChannels: state.myChannels,
         subscriptions: state.subscriptions,
         dismissedAutoWatch: state.dismissedAutoWatch,
+        follows: state.follows,
+        handleFollows: state.handleFollows,
         atprotoDID: state.atprotoDID,
         atprotoHandle: state.atprotoHandle,
         feedSortOrder: state.feedSortOrder,
