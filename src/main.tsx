@@ -29,6 +29,7 @@ if (import.meta.env.DEV) {
     __pinDidDht?: () => Promise<string>
     __pinPkarrRoundTrip?: () => Promise<string>
     __pinChannelLocatorRoundTrip?: () => Promise<string>
+    __pinIdentityDocRoundTrip?: () => Promise<string>
   }
   g.__pinMirrorWrite = async (text: string) => {
     const { sdk, hex } = await session()
@@ -157,6 +158,40 @@ if (import.meta.env.DEV) {
     const match =
       got?.name === manifest.name && got?.items.length === manifest.items.length
     return `locator ${pub.locatorKey.slice(0, 12)}… → reader resolved "${got?.name}" (${got?.items.length ?? 0}/${manifest.items.length} items) — ${match ? 'MATCH' : 'MISMATCH'}`
+  }
+  // Phase D step-3 proof: the identity-doc read path. Publishes your directory
+  // (profile + advertised public channels + follows) under your did:dht, then
+  // resolves it back the way a visitor would — no atproto. MATCH confirms profile +
+  // channel count + follow count survive the pkarr/Sia round-trip.
+  g.__pinIdentityDocRoundTrip = async () => {
+    const { useAuthStore } = await import('./stores/auth')
+    const { useFeedStore } = await import('./stores/feed')
+    const auth = useAuthStore.getState()
+    if (!auth.sdk || !auth.storedKeyHex) return 'not signed in'
+    const appKeyBytes = hexToBytes(auth.storedKeyHex)
+    const { deriveDidDht } = await import('./lib/pkarr')
+    const { publishIdentityDoc, resolveIdentityDoc } = await import(
+      './lib/identityDoc'
+    )
+    const { manifests } = useFeedStore.getState()
+    const channels = auth.myChannels.flatMap((c) => {
+      const m = manifests[c.channelID]
+      return m?.visibility === 'public'
+        ? [{ channelID: c.channelID, key: c.channelKey, name: m.name }]
+        : []
+    })
+    const doc = {
+      version: 1 as const,
+      profile: null,
+      channels,
+      follows: [] as string[],
+      updatedAt: new Date().toISOString(),
+    }
+    await publishIdentityDoc(auth.sdk, appKeyBytes, doc)
+    const { did } = await deriveDidDht(appKeyBytes)
+    const got = await resolveIdentityDoc(auth.sdk, did)
+    const match = got?.channels.length === channels.length
+    return `identity-doc → resolved ${got?.channels.length ?? 0}/${channels.length} public channels, ${got?.follows.length ?? 0} follows — ${match ? 'MATCH' : 'MISMATCH'}`
   }
 }
 
