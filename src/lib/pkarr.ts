@@ -106,8 +106,19 @@ export function reassembleTxt(records: PkarrTxt[], prefix: string): string {
     .join('')
 }
 
+// DHT publishes fail transiently — network flakiness, and pkarr's concurrency guard
+// ("A different SignedPacket is being concurrently published for the same PublicKey")
+// when another publish to the same key is briefly in flight (e.g. the keeper + this
+// browser both writing the identity key, or an overlapping re-publish). Retry a few
+// times with a short delay, the same posture the Rust keeper takes — the delay lets
+// the competing publish finish, then the retry (of the same signed packet) lands.
+const PUBLISH_RETRIES = 3
+const PUBLISH_RETRY_DELAY_MS = 2000
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
 /** Publish a set of TXT records to the DHT under `keypair`. Overwrites the prior
- *  document for this key. ~5s (Mainline store latency); call in the background. */
+ *  document for this key. ~5s (Mainline store latency); call in the background.
+ *  Retries transient failures; throws only if every attempt fails. */
 export async function publishRecords(
   keypair: Keypair,
   records: PkarrTxt[],
@@ -121,7 +132,17 @@ export async function publishRecords(
   }
   const packet = builder.buildAndSign(keypair)
   const c = await getPublishClient()
-  await c.publish(packet)
+  let lastErr: unknown
+  for (let attempt = 0; attempt < PUBLISH_RETRIES; attempt++) {
+    if (attempt > 0) await sleep(PUBLISH_RETRY_DELAY_MS)
+    try {
+      await c.publish(packet)
+      return
+    } catch (e) {
+      lastErr = e
+    }
+  }
+  throw lastErr
 }
 
 /** Resolve a `did:dht:<key>` (or a bare pkarr public-key string) to its current TXT
