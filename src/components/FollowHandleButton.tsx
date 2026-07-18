@@ -1,9 +1,4 @@
-import { useEffect, useState } from 'react'
-import {
-  followHandle,
-  isFollowingHandle,
-  unfollowHandle,
-} from '../core/handleFollow'
+import { useState } from 'react'
 import {
   reconcileOneHandle,
   sweepHandleFollow,
@@ -11,73 +6,50 @@ import {
 import { useAuthStore } from '../stores/auth'
 import { useToastStore } from '../stores/toast'
 
-// Follow the whole person (their DID), not a single channel. Following
-// auto-Watches every public channel they currently claim and tracks new ones
-// across boots; unfollowing sweeps all their feeds back out. Distinct from the
-// per-channel FollowButton on a channel page. Rendered on another person's
-// handle directory (never your own — you can't follow yourself).
+// Follow the whole person (their did:dht), not a single channel. The follow
+// state is a synchronous local-store edge (handleFollows), mirrored into the
+// identity-doc — no atproto. Following auto-Watches every public channel they
+// currently advertise and tracks new ones across boots; unfollowing sweeps all
+// their feeds back out. Distinct from the per-channel FollowButton. Rendered on
+// another person's did:dht directory (never your own — you can't follow
+// yourself).
 export function FollowHandleButton({
-  subjectDID,
+  subjectDidDht,
   subjectHandle,
 }: {
-  subjectDID: string
+  subjectDidDht: string
   subjectHandle: string
 }) {
-  const agent = useAuthStore((s) => s.atprotoAgent)
-  const myDID = useAuthStore((s) => s.atprotoDID)
+  const following = useAuthStore((s) => s.handleFollows.includes(subjectDidDht))
+  const addHandleFollow = useAuthStore((s) => s.addHandleFollow)
+  const removeHandleFollow = useAuthStore((s) => s.removeHandleFollow)
   const addToast = useToastStore((s) => s.addToast)
 
-  const [following, setFollowing] = useState<boolean | null>(null)
+  // The follow edge toggles synchronously (local store); busy covers the async
+  // auto-Watch side-effect (resolve their identity-doc + add/sweep channels).
   const [busy, setBusy] = useState(false)
 
-  useEffect(() => {
-    let cancelled = false
-    if (!myDID || myDID === subjectDID) {
-      setFollowing(null)
-      return
-    }
-    isFollowingHandle(myDID, subjectDID)
-      .then((v) => {
-        if (!cancelled) setFollowing(v)
-      })
-      .catch(() => {
-        // Unknown — hide rather than guess wrong (matches FollowButton).
-        if (!cancelled) setFollowing(null)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [myDID, subjectDID])
-
-  // No session, self, or unknown state → no button.
-  if (!agent || !myDID || myDID === subjectDID || following === null)
-    return null
-
   async function handleClick() {
-    if (!agent || busy) return
+    if (busy) return
     setBusy(true)
     try {
       if (following) {
-        await unfollowHandle(agent, subjectDID)
-        setFollowing(false)
-        const removed = await sweepHandleFollow(subjectDID).catch(() => 0)
+        removeHandleFollow(subjectDidDht)
+        const removed = await sweepHandleFollow(subjectDidDht).catch(() => 0)
         addToast(
           removed > 0
             ? `Unfollowed @${subjectHandle} · removed ${removed} ${removed === 1 ? 'channel' : 'channels'}`
             : `Unfollowed @${subjectHandle}`,
         )
       } else {
-        await followHandle(agent, subjectDID)
-        setFollowing(true)
-        const added = await reconcileOneHandle(subjectDID).catch(() => 0)
+        addHandleFollow(subjectDidDht)
+        const added = await reconcileOneHandle(subjectDidDht).catch(() => 0)
         addToast(
           added > 0
             ? `Following @${subjectHandle} · added ${added} ${added === 1 ? 'channel' : 'channels'}`
             : `Following @${subjectHandle}`,
         )
       }
-    } catch (e) {
-      addToast(e instanceof Error ? e.message : 'Action failed')
     } finally {
       setBusy(false)
     }

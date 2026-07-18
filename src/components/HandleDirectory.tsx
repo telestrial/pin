@@ -517,11 +517,16 @@ function ProfileHeader({
                 {profile ? 'Edit profile' : 'Set up profile'}
               </button>
             )}
-            {/* Follow is an atproto primitive (dev.sia.pin.subscription); it
-                doesn't apply to a did:dht identity yet, so suppress it there. */}
-            {!isSelf && !isDidDht && (
+            {/* Handle-follow: follow the whole person (their did:dht) — an
+                iroh edge in local settings + the identity-doc. Shown on another
+                person's did:dht identity. (A legacy atproto directory has no
+                did:dht to follow by; that path is going away.) */}
+            {!isSelf && isDidDht && (
               <div className="shrink-0">
-                <FollowHandleButton subjectDID={did} subjectHandle={handle} />
+                <FollowHandleButton
+                  subjectDidDht={did}
+                  subjectHandle={profile?.username ?? handleLabel}
+                />
               </div>
             )}
           </div>
