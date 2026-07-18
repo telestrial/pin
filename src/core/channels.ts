@@ -15,12 +15,6 @@ import {
   encryptForChannel,
   generateChannelKey,
 } from './crypto'
-import {
-  channelAtURI,
-  rkeyForSubject,
-  SUBSCRIPTION_LEXICON,
-  type SubscriptionRecord,
-} from './follow'
 import { downloadItem, uploadItem } from './sia'
 import {
   type AttachmentRef,
@@ -173,26 +167,9 @@ export async function createChannel(
     },
   ]
 
-  // Public channels are claimed at birth: the author self-follows in the
-  // SAME atproto commit, so a channel is never momentarily public-but-
-  // unclaimed. Obscure channels can't be followed (the AT-URI rkey derives
-  // from K, so a public follow record would leak the channel's existence),
-  // so they're never claimed and never surface under "Voices".
-  if (isPublic) {
-    const subject = channelAtURI(did, channelID)
-    const subRecord: SubscriptionRecord = {
-      $type: SUBSCRIPTION_LEXICON,
-      subject,
-      createdAt: manifest.publishedAt,
-    }
-    writes.push({
-      $type: 'com.atproto.repo.applyWrites#create',
-      collection: SUBSCRIPTION_LEXICON,
-      rkey: await rkeyForSubject(subject),
-      value: subRecord,
-    })
-  }
-
+  // Claim ("Voices") is now the local `advertised` flag on the OwnedChannel
+  // (default true → advertised in the identity-doc), not an atproto self-follow.
+  // So a public channel is claimed-at-birth without a second record here.
   await agent.com.atproto.repo.applyWrites({
     repo: did,
     validate: false,

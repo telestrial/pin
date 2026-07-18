@@ -174,6 +174,10 @@ export type OwnedChannel = {
   channelKey: string
   name: string
   createdAt: string
+  // Whether this public channel is advertised in your identity-doc (shows under
+  // "Voices"). Undefined = advertised — the default, "claimed at birth". Set
+  // false by Unclaim. Obscure channels are never advertised regardless.
+  advertised?: boolean
 }
 
 export type Subscriptions = {

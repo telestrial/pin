@@ -1,18 +1,17 @@
 import { MoreHorizontal } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
-import { follow, unfollow } from '../../core/follow'
-import { useAuthStore } from '../../stores/auth'
 import { useToastStore } from '../../stores/toast'
 import { Modal } from '../ui/Modal'
 
 // Owner-actions menu for a channel you authored. Horizontal-dots trigger →
 // dropdown. Today it holds one item: the claim toggle.
 //
-// Following your own public channel is the public claim of authorship — it's
-// what makes the channel appear under "Voices" on your profile. Unclaim
+// Advertising a public channel in your identity-doc is the claim of authorship
+// — it's what makes the channel appear under "Voices" on your profile. Unclaim
 // removes that public association: the channel stays public and readable, it
-// just stops being advertised as yours. Reclaim is instant; Unclaim asks
-// first, because stepping back from a voice is the weightier direction.
+// just stops being advertised as yours. Reclaim is instant; Unclaim asks first,
+// because stepping back from a voice is the weightier direction. Both are a
+// local flag flip now (no atproto) — the identity-doc republishes off it.
 //
 // Controlled: the claim state lives in the parent (ChannelView) via
 // useChannelClaim, so the header "Unclaimed" badge and this menu agree and
@@ -20,24 +19,18 @@ import { Modal } from '../ui/Modal'
 // parent renders it only for public channels (claim doesn't apply to obscure
 // ones); unpin/retract lives on the separate pin icon, not here.
 export function ChannelOwnerMenu({
-  channelAuthorDID,
-  channelID,
   channelName,
   claimed,
   onClaimedChange,
 }: {
-  channelAuthorDID: string
-  channelID: string
   channelName: string
   claimed: boolean
   onClaimedChange: (v: boolean) => void
 }) {
-  const agent = useAuthStore((s) => s.atprotoAgent)
   const addToast = useToastStore((s) => s.addToast)
 
   const [open, setOpen] = useState(false)
   const [confirming, setConfirming] = useState(false)
-  const [busy, setBusy] = useState(false)
   const wrapRef = useRef<HTMLDivElement>(null)
 
   // Close the dropdown on any outside click.
@@ -52,39 +45,17 @@ export function ChannelOwnerMenu({
     return () => document.removeEventListener('mousedown', onDown)
   }, [open])
 
-  // No session → render nothing (mirrors FollowButton: don't show an
-  // affordance that wouldn't work if clicked).
-  if (!agent) return null
-
-  async function doReclaim() {
-    if (!agent || busy) return
-    setBusy(true)
-    try {
-      await follow(agent, channelAuthorDID, channelID)
-      onClaimedChange(true)
-      addToast(`Reclaimed “${channelName}”`)
-    } catch (e) {
-      addToast(e instanceof Error ? e.message : 'Action failed')
-    } finally {
-      setBusy(false)
-      setOpen(false)
-    }
+  function doReclaim() {
+    onClaimedChange(true)
+    addToast(`Reclaimed “${channelName}”`)
+    setOpen(false)
   }
 
-  async function doUnclaim() {
-    if (!agent || busy) return
-    setBusy(true)
-    try {
-      await unfollow(agent, channelAuthorDID, channelID)
-      onClaimedChange(false)
-      addToast(`Unclaimed “${channelName}”`)
-    } catch (e) {
-      addToast(e instanceof Error ? e.message : 'Action failed')
-    } finally {
-      setBusy(false)
-      setConfirming(false)
-      setOpen(false)
-    }
+  function doUnclaim() {
+    onClaimedChange(false)
+    addToast(`Unclaimed “${channelName}”`)
+    setConfirming(false)
+    setOpen(false)
   }
 
   return (
@@ -121,9 +92,8 @@ export function ChannelOwnerMenu({
             <button
               type="button"
               role="menuitem"
-              disabled={busy}
               onClick={doReclaim}
-              className="w-full text-left px-3 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-50 cursor-pointer disabled:opacity-60"
+              className="w-full text-left px-3 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-50 cursor-pointer"
             >
               Reclaim
             </button>
@@ -151,18 +121,16 @@ export function ChannelOwnerMenu({
             <button
               type="button"
               onClick={() => setConfirming(false)}
-              disabled={busy}
-              className="px-3 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-100 rounded-md transition-colors cursor-pointer disabled:opacity-60"
+              className="px-3 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-100 rounded-md transition-colors cursor-pointer"
             >
               Cancel
             </button>
             <button
               type="button"
               onClick={doUnclaim}
-              disabled={busy}
-              className="px-3 py-1.5 text-xs font-medium text-white bg-neutral-900 hover:bg-neutral-700 rounded-md transition-colors cursor-pointer disabled:opacity-60"
+              className="px-3 py-1.5 text-xs font-medium text-white bg-neutral-900 hover:bg-neutral-700 rounded-md transition-colors cursor-pointer"
             >
-              {busy ? 'Unclaiming…' : 'Unclaim'}
+              Unclaim
             </button>
           </div>
         </Modal>

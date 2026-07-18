@@ -84,6 +84,7 @@ type AuthState = {
   setApprovalURL: (url: string | null) => void
   addMyChannel: (channel: OwnedChannel) => void
   updateMyChannelName: (channelID: string, name: string) => void
+  setChannelAdvertised: (channelID: string, advertised: boolean) => void
   removeMyChannel: (channelID: string) => void
   addSubscription: (sub: SubscriptionRef) => void
   updateSubscriptionName: (channelID: string, name: string) => void
@@ -161,6 +162,12 @@ export const useAuthStore = create<AuthState>()(
         set((s) => ({
           myChannels: s.myChannels.map((c) =>
             c.channelID === channelID ? { ...c, name } : c,
+          ),
+        })),
+      setChannelAdvertised: (channelID, advertised) =>
+        set((s) => ({
+          myChannels: s.myChannels.map((c) =>
+            c.channelID === channelID ? { ...c, advertised } : c,
           ),
         })),
       removeMyChannel: (channelID) =>

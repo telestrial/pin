@@ -63,11 +63,7 @@ export function ChannelView({
     manifest.authorATProtoDID &&
     manifest.authorATProtoDID === myDID
   )
-  const { claimed, setClaimed } = useChannelClaim(
-    manifest?.authorATProtoDID,
-    channelID,
-    isOwnPublic,
-  )
+  const { claimed, setClaimed } = useChannelClaim(channelID, isOwnPublic)
 
   // Backfill the manifest cache on cold-mount (e.g. empty channel that
   // contributed no feed entries to the initial refresh). Subsequent updates
@@ -175,17 +171,13 @@ export function ChannelView({
                           {/* Context menu — only the claim toggle, so it
                               shows for public channels only (claim doesn't
                               apply to obscure ones). */}
-                          {isOwnPublic &&
-                            manifest?.authorATProtoDID &&
-                            claimed !== null && (
-                              <ChannelOwnerMenu
-                                channelAuthorDID={manifest.authorATProtoDID}
-                                channelID={channelID}
-                                channelName={channelName}
-                                claimed={claimed}
-                                onClaimedChange={setClaimed}
-                              />
-                            )}
+                          {isOwnPublic && claimed !== null && (
+                            <ChannelOwnerMenu
+                              channelName={channelName}
+                              claimed={claimed}
+                              onClaimedChange={setClaimed}
+                            />
+                          )}
                           {/* Channel pin icon — separate third element. You
                               authored this channel, so its bytes are pinned in
                               your storage → the icon renders activated (filled

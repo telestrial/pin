@@ -64,7 +64,9 @@ export function useIdentityDocPublish() {
       // read them). Obscure channels stay unlisted.
       const channels: DirectoryChannelRef[] = myChannels.flatMap((c) => {
         const m = manifests[c.channelID]
-        if (!m || m.visibility !== 'public') return []
+        // Public + claimed (advertised). Unclaimed (advertised === false) and
+        // obscure channels stay unlisted.
+        if (!m || m.visibility !== 'public' || c.advertised === false) return []
         return [{ channelID: c.channelID, key: c.channelKey, name: m.name }]
       })
 
