@@ -2,6 +2,11 @@ import type { Agent } from '@atproto/api'
 import type { Sdk } from '@siafoundation/sia-storage'
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+import {
+  applyProfilePatch,
+  type ProfilePatch,
+  type ProfileRecord,
+} from '../core/profile'
 import type {
   FollowEdge,
   OwnedChannel,
@@ -51,6 +56,9 @@ type AuthState = {
   // replacing the atproto dev.sia.pin.subscription / .handlefollow records.
   follows: FollowEdge[]
   handleFollows: string[]
+  // The user's own profile — canonical locally (settings-synced), published into
+  // the identity-doc. Replaces the atproto dev.sia.pin.profile record.
+  profile: ProfileRecord | null
   atprotoAgent: Agent | null
   atprotoDID: string | null
   atprotoHandle: string | null
@@ -87,6 +95,7 @@ type AuthState = {
   removeFollow: (channelID: string) => void
   addHandleFollow: (didDht: string) => void
   removeHandleFollow: (didDht: string) => void
+  setProfile: (patch: ProfilePatch) => void
   setATProtoIdentity: (
     agent: Agent | null,
     did: string | null,
@@ -102,6 +111,7 @@ type AuthState = {
     theme: ThemeMode,
     follows: FollowEdge[],
     handleFollows: string[],
+    profile: ProfileRecord | null,
     // null when the freshest settings came from the Sia snapshot with no atproto
     // record (no CID to CAS against — the next save is a fresh create).
     cid: string | null,
@@ -128,6 +138,7 @@ export const useAuthStore = create<AuthState>()(
       dismissedAutoWatch: [],
       follows: [],
       handleFollows: [],
+      profile: null,
       atprotoAgent: null,
       atprotoDID: null,
       atprotoHandle: null,
@@ -218,6 +229,8 @@ export const useAuthStore = create<AuthState>()(
         set((s) => ({
           handleFollows: s.handleFollows.filter((d) => d !== didDht),
         })),
+      setProfile: (patch) =>
+        set((s) => ({ profile: applyProfilePatch(s.profile, patch) })),
       setATProtoIdentity: (atprotoAgent, atprotoDID, atprotoHandle) =>
         // Don't overwrite an already-cached handle with null. The OAuth
         // scope doesn't permit app.bsky.actor.getProfile, so doBoot can
@@ -240,6 +253,7 @@ export const useAuthStore = create<AuthState>()(
         theme,
         follows,
         handleFollows,
+        profile,
         cid,
       ) =>
         set({
@@ -249,6 +263,7 @@ export const useAuthStore = create<AuthState>()(
           theme,
           follows,
           handleFollows,
+          profile,
           settingsRecordCid: cid,
           settingsLoaded: true,
         }),
@@ -272,6 +287,7 @@ export const useAuthStore = create<AuthState>()(
           dismissedAutoWatch: [],
           follows: [],
           handleFollows: [],
+          profile: null,
           atprotoAgent: null,
           atprotoDID: null,
           atprotoHandle: null,
@@ -293,6 +309,7 @@ export const useAuthStore = create<AuthState>()(
         dismissedAutoWatch: state.dismissedAutoWatch,
         follows: state.follows,
         handleFollows: state.handleFollows,
+        profile: state.profile,
         atprotoDID: state.atprotoDID,
         atprotoHandle: state.atprotoHandle,
         feedSortOrder: state.feedSortOrder,

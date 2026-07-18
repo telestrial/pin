@@ -120,6 +120,7 @@ export function useSettingsSync() {
               chosen.theme ?? useAuthStore.getState().theme,
               chosen.follows ?? [],
               chosen.handleFollows ?? [],
+              chosen.profile ?? null,
               atp?.cid ?? null,
             )
         } else {
@@ -160,7 +161,8 @@ export function useSettingsSync() {
           initial.subscriptions.length > 0 ||
           initial.dismissedAutoWatch.length > 0 ||
           initial.follows.length > 0 ||
-          initial.handleFollows.length > 0))
+          initial.handleFollows.length > 0 ||
+          initial.profile !== null))
     let lastSerialized = needsPush ? '__push__' : serialize(initial)
 
     const runSave = async () => {
@@ -190,6 +192,7 @@ export function useSettingsSync() {
           theme: state.theme,
           follows: state.follows,
           handleFollows: state.handleFollows,
+          profile: state.profile,
           updatedAt: new Date().toISOString(),
         }
         const cid = await saveSettingsRecord(
@@ -236,7 +239,8 @@ export function useSettingsSync() {
         state.dismissedAutoWatch === prev.dismissedAutoWatch &&
         state.theme === prev.theme &&
         state.follows === prev.follows &&
-        state.handleFollows === prev.handleFollows
+        state.handleFollows === prev.handleFollows &&
+        state.profile === prev.profile
       ) {
         return
       }
@@ -302,5 +306,6 @@ function serialize(s: ReturnType<typeof useAuthStore.getState>): string {
     theme: s.theme,
     follows: s.follows,
     handleFollows: s.handleFollows,
+    profile: s.profile,
   })
 }

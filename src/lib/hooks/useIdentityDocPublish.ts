@@ -4,7 +4,6 @@ import {
   type DirectoryChannelRef,
   type DirectoryDoc,
 } from '../../core/identityDoc'
-import { getProfileRecord } from '../../core/profile'
 import { useAuthStore } from '../../stores/auth'
 import { useFeedStore } from '../../stores/feed'
 import { publishIdentityDoc } from '../identityDoc'
@@ -57,7 +56,7 @@ export function useIdentityDocPublish() {
     let lastFingerprint: string | null = null
 
     const assemble = async (): Promise<DirectoryDoc | null> => {
-      const { atprotoHandle, myChannels, follows, handleFollows } =
+      const { myChannels, follows, handleFollows, profile } =
         useAuthStore.getState()
       const { manifests } = useFeedStore.getState()
 
@@ -69,14 +68,9 @@ export function useIdentityDocPublish() {
         return [{ channelID: c.channelID, key: c.channelKey, name: m.name }]
       })
 
-      // follows/handleFollows are iroh-native local state (the settings doc) —
-      // no atproto read. Profile still comes from atproto for now (a separate
-      // atproto-consumer slice). Absent when just-reading / not yet set — an
-      // emptier directory, still valid.
-      const profile = atprotoHandle
-        ? await getProfileRecord(atprotoHandle).catch(() => null)
-        : null
-
+      // profile / follows / handleFollows are all iroh-native local state (the
+      // settings doc) — no atproto read. Absent when just-reading / not yet set
+      // → an emptier directory, still valid.
       // Nothing to advertise — don't publish an empty directory (or boot pkarr).
       if (
         !profile &&
@@ -141,7 +135,8 @@ export function useIdentityDocPublish() {
       if (
         s.myChannels !== p.myChannels ||
         s.follows !== p.follows ||
-        s.handleFollows !== p.handleFollows
+        s.handleFollows !== p.handleFollows ||
+        s.profile !== p.profile
       )
         schedule()
     })

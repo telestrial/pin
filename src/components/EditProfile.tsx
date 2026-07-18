@@ -1,10 +1,8 @@
 import { type ChangeEvent, useEffect, useState } from 'react'
 import {
-  getProfileRecord,
   normalizeUsername,
   type ProfilePatch,
   type ProfileRecord,
-  putProfileRecord,
 } from '../core/profile'
 import { uploadItem } from '../core/sia'
 import { useItemBlobURL } from '../lib/hooks/useItemBytes'
@@ -26,11 +24,9 @@ export function EditProfile({
   rightSidebar?: React.ReactNode
 }) {
   const sdk = useAuthStore((s) => s.sdk)
-  const agent = useAuthStore((s) => s.atprotoAgent)
-  const did = useAuthStore((s) => s.atprotoDID)
+  const setProfile = useAuthStore((s) => s.setProfile)
 
   const [loading, setLoading] = useState(true)
-  const [loadError, setLoadError] = useState<string | null>(null)
   const [original, setOriginal] = useState<ProfileRecord | null>(null)
   const [username, setUsername] = useState('')
   const [displayName, setDisplayName] = useState('')
@@ -51,32 +47,15 @@ export function EditProfile({
   const [removeExistingCover, setRemoveExistingCover] = useState(false)
 
   useEffect(() => {
-    let cancelled = false
-    if (!did) {
-      setLoadError('Bluesky session not active.')
-      setLoading(false)
-      return
-    }
-    // First-time editors don't have a profile record yet; null is a valid
-    // starting state (form just opens with empty fields).
-    getProfileRecord(did)
-      .then((profile) => {
-        if (cancelled) return
-        setOriginal(profile)
-        setUsername(profile?.username ?? '')
-        setDisplayName(profile?.displayName ?? '')
-        setBio(profile?.bio ?? '')
-        setLoading(false)
-      })
-      .catch((e) => {
-        if (cancelled) return
-        setLoadError(e instanceof Error ? e.message : 'Failed to load profile')
-        setLoading(false)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [did])
+    // Profile is local now (settings-synced) — no atproto fetch. First-time
+    // editors have none; null is a valid starting state (empty fields).
+    const profile = useAuthStore.getState().profile
+    setOriginal(profile)
+    setUsername(profile?.username ?? '')
+    setDisplayName(profile?.displayName ?? '')
+    setBio(profile?.bio ?? '')
+    setLoading(false)
+  }, [])
 
   // Local preview blob URLs for newly-picked files; cleaned up on
   // unmount or when the file is cleared.
@@ -148,10 +127,6 @@ export function EditProfile({
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    if (!agent) {
-      setError('Bluesky session not active. Cancel and try again to sign in.')
-      return
-    }
     if (!sdk) {
       setError('Sia session not active. Reload and reconnect.')
       return
@@ -184,11 +159,11 @@ export function EditProfile({
         patch.removeCover = true
       }
 
-      // putProfileRecord's read-current-then-patch path interprets
-      // undefined as "keep what's there." Explicit clearing for
-      // displayName/bio isn't a v1 affordance (vs. avatar/cover, which
-      // are explicit via removeAvatar / removeCover flags).
-      await putProfileRecord(agent, patch)
+      // setProfile's read-current-then-patch path interprets undefined as
+      // "keep what's there." Explicit clearing for displayName/bio isn't a v1
+      // affordance (vs. avatar/cover, which are explicit via removeAvatar /
+      // removeCover flags). Local write; the identity-doc publisher pushes it.
+      setProfile(patch)
 
       // Reclaim old avatar/cover bytes a replace/remove orphaned — durable,
       // retried byte-cleanup via the journal. Per-object Sia encryption makes
@@ -219,12 +194,6 @@ export function EditProfile({
 
   if (loading) {
     return card(<p className="text-neutral-500 text-sm">Loading profile…</p>)
-  }
-
-  if (loadError) {
-    return card(
-      <p className="text-red-600 text-sm wrap-break-word">{loadError}</p>,
-    )
   }
 
   return card(

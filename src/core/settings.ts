@@ -1,3 +1,4 @@
+import type { ProfileRecord } from './profile'
 import type {
   FollowEdge,
   OwnedChannel,
@@ -27,5 +28,9 @@ export type DispatchSettings = {
   // dev.sia.pin.handlefollow). Both optional for back-compat (treated empty).
   follows?: FollowEdge[]
   handleFollows?: string[]
+  // The user's own profile (Phase D step 6, atproto-free) — canonical locally,
+  // published into the identity-doc for others to resolve. Optional for
+  // back-compat (absent → no profile set).
+  profile?: ProfileRecord | null
   updatedAt: string
 }

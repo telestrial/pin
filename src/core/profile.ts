@@ -66,16 +66,16 @@ export async function getProfileRecord(
   }
 }
 
-export async function putProfileRecord(
-  agent: Agent,
+// Apply a patch to a profile: undefined fields keep the current value;
+// removeAvatar/removeCover explicitly clear. The iroh-native profile write is
+// just this — the store holds the result locally, and the identity-doc
+// publisher pushes it. (putProfileRecord below reuses it for the legacy atproto
+// path, which is on its way out.)
+export function applyProfilePatch(
+  current: ProfileRecord | null,
   patch: ProfilePatch,
-): Promise<ProfileRecord> {
-  const did = agent.assertDid
-
-  // Read current so we patch instead of overwriting unrelated fields.
-  const current = await getProfileRecord(did)
-
-  const next: ProfileRecord = {
+): ProfileRecord {
+  return {
     $type: PROFILE_LEXICON,
     username: patch.username ?? current?.username,
     displayName: patch.displayName ?? current?.displayName,
@@ -88,6 +88,17 @@ export async function putProfileRecord(
       : (patch.coverURL ?? current?.coverURL),
     updatedAt: new Date().toISOString(),
   }
+}
+
+export async function putProfileRecord(
+  agent: Agent,
+  patch: ProfilePatch,
+): Promise<ProfileRecord> {
+  const did = agent.assertDid
+
+  // Read current so we patch instead of overwriting unrelated fields.
+  const current = await getProfileRecord(did)
+  const next = applyProfilePatch(current, patch)
 
   await agent.com.atproto.repo.putRecord({
     repo: did,
