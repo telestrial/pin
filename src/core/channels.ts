@@ -121,6 +121,10 @@ export async function createChannel(
     visibility?: ChannelVisibility
     avatarImage?: { bytes: Uint8Array; mimeType: string }
     coverImage?: { bytes: Uint8Array; mimeType: string }
+    // The author's did:dht (derived by the caller from the AppKey — core stays
+    // pure of the pkarr/wasm layer). Stamped into the manifest as the iroh-world
+    // author identity.
+    authorDidDht?: string
   },
 ): Promise<CreatedChannel> {
   const did = agent.assertDid
@@ -138,6 +142,7 @@ export async function createChannel(
     description: args.description,
     authorPubkey: sdk.appKey().publicKey(),
     authorATProtoDID: did,
+    authorDidDht: args.authorDidDht,
     publishedAt: new Date().toISOString(),
     visibility: args.visibility ?? 'public',
     avatar,

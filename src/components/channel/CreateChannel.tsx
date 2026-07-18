@@ -99,16 +99,18 @@ export function CreateChannel({
               mimeType: f.type,
             }
           : undefined
+      // Derive our did:dht (from the AppKey — same identity the keeper /
+      // identity-doc use) up front: it's stamped into the manifest as the
+      // iroh-world author identity AND carried in the shareable capability link.
+      const { did } = await deriveDidDht(Uint8Array.fromHex(storedKeyHex))
       const result = await createChannel(sdk, agent, {
         name: trimmedName,
         description: description.trim(),
         visibility,
         avatarImage: await toImage(avatarFile),
         coverImage: await toImage(coverFile),
+        authorDidDht: did,
       })
-      // The shareable capability link carries our own did:dht (derived from the
-      // AppKey — same identity the keeper/identity-doc use), not the atproto handle.
-      const { did } = await deriveDidDht(Uint8Array.fromHex(storedKeyHex))
       const subscribeURL = buildSubscribeURL(did, result.channelKey)
       addMyChannel({
         channelID: result.channelID,

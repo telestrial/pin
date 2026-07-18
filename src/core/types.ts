@@ -121,6 +121,11 @@ export type ChannelManifest = {
   description: string
   authorPubkey: string
   authorATProtoDID: string
+  // The author's self-sovereign did:dht (Phase D) — the iroh-world author
+  // identity replacing authorATProtoDID. Lets a viewer resolve the author's
+  // identity-doc and build a channel-follow edge without atproto. Optional on
+  // manifests written before the field existed.
+  authorDidDht?: string
   publishedAt: string
   // Absent on manifests written before this field existed; readers treat
   // missing as 'obscure' (the safer default — Follow is opt-in).
