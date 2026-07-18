@@ -1,10 +1,13 @@
 import { useCallback, useState } from 'react'
 import { buildReachablePeople, type ReachablePerson } from '../../core/network'
 import { useAuthStore } from '../../stores/auth'
+import { deriveDidDht } from '../pkarr'
+import { makeReach } from '../reach'
 
-// Session cache of the resolved reachable-people index, keyed by DID. Building
-// it resolves an identity per reachable person, so we do it once per session and
-// lazily — only when the composer actually needs candidates (first `@`).
+// Session cache of the resolved reachable-people index, keyed by my did:dht.
+// Building it resolves an identity-doc per reachable person, so we do it once
+// per session and lazily — only when the composer actually needs candidates
+// (first `@`).
 const cache = new Map<string, ReachablePerson[]>()
 const inFlight = new Map<string, Promise<ReachablePerson[]>>()
 
@@ -13,38 +16,48 @@ export function useMentionCandidates(): {
   loading: boolean
   ensureLoaded: () => void
 } {
-  const myDID = useAuthStore((s) => s.atprotoDID)
-  const [candidates, setCandidates] = useState<ReachablePerson[]>(() =>
-    myDID ? (cache.get(myDID) ?? []) : [],
-  )
+  const sdk = useAuthStore((s) => s.sdk)
+  const storedKeyHex = useAuthStore((s) => s.storedKeyHex)
+  const [candidates, setCandidates] = useState<ReachablePerson[]>([])
   const [loading, setLoading] = useState(false)
 
   const ensureLoaded = useCallback(() => {
-    if (!myDID) return
-    const cached = cache.get(myDID)
-    if (cached) {
-      setCandidates(cached)
-      return
-    }
-    if (inFlight.has(myDID)) return
+    if (!sdk || !storedKeyHex) return
     setLoading(true)
-    // Read subscriptions at load time so this doesn't re-run on every sub tweak.
-    const subs = useAuthStore.getState().subscriptions
-    const r0 = [...new Set(subs.map((s) => s.authorDID).filter(Boolean))]
-    const p = buildReachablePeople(myDID, r0)
-    inFlight.set(myDID, p)
-    p.then((people) => {
-      cache.set(myDID, people)
-      setCandidates(people)
-    })
-      .catch(() => {
-        /* leave candidates empty; picker just shows no matches */
-      })
-      .finally(() => {
-        inFlight.delete(myDID)
+    void (async () => {
+      const { did: me } = await deriveDidDht(Uint8Array.fromHex(storedKeyHex))
+      const cached = cache.get(me)
+      if (cached) {
+        setCandidates(cached)
         setLoading(false)
+        return
+      }
+      if (inFlight.has(me)) {
+        setLoading(false)
+        return
+      }
+      // Read subscriptions at load time so this doesn't re-run on every sub
+      // tweak; seed with the did:dht-native subs.
+      const subs = useAuthStore.getState().subscriptions
+      const r0 = [
+        ...new Set(subs.map((s) => s.didDht).filter((d): d is string => !!d)),
+      ]
+      const { fetch, resolve } = makeReach(sdk)
+      const p = buildReachablePeople(me, r0, { fetch, resolve })
+      inFlight.set(me, p)
+      p.then((people) => {
+        cache.set(me, people)
+        setCandidates(people)
       })
-  }, [myDID])
+        .catch(() => {
+          /* leave candidates empty; picker just shows no matches */
+        })
+        .finally(() => {
+          inFlight.delete(me)
+          setLoading(false)
+        })
+    })()
+  }, [sdk, storedKeyHex])
 
   return { candidates, loading, ensureLoaded }
 }

@@ -7,109 +7,88 @@ import {
   STANDARD_GRAPH,
   type SyntheticGraph,
 } from '../test/socialGraph'
-import { channelAtURI } from './follow'
 import {
   buildReachablePeople,
   countReachablePeople,
-  type FollowsFetcher,
   type IdentityResolver,
+  type ReachFetcher,
   walkReachable,
 } from './network'
 
-const chan = (authorDID: string, cid = 'c1') =>
-  `at://${authorDID}/dev.sia.pin.channel/${cid}`
-
-// Build a fake follow-graph: did → the channel-author DIDs that did follows.
-function fakeFollows(graph: Record<string, string[]>): FollowsFetcher {
-  return async (did) =>
-    (graph[did] ?? []).map((authorDID) => ({
-      record: { subject: chan(authorDID) },
-    }))
+// A fake reach graph: id → the ids that id connects to.
+function fakeReach(graph: Record<string, string[]>): ReachFetcher {
+  return async (id) => graph[id] ?? []
 }
 
 describe('countReachablePeople', () => {
   it('returns zeros when you hold no one', async () => {
-    const r = await countReachablePeople('me', [], {
-      listFollows: fakeFollows({}),
-    })
+    const r = await countReachablePeople('me', [], { fetch: fakeReach({}) })
     expect(r).toEqual({ direct: 0, extended: 0, total: 0 })
   })
 
   it('counts direct (R0) people, deduped and excluding self', async () => {
     const r = await countReachablePeople('me', ['a', 'a', 'b', 'me'], {
-      listFollows: fakeFollows({}),
+      fetch: fakeReach({}),
     })
     expect(r).toEqual({ direct: 2, extended: 0, total: 2 })
   })
 
-  it('adds one-hop (R1) authors your follows follow', async () => {
-    // R0 = {a, b}; a follows c,d; b follows d,e → R1 = {c, d, e}.
+  it('adds one-hop (R1) people your follows connect to', async () => {
+    // R0 = {a, b}; a → c,d; b → d,e → R1 = {c, d, e}.
     const r = await countReachablePeople('me', ['a', 'b'], {
-      listFollows: fakeFollows({ a: ['c', 'd'], b: ['d', 'e'] }),
+      fetch: fakeReach({ a: ['c', 'd'], b: ['d', 'e'] }),
     })
     expect(r).toEqual({ direct: 2, extended: 3, total: 5 })
   })
 
   it('does not double-count an R1 person who is also R0', async () => {
-    // a follows b (already held) and c.
+    // a → b (already held) and c.
     const r = await countReachablePeople('me', ['a', 'b'], {
-      listFollows: fakeFollows({ a: ['b', 'c'] }),
+      fetch: fakeReach({ a: ['b', 'c'] }),
     })
     expect(r).toEqual({ direct: 2, extended: 1, total: 3 })
   })
 
   it('excludes yourself when reached one hop out', async () => {
     const r = await countReachablePeople('me', ['a'], {
-      listFollows: fakeFollows({ a: ['me', 'c'] }),
+      fetch: fakeReach({ a: ['me', 'c'] }),
     })
     expect(r).toEqual({ direct: 1, extended: 1, total: 2 }) // a, c
   })
 
-  it('tolerates a seed whose follow-list lookup fails', async () => {
-    const listFollows: FollowsFetcher = async (did) => {
-      if (did === 'b') throw new Error('network')
-      return [{ record: { subject: chan('c') } }]
+  it('tolerates a seed whose lookup fails', async () => {
+    const fetch: ReachFetcher = async (id) => {
+      if (id === 'b') throw new Error('network')
+      return ['c']
     }
-    const r = await countReachablePeople('me', ['a', 'b'], { listFollows })
+    const r = await countReachablePeople('me', ['a', 'b'], { fetch })
     // a → c; b throws (contributes nothing); still counts a, b, c.
     expect(r.total).toBe(3)
   })
 
   it('respects maxSeeds without dropping unwalked seeds from the R0 count', async () => {
     const r = await countReachablePeople('me', ['a', 'b', 'c'], {
-      listFollows: fakeFollows({ a: ['x'], b: ['y'], c: ['z'] }),
+      fetch: fakeReach({ a: ['x'], b: ['y'], c: ['z'] }),
       maxSeeds: 1,
     })
     // Only 'a' is walked → R1 = {x}; b and c still count as directly held.
     expect(r).toEqual({ direct: 3, extended: 1, total: 4 })
   })
-
-  it('ignores follow subjects that are not channel AT-URIs', async () => {
-    const listFollows: FollowsFetcher = async () => [
-      { record: { subject: 'at://did:x/app.bsky.feed.post/abc' } },
-      { record: { subject: chan('c') } },
-    ]
-    const r = await countReachablePeople('me', ['a'], { listFollows })
-    expect(r.total).toBe(2) // a, c — the bsky post subject is skipped
-  })
 })
 
 // Validate the real walk against the shared socialGraph harness: drive it off a
-// synthetic graph via a graph-backed follows fetcher, and cross-check its
+// synthetic graph via a graph-backed reach fetcher, and cross-check its
 // direct/total against reachablePeople — an *independent* computation over the
-// same graph (it reads the structs directly; the walk goes through the fetcher
-// + parseChannelAtURI, so agreement isn't tautological). Reach features built on
-// this walk should extend these cases rather than hand-roll fixtures.
-function graphListFollows(graph: SyntheticGraph): FollowsFetcher {
+// same graph. Reach features built on this walk should extend these cases
+// rather than hand-roll fixtures.
+function graphReach(graph: SyntheticGraph): ReachFetcher {
   const byDID = new Map(graph.users.map((u) => [u.did, u]))
   return async (did) => {
     const u = byDID.get(did)
     if (!u) return []
-    // Each of this person's subscriptions is a follow of a channel owned by
-    // sub.authorDID — the same subject shape production writes.
-    return u.subscriptions.map((s) => ({
-      record: { subject: channelAtURI(s.authorDID, s.channelID) },
-    }))
+    // A person connects to the authors of the channels they follow — the same
+    // people-edges the identity-doc's follows resolve to in production.
+    return [...new Set(u.subscriptions.map((s) => s.authorDID))]
   }
 }
 
@@ -123,10 +102,10 @@ describe('countReachablePeople against the socialGraph harness', () => {
   it('matches the reachablePeople oracle for alice in STANDARD_GRAPH', async () => {
     const me = 'did:test:alice'
     const reach = await countReachablePeople(me, r0Of(STANDARD_GRAPH, me), {
-      listFollows: graphListFollows(STANDARD_GRAPH),
+      fetch: graphReach(STANDARD_GRAPH),
     })
-    // Hand-verified: R0 = {bob, carol}; carol follows dan → R1 adds dan; bob
-    // follows only alice (the viewer, excluded). So 2 direct, 1 extended, 3 total.
+    // Hand-verified: R0 = {bob, carol}; carol → dan → R1 adds dan; bob → alice
+    // (the viewer, excluded). So 2 direct, 1 extended, 3 total.
     expect(reach).toEqual({ direct: 2, extended: 1, total: 3 })
     expect(reach.direct).toBe(reachablePeople(me, STANDARD_GRAPH, 1).length)
     expect(reach.total).toBe(reachablePeople(me, STANDARD_GRAPH, 2).length)
@@ -168,9 +147,7 @@ describe('countReachablePeople against the socialGraph harness', () => {
     const reach = await countReachablePeople(
       c.viewer,
       r0Of(c.graph, c.viewer),
-      {
-        listFollows: graphListFollows(c.graph),
-      },
+      { fetch: graphReach(c.graph) },
     )
     const elapsedMs = performance.now() - start
 
@@ -187,9 +164,9 @@ describe('countReachablePeople against the socialGraph harness', () => {
 
 describe('walkReachable', () => {
   it('keeps R0 people at distance 0 even if also reached one hop out', async () => {
-    // a follows b (also R0) and c. b must not be demoted to distance 1.
+    // a → b (also R0) and c. b must not be demoted to distance 1.
     const dist = await walkReachable('me', ['a', 'b'], {
-      listFollows: fakeFollows({ a: ['b', 'c'] }),
+      fetch: fakeReach({ a: ['b', 'c'] }),
     })
     expect(dist.get('a')).toBe(0)
     expect(dist.get('b')).toBe(0)
@@ -198,7 +175,7 @@ describe('walkReachable', () => {
 
   it('hops:0 returns only R0', async () => {
     const dist = await walkReachable('me', ['a'], {
-      listFollows: fakeFollows({ a: ['b'] }),
+      fetch: fakeReach({ a: ['b'] }),
       hops: 0,
     })
     expect([...dist.keys()]).toEqual(['a'])
@@ -206,7 +183,7 @@ describe('walkReachable', () => {
 
   it('hops:2 reaches two rings out with increasing distance', async () => {
     const dist = await walkReachable('me', ['a'], {
-      listFollows: fakeFollows({ a: ['b'], b: ['c'] }),
+      fetch: fakeReach({ a: ['b'], b: ['c'] }),
       hops: 2,
     })
     expect(dist.get('a')).toBe(0)
@@ -216,7 +193,7 @@ describe('walkReachable', () => {
 })
 
 // The picker's candidate provider — walk + identity resolution — against the
-// harness, with a graph-backed resolver standing in for describeRepo/profile.
+// harness, with a graph-backed resolver standing in for identity-doc profiles.
 function graphResolver(graph: SyntheticGraph): IdentityResolver {
   const byDID = new Map(graph.users.map((u) => [u.did, u]))
   return async (did) => {
@@ -230,7 +207,7 @@ describe('buildReachablePeople', () => {
 
   it('resolves the reachable set with correct distances (STANDARD_GRAPH)', async () => {
     const people = await buildReachablePeople(me, r0Of(STANDARD_GRAPH, me), {
-      listFollows: graphListFollows(STANDARD_GRAPH),
+      fetch: graphReach(STANDARD_GRAPH),
       resolve: graphResolver(STANDARD_GRAPH),
     })
     expect(people.map((p) => p.did).sort()).toEqual(
@@ -245,7 +222,7 @@ describe('buildReachablePeople', () => {
 
   it('sorts nearest-first (non-decreasing distance)', async () => {
     const people = await buildReachablePeople(me, r0Of(STANDARD_GRAPH, me), {
-      listFollows: graphListFollows(STANDARD_GRAPH),
+      fetch: graphReach(STANDARD_GRAPH),
       resolve: graphResolver(STANDARD_GRAPH),
     })
     for (let i = 1; i < people.length; i++) {
@@ -257,7 +234,7 @@ describe('buildReachablePeople', () => {
     const resolve: IdentityResolver = async (did) =>
       did === 'did:test:dan' ? null : { handle: did.replace('did:test:', '') }
     const people = await buildReachablePeople(me, r0Of(STANDARD_GRAPH, me), {
-      listFollows: graphListFollows(STANDARD_GRAPH),
+      fetch: graphReach(STANDARD_GRAPH),
       resolve,
     })
     expect(people.map((p) => p.did)).not.toContain('did:test:dan')
