@@ -181,10 +181,11 @@ if (import.meta.env.DEV) {
         : []
     })
     const doc = {
-      version: 1 as const,
+      version: 2 as const,
       profile: null,
       channels,
-      follows: [] as string[],
+      follows: [],
+      handleFollows: [],
       updatedAt: new Date().toISOString(),
     }
     await publishIdentityDoc(auth.sdk, appKeyBytes, doc)

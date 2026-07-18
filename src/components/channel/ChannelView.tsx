@@ -208,9 +208,9 @@ export function ChannelView({
                         // Non-owned channel: Follow (public only) + Unsubscribe.
                         <>
                           {manifest?.visibility === 'public' &&
-                            manifest.authorATProtoDID && (
+                            manifest.authorDidDht && (
                               <FollowButton
-                                channelAuthorDID={manifest.authorATProtoDID}
+                                authorDidDht={manifest.authorDidDht}
                                 channelID={channelID}
                                 channelName={channelName}
                               />

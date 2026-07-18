@@ -1,5 +1,4 @@
 import { useEffect } from 'react'
-import { listFollows } from '../../core/follow'
 import {
   DIRECTORY_DOC_VERSION,
   type DirectoryChannelRef,
@@ -58,7 +57,8 @@ export function useIdentityDocPublish() {
     let lastFingerprint: string | null = null
 
     const assemble = async (): Promise<DirectoryDoc | null> => {
-      const { atprotoHandle, myChannels } = useAuthStore.getState()
+      const { atprotoHandle, myChannels, follows, handleFollows } =
+        useAuthStore.getState()
       const { manifests } = useFeedStore.getState()
 
       // Own channels that are public → advertise them (with K so a resolver can
@@ -69,23 +69,29 @@ export function useIdentityDocPublish() {
         return [{ channelID: c.channelID, key: c.channelKey, name: m.name }]
       })
 
-      // Profile + follows come from atproto (this step mirrors them). Absent when
-      // just-reading / not yet set — an emptier directory, still valid.
-      const [profile, follows] = atprotoHandle
-        ? await Promise.all([
-            getProfileRecord(atprotoHandle).catch(() => null),
-            listFollows(atprotoHandle).catch(() => []),
-          ])
-        : [null, []]
+      // follows/handleFollows are iroh-native local state (the settings doc) —
+      // no atproto read. Profile still comes from atproto for now (a separate
+      // atproto-consumer slice). Absent when just-reading / not yet set — an
+      // emptier directory, still valid.
+      const profile = atprotoHandle
+        ? await getProfileRecord(atprotoHandle).catch(() => null)
+        : null
 
       // Nothing to advertise — don't publish an empty directory (or boot pkarr).
-      if (!profile && channels.length === 0 && follows.length === 0) return null
+      if (
+        !profile &&
+        channels.length === 0 &&
+        follows.length === 0 &&
+        handleFollows.length === 0
+      )
+        return null
 
       return {
         version: DIRECTORY_DOC_VERSION,
         profile,
         channels,
-        follows: follows.map((f) => f.record.subject),
+        follows,
+        handleFollows,
         updatedAt: new Date().toISOString(),
       }
     }
@@ -132,7 +138,12 @@ export function useIdentityDocPublish() {
       if (s.manifests !== p.manifests) schedule()
     })
     const unsubAuth = useAuthStore.subscribe((s, p) => {
-      if (s.myChannels !== p.myChannels) schedule()
+      if (
+        s.myChannels !== p.myChannels ||
+        s.follows !== p.follows ||
+        s.handleFollows !== p.handleFollows
+      )
+        schedule()
     })
     // Publish on mount too (catches profile/follows set before mount + the common
     // case of a returning user whose channels loaded before this ran).

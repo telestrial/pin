@@ -1,4 +1,5 @@
 import type { ProfileRecord } from './profile'
+import type { FollowEdge } from './types'
 
 // The public directory document for an identity — what a visitor gets when they
 // resolve someone's did:dht. It's the atproto-free replacement for the profile
@@ -9,7 +10,7 @@ import type { ProfileRecord } from './profile'
 // public — 06-02). Obscure channels are deliberately ABSENT — they're only reachable
 // via their own K-derived locator, so resolving an identity never enumerates them.
 
-export const DIRECTORY_DOC_VERSION = 1
+export const DIRECTORY_DOC_VERSION = 2
 
 // One advertised public channel: enough for a resolver to read it — the channelID +
 // its key K (public channels' K is shareable by definition) → derive the channel's
@@ -24,9 +25,15 @@ export type DirectoryDoc = {
   version: typeof DIRECTORY_DOC_VERSION
   profile: ProfileRecord | null
   channels: DirectoryChannelRef[]
-  // Public follows, mirrored as their subject AT-URIs (at://did/dev.sia.pin.channel/id)
-  // — the same values atproto's follow records carry. Resolving them into a walkable
-  // discovery graph is step 5 (needs the followed identities' did:dht).
-  follows: string[]
+  // Channel-follows as iroh-native edges (Phase D step 6) — {didDht, channelID,
+  // name?}, no K. A resolver takes didDht → the author's identity-doc → looks up
+  // channelID in `channels` → K there (public channels advertise K; obscure ones
+  // aren't advertised, so a follow of one stays an opaque pointer). Replaces the
+  // v1 subject-AT-URI strings.
+  follows: FollowEdge[]
+  // Handle-follows: the did:dhts of people this identity follows wholesale
+  // (their channels auto-Watched + tracked). Replaces the dev.sia.pin.handlefollow
+  // records.
+  handleFollows: string[]
   updatedAt: string
 }
