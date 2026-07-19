@@ -2,28 +2,38 @@ import { useEffect } from 'react'
 import { deriveSettingsKey, encryptSettings } from '../../core/crypto'
 import { type DispatchSettings, SETTINGS_VERSION } from '../../core/settings'
 import { useAuthStore } from '../../stores/auth'
+import { useStorageActivityStore } from '../../stores/storageActivity'
 import { openDocs, putRecord } from '../docs'
 import { snapshotToSia } from '../docsMirror'
 
-// Phase C — mirror the user's settings into iroh-docs + Sia, alongside the atproto
-// settings record. Increment 1 made this a best-effort shadow; increment 4(a)
-// HARDENS it to atproto-write reliability, because it's about to become a (or the)
-// source of truth once the atproto write is dropped in 4(b).
+// The user's settings mirrored into iroh-docs + Sia — the CANONICAL settings
+// write (Phase C step 4b dropped the atproto settings record). Everything the
+// user holds — channels + their keys, subscriptions, follows / handle-follows,
+// profile, theme, auto-Watch tombstones — lives here, encrypted under a key
+// derived from the Sia AppKey (never shared, never the atproto identity), and
+// made durable on Sia via the snapshot. Runs for every Sia user, so just-reading
+// users get durable settings too (they had none under the atproto-only write).
 //
 // Reliability model: a localStorage FINGERPRINT records the settings content last
-// SUCCESSFULLY mirrored. The mirror only writes when the current content differs
-// from the fingerprint, and only advances the fingerprint on success. So:
-//   - a failed write leaves the fingerprint stale -> it retries on the next change
-//     AND on the next boot (self-healing boot catch-up), so no change is silently
-//     lost even without an atproto backstop;
-//   - a matching fingerprint short-circuits BEFORE openDocs, so pin-core's wasm +
-//     relay stay unloaded when there's nothing new to mirror (lazy cost preserved).
-//
-// atproto is still the source of truth through 4(a) — this is purely making the
-// doc/Sia write trustworthy before 4(b) relies on it.
+// SUCCESSFULLY mirrored. The mirror writes only when the current content differs,
+// and advances the fingerprint only on success. So a failed write retries on the
+// next change AND on the next boot (self-healing catch-up) — no change is silently
+// lost. A matching fingerprint short-circuits BEFORE openDocs, so pin-core's wasm
+// + relay stay unloaded when there's nothing new.
 
 const DEBOUNCE_MS = 2000
 const FINGERPRINT_KEY = 'pin:docsnapshot:settingsFingerprint'
+
+// Module-scope flush so non-React callers (channel mutations, etc.) can await the
+// durable settings write before proceeding. Set by the hook on mount.
+let activeMirrorFlush: (() => Promise<void>) | null = null
+
+// Await the durable settings write now (best-effort) — the replacement for the
+// old atproto flush. Resolves once the current settings are mirrored to Sia (or,
+// on failure, a retry is left armed via the stale fingerprint).
+export async function flushSettingsMirror(): Promise<void> {
+  if (activeMirrorFlush) await activeMirrorFlush()
+}
 
 function settingsFingerprint(): string {
   const s = useAuthStore.getState()
@@ -32,6 +42,9 @@ function settingsFingerprint(): string {
     subscriptions: s.subscriptions,
     dismissedAutoWatch: s.dismissedAutoWatch,
     theme: s.theme,
+    follows: s.follows,
+    handleFollows: s.handleFollows,
+    profile: s.profile,
   })
 }
 
@@ -78,6 +91,7 @@ export function useSettingsDocsMirror() {
       // Already mirrored this exact content — skip before touching pin-core.
       if (fp === readFingerprint()) return
       saving = true
+      useStorageActivityStore.getState().setSavingSettings(true)
       try {
         await ensureOpen()
         if (cancelled) return
@@ -88,6 +102,9 @@ export function useSettingsDocsMirror() {
           subscriptions: state.subscriptions,
           dismissedAutoWatch: state.dismissedAutoWatch,
           theme: state.theme,
+          follows: state.follows,
+          handleFollows: state.handleFollows,
+          profile: state.profile,
           updatedAt: new Date().toISOString(),
         }
         const key = await deriveSettingsKey(appKeyBytes)
@@ -98,9 +115,10 @@ export function useSettingsDocsMirror() {
         // stale so the next change/boot retries (no silent loss).
         writeFingerprint(fp)
       } catch (e) {
-        console.warn('settings docs-mirror failed (will retry):', e)
+        console.warn('settings mirror failed (will retry):', e)
       } finally {
         saving = false
+        useStorageActivityStore.getState().setSavingSettings(false)
         if (pending && !cancelled) {
           pending = false
           schedule()
@@ -121,7 +139,10 @@ export function useSettingsDocsMirror() {
         s.myChannels === p.myChannels &&
         s.subscriptions === p.subscriptions &&
         s.dismissedAutoWatch === p.dismissedAutoWatch &&
-        s.theme === p.theme
+        s.theme === p.theme &&
+        s.follows === p.follows &&
+        s.handleFollows === p.handleFollows &&
+        s.profile === p.profile
       ) {
         return
       }
@@ -129,12 +150,22 @@ export function useSettingsDocsMirror() {
     })
 
     // Boot catch-up: if local settings differ from what we last mirrored (a
-    // failed write last session, or first run), re-mirror. mirror() self-skips
-    // when the fingerprint already matches, so this is free when up to date.
+    // failed write last session, first run, or new fields added since), re-mirror.
+    // mirror() self-skips when the fingerprint already matches, so it's free when
+    // up to date.
     if (settingsFingerprint() !== readFingerprint()) schedule()
+
+    // Flush contract (durable-when-done): await any in-flight mirror, then mirror
+    // once if still stale. Callers awaiting this get the current settings durable
+    // on Sia — the replacement for the dropped atproto flush.
+    activeMirrorFlush = async () => {
+      while (saving) await new Promise((r) => setTimeout(r, 50))
+      if (settingsFingerprint() !== readFingerprint()) await mirror()
+    }
 
     return () => {
       cancelled = true
+      activeMirrorFlush = null
       if (timer) clearTimeout(timer)
       unsub()
     }
