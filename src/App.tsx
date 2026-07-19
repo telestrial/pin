@@ -17,7 +17,6 @@ import { useChannelReader } from './lib/hooks/useChannelReader'
 import { useGhostReconciliation } from './lib/hooks/useGhostReconciliation'
 import { useHandleFollowReconciliation } from './lib/hooks/useHandleFollowReconciliation'
 import { useIdentityDocPublish } from './lib/hooks/useIdentityDocPublish'
-import { useJetstream } from './lib/hooks/useJetstream'
 import { useRepackRunner } from './lib/hooks/useRepackRunner'
 import { useSettingsDocsMirror } from './lib/hooks/useSettingsDocsMirror'
 import { useSettingsSync } from './lib/hooks/useSettingsSync'
@@ -67,7 +66,6 @@ export default function App() {
     document.documentElement.dataset.shell = inTauri() ? 'desktop' : 'web'
   }, [])
 
-  useJetstream()
   useActionQueueHydration()
   useActionRunner()
   useRepackRunner()

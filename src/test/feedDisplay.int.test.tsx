@@ -1,8 +1,8 @@
 // Integration test: author publishes a post → subscriber sees it in the feed.
 //
 // First integration test in the suite — sets the harness pattern for the rest.
-// Drives production components (HomeFeed) against the Phase 3 fakes via three
-// vi.mock'd modules: @atproto/api, ../core/jetstream, @siafoundation/sia-storage.
+// Drives production components (HomeFeed) against the Phase 3 fakes via two
+// vi.mock'd modules: @atproto/api, @siafoundation/sia-storage.
 //
 // Alice (author) publishes a text post through the real core/channels +
 // core/sia code paths (now backed by FakeSdk + FakeAgent). Bob (subscriber)
@@ -18,9 +18,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 // at runtime (after hoist), when getCurrentWorld() can return a live world.
 vi.mock('@atproto/api', async () =>
   (await import('./fakeModules')).fakeAtprotoApiModule(),
-)
-vi.mock('../core/jetstream', async () =>
-  (await import('./fakeModules')).fakeJetstreamModule(),
 )
 vi.mock('@siafoundation/sia-storage', async () =>
   (await import('./fakeModules')).fakeSiaStorageModule(),

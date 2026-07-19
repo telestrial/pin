@@ -28,7 +28,6 @@ export function HomeFeed({
   const errors = useFeedStore((s) => s.errors)
   const loading = useFeedStore((s) => s.loading)
   const lastRefreshedAt = useFeedStore((s) => s.lastRefreshedAt)
-  const live = useFeedStore((s) => s.live)
   const refresh = useFeedStore((s) => s.refresh)
 
   useEffect(() => {
@@ -72,20 +71,6 @@ export function HomeFeed({
         })}
       </div>
       <div className="flex items-center gap-2 text-xs text-neutral-500">
-        {live ? (
-          <span className="hidden sm:inline-flex items-center gap-1.5">
-            <span className="relative flex size-1.5">
-              <span className="animate-ping absolute inline-flex size-full rounded-full bg-green-500 opacity-75" />
-              <span className="relative inline-flex rounded-full size-1.5 bg-green-600" />
-            </span>
-            Live
-          </span>
-        ) : (
-          <span className="hidden sm:inline-flex items-center gap-1.5">
-            <span className="size-1.5 rounded-full bg-neutral-400" />
-            Offline
-          </span>
-        )}
         <button
           type="button"
           onClick={() => refresh(subscriptions)}

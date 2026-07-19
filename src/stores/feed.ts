@@ -14,7 +14,6 @@ type FeedState = {
   manifests: Record<string, ChannelManifest>
   loading: boolean
   lastRefreshedAt: string | null
-  live: boolean
   // How channels are read. Defaults to the atproto fetch; App injects the
   // locator-first reader (pkarr → Sia → atproto fallback) once the sdk exists.
   // Pluggable here (not imported) to keep this store off the auth store — auth
@@ -25,7 +24,6 @@ type FeedState = {
   refreshChannel: (sub: SubscriptionRef) => Promise<void>
   setManifest: (channelID: string, manifest: ChannelManifest) => void
   removeChannel: (channelID: string) => void
-  setLive: (live: boolean) => void
   reset: () => void
 }
 
@@ -35,7 +33,6 @@ export const useFeedStore = create<FeedState>()((set, get) => ({
   manifests: {},
   loading: false,
   lastRefreshedAt: null,
-  live: false,
   channelReader: fetchChannel,
   setChannelReader: (reader) => set({ channelReader: reader }),
   refresh: async (subscriptions) => {
@@ -99,7 +96,6 @@ export const useFeedStore = create<FeedState>()((set, get) => ({
         manifests: remainingManifests,
       }
     }),
-  setLive: (live) => set({ live }),
   reset: () =>
     set({
       entries: [],
@@ -107,6 +103,5 @@ export const useFeedStore = create<FeedState>()((set, get) => ({
       manifests: {},
       loading: false,
       lastRefreshedAt: null,
-      live: false,
     }),
 }))

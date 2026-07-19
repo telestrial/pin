@@ -6,9 +6,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 vi.mock('@atproto/api', async () =>
   (await import('../test/fakeModules')).fakeAtprotoApiModule(),
 )
-vi.mock('./jetstream', async () =>
-  (await import('../test/fakeModules')).fakeJetstreamModule(),
-)
 vi.mock('@siafoundation/sia-storage', async () =>
   (await import('../test/fakeModules')).fakeSiaStorageModule(),
 )
