@@ -1,8 +1,8 @@
 import { useEffect, useMemo } from 'react'
 import type { FeedEntry } from '../../core/feed'
 import type { ChannelImage } from '../../core/types'
-import { useAuthorName } from '../../lib/hooks/useAuthorName'
 import { useChannelClaim } from '../../lib/hooks/useChannelClaim'
+import { useIdentityName } from '../../lib/hooks/useIdentityName'
 import { useItemBlobURL } from '../../lib/hooks/useItemBytes'
 import { renderMarkdown } from '../../lib/markdown'
 import { useAuthStore } from '../../stores/auth'
@@ -47,7 +47,6 @@ export function ChannelView({
     ),
   )
   const sortOrder = useAuthStore((s) => s.feedSortOrder)
-  const authorName = useAuthorName(authorHandle)
   const setSortOrder = useAuthStore((s) => s.setFeedSortOrder)
   const myDID = useAuthStore((s) => s.atprotoDID)
   const entries = useFeedStore((s) => s.entries)
@@ -55,6 +54,9 @@ export function ChannelView({
   const live = useFeedStore((s) => s.live)
   const refreshChannel = useFeedStore((s) => s.refreshChannel)
   const manifest = useFeedStore((s) => s.manifests[channelID])
+  // did:dht author → identity-doc name; legacy handle author → the raw handle.
+  const identityName = useIdentityName(manifest?.authorDidDht ?? '')
+  const authorName = manifest?.authorDidDht ? identityName : authorHandle
 
   // A public channel you authored. Claim (self-follow) only applies here —
   // obscure channels can't be followed, others' channels you Follow not claim.

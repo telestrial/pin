@@ -1,7 +1,6 @@
 import { useEffect, useMemo } from 'react'
 import type { FeedEntry } from '../core/feed'
 import type { ItemRef } from '../core/types'
-import { useAuthorName } from '../lib/hooks/useAuthorName'
 import { useIdentityName } from '../lib/hooks/useIdentityName'
 import { renderPostBody } from '../lib/markdown'
 import { formatAbsolute, formatRelativeShort } from '../lib/time'
@@ -235,11 +234,10 @@ export function FeedRow({
   onHandleClick: (handle: string) => void
 }) {
   const { item, channel } = entry
-  // did:dht subs display + navigate by identity-doc; legacy handle subs by atproto.
-  // Both hooks run unconditionally (hook rules); we pick by which id the sub carries.
-  const handleName = useAuthorName(channel.authorHandle)
+  // did:dht subs display + navigate by identity-doc; legacy handle subs show the
+  // raw handle (no atproto profile lookup).
   const identityName = useIdentityName(channel.authorDidDht ?? '')
-  const authorName = channel.authorDidDht ? identityName : handleName
+  const authorName = channel.authorDidDht ? identityName : channel.authorHandle
   const authorId = channel.authorDidDht || channel.authorHandle
 
   const handleChannelClick = (e: React.MouseEvent | React.KeyboardEvent) => {

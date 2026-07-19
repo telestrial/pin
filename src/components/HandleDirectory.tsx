@@ -8,7 +8,6 @@ import type { ChannelManifest } from '../core/types'
 import { resolveChannelViaLocator } from '../lib/channelLocator'
 import { formatBytes } from '../lib/format'
 import { resolveIdentityDoc } from '../lib/identityDoc'
-import { useAuthorName } from '../lib/hooks/useAuthorName'
 import { useItemBlobURL } from '../lib/hooks/useItemBytes'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
@@ -674,7 +673,7 @@ function ChannelRow({
   onChannelClick: (authorHandle: string, channelID: string) => void
   onHandleClick: (handle: string) => void
 }) {
-  const authorName = useAuthorName(entry.authorHandle)
+  const authorName = entry.authorHandle
   const onRowClick = () => onChannelClick(entry.authorHandle, entry.channelID)
   const onAuthorClick = (e: React.MouseEvent) => {
     e.stopPropagation()
