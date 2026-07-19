@@ -48,7 +48,9 @@ export function ChannelView({
   )
   const sortOrder = useAuthStore((s) => s.feedSortOrder)
   const setSortOrder = useAuthStore((s) => s.setFeedSortOrder)
-  const myDID = useAuthStore((s) => s.atprotoDID)
+  const isOwned = useAuthStore((s) =>
+    s.myChannels.some((c) => c.channelID === channelID),
+  )
   const entries = useFeedStore((s) => s.entries)
   const loading = useFeedStore((s) => s.loading)
   const live = useFeedStore((s) => s.live)
@@ -58,13 +60,12 @@ export function ChannelView({
   const identityName = useIdentityName(manifest?.authorDidDht ?? '')
   const authorName = manifest?.authorDidDht ? identityName : authorHandle
 
-  // A public channel you authored. Claim (self-follow) only applies here —
-  // obscure channels can't be followed, others' channels you Follow not claim.
-  const isOwnPublic = !!(
-    manifest?.visibility === 'public' &&
-    manifest.authorATProtoDID &&
-    manifest.authorATProtoDID === myDID
-  )
+  // A public channel you authored. Ownership is local — a channel you created
+  // is in myChannels (identity-independent), so this no longer needs the
+  // manifest's atproto DID. Claim (advertise in the identity-doc) applies only
+  // to public channels you own — obscure channels aren't advertised, others'
+  // channels you Follow not claim.
+  const isOwnPublic = isOwned && manifest?.visibility === 'public'
   const { claimed, setClaimed } = useChannelClaim(channelID, isOwnPublic)
 
   // Backfill the manifest cache on cold-mount (e.g. empty channel that
