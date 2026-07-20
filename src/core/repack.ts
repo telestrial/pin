@@ -1,10 +1,21 @@
-import type { Agent } from '@atproto/api'
 import type { Sdk } from '@siafoundation/sia-storage'
-import { putChannelRecord } from './atproto'
-import { fetchChannel } from './channels'
-import { channelKeyFromBase64, encryptForChannel } from './crypto'
 import { downloadItem, uploadItemsPacked } from './sia'
 import type { ChannelManifest } from './types'
+
+// Manifest I/O injected by the runner (lib), so core/repack stays pure of the
+// pkarr/wasm locator layer. readManifest returns a channel's current manifest;
+// commitManifest publishes a rewritten one (to the locator, in production).
+export type ChannelManifestIO = {
+  readManifest: (
+    channelID: string,
+    channelKey: string,
+  ) => Promise<ChannelManifest>
+  commitManifest: (
+    channelID: string,
+    channelKey: string,
+    manifest: ChannelManifest,
+  ) => Promise<void>
+}
 
 // 10 data shards × 4 MiB each = 40 MiB usable per slab. Same constant the
 // publish handler (lib/actions/publish) uses for shard-count math.
@@ -128,8 +139,11 @@ function pickBatch(slabs: SlabAggregate[], now = Date.now()): SlabAggregate[] {
 
 export async function runRepackBatch(
   sdk: Sdk,
-  agent: Agent | null,
   scope: ScopeRef[],
+  // Present when the caller can rewrite channel manifests (locator I/O). Absent
+  // → channel objects are dropped from the batch (library + external still
+  // pack), so a reader with no owned channels stays productive.
+  channelIO?: ChannelManifestIO,
 ): Promise<RepackBatchResult | null> {
   const { slabs, refsByID } = await buildSlabAggregates(sdk, scope)
   const batch = pickBatch(slabs)
@@ -145,10 +159,12 @@ export async function runRepackBatch(
   }
   if (refs.length === 0) return null
 
-  // If any object lives in an own channel, we need an agent to rewrite that
-  // channel's manifest. Without one, drop channel objects from this batch
-  // and only pack library + external. Keeps Just-Reading users productive.
-  const filteredRefs = agent ? refs : refs.filter((r) => r.source !== 'channel')
+  // If any object lives in an own channel, we need channel I/O to rewrite that
+  // channel's manifest. Without it, drop channel objects from this batch and
+  // only pack library + external. Keeps Just-Reading users productive.
+  const filteredRefs = channelIO
+    ? refs
+    : refs.filter((r) => r.source !== 'channel')
   if (filteredRefs.length === 0) return null
 
   // Download bytes for each — uses the existing useItemBytes cache path
@@ -187,13 +203,12 @@ export async function runRepackBatch(
 
   const affectedChannelIDs: string[] = []
   for (const [channelID, channelMappings] of channelGroups) {
-    if (!agent) continue // shouldn't reach here per filter above
+    if (!channelIO) continue // shouldn't reach here per filter above
     const channelKey = (
       channelMappings[0].oldRef as Extract<ScopeRef, { source: 'channel' }>
     ).channelKey
-    const did = agent.assertDid
 
-    const manifest = await fetchChannel(did, channelID, channelKey)
+    const manifest = await channelIO.readManifest(channelID, channelKey)
 
     const replacementsByURL = new Map<
       string,
@@ -264,17 +279,7 @@ export async function runRepackBatch(
       items: updatedItems,
     }
 
-    const keyBytes = channelKeyFromBase64(channelKey)
-    const ciphertext = await encryptForChannel(
-      keyBytes,
-      JSON.stringify(updated),
-    )
-    await putChannelRecord(
-      agent,
-      channelID,
-      ciphertext,
-      updated.visibility === 'public' ? channelKey : undefined,
-    )
+    await channelIO.commitManifest(channelID, channelKey, updated)
     affectedChannelIDs.push(channelID)
   }
 

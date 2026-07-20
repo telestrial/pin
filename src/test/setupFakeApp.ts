@@ -13,7 +13,12 @@ import {
   editItem,
 } from '../core/channels'
 import { uploadItem } from '../core/sia'
-import type { ItemRef, SubscriptionRef } from '../core/types'
+import type { ChannelManifest, ItemRef, SubscriptionRef } from '../core/types'
+import {
+  commitChannelManifest,
+  makeLocatorFirstReader,
+  resolveChannelViaLocator,
+} from '../lib/channelLocator'
 import { useActionStore } from '../stores/actionQueue'
 import { useAuthStore } from '../stores/auth'
 import { useComposeStore } from '../stores/compose'
@@ -71,15 +76,26 @@ export function resetAllStores(): void {
   setCurrentWorld(null)
 }
 
-// Convenience: author publishes a text post through real core/channels
-// + core/sia code paths. Used for setup phases of integration tests.
+// The channel's current published manifest, read back off its locator (the
+// same path a reader uses). Helpers read-modify-write against this instead of
+// threading the manifest through the test.
+async function loadChannelManifest(
+  sdk: Sdk,
+  channel: { channelKey: string },
+): Promise<ChannelManifest> {
+  const manifest = await resolveChannelViaLocator(sdk, channel.channelKey)
+  if (!manifest) throw new Error('channel locator not resolvable')
+  return manifest
+}
+
+// Convenience: author publishes a text post through the real locator write path
+// (upload bytes → append to manifest → commit locator). Setup for int tests.
 export async function publishTextPost(
   author: FakeAccount,
   channel: { channelID: string; channelKey: string },
   body: string,
 ): Promise<ItemRef> {
   const sdk = author.sdk as unknown as Sdk
-  const agent = author.agent as unknown as Agent
   const bytes = new TextEncoder().encode(body)
   const uploaded = await uploadItem(sdk, bytes)
   const item = buildItemRef(uploaded, {
@@ -89,13 +105,19 @@ export async function publishTextPost(
     mimeType: 'text/markdown',
     bytes,
   })
-  await appendItemToChannel(agent, channel, item)
+  const current = await loadChannelManifest(sdk, channel)
+  const manifest = appendItemToChannel(current, item)
+  await commitChannelManifest(
+    sdk,
+    channel.channelID,
+    channel.channelKey,
+    manifest,
+  )
   return item
 }
 
-// Convenience: author edits an existing text post in place. Uploads new
-// bytes, swaps the manifest entry (preserving publishedAt), and stamps
-// editedAt. Mirrors what the publish handler does in production.
+// Convenience: author edits an existing text post in place. Uploads new bytes,
+// swaps the manifest entry (preserving publishedAt), stamps editedAt, commits.
 export async function editTextPost(
   author: FakeAccount,
   channel: { channelID: string; channelKey: string },
@@ -103,7 +125,6 @@ export async function editTextPost(
   newBody: string,
 ): Promise<ItemRef> {
   const sdk = author.sdk as unknown as Sdk
-  const agent = author.agent as unknown as Agent
   const bytes = new TextEncoder().encode(newBody)
   const uploaded = await uploadItem(sdk, bytes)
   const newItem: ItemRef = {
@@ -116,19 +137,34 @@ export async function editTextPost(
     }),
     editedAt: new Date().toISOString(),
   }
-  const result = await editItem(agent, channel, oldItemID, newItem)
-  return result.item
+  const current = await loadChannelManifest(sdk, channel)
+  const { manifest, item } = editItem(current, oldItemID, newItem)
+  await commitChannelManifest(
+    sdk,
+    channel.channelID,
+    channel.channelKey,
+    manifest,
+  )
+  return item
 }
 
-// Convenience: author creates a channel and returns the canonical handle.
+// Convenience: author creates a channel and commits its locator.
 export async function authorCreateChannel(
   author: FakeAccount,
   args: { name: string; description?: string } = { name: 'Channel' },
 ): Promise<CreatedChannel> {
-  return createChannel(author.sdk as unknown as Sdk, author.agent as unknown as Agent, {
+  const sdk = author.sdk as unknown as Sdk
+  const created = await createChannel(sdk, {
     name: args.name,
     description: args.description ?? '',
   })
+  await commitChannelManifest(
+    sdk,
+    created.channelID,
+    created.channelKey,
+    created.manifest,
+  )
+  return created
 }
 
 export function mountAs(
@@ -159,4 +195,10 @@ export function mountAs(
     settingsLoaded: true,
     error: null,
   })
+  // Reads go locator-first (pkarr → Sia → atproto fallback), matching what
+  // App's useChannelReader injects in production — so a subscriber's feed reads
+  // the channel the author committed to the locator, not the (gone) atproto record.
+  useFeedStore
+    .getState()
+    .setChannelReader(makeLocatorFirstReader(account.sdk as unknown as Sdk))
 }

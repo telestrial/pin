@@ -14,6 +14,9 @@ vi.mock('@atproto/api', async () =>
 vi.mock('@siafoundation/sia-storage', async () =>
   (await import('./fakeModules')).fakeSiaStorageModule(),
 )
+vi.mock('../lib/pkarr', async () =>
+  (await import('./fakeModules')).fakePkarrModule(),
+)
 
 // A followed person's advertised channels are served from a mock identity-doc
 // keyed by their DID. Hoisted so the vi.mock factory can close over it.

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { deletePublishedItem } from '../../core/channels'
+import { deleteItemFromChannel } from '../../lib/channelWrites'
 import { formatBytes } from '../../lib/format'
 import { itemPinByteSize } from '../../lib/hooks/useChannelPinState'
 import { usePinState } from '../../lib/hooks/usePinState'
@@ -17,15 +17,12 @@ import { PinIcon } from './PinIcon'
 
 export function PinButton({ input }: { input: PinInput }) {
   const sdk = useAuthStore((s) => s.sdk)
-  const agent = useAuthStore((s) => s.atprotoAgent)
   const myChannels = useAuthStore((s) => s.myChannels)
-  const subscriptions = useAuthStore((s) => s.subscriptions)
   const isPinned = usePinStore((s) => s.isPinned(input.item.itemURL))
   const isPinning = usePinStore((s) => s.isPinning(input.item.itemURL))
   const pin = usePinStore((s) => s.pin)
   const unpin = usePinStore((s) => s.unpin)
   const addToast = useToastStore((s) => s.addToast)
-  const refreshChannel = useFeedStore((s) => s.refreshChannel)
   const pinState = usePinState(input.item, input.channel.channelID)
 
   const [deleting, setDeleting] = useState(false)
@@ -40,7 +37,7 @@ export function PinButton({ input }: { input: PinInput }) {
     e.stopPropagation()
     if (!sdk || busy) return
 
-    if (isOwned && ownedChannel && agent) {
+    if (isOwned && ownedChannel) {
       const confirmation = window.prompt(
         'This removes the item from your channel and your storage. Subscribers who pinned it will keep their copies.\n\nType DELETE to confirm.',
       )
@@ -57,22 +54,19 @@ export function PinButton({ input }: { input: PinInput }) {
           ),
           ...objectIDsReferencedBy(usePinStore.getState().pinned),
         ])
-        const { orphanedObjectIDs } = await deletePublishedItem(
-          agent,
+        // Commits the updated manifest to the locator + reflects it in the feed.
+        const { orphanedObjectIDs } = await deleteItemFromChannel(
+          sdk,
           ownedChannel,
           input.item.id,
           protectedIDs,
         )
-        // The record write is done; reclaim the orphaned bytes as a durable,
-        // retried journal action rather than a fire-and-forget delete.
+        // Reclaim the orphaned bytes as a durable, retried journal action
+        // rather than a fire-and-forget delete.
         useActionStore.getState().enqueueDeleteObjects({
           objectIDs: orphanedObjectIDs,
           label: `Reclaiming “${input.item.title || 'post'}”`,
         })
-        const sub = subscriptions.find(
-          (s) => s.channelID === ownedChannel.channelID,
-        )
-        if (sub) await refreshChannel(sub)
         usePinStore.getState().refreshAccount(sdk)
         addToast('Item retracted')
       } catch (err) {

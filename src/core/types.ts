@@ -120,9 +120,11 @@ export type ChannelManifest = {
   name: string
   description: string
   authorPubkey: string
-  authorATProtoDID: string
+  // Legacy atproto author DID. No longer written (channels left atproto in
+  // Phase D step 6); still read off pre-cutover manifests. Optional.
+  authorATProtoDID?: string
   // The author's self-sovereign did:dht (Phase D) — the iroh-world author
-  // identity replacing authorATProtoDID. Lets a viewer resolve the author's
+  // identity that replaced authorATProtoDID. Lets a viewer resolve the author's
   // identity-doc and build a channel-follow edge without atproto. Optional on
   // manifests written before the field existed.
   authorDidDht?: string

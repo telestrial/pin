@@ -1,6 +1,6 @@
 import { useState } from 'react'
-import { removeAttachmentFromItem } from '../../core/channels'
 import type { AttachmentRef } from '../../core/types'
+import { removeAttachment } from '../../lib/channelWrites'
 import { itemRefFromAttachment } from '../../lib/filePin'
 import { formatBytes } from '../../lib/format'
 import { LIBRARY_CHANNEL } from '../../lib/pinUpload'
@@ -36,24 +36,21 @@ export function FilePinButton({
   itemID: string
 }) {
   const sdk = useAuthStore((s) => s.sdk)
-  const agent = useAuthStore((s) => s.atprotoAgent)
   const ownedChannel = useAuthStore((s) =>
     s.myChannels.find((c) => c.channelID === channelID),
   )
-  const subscriptions = useAuthStore((s) => s.subscriptions)
   const isPinned = usePinStore((s) => s.isPinned(attachment.url))
   const isPinning = usePinStore((s) => s.isPinning(attachment.url))
   const pin = usePinStore((s) => s.pin)
   const unpin = usePinStore((s) => s.unpin)
   const addToast = useToastStore((s) => s.addToast)
-  const refreshChannel = useFeedStore((s) => s.refreshChannel)
 
   const [removing, setRemoving] = useState(false)
   const isOwned = !!ownedChannel
   const busy = isPinning || removing
 
   const retractFile = async () => {
-    if (!sdk || !ownedChannel || !agent) return
+    if (!sdk || !ownedChannel) return
     const ok = window.confirm(
       'Remove this file from the post? Subscribers who pinned it keep their copies.',
     )
@@ -69,22 +66,19 @@ export function FilePinButton({
         ),
         ...objectIDsReferencedBy(usePinStore.getState().pinned),
       ])
-      const { orphanedObjectIDs } = await removeAttachmentFromItem(
-        agent,
+      // Commits the updated manifest to the locator + reflects it in the feed.
+      const { orphanedObjectIDs } = await removeAttachment(
+        sdk,
         ownedChannel,
         itemID,
         attachment.url,
         protectedIDs,
       )
-      // Record write done; reclaim the file's bytes via the journal.
+      // Reclaim the file's bytes via the journal.
       useActionStore.getState().enqueueDeleteObjects({
         objectIDs: orphanedObjectIDs,
         label: `Reclaiming ${attachment.filename || 'file'}`,
       })
-      const sub = subscriptions.find(
-        (s) => s.channelID === ownedChannel.channelID,
-      )
-      if (sub) await refreshChannel(sub)
       usePinStore.getState().refreshAccount(sdk)
       addToast('File removed from the post')
     } catch (err) {

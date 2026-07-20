@@ -1,15 +1,11 @@
 import type { Sdk } from '@siafoundation/sia-storage'
-import {
-  appendItemToChannel,
-  buildItemRef,
-  editItem,
-} from '../../core/channels'
+import { buildItemRef } from '../../core/channels'
 import { uploadItemsPacked } from '../../core/sia'
 import type { AttachmentRef, ItemRef } from '../../core/types'
 import { type PublishAction, useActionStore } from '../../stores/actionQueue'
 import { useAuthStore } from '../../stores/auth'
-import { useFeedStore } from '../../stores/feed'
 import { usePinStore } from '../../stores/pin'
+import { editPublishedItem, publishItemToChannel } from '../channelWrites'
 import { LIBRARY_CHANNEL } from '../pinUpload'
 
 const SLAB_DATA_BYTES = 10 * 4 * 1024 * 1024 // 10 data shards × 4 MiB each
@@ -49,7 +45,6 @@ export async function runPublish(
   const { sdk, setPhase, setProgress, checkpoint, markPublished } = ctx
   const intent = action.intent
   const auth = useAuthStore.getState()
-  const feed = useFeedStore.getState()
   const pin = usePinStore.getState()
 
   // Channel destination needs at least one valid channel; library destination
@@ -63,9 +58,6 @@ export async function runPublish(
 
   if (intent.destination === 'channel' && channels.length === 0) {
     throw new SilentActionError('Channel no longer exists')
-  }
-  if (intent.destination === 'channel' && !auth.atprotoAgent) {
-    throw new SilentActionError('Sign in to Bluesky to publish to a channel')
   }
 
   // Resume fast-path: a checkpoint means the bytes are already on Sia, so skip
@@ -144,11 +136,9 @@ export async function runPublish(
     // pinStore dedups library pins by URL, so a resumed pin is idempotent.
     await pin.pin(sdk, { item: itemRef, channel: LIBRARY_CHANNEL })
   } else {
-    // Guaranteed by the channel-destination agent guard above; re-narrowed
-    // here so the type holds without a non-null assertion.
-    const agent = auth.atprotoAgent
-    if (!agent)
-      throw new SilentActionError('Sign in to Bluesky to publish to a channel')
+    // Publishing to a channel no longer touches atproto — each write commits the
+    // manifest to the channel's pkarr locator (Sia object + DHT pointer) and
+    // reflects it in the feed store.
     const alreadyPublished = new Set(action.ledger.publishedChannelIDs ?? [])
     // Old-version bytes an edit orphans (same body objectID across channels →
     // deduped before journaling).
@@ -163,8 +153,8 @@ export async function runPublish(
           ...itemRef,
           editedAt: new Date().toISOString(),
         }
-        const { orphanedObjectIDs } = await editItem(
-          agent,
+        const { orphanedObjectIDs } = await editPublishedItem(
+          sdk,
           ch,
           intent.editingItemID,
           editedItem,
@@ -172,12 +162,10 @@ export async function runPublish(
         )
         for (const id of orphanedObjectIDs) orphanedFromEdits.add(id)
       } else {
-        await appendItemToChannel(agent, ch, itemRef)
+        await publishItemToChannel(sdk, ch, itemRef)
       }
       // Record this channel as done (and persist) before the next one.
       markPublished(ch.channelID)
-      const sub = auth.subscriptions.find((s) => s.channelID === ch.channelID)
-      if (sub) feed.refreshChannel(sub)
     }
     // Reclaim the replaced bytes via the journal (durable, retried).
     if (orphanedFromEdits.size > 0) {

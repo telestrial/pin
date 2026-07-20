@@ -32,6 +32,39 @@ import {
 // TXT record name prefix for the chunked Sia pointer in a channel-locator document.
 const POINTER_PREFIX = '_c'
 
+// localStorage key prefix for the "current Sia manifest object" pointer, one per
+// owned channel. It lets a republish (or a retract) delete the object it
+// supersedes — positive-id reclamation, no orphan sweep. localStorage is a
+// cache: losing it only risks a stray small manifest object, never data.
+const OBJECT_POINTER_PREFIX = 'pin:chanloc:'
+type LocatorObjectPointer = { id: string }
+
+export function readLocatorObjectPointer(
+  channelID: string,
+): LocatorObjectPointer | null {
+  try {
+    const s = localStorage.getItem(OBJECT_POINTER_PREFIX + channelID)
+    return s ? (JSON.parse(s) as LocatorObjectPointer) : null
+  } catch {
+    return null
+  }
+}
+function writeLocatorObjectPointer(channelID: string, id: string): void {
+  try {
+    localStorage.setItem(
+      OBJECT_POINTER_PREFIX + channelID,
+      JSON.stringify({ id }),
+    )
+  } catch {
+    // localStorage unavailable/quota — the pointer is a cache, safe to skip.
+  }
+}
+export function clearLocatorObjectPointer(channelID: string): void {
+  try {
+    localStorage.removeItem(OBJECT_POINTER_PREFIX + channelID)
+  } catch {}
+}
+
 /** Mirror a channel's manifest to its own Sia object (encrypted under K) and publish
  *  the pointer to that object under the channel's K-derived pkarr locator. Call
  *  (background) whenever the manifest changes. ~5s (Mainline store latency).
@@ -97,5 +130,29 @@ export function makeLocatorFirstReader(sdk: Sdk): FetchChannel {
       console.warn(`locator read failed for ${channelID}, using atproto:`, e)
     }
     return fetchChannel(authorHandleOrDID, channelID, channelKey)
+  }
+}
+
+/** Commit a channel's manifest as its canonical published state: upload the new
+ *  Sia object under K + publish the K-derived pkarr locator, then reclaim the
+ *  Sia object this supersedes. Awaited — when it resolves, the Sia object and
+ *  the DHT pointer are both live (the "done" bar for a channel write). The
+ *  superseded-object delete is best-effort positive-id (a tiny, frequently
+ *  replaced housekeeping object; a failed delete leaks at most one small
+ *  object). */
+export async function commitChannelManifest(
+  sdk: Sdk,
+  channelID: string,
+  channelKeyB64: string,
+  manifest: ChannelManifest,
+): Promise<void> {
+  const prev = readLocatorObjectPointer(channelID)
+  const { id } = await publishChannelLocator(sdk, channelKeyB64, manifest)
+  writeLocatorObjectPointer(channelID, id)
+  if (prev && prev.id !== id) {
+    await sdk
+      .deleteObject(prev.id)
+      .then(() => sdk.pruneSlabs())
+      .catch(() => {})
   }
 }

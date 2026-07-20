@@ -1,18 +1,10 @@
-import type { Agent } from '@atproto/api'
 import type { Sdk } from '@siafoundation/sia-storage'
-import {
-  CHANNEL_LEXICON,
-  type ChannelRecord,
-  deleteChannelRecord,
-  getChannelRecord,
-  putChannelRecord,
-} from './atproto'
+import { getChannelRecord } from './atproto'
 import {
   channelKeyFromBase64,
   channelKeyToBase64,
   decryptForChannel,
   deriveChannelID,
-  encryptForChannel,
   generateChannelKey,
 } from './crypto'
 import { downloadItem, uploadItem } from './sia'
@@ -104,7 +96,6 @@ export type ItemPayload = {
 
 export async function createChannel(
   sdk: Sdk,
-  agent: Agent,
   args: {
     name: string
     description: string
@@ -121,8 +112,6 @@ export async function createChannel(
     authorDidDht?: string
   },
 ): Promise<CreatedChannel> {
-  const did = agent.assertDid
-
   const keyBytes = await generateChannelKey()
   const channelKey = channelKeyToBase64(keyBytes)
   const channelID = await deriveChannelID(keyBytes)
@@ -135,7 +124,6 @@ export async function createChannel(
     name: args.name,
     description: args.description,
     authorPubkey: sdk.appKey().publicKey(),
-    authorATProtoDID: did,
     authorDidDht: args.authorDidDht,
     publishedAt: new Date().toISOString(),
     visibility: args.visibility ?? 'public',
@@ -144,38 +132,9 @@ export async function createChannel(
     items: [],
   }
 
-  const ciphertext = await encryptForChannel(keyBytes, JSON.stringify(manifest))
-  const isPublic = manifest.visibility === 'public'
-
-  const channelRecord: ChannelRecord = {
-    $type: CHANNEL_LEXICON,
-    encryptedManifest: ciphertext,
-    ...(isPublic && { key: channelKey }),
-  }
-
-  const writes: Array<{
-    $type: 'com.atproto.repo.applyWrites#create'
-    collection: string
-    rkey: string
-    value: Record<string, unknown>
-  }> = [
-    {
-      $type: 'com.atproto.repo.applyWrites#create',
-      collection: CHANNEL_LEXICON,
-      rkey: channelID,
-      value: channelRecord,
-    },
-  ]
-
-  // Claim ("Voices") is now the local `advertised` flag on the OwnedChannel
-  // (default true → advertised in the identity-doc), not an atproto self-follow.
-  // So a public channel is claimed-at-birth without a second record here.
-  await agent.com.atproto.repo.applyWrites({
-    repo: did,
-    validate: false,
-    writes,
-  })
-
+  // No atproto write — the caller commits this manifest to the channel's pkarr
+  // locator (Sia object + K-derived DHT pointer) via lib/channelWrites. Claim
+  // ("Voices") is the local `advertised` flag on the OwnedChannel.
   return { channelID, channelKey, manifest }
 }
 
@@ -190,14 +149,9 @@ export type EditChannelPatch = {
 
 export async function editChannel(
   sdk: Sdk,
-  agent: Agent,
-  channel: { channelID: string; channelKey: string },
+  current: ChannelManifest,
   patch: EditChannelPatch,
 ): Promise<{ manifest: ChannelManifest; reclaimURLs: string[] }> {
-  const did = agent.assertDid
-
-  const current = await fetchChannel(did, channel.channelID, channel.channelKey)
-
   let avatar: ChannelImage | undefined = current.avatar
   if (patch.removeAvatar) {
     avatar = undefined
@@ -220,15 +174,6 @@ export async function editChannel(
     cover,
     publishedAt: new Date().toISOString(),
   }
-
-  const keyBytes = channelKeyFromBase64(channel.channelKey)
-  const ciphertext = await encryptForChannel(keyBytes, JSON.stringify(updated))
-  await putChannelRecord(
-    agent,
-    channel.channelID,
-    ciphertext,
-    updated.visibility === 'public' ? channel.channelKey : undefined,
-  )
 
   // Old avatar/cover bytes a replace/remove orphaned. Per-object Sia encryption
   // gives each upload a unique objectID, so an old image is never shared with
@@ -299,39 +244,24 @@ export function buildItemRef(
   }
 }
 
-export async function unpinChannel(
-  agent: Agent,
-  channel: { channelID: string; channelKey: string },
+// Enumerate a retracted channel's byte objects for reference-safe cleanup.
+// Pure: takes the channel's current manifest (resolved by the caller via the
+// locator, or null when it's already gone) and returns the object IDs (items +
+// their attachment objects, reference-filtered) and image URLs (avatar/cover)
+// the caller should journal as a delete-objects action. Dropping the channel's
+// locator (Sia manifest object + pkarr pointer) is the caller's job too —
+// there's no atproto record to delete anymore.
+export function unpinChannel(
+  current: ChannelManifest | null,
   // Object IDs referenced elsewhere in the author's own scope (other channel
   // manifests + pins) — survive the retract, same reference-safety as
   // deletePublishedItem. Defaults to empty.
   protectedObjectIDs: ReadonlySet<string> = new Set(),
-): Promise<{ objectIDs: string[]; urls: string[] }> {
-  const did = agent.assertDid
-
-  // Retract is idempotent. The channel record may already be gone — a prior
-  // partial retract, a record deleted out-of-band, a stale local entry
-  // pointing at nothing. If the manifest can't be fetched we can't enumerate
-  // the item bytes to delete, but we still clear the record best-effort and
-  // return empty lists so the caller drops its local state. The goal — "this
-  // channel is gone" — is already met, and a ghost channel that can't be
-  // retracted would otherwise wedge the UI (and the e2e cleanup loop) forever.
-  let manifest: ChannelManifest | null = null
-  try {
-    manifest = await fetchChannel(did, channel.channelID, channel.channelKey)
-  } catch (e) {
-    if (!isRecordNotFoundError(e)) throw e
-  }
-
-  // Enumerate the channel's bytes before dropping the record. Items + their
-  // attachment objects go in objectIDs (reference-filtered); avatar/cover go in
-  // urls (the delete-objects action resolves URL→id). The caller journals these
-  // as a durable, retried delete-objects action instead of a fire-and-forget
-  // delete a QUIC blip could silently drop.
+): { objectIDs: string[]; urls: string[] } {
   const objectIDs: string[] = []
   const urls: string[] = []
-  if (manifest) {
-    for (const item of manifest.items) {
+  if (current) {
+    for (const item of current.items) {
       if (!protectedObjectIDs.has(item.id)) objectIDs.push(item.id)
       for (const att of item.attachments ?? []) {
         if (!isValidAttachment(att) || !att.objectID) continue
@@ -339,66 +269,21 @@ export async function unpinChannel(
         objectIDs.push(att.objectID)
       }
     }
-    for (const image of [manifest.avatar, manifest.cover]) {
+    for (const image of [current.avatar, current.cover]) {
       if (image) urls.push(image.itemURL)
     }
   }
-
-  // Reliable leg first: drop the record (removes the reference) before the
-  // byte-cleanup is journaled.
-  try {
-    await deleteChannelRecord(agent, channel.channelID)
-  } catch (e) {
-    if (!isRecordNotFoundError(e)) throw e
-  }
-
   return { objectIDs, urls }
 }
 
-// Whether an atproto error means "the record isn't there" — so a delete can
-// treat it as already-done. Mirrors the local helper in core/follow.ts; kept
-// duplicated (small, two call sites) rather than coupling the modules.
-function isRecordNotFoundError(err: unknown): boolean {
-  if (typeof err !== 'object' || err === null) return false
-  const e = err as { status?: number; error?: string; message?: string }
-  if (e.error === 'RecordNotFound') return true
-  return (
-    e.status === 400 &&
-    typeof e.message === 'string' &&
-    /could not locate|not found|recordnotfound/i.test(e.message)
-  )
-}
+// All four below are PURE manifest transforms — they take the channel's current
+// manifest and return the next one (+ reference-safe orphan enumeration). The
+// caller reads `current` (from feedStore.manifests or the locator) and commits
+// the returned manifest to the pkarr locator via lib/channelWrites. No atproto,
+// no encryption here — encryption lives in the locator commit.
 
-// Identify "ghost" owned channels: entries in the user's channel list whose
-// atproto record no longer exists. These arise when a retract deletes the
-// channel record but the follow-up settings save fails — the record is gone
-// but the settings entry is orphaned, so the channel resurrects on the next
-// load from stale settings. Reconciliation prunes them.
-//
-// Only a DEFINITIVE RecordNotFound counts. A transient network failure (QUIC
-// idle-timeout, 502, host churn) returns the channel as "not a ghost" so a
-// blip can never delete a real channel — at worst reconciliation is a no-op
-// that retries next load.
-export async function reconcileGhostChannels(
-  authorDID: string,
-  channelIDs: string[],
-): Promise<string[]> {
-  const results = await Promise.all(
-    channelIDs.map(async (channelID) => {
-      try {
-        await getChannelRecord(authorDID, channelID)
-        return null
-      } catch (e) {
-        return isRecordNotFoundError(e) ? channelID : null
-      }
-    }),
-  )
-  return results.filter((id): id is string => id !== null)
-}
-
-export async function deletePublishedItem(
-  agent: Agent,
-  channel: { channelID: string; channelKey: string },
+export function deletePublishedItem(
+  current: ChannelManifest,
   itemID: string,
   // Object IDs referenced elsewhere in the author's own scope (other channel
   // manifests + pins). Bytes in this set survive the retract — a file shared
@@ -406,10 +291,7 @@ export async function deletePublishedItem(
   // yanked out from under it. Defaults to empty; callers pass their in-memory
   // scope refs to make the reference-safe prune correct.
   protectedObjectIDs: ReadonlySet<string> = new Set(),
-): Promise<{ manifest: ChannelManifest; orphanedObjectIDs: string[] }> {
-  const did = agent.assertDid
-
-  const current = await fetchChannel(did, channel.channelID, channel.channelKey)
+): { manifest: ChannelManifest; orphanedObjectIDs: string[] } {
   const removed = current.items.find((i) => i.id === itemID)
 
   const updated: ChannelManifest = {
@@ -418,22 +300,11 @@ export async function deletePublishedItem(
     items: current.items.filter((i) => i.id !== itemID),
   }
 
-  const keyBytes = channelKeyFromBase64(channel.channelKey)
-  const ciphertext = await encryptForChannel(keyBytes, JSON.stringify(updated))
-  await putChannelRecord(
-    agent,
-    channel.channelID,
-    ciphertext,
-    updated.visibility === 'public' ? channel.channelKey : undefined,
-  )
-
-  // Reference-safe prune: the reliable leg (the record write above) is done, so
-  // collect the body + every attachment whose bytes nothing surviving still
-  // references, and hand them back. The caller journals them as a delete-objects
-  // action — a durable, retried byte-cleanup — instead of a best-effort delete
-  // that a QUIC blip could silently drop. Subscribers' pinned copies live in
-  // their own scope, so this never touches them. (Legacy attachments without an
-  // objectID can't be enumerated here; they're a known, bounded gap.)
+  // Reference-safe prune: collect the body + every attachment whose bytes
+  // nothing surviving still references, and hand them back. The caller journals
+  // them as a durable, retried delete-objects action. Subscribers' pinned copies
+  // live in their own scope, so this never touches them. (Legacy attachments
+  // without an objectID can't be enumerated here; a known, bounded gap.)
   const surviving = survivingObjectIDs(updated, protectedObjectIDs)
   const orphanedObjectIDs: string[] = []
   if (!surviving.has(itemID)) orphanedObjectIDs.push(itemID)
@@ -448,23 +319,19 @@ export async function deletePublishedItem(
 
 // Retract a single attachment from a published item — the file-level analog of
 // deletePublishedItem. Rewrites the item with that attachment dropped (body and
-// other attachments untouched, publishedAt preserved, editedAt stamped), then
-// eagerly deletes the file's bytes unless something surviving still references
-// them. Subscribers who pinned the post or the file keep their copies.
-export async function removeAttachmentFromItem(
-  agent: Agent,
-  channel: { channelID: string; channelKey: string },
+// other attachments untouched, publishedAt preserved, editedAt stamped) and
+// hands back the file's bytes for cleanup unless something surviving still
+// references them. Subscribers who pinned the post or the file keep their copies.
+export function removeAttachmentFromItem(
+  current: ChannelManifest,
   itemID: string,
   attachmentURL: string,
   protectedObjectIDs: ReadonlySet<string> = new Set(),
-): Promise<{
+): {
   manifest: ChannelManifest
   item: ItemRef
   orphanedObjectIDs: string[]
-}> {
-  const did = agent.assertDid
-
-  const current = await fetchChannel(did, channel.channelID, channel.channelKey)
+} {
   const index = current.items.findIndex((i) => i.id === itemID)
   if (index === -1) throw new Error('Item not found in channel')
   const item = current.items[index]
@@ -487,18 +354,6 @@ export async function removeAttachmentFromItem(
     items: updatedItems,
   }
 
-  const keyBytes = channelKeyFromBase64(channel.channelKey)
-  const ciphertext = await encryptForChannel(keyBytes, JSON.stringify(updated))
-  await putChannelRecord(
-    agent,
-    channel.channelID,
-    ciphertext,
-    updated.visibility === 'public' ? channel.channelKey : undefined,
-  )
-
-  // Reference-safe prune: hand back the removed file's bytes unless another of
-  // your posts / a library pin still references the same object. The caller
-  // journals it as a delete-objects action.
   const surviving = survivingObjectIDs(updated, protectedObjectIDs)
   const orphanedObjectIDs: string[] = []
   if (
@@ -513,20 +368,16 @@ export async function removeAttachmentFromItem(
   return { manifest: updated, item: finalItem, orphanedObjectIDs }
 }
 
-export async function editItem(
-  agent: Agent,
-  channel: { channelID: string; channelKey: string },
+export function editItem(
+  current: ChannelManifest,
   oldItemID: string,
   newItem: ItemRef,
   removedAttachmentObjectIDs?: string[],
-): Promise<{
+): {
   manifest: ChannelManifest
   item: ItemRef
   orphanedObjectIDs: string[]
-}> {
-  const did = agent.assertDid
-
-  const current = await fetchChannel(did, channel.channelID, channel.channelKey)
+} {
   const oldIndex = current.items.findIndex((i) => i.id === oldItemID)
   if (oldIndex === -1) throw new Error('Item not found in channel')
   const oldItem = current.items[oldIndex]
@@ -544,15 +395,6 @@ export async function editItem(
     items: updatedItems,
   }
 
-  const keyBytes = channelKeyFromBase64(channel.channelKey)
-  const ciphertext = await encryptForChannel(keyBytes, JSON.stringify(updated))
-  await putChannelRecord(
-    agent,
-    channel.channelID,
-    ciphertext,
-    updated.visibility === 'public' ? channel.channelKey : undefined,
-  )
-
   // Hand back the old body + any removed-attachment bytes for the caller to
   // journal as a delete-objects action. Subscribers who pinned the old version
   // keep their snapshots (their copies live in their own scope).
@@ -561,31 +403,15 @@ export async function editItem(
   return { manifest: updated, item: finalItem, orphanedObjectIDs }
 }
 
-export async function appendItemToChannel(
-  agent: Agent,
-  channel: { channelID: string; channelKey: string },
+export function appendItemToChannel(
+  current: ChannelManifest,
   itemRef: ItemRef,
-): Promise<ChannelManifest> {
-  const did = agent.assertDid
-
-  const current = await fetchChannel(did, channel.channelID, channel.channelKey)
-
-  const updated: ChannelManifest = {
+): ChannelManifest {
+  return {
     ...current,
     publishedAt: new Date().toISOString(),
     items: [itemRef, ...current.items],
   }
-
-  const keyBytes = channelKeyFromBase64(channel.channelKey)
-  const ciphertext = await encryptForChannel(keyBytes, JSON.stringify(updated))
-  await putChannelRecord(
-    agent,
-    channel.channelID,
-    ciphertext,
-    updated.visibility === 'public' ? channel.channelKey : undefined,
-  )
-
-  return updated
 }
 
 export async function downloadItemBytes(
@@ -599,10 +425,7 @@ export async function downloadItemBytes(
 // (`pin://<did:dht>#k=<K>`), not the atproto handle — the identity resolves without
 // atproto, and non-unique self-asserted handles couldn't resolve globally anyway.
 // The `author` slot is either a did:dht or (legacy) an atproto handle.
-export function buildSubscribeURL(
-  author: string,
-  channelKey: string,
-): string {
+export function buildSubscribeURL(author: string, channelKey: string): string {
   return `pin://${author}#k=${channelKey}`
 }
 

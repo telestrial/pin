@@ -15,6 +15,9 @@ vi.mock('@atproto/api', async () =>
 vi.mock('@siafoundation/sia-storage', async () =>
   (await import('./fakeModules')).fakeSiaStorageModule(),
 )
+vi.mock('../lib/pkarr', async () =>
+  (await import('./fakeModules')).fakePkarrModule(),
+)
 
 import type { Sdk } from '@siafoundation/sia-storage'
 import { ChannelView } from '../components/channel/ChannelView'

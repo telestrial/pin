@@ -1,10 +1,8 @@
 import { type ChangeEvent, useEffect, useState } from 'react'
-import {
-  type EditChannelPatch,
-  editChannel,
-  fetchChannel,
-} from '../../core/channels'
+import type { EditChannelPatch } from '../../core/channels'
 import type { ChannelImage, ChannelManifest } from '../../core/types'
+import { makeLocatorFirstReader } from '../../lib/channelLocator'
+import { saveChannelEdits } from '../../lib/channelWrites'
 import { useItemBlobURL } from '../../lib/hooks/useItemBytes'
 import { useActionStore } from '../../stores/actionQueue'
 import { useAuthStore } from '../../stores/auth'
@@ -29,12 +27,9 @@ export function EditChannel({
   rightSidebar?: React.ReactNode
 }) {
   const sdk = useAuthStore((s) => s.sdk)
-  const agent = useAuthStore((s) => s.atprotoAgent)
   const atprotoDID = useAuthStore((s) => s.atprotoDID)
   const updateMyChannelName = useAuthStore((s) => s.updateMyChannelName)
   const updateSubscriptionName = useAuthStore((s) => s.updateSubscriptionName)
-  const refreshChannel = useFeedStore((s) => s.refreshChannel)
-  const subscriptions = useAuthStore((s) => s.subscriptions)
 
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -53,12 +48,18 @@ export function EditChannel({
 
   useEffect(() => {
     let cancelled = false
-    if (!atprotoDID) {
-      setLoadError('Bluesky session not active.')
+    if (!sdk) {
+      setLoadError('Not connected to Sia.')
       setLoading(false)
       return
     }
-    fetchChannel(atprotoDID, channelID, channelKey)
+    // Prefer the local cache; else read the channel via its locator (the
+    // atproto fallback in makeLocatorFirstReader covers not-yet-migrated ones).
+    const cached = useFeedStore.getState().manifests[channelID]
+    const load = cached
+      ? Promise.resolve(cached)
+      : makeLocatorFirstReader(sdk)(atprotoDID ?? '', channelID, channelKey)
+    load
       .then((manifest) => {
         if (cancelled) return
         setOriginal(manifest)
@@ -74,7 +75,7 @@ export function EditChannel({
     return () => {
       cancelled = true
     }
-  }, [atprotoDID, channelID, channelKey])
+  }, [sdk, atprotoDID, channelID, channelKey])
 
   useEffect(() => {
     if (!newAvatarFile) {
@@ -121,7 +122,7 @@ export function EditChannel({
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    if (!sdk || !agent || !original) return
+    if (!sdk || !original) return
     const trimmedName = name.trim()
     if (!trimmedName) return
     setSubmitting(true)
@@ -140,9 +141,8 @@ export function EditChannel({
       if (newCoverFile) patch.coverImage = await toImage(newCoverFile)
       else if (removeCover) patch.removeCover = true
 
-      const { manifest: updated, reclaimURLs } = await editChannel(
+      const { manifest: updated, reclaimURLs } = await saveChannelEdits(
         sdk,
-        agent,
         { channelID, channelKey },
         patch,
       )
@@ -155,8 +155,6 @@ export function EditChannel({
         updateMyChannelName(channelID, updated.name)
         updateSubscriptionName(channelID, updated.name)
       }
-      const sub = subscriptions.find((s) => s.channelID === channelID)
-      if (sub) await refreshChannel(sub)
       onSaved(updated.name)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to save changes')

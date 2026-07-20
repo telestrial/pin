@@ -1,6 +1,7 @@
 import { type ChangeEvent, useEffect, useState } from 'react'
-import { buildSubscribeURL, createChannel } from '../../core/channels'
+import { buildSubscribeURL } from '../../core/channels'
 import type { ChannelVisibility } from '../../core/types'
+import { createAndPublishChannel } from '../../lib/channelWrites'
 import { flushSettingsBestEffort } from '../../lib/hooks/useSettingsSync'
 import { deriveDidDht } from '../../lib/pkarr'
 import { useAuthStore } from '../../stores/auth'
@@ -103,7 +104,7 @@ export function CreateChannel({
       // identity-doc use) up front: it's stamped into the manifest as the
       // iroh-world author identity AND carried in the shareable capability link.
       const { did } = await deriveDidDht(Uint8Array.fromHex(storedKeyHex))
-      const result = await createChannel(sdk, agent, {
+      const result = await createAndPublishChannel(sdk, {
         name: trimmedName,
         description: description.trim(),
         visibility,

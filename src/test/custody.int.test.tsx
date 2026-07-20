@@ -17,11 +17,14 @@ vi.mock('@atproto/api', async () =>
 vi.mock('@siafoundation/sia-storage', async () =>
   (await import('./fakeModules')).fakeSiaStorageModule(),
 )
+vi.mock('../lib/pkarr', async () =>
+  (await import('./fakeModules')).fakePkarrModule(),
+)
 
-import type { Agent } from '@atproto/api'
+import type { Sdk } from '@siafoundation/sia-storage'
 import { HomeFeed } from '../components/HomeFeed'
-import { deletePublishedItem } from '../core/channels'
 import type { SubscriptionRef } from '../core/types'
+import { deleteItemFromChannel } from '../lib/channelWrites'
 import { useFeedStore } from '../stores/feed'
 import { usePinStore } from '../stores/pin'
 import {
@@ -111,6 +114,10 @@ describe('integration: custody', () => {
     const aliceSnap = await alice.sdk.account()
     expect(aliceSnap.pinnedData).toBeGreaterThan(0)
 
+    // Bob's mirror will hold exactly the post body's bytes (alice's scope also
+    // carries the channel's manifest object, so it isn't a clean equality).
+    const bodyBytes = new TextEncoder().encode(postBody).length
+
     await userEvent.click(pinButton)
 
     // After the click: pinStore has bob's snapshot; button flips to
@@ -123,11 +130,10 @@ describe('integration: custody', () => {
       alice.handle,
     )
 
-    // The pinned bytes mirror into bob's scope on the world. Bob's account
-    // snapshot now reflects the same byte size alice's does (they share
-    // the object — capability addressing).
+    // The pinned bytes mirror into bob's scope on the world — he now hosts the
+    // post body object (shared by capability addressing with alice's copy).
     const bobAfter = await bob.sdk.account()
-    expect(bobAfter.pinnedData).toBe(aliceSnap.pinnedData)
+    expect(bobAfter.pinnedData).toBe(bodyBytes)
 
     // UI updated to pinned state.
     expect(screen.getByTitle(/Unpin from your storage/)).toHaveAttribute(
@@ -250,17 +256,17 @@ describe('integration: custody', () => {
     await userEvent.click(screen.getByTitle(/Pin to your storage/))
     await waitFor(() => expect(usePinStore.getState().pinned).toHaveLength(1))
 
-    // Alice retracts. core/channels.deletePublishedItem filters the item from
-    // her manifest and returns the orphaned bytes for the journal to reclaim.
-    // Bob's independent pin keeps the bytes alive because he's still a pinner;
-    // his snapshot is unaffected by alice's retract regardless.
-    await deletePublishedItem(
-      alice.agent as unknown as Agent,
+    // Alice retracts. deleteItemFromChannel drops the item from her manifest
+    // and commits the update to the channel's locator (Sia + pkarr). Bob's
+    // independent pin keeps the bytes alive because he's still a pinner; his
+    // snapshot is unaffected by alice's retract regardless.
+    await deleteItemFromChannel(
+      alice.sdk as unknown as Sdk,
       channel,
       postItemID,
     )
 
-    // Mimic the JetStream-driven refresh.
+    // Read the updated manifest back off the locator into bob's feed.
     await act(async () => {
       await useFeedStore.getState().refreshChannel(sub)
     })

@@ -56,7 +56,7 @@ export function SubscribeToChannel({
       )
       addSubscription({
         authorHandle: parsed.authorHandle,
-        authorDID: manifest.authorATProtoDID,
+        authorDID: manifest.authorATProtoDID ?? '',
         didDht: parsed.didDht,
         channelID: parsed.channelID,
         channelKey: parsed.channelKey,

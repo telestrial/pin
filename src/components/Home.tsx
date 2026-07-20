@@ -1,7 +1,7 @@
 import { useState } from 'react'
-import { unpinChannel } from '../core/channels'
 import type { FeedEntry } from '../core/feed'
 import type { ItemRef } from '../core/types'
+import { retractChannel } from '../lib/channelWrites'
 import { flushSettingsBestEffort } from '../lib/hooks/useSettingsSync'
 import { objectIDsInManifests } from '../lib/scopeRefs'
 import { useActionStore } from '../stores/actionQueue'
@@ -390,10 +390,9 @@ export function Home() {
     ) : undefined
     const handleUnpinChannel = async () => {
       const sdk = useAuthStore.getState().sdk
-      const agent = useAuthStore.getState().atprotoAgent
-      if (!sdk || !agent || !owned) return
+      if (!sdk || !owned) return
       const confirmation = window.prompt(
-        'This drops every item in this channel from your storage and deletes the channel record. Subscribers who pinned individual items keep their copies; their share URLs keep working.\n\nType DELETE to confirm.',
+        'This drops every item in this channel from your storage and stops publishing it. Subscribers who pinned individual items keep their copies; their share URLs keep working.\n\nType DELETE to confirm.',
       )
       if (confirmation !== 'DELETE') return
       try {
@@ -406,15 +405,16 @@ export function Home() {
           ),
           ...objectIDsReferencedBy(usePinStore.getState().pinned),
         ])
-        // Reliable leg: the record is dropped inside unpinChannel.
-        const { objectIDs, urls } = await unpinChannel(
-          agent,
+        // Enumerates the channel's byte objects (incl. its Sia manifest object),
+        // clears the locator pointer, and drops the channel from the feed. The
+        // pkarr record expires by TTL once we stop republishing it.
+        const { objectIDs, urls } = await retractChannel(
+          sdk,
           owned,
           protectedIDs,
         )
         useAuthStore.getState().removeMyChannel(owned.channelID)
         useAuthStore.getState().removeSubscription(owned.channelID)
-        useFeedStore.getState().removeChannel(owned.channelID)
         // The removal is durable once it reaches the PDS settings record.
         // Flush now (awaited) so the retract is durable when we report it done,
         // rather than relying on a background save a reload/close could lose.

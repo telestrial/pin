@@ -16,10 +16,14 @@ vi.mock('@atproto/api', async () =>
 vi.mock('@siafoundation/sia-storage', async () =>
   (await import('./fakeModules')).fakeSiaStorageModule(),
 )
+vi.mock('../lib/pkarr', async () =>
+  (await import('./fakeModules')).fakePkarrModule(),
+)
 
 import type { Sdk } from '@siafoundation/sia-storage'
-import { buildItemRef, fetchChannel } from '../core/channels'
+import { buildItemRef } from '../core/channels'
 import { uploadItem } from '../core/sia'
+import { resolveChannelViaLocator } from '../lib/channelLocator'
 import { useActionRunner } from '../lib/hooks/useActionRunner'
 import { type PublishAction, useActionStore } from '../stores/actionQueue'
 import {
@@ -84,13 +88,12 @@ describe('integration: action journal resume', () => {
     expect(done?.ledger.uploadedItemRef).toBeDefined()
     expect(done?.ledger.publishedChannelIDs).toEqual([channel.channelID])
 
-    // The append landed in the manifest.
-    const manifest = await fetchChannel(
-      alice.did,
-      channel.channelID,
+    // The append landed in the manifest committed to the locator.
+    const manifest = await resolveChannelViaLocator(
+      alice.sdk as unknown as Sdk,
       channel.channelKey,
     )
-    expect(manifest.items.some((i) => i.summary === 'fresh post')).toBe(true)
+    expect(manifest?.items.some((i) => i.summary === 'fresh post')).toBe(true)
   })
 
   it('resumes a checkpointed action without re-uploading', async () => {
@@ -112,7 +115,7 @@ describe('integration: action journal resume', () => {
       mimeType: 'text/markdown',
       bytes: enc(body),
     })
-    const objectsAfterUpload = app.world.objects.size
+    const bodyObjectID = uploaded.id
 
     mountAs(alice, {
       myChannels: [
@@ -162,15 +165,18 @@ describe('integration: action journal resume', () => {
       expect(!a || a.state === 'success').toBe(true)
     })
 
-    // No new Sia object was minted — the slow re-upload was skipped.
-    expect(app.world.objects.size).toBe(objectsAfterUpload)
+    // The body bytes weren't re-uploaded — the checkpoint's object persists and
+    // the append points back at its URL (the manifest commit itself mints a
+    // separate small manifest object; the body object is what must be reused).
+    expect(app.world.objects.has(bodyObjectID)).toBe(true)
 
     // The append still landed, pointing at the checkpoint's bytes.
-    const manifest = await fetchChannel(
-      alice.did,
-      channel.channelID,
+    const manifest = await resolveChannelViaLocator(
+      alice.sdk as unknown as Sdk,
       channel.channelKey,
     )
-    expect(manifest.items.some((i) => i.itemURL === itemRef.itemURL)).toBe(true)
+    expect(manifest?.items.some((i) => i.itemURL === itemRef.itemURL)).toBe(
+      true,
+    )
   })
 })

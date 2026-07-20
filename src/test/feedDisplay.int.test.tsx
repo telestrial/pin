@@ -22,6 +22,9 @@ vi.mock('@atproto/api', async () =>
 vi.mock('@siafoundation/sia-storage', async () =>
   (await import('./fakeModules')).fakeSiaStorageModule(),
 )
+vi.mock('../lib/pkarr', async () =>
+  (await import('./fakeModules')).fakePkarrModule(),
+)
 
 import { HomeFeed } from '../components/HomeFeed'
 import type { SubscriptionRef } from '../core/types'

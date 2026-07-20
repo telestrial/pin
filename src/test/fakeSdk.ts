@@ -98,6 +98,10 @@ export class FakeWorld {
   // fake describeRepo (the unauthenticated DID↔handle resolution real Pin
   // does for the directory + handle-follow reconcile).
   readonly handles = new Map<string, string>()
+  // pkarr universe — publicKey → its published TXT records. Backs the fake
+  // lib/pkarr so channel-locator publish/resolve round-trips in-memory (no
+  // wasm, no Mainline DHT) under the locator-native write path.
+  readonly pkarr = new Map<string, { name: string; value: string }[]>()
 
   nextObjectID(): string {
     this._objectCounter++

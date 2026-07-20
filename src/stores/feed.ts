@@ -22,6 +22,9 @@ type FeedState = {
   setChannelReader: (reader: FetchChannel) => void
   refresh: (subscriptions: SubscriptionRef[]) => Promise<void>
   refreshChannel: (sub: SubscriptionRef) => Promise<void>
+  // Reflect a manifest already in hand (e.g. just committed to the locator by
+  // the author) — rebuild the channel's entries + cache the manifest, no read.
+  applyManifest: (sub: SubscriptionRef, manifest: ChannelManifest) => void
   setManifest: (channelID: string, manifest: ChannelManifest) => void
   removeChannel: (channelID: string) => void
   reset: () => void
@@ -53,29 +56,7 @@ export const useFeedStore = create<FeedState>()((set, get) => ({
         sub.channelID,
         sub.channelKey,
       )
-      set((s) => {
-        const others = s.entries.filter(
-          (e) =>
-            !(
-              e.channel.authorHandle === sub.authorHandle &&
-              e.channel.channelID === sub.channelID
-            ),
-        )
-        const fresh: FeedEntry[] = manifest.items.map((item) => ({
-          item,
-          channel: {
-            authorHandle: sub.authorHandle,
-            authorDidDht: sub.didDht,
-            channelID: sub.channelID,
-            name: manifest.name,
-            avatar: manifest.avatar,
-          },
-        }))
-        return {
-          entries: [...others, ...fresh],
-          manifests: { ...s.manifests, [sub.channelID]: manifest },
-        }
-      })
+      get().applyManifest(sub, manifest)
     } catch (e) {
       console.warn(
         `Failed to refresh channel ${sub.authorHandle}/${sub.channelID}:`,
@@ -83,6 +64,30 @@ export const useFeedStore = create<FeedState>()((set, get) => ({
       )
     }
   },
+  applyManifest: (sub, manifest) =>
+    set((s) => {
+      const others = s.entries.filter(
+        (e) =>
+          !(
+            e.channel.authorHandle === sub.authorHandle &&
+            e.channel.channelID === sub.channelID
+          ),
+      )
+      const fresh: FeedEntry[] = manifest.items.map((item) => ({
+        item,
+        channel: {
+          authorHandle: sub.authorHandle,
+          authorDidDht: sub.didDht,
+          channelID: sub.channelID,
+          name: manifest.name,
+          avatar: manifest.avatar,
+        },
+      }))
+      return {
+        entries: [...others, ...fresh],
+        manifests: { ...s.manifests, [sub.channelID]: manifest },
+      }
+    }),
   setManifest: (channelID, manifest) =>
     set((s) => ({
       manifests: { ...s.manifests, [channelID]: manifest },

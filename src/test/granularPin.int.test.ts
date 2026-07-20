@@ -16,41 +16,42 @@ vi.mock('@atproto/api', async () =>
 vi.mock('@siafoundation/sia-storage', async () =>
   (await import('./fakeModules')).fakeSiaStorageModule(),
 )
+vi.mock('../lib/pkarr', async () =>
+  (await import('./fakeModules')).fakePkarrModule(),
+)
 
-import type { Agent } from '@atproto/api'
 import type { Sdk } from '@siafoundation/sia-storage'
 import {
   appendItemToChannel,
   buildItemRef,
+  createChannel,
   deletePublishedItem,
   removeAttachmentFromItem,
   unpinChannel,
 } from '../core/channels'
 import { uploadItem } from '../core/sia'
-import type { AttachmentRef, ItemRef } from '../core/types'
+import type { AttachmentRef, ChannelManifest, ItemRef } from '../core/types'
 import { runDeleteObjects } from '../lib/actions/deleteObjects'
 import type { DeleteObjectsAction } from '../stores/actionQueue'
-import {
-  authorCreateChannel,
-  createFakeApp,
-  type FakeAccount,
-  resetAllStores,
-} from './setupFakeApp'
+import { createFakeApp, type FakeAccount, resetAllStores } from './setupFakeApp'
 
-// Publish a post with N attachments through the real core/sia + core/channels
-// paths. Returns the item plus the attachment objectIDs for scope assertions.
+// Upload a post's content bytes (attachments + body) into the author's Sia
+// scope and append the item to the in-hand manifest. The manifest stays
+// in-memory (NOT committed to a locator) — these tests exercise the PURE core
+// enumeration + the cleanup handler, so scope holds only content objects and
+// the scope-size math stays clean. Returns the new manifest + the ids.
 async function publishPostWithAttachments(
   author: FakeAccount,
-  channel: { channelID: string; channelKey: string },
+  manifest: ChannelManifest,
   body: string,
   files: { mime: string; size: number }[],
 ): Promise<{
   item: ItemRef
+  manifest: ChannelManifest
   bodyObjectID: string
   attachmentObjectIDs: string[]
 }> {
   const sdk = author.sdk as unknown as Sdk
-  const agent = author.agent as unknown as Agent
 
   const attachments: AttachmentRef[] = []
   const attachmentObjectIDs: string[] = []
@@ -78,8 +79,12 @@ async function publishPostWithAttachments(
     }),
     attachments,
   }
-  await appendItemToChannel(agent, channel, item)
-  return { item, bodyObjectID: uploaded.id, attachmentObjectIDs }
+  return {
+    item,
+    manifest: appendItemToChannel(manifest, item),
+    bodyObjectID: uploaded.id,
+    attachmentObjectIDs,
+  }
 }
 
 describe('integration: author-side granular pinning', () => {
@@ -93,7 +98,12 @@ describe('integration: author-side granular pinning', () => {
       did: 'did:plc:alice',
       handle: 'alice.test',
     })
-    const channel = await authorCreateChannel(alice, { name: "Alice's voice" })
+    // Build the channel WITHOUT committing a locator, so alice's scope holds
+    // only the content objects the enumeration tests assert on.
+    const channel = await createChannel(alice.sdk as unknown as Sdk, {
+      name: "Alice's voice",
+      description: '',
+    })
     return { app, alice, channel }
   }
 
@@ -108,18 +118,14 @@ describe('integration: author-side granular pinning', () => {
 
   it('retract returns the body + all attachments as the orphan list (core does not delete)', async () => {
     const { app, alice, channel } = await setup()
-    const { item, bodyObjectID, attachmentObjectIDs } =
-      await publishPostWithAttachments(alice, channel, 'hi', [
+    const { item, manifest, bodyObjectID, attachmentObjectIDs } =
+      await publishPostWithAttachments(alice, channel.manifest, 'hi', [
         { mime: 'image/png', size: 200 },
         { mime: 'application/pdf', size: 300 },
       ])
     expect(app.world.scopeOf('did:plc:alice').size).toBe(3)
 
-    const { orphanedObjectIDs } = await deletePublishedItem(
-      alice.agent as unknown as Agent,
-      channel,
-      item.id,
-    )
+    const { orphanedObjectIDs } = deletePublishedItem(manifest, item.id)
 
     // Core computes the reference-safe prune but does NOT delete — that's the
     // journal's job. Scope is unchanged until the cleanup runs.
@@ -131,39 +137,39 @@ describe('integration: author-side granular pinning', () => {
 
   it('the orphan list, run through the cleanup handler, empties the scope', async () => {
     const { app, alice, channel } = await setup()
-    const { item } = await publishPostWithAttachments(alice, channel, 'hi', [
-      { mime: 'image/png', size: 200 },
-      { mime: 'application/pdf', size: 300 },
-    ])
+    const { item, manifest } = await publishPostWithAttachments(
+      alice,
+      channel.manifest,
+      'hi',
+      [
+        { mime: 'image/png', size: 200 },
+        { mime: 'application/pdf', size: 300 },
+      ],
+    )
     expect(app.world.scopeOf('did:plc:alice').size).toBe(3)
 
-    const { orphanedObjectIDs } = await deletePublishedItem(
-      alice.agent as unknown as Agent,
-      channel,
-      item.id,
-    )
+    const { orphanedObjectIDs } = deletePublishedItem(manifest, item.id)
     await runDeleteObjects(cleanup(orphanedObjectIDs), {
       sdk: alice.sdk as unknown as Sdk,
       markDone: () => {},
     })
 
     // The full author-retract path — core prune → journal cleanup — reclaims
-    // every byte. No sweep involved.
+    // every content byte. No sweep involved.
     expect(app.world.scopeOf('did:plc:alice').size).toBe(0)
   })
 
   it('retract excludes a protected attachment from the orphan list', async () => {
     const { alice, channel } = await setup()
-    const { item, bodyObjectID, attachmentObjectIDs } =
-      await publishPostWithAttachments(alice, channel, 'hi', [
+    const { item, manifest, bodyObjectID, attachmentObjectIDs } =
+      await publishPostWithAttachments(alice, channel.manifest, 'hi', [
         { mime: 'image/png', size: 200 },
       ])
     const sharedFileID = attachmentObjectIDs[0]
 
     // Simulate the file being held by another of alice's posts / a library pin.
-    const { orphanedObjectIDs } = await deletePublishedItem(
-      alice.agent as unknown as Agent,
-      channel,
+    const { orphanedObjectIDs } = deletePublishedItem(
+      manifest,
       item.id,
       new Set([sharedFileID]),
     )
@@ -174,21 +180,16 @@ describe('integration: author-side granular pinning', () => {
 
   it('removeAttachmentFromItem returns the removed file as the orphan list', async () => {
     const { alice, channel } = await setup()
-    const { item, attachmentObjectIDs } = await publishPostWithAttachments(
-      alice,
-      channel,
-      'hi',
-      [
+    const { item, manifest, attachmentObjectIDs } =
+      await publishPostWithAttachments(alice, channel.manifest, 'hi', [
         { mime: 'image/png', size: 200 },
         { mime: 'image/png', size: 250 },
-      ],
-    )
+      ])
     const fileA = attachmentObjectIDs[0]
     const fileAURL = item.attachments?.[0].url as string
 
-    const { item: edited, orphanedObjectIDs } = await removeAttachmentFromItem(
-      alice.agent as unknown as Agent,
-      channel,
+    const { item: edited, orphanedObjectIDs } = removeAttachmentFromItem(
+      manifest,
       item.id,
       fileAURL,
     )
@@ -201,18 +202,15 @@ describe('integration: author-side granular pinning', () => {
 
   it('removeAttachmentFromItem omits a protected sibling from the orphan list', async () => {
     const { alice, channel } = await setup()
-    const { item, attachmentObjectIDs } = await publishPostWithAttachments(
-      alice,
-      channel,
-      'hi',
-      [{ mime: 'image/png', size: 200 }],
-    )
+    const { item, manifest, attachmentObjectIDs } =
+      await publishPostWithAttachments(alice, channel.manifest, 'hi', [
+        { mime: 'image/png', size: 200 },
+      ])
     const fileA = attachmentObjectIDs[0]
     const fileAURL = item.attachments?.[0].url as string
 
-    const { item: edited, orphanedObjectIDs } = await removeAttachmentFromItem(
-      alice.agent as unknown as Agent,
-      channel,
+    const { item: edited, orphanedObjectIDs } = removeAttachmentFromItem(
+      manifest,
       item.id,
       fileAURL,
       new Set([fileA]),
@@ -223,28 +221,17 @@ describe('integration: author-side granular pinning', () => {
     expect(orphanedObjectIDs).toEqual([])
   })
 
-  it('unpinChannel deletes the record and returns the channel bytes as the orphan list', async () => {
+  it('unpinChannel enumerates the channel bytes as the orphan list (core does not delete)', async () => {
     const { app, alice, channel } = await setup()
-    const { bodyObjectID, attachmentObjectIDs } =
-      await publishPostWithAttachments(alice, channel, 'hi', [
+    const { manifest, bodyObjectID, attachmentObjectIDs } =
+      await publishPostWithAttachments(alice, channel.manifest, 'hi', [
         { mime: 'image/png', size: 200 },
       ])
     expect(app.world.scopeOf('did:plc:alice').size).toBe(2)
 
-    const { objectIDs, urls } = await unpinChannel(
-      alice.agent as unknown as Agent,
-      channel,
-    )
+    const { objectIDs, urls } = unpinChannel(manifest)
 
-    // Reliable leg: the record is gone.
-    expect(
-      app.world.records?.get(
-        'did:plc:alice',
-        'dev.sia.pin.channel',
-        channel.channelID,
-      ),
-    ).toBeUndefined()
-    // Bytes are returned for the journal, not deleted by core.
+    // Bytes are enumerated for the journal, not deleted by core.
     expect(new Set(objectIDs)).toEqual(
       new Set([bodyObjectID, ...attachmentObjectIDs]),
     )
@@ -254,13 +241,13 @@ describe('integration: author-side granular pinning', () => {
 
   it('unpinChannel orphan list, run through the cleanup handler, empties the scope', async () => {
     const { app, alice, channel } = await setup()
-    await publishPostWithAttachments(alice, channel, 'hi', [
-      { mime: 'image/png', size: 200 },
-    ])
-    const { objectIDs } = await unpinChannel(
-      alice.agent as unknown as Agent,
-      channel,
+    const { manifest } = await publishPostWithAttachments(
+      alice,
+      channel.manifest,
+      'hi',
+      [{ mime: 'image/png', size: 200 }],
     )
+    const { objectIDs } = unpinChannel(manifest)
     await runDeleteObjects(cleanup(objectIDs), {
       sdk: alice.sdk as unknown as Sdk,
       markDone: () => {},
@@ -270,17 +257,13 @@ describe('integration: author-side granular pinning', () => {
 
   it('unpinChannel excludes protected object IDs from the orphan list', async () => {
     const { alice, channel } = await setup()
-    const { bodyObjectID, attachmentObjectIDs } =
-      await publishPostWithAttachments(alice, channel, 'hi', [
+    const { manifest, bodyObjectID, attachmentObjectIDs } =
+      await publishPostWithAttachments(alice, channel.manifest, 'hi', [
         { mime: 'image/png', size: 200 },
       ])
     const sharedFileID = attachmentObjectIDs[0]
 
-    const { objectIDs } = await unpinChannel(
-      alice.agent as unknown as Agent,
-      channel,
-      new Set([sharedFileID]),
-    )
+    const { objectIDs } = unpinChannel(manifest, new Set([sharedFileID]))
 
     // The protected attachment is left out; the body is still orphaned.
     expect(objectIDs).toEqual([bodyObjectID])

@@ -14,7 +14,6 @@ import {
 import { useChannelDocsMirror } from './lib/hooks/useChannelDocsMirror'
 import { useChannelLocatorPublish } from './lib/hooks/useChannelLocatorPublish'
 import { useChannelReader } from './lib/hooks/useChannelReader'
-import { useGhostReconciliation } from './lib/hooks/useGhostReconciliation'
 import { useHandleFollowReconciliation } from './lib/hooks/useHandleFollowReconciliation'
 import { useIdentityDocPublish } from './lib/hooks/useIdentityDocPublish'
 import { useRepackRunner } from './lib/hooks/useRepackRunner'
@@ -75,7 +74,6 @@ export default function App() {
   useChannelReader()
   useChannelLocatorPublish()
   useIdentityDocPublish()
-  useGhostReconciliation()
   useHandleFollowReconciliation()
 
   // While a pinned item is armed, mark the body so a global CSS rule

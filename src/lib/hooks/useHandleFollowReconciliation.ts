@@ -7,10 +7,10 @@ import { useToastStore } from '../../stores/toast'
 import { resolveIdentityDoc } from '../identityDoc'
 import { flushSettingsBestEffort } from './useSettingsSync'
 
-// Once-guard across StrictMode's double-mount (and any remount), same as
-// useGhostReconciliation. New channels a followed person advertises mid-session
-// are picked up on the next boot; following someone mid-session goes through
-// reconcileOneHandle (the button path) for an immediate add.
+// Once-guard across StrictMode's double-mount (and any remount). New channels a
+// followed person advertises mid-session are picked up on the next boot;
+// following someone mid-session goes through reconcileOneHandle (the button
+// path) for an immediate add.
 let reconciled = false
 
 // Resolve one followed person's advertised public channels into Watch

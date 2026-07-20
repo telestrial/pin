@@ -1,7 +1,11 @@
 import type { Sdk } from '@siafoundation/sia-storage'
 import { useEffect } from 'react'
 import { resolveChannelImageIDs } from '../../core/channelImages'
-import { runRepackBatch, type ScopeRef } from '../../core/repack'
+import {
+  type ChannelManifestIO,
+  runRepackBatch,
+  type ScopeRef,
+} from '../../core/repack'
 import { isValidAttachment } from '../../core/types'
 import { checkpointedObjectIDs, useActionStore } from '../../stores/actionQueue'
 import { useAuthStore } from '../../stores/auth'
@@ -9,6 +13,10 @@ import { useFeedStore } from '../../stores/feed'
 import { usePinStore } from '../../stores/pin'
 import { useStorageActivityStore } from '../../stores/storageActivity'
 import { useToastStore } from '../../stores/toast'
+import {
+  commitChannelManifest,
+  resolveChannelViaLocator,
+} from '../channelLocator'
 import { LIBRARY_CHANNEL } from '../pinUpload'
 
 // Build the "what's pinned in your scope right now" snapshot the repack
@@ -135,6 +143,20 @@ export function useRepackRunner() {
   useEffect(() => {
     if (!sdk) return
 
+    // Channel manifest I/O over the locator: prefer the local cache for the
+    // read (fresh + no DHT round-trip), commit the rewrite to the locator.
+    const channelIO: ChannelManifestIO = {
+      readManifest: async (channelID, channelKey) => {
+        const cached = useFeedStore.getState().manifests[channelID]
+        if (cached) return cached
+        const resolved = await resolveChannelViaLocator(sdk, channelKey)
+        if (!resolved) throw new Error(`repack: no locator for ${channelID}`)
+        return resolved
+      },
+      commitManifest: (channelID, channelKey, manifest) =>
+        commitChannelManifest(sdk, channelID, channelKey, manifest),
+    }
+
     let running = false
     let queued = false
     let stopped = false
@@ -157,7 +179,7 @@ export function useRepackRunner() {
 
           let result: Awaited<ReturnType<typeof runRepackBatch>>
           try {
-            result = await runRepackBatch(sdk, auth.atprotoAgent, scope)
+            result = await runRepackBatch(sdk, scope, channelIO)
           } catch (e) {
             // One batch failing shouldn't kill the runner. Log and bail
             // out of this tick; next pin event will try again.
