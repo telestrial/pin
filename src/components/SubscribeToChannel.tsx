@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { parseSubscribeURL } from '../core/channels'
 import type { FeedEntry } from '../core/feed'
-import { makeLocatorFirstReader } from '../lib/channelLocator'
+import { makeLocatorReader } from '../lib/channelLocator'
 import { flushSettingsBestEffort } from '../lib/hooks/useSettingsSync'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
@@ -46,11 +46,11 @@ export function SubscribeToChannel({
         setSubmitting(false)
         return
       }
-      // Locator-first (via K from the URL), atproto fallback — same reader as the
-      // feed (step 4a). authorATProtoDID for the subscription comes off the manifest
-      // either way, so the sub is built the same regardless of read path.
-      const manifest = await makeLocatorFirstReader(sdk)(
-        parsed.authorHandle,
+      // Locator-only read (via K from the URL), same reader as the feed. A
+      // legacy authorATProtoDID off the manifest is stored when present, but
+      // identity is the did:dht from the subscribe URL.
+      const manifest = await makeLocatorReader(sdk)(
+        parsed.didDht ?? parsed.authorHandle,
         parsed.channelID,
         parsed.channelKey,
       )

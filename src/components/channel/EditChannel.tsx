@@ -1,7 +1,7 @@
 import { type ChangeEvent, useEffect, useState } from 'react'
 import type { EditChannelPatch } from '../../core/channels'
 import type { ChannelImage, ChannelManifest } from '../../core/types'
-import { makeLocatorFirstReader } from '../../lib/channelLocator'
+import { makeLocatorReader } from '../../lib/channelLocator'
 import { saveChannelEdits } from '../../lib/channelWrites'
 import { useItemBlobURL } from '../../lib/hooks/useItemBytes'
 import { useActionStore } from '../../stores/actionQueue'
@@ -53,12 +53,11 @@ export function EditChannel({
       setLoading(false)
       return
     }
-    // Prefer the local cache; else read the channel via its locator (the
-    // atproto fallback in makeLocatorFirstReader covers not-yet-migrated ones).
+    // Prefer the local cache; else read the channel via its locator.
     const cached = useFeedStore.getState().manifests[channelID]
     const load = cached
       ? Promise.resolve(cached)
-      : makeLocatorFirstReader(sdk)(atprotoDID ?? '', channelID, channelKey)
+      : makeLocatorReader(sdk)(atprotoDID ?? '', channelID, channelKey)
     load
       .then((manifest) => {
         if (cancelled) return

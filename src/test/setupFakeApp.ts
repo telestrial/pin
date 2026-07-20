@@ -16,7 +16,7 @@ import { uploadItem } from '../core/sia'
 import type { ChannelManifest, ItemRef, SubscriptionRef } from '../core/types'
 import {
   commitChannelManifest,
-  makeLocatorFirstReader,
+  makeLocatorReader,
   resolveChannelViaLocator,
 } from '../lib/channelLocator'
 import { useActionStore } from '../stores/actionQueue'
@@ -195,10 +195,10 @@ export function mountAs(
     settingsLoaded: true,
     error: null,
   })
-  // Reads go locator-first (pkarr → Sia → atproto fallback), matching what
-  // App's useChannelReader injects in production — so a subscriber's feed reads
-  // the channel the author committed to the locator, not the (gone) atproto record.
+  // Reads go through the locator (pkarr → Sia), matching what App's
+  // useChannelReader injects in production — so a subscriber's feed reads the
+  // channel the author committed to the locator.
   useFeedStore
     .getState()
-    .setChannelReader(makeLocatorFirstReader(account.sdk as unknown as Sdk))
+    .setChannelReader(makeLocatorReader(account.sdk as unknown as Sdk))
 }

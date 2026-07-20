@@ -11,7 +11,6 @@
 // can't derive a channel's locator without its K.
 
 import type { Sdk } from '@siafoundation/sia-storage'
-import { fetchChannel } from '../core/channels'
 import {
   channelKeyFromBase64,
   decryptForChannel,
@@ -116,20 +115,20 @@ export async function resolveChannelViaLocator(
   return manifest as ChannelManifest
 }
 
-/** A `FetchChannel` that reads a channel from its pkarr locator (no atproto) and
- *  falls back to the atproto record when the locator isn't resolvable / errors.
- *  This is the step-4a read flip: locator-first, atproto as the safety net. The sdk
- *  is closed over (the FetchChannel signature stays atproto-shaped), so it drops in
- *  wherever `buildHomeFeed`'s fetcher is injected. */
-export function makeLocatorFirstReader(sdk: Sdk): FetchChannel {
-  return async (authorHandleOrDID, channelID, channelKey) => {
-    try {
-      const viaLocator = await resolveChannelViaLocator(sdk, channelKey)
-      if (viaLocator) return viaLocator
-    } catch (e) {
-      console.warn(`locator read failed for ${channelID}, using atproto:`, e)
+/** A `FetchChannel` that reads a channel purely from its pkarr locator (no
+ *  atproto). Channels are locator-native now, so a miss/error is a genuine
+ *  read failure — it throws, and `buildHomeFeed` records it as a channel error
+ *  (rather than silently masking a DHT/Sia problem behind an atproto read that
+ *  no longer has anything to serve). The sdk is closed over; the `FetchChannel`
+ *  signature keeps its author-identifier arg (unused here) so this drops in
+ *  wherever the feed's fetcher is injected. */
+export function makeLocatorReader(sdk: Sdk): FetchChannel {
+  return async (_authorHandleOrDID, channelID, channelKey) => {
+    const manifest = await resolveChannelViaLocator(sdk, channelKey)
+    if (!manifest) {
+      throw new Error(`Channel ${channelID} not resolvable (no locator)`)
     }
-    return fetchChannel(authorHandleOrDID, channelID, channelKey)
+    return manifest
   }
 }
 
