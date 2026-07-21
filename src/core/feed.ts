@@ -1,4 +1,3 @@
-import { fetchChannel } from './channels'
 import type {
   ChannelImage,
   ChannelManifest,
@@ -42,7 +41,9 @@ export type FetchChannel = (
 
 export async function buildHomeFeed(
   subscriptions: SubscriptionRef[],
-  fetcher: FetchChannel = fetchChannel,
+  // Reads go through the locator (pkarr → Sia); the caller injects it. No
+  // default reader — channels can't be read without the Sia sdk.
+  fetcher: FetchChannel,
   // Last-known manifests, keyed by channelID. Stale-while-revalidate: reads go
   // through the pkarr/Mainline-DHT locator, which is eventually consistent, so a
   // momentary miss shouldn't blank a channel out of the feed. A channel that

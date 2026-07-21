@@ -24,13 +24,13 @@ import { useComposeStore } from '../stores/compose'
 import { useFeedStore } from '../stores/feed'
 import { usePinStore } from '../stores/pin'
 import { useToastStore } from '../stores/toast'
-import { FakeAgent, FakeRecordStore } from './fakeAgent'
 import { setCurrentWorld } from './fakeModules'
 import { createFakeWorld, FakeSdk, type FakeWorld } from './fakeSdk'
 
 export type FakeAccount = {
   sdk: FakeSdk
-  agent: FakeAgent
+  // did/handle are test bookkeeping for building SubscriptionRefs; identity is
+  // did:dht (derived from the AppKey) in the app itself.
   did: string
   handle: string
 }
@@ -46,9 +46,6 @@ export type FakeApp = {
 
 export function createFakeApp(): FakeApp {
   const world = createFakeWorld()
-  // Eagerly initialize so vi.mock'd reads work before any FakeAgent
-  // constructor runs.
-  if (!world.records) world.records = new FakeRecordStore()
   setCurrentWorld(world)
   return {
     world,
@@ -56,8 +53,7 @@ export function createFakeApp(): FakeApp {
       if (maxPinned !== undefined) world.accountMax.set(did, maxPinned)
       world.handles.set(did, handle)
       const sdk = new FakeSdk(did, world)
-      const agent = new FakeAgent(did, world)
-      return { sdk, agent, did, handle }
+      return { sdk, did, handle }
     },
   }
 }

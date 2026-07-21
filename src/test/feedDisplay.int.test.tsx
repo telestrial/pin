@@ -1,13 +1,13 @@
 // Integration test: author publishes a post → subscriber sees it in the feed.
 //
 // First integration test in the suite — sets the harness pattern for the rest.
-// Drives production components (HomeFeed) against the Phase 3 fakes via two
-// vi.mock'd modules: @atproto/api, @siafoundation/sia-storage.
+// Drives production components (HomeFeed) against the Phase 3 fakes via the
+// vi.mock'd @siafoundation/sia-storage module.
 //
 // Alice (author) publishes a text post through the real core/channels +
-// core/sia code paths (now backed by FakeSdk + FakeAgent). Bob (subscriber)
+// core/sia code paths (backed by FakeSdk). Bob (subscriber)
 // renders HomeFeed with alice's subscription seeded into his auth store;
-// the feed populates from the encrypted ATProto record and the post body
+// the feed populates from the channel locator and the post body
 // renders inline.
 
 import { render, screen, waitFor } from '@testing-library/react'
@@ -16,9 +16,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 // vi.mock must come before the imports below — Vitest hoists these calls.
 // The factories use dynamic import() so the helper module is loaded lazily
 // at runtime (after hoist), when getCurrentWorld() can return a live world.
-vi.mock('@atproto/api', async () =>
-  (await import('./fakeModules')).fakeAtprotoApiModule(),
-)
 vi.mock('@siafoundation/sia-storage', async () =>
   (await import('./fakeModules')).fakeSiaStorageModule(),
 )
@@ -53,8 +50,7 @@ describe('integration: subscriber feed display', () => {
     })
 
     // Alice creates a channel and publishes a post — through the real
-    // production code paths (core/channels + core/sia), now backed by
-    // FakeSdk + FakeAgent.
+    // production code paths (core/channels + core/sia), backed by FakeSdk.
     const channel = await authorCreateChannel(alice, {
       name: "Alice's voice",
       description: 'Things worth keeping',

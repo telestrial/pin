@@ -4,8 +4,8 @@
 //
 // Test files use these as factories:
 //
-//   vi.mock('@atproto/api', async () =>
-//     (await import('./fakeModules')).fakeAtprotoApiModule(),
+//   vi.mock('@siafoundation/sia-storage', async () =>
+//     (await import('./fakeModules')).fakeSiaStorageModule(),
 //   )
 //
 // State (the current FakeWorld) lives here too, so the factories don't have
@@ -27,94 +27,6 @@ export function getCurrentWorld(): FakeWorld {
     )
   }
   return currentWorld
-}
-
-// ---------------------------------------------------------------------------
-// @atproto/api replacement
-// ---------------------------------------------------------------------------
-
-type AtprotoCallArgs = {
-  repo: string
-  collection: string
-  rkey: string
-  record?: unknown
-  validate?: boolean
-}
-
-class FakeAtpAgent {
-  constructor(_opts: { service: string }) {
-    void _opts
-  }
-
-  readonly com = {
-    atproto: {
-      repo: {
-        getRecord: async ({ repo, collection, rkey }: AtprotoCallArgs) => {
-          const store = getCurrentWorld().records
-          if (!store) throw atprotoNotFound()
-          const rec = store.get(repo, collection, rkey)
-          if (!rec) throw atprotoNotFound()
-          return { data: rec }
-        },
-        listRecords: async ({ repo, collection }: AtprotoCallArgs) => {
-          const store = getCurrentWorld().records
-          if (!store) return { data: { records: [] } }
-          const records = store
-            .list(repo, collection)
-            .map((r) => ({ uri: r.uri, cid: r.cid, value: r.value }))
-          return { data: { records } }
-        },
-        describeRepo: async ({ repo }: { repo: string }) => {
-          // repo may be a DID (registry key) or a handle (registry value).
-          const handles = getCurrentWorld().handles
-          let did = repo
-          let handle = handles.get(repo)
-          if (!handle) {
-            for (const [d, h] of handles) {
-              if (h === repo) {
-                did = d
-                handle = h
-                break
-              }
-            }
-          }
-          if (!handle) throw atprotoNotFound()
-          return { data: { did, handle, didDoc: {}, collections: [] } }
-        },
-        putRecord: async (_args: AtprotoCallArgs) => {
-          throw new Error(
-            'Unauthenticated AtpAgent cannot putRecord — use a FakeAgent for the authenticated path.',
-          )
-        },
-        deleteRecord: async (_args: AtprotoCallArgs) => {
-          throw new Error(
-            'Unauthenticated AtpAgent cannot deleteRecord — use a FakeAgent for the authenticated path.',
-          )
-        },
-      },
-    },
-  }
-}
-
-class FakeAgentStub {
-  constructor() {
-    throw new Error(
-      'new Agent() is not used by Pin in test mode; FakeAgent is constructed via createFakeApp instead.',
-    )
-  }
-}
-
-function atprotoNotFound(): Error {
-  const err: Error & { status?: number } = new Error('Record not found')
-  err.status = 400
-  return err
-}
-
-export function fakeAtprotoApiModule() {
-  return {
-    AtpAgent: FakeAtpAgent,
-    Agent: FakeAgentStub,
-  }
 }
 
 // ---------------------------------------------------------------------------

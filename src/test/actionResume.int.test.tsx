@@ -10,9 +10,6 @@
 import { render, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-vi.mock('@atproto/api', async () =>
-  (await import('./fakeModules')).fakeAtprotoApiModule(),
-)
 vi.mock('@siafoundation/sia-storage', async () =>
   (await import('./fakeModules')).fakeSiaStorageModule(),
 )

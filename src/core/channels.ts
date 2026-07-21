@@ -1,9 +1,7 @@
 import type { Sdk } from '@siafoundation/sia-storage'
-import { getChannelRecord } from './atproto'
 import {
   channelKeyFromBase64,
   channelKeyToBase64,
-  decryptForChannel,
   deriveChannelID,
   generateChannelKey,
 } from './crypto'
@@ -189,33 +187,6 @@ export async function editChannel(
   }
 
   return { manifest: updated, reclaimURLs }
-}
-
-// channelKey is optional: for public channels, K is embedded in the
-// record body itself so a caller that doesn't have K (e.g. a directory
-// page walking a follow list) can still decrypt. For obscure channels,
-// callers must supply K — otherwise we have no way to read the manifest.
-export async function fetchChannel(
-  authorHandleOrDID: string,
-  channelID: string,
-  channelKey?: string,
-): Promise<ChannelManifest> {
-  const record = await getChannelRecord(authorHandleOrDID, channelID)
-  const keyB64 = channelKey ?? record.key
-  if (!keyB64) {
-    throw new Error(
-      'Channel is obscure (no key in record) and no channel key supplied',
-    )
-  }
-  const keyBytes = channelKeyFromBase64(keyB64)
-  const plaintext = await decryptForChannel(keyBytes, record.encryptedManifest)
-  const parsed = JSON.parse(plaintext)
-  if (parsed?.version !== CHANNEL_MANIFEST_VERSION) {
-    throw new Error(
-      `Unsupported channel manifest version (got ${parsed?.version}, expected ${CHANNEL_MANIFEST_VERSION})`,
-    )
-  }
-  return parsed as ChannelManifest
 }
 
 export function buildItemRef(

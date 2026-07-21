@@ -1,25 +1,19 @@
-import { type Agent, AtpAgent } from '@atproto/api'
-
+// The profile record shape + pure helpers. Profiles are local (settings-synced)
+// and published into the identity-doc on pkarr/Sia — there's no atproto profile
+// record anymore; PROFILE_LEXICON survives only as the record's `$type` tag.
 export const PROFILE_LEXICON = 'dev.sia.pin.profile'
-// Well-known rkey, parallel to app.bsky.actor.profile/self.
-export const PROFILE_RKEY = 'self'
-
-const DEFAULT_SERVICE = 'https://bsky.social'
 
 export type ProfileRecord = {
   $type: typeof PROFILE_LEXICON
   // The self-chosen @-word: the name a person picks to represent them.
   // NON-unique, mutable, and unenforced by design — identity is the DID,
   // continuity is petname + DID, reputation is key-anchored vouches, so this
-  // is purely a display/mention label carrying no structural weight. Distinct
-  // from the atproto handle (`handle` everywhere else in the code), which is
-  // the DID's permanent address; `username` is what the user calls themselves.
+  // is purely a display/mention label carrying no structural weight.
   username?: string
   displayName?: string
   bio?: string
   // Sia share URLs (with per-object encryption key in the URL fragment),
-  // same shape as ChannelImage.itemURL. Bytes live on Sia, not in atproto
-  // blob storage — symmetric with how channel images work.
+  // same shape as ChannelImage.itemURL. Bytes live on Sia.
   avatarURL?: string
   coverURL?: string
   updatedAt: string
@@ -46,31 +40,9 @@ export function normalizeUsername(raw: string): string {
   return raw.trim().replace(/^@+/, '').replace(/\s+/g, '').slice(0, 30)
 }
 
-export async function getProfileRecord(
-  authorHandleOrDID: string,
-): Promise<ProfileRecord | null> {
-  const agent = new AtpAgent({ service: DEFAULT_SERVICE })
-  try {
-    const result = await agent.com.atproto.repo.getRecord({
-      repo: authorHandleOrDID,
-      collection: PROFILE_LEXICON,
-      rkey: PROFILE_RKEY,
-    })
-    return result.data.value as ProfileRecord
-  } catch (err) {
-    // "No Pin profile yet" is the common case — return null so the caller
-    // renders the empty state. Other errors bubble so network problems
-    // stay distinguishable from missing-profile.
-    if (isRecordNotFoundError(err)) return null
-    throw err
-  }
-}
-
 // Apply a patch to a profile: undefined fields keep the current value;
-// removeAvatar/removeCover explicitly clear. The iroh-native profile write is
-// just this — the store holds the result locally, and the identity-doc
-// publisher pushes it. (putProfileRecord below reuses it for the legacy atproto
-// path, which is on its way out.)
+// removeAvatar/removeCover explicitly clear. The store holds the result locally
+// and the identity-doc publisher pushes it.
 export function applyProfilePatch(
   current: ProfileRecord | null,
   patch: ProfilePatch,
@@ -88,47 +60,4 @@ export function applyProfilePatch(
       : (patch.coverURL ?? current?.coverURL),
     updatedAt: new Date().toISOString(),
   }
-}
-
-export async function putProfileRecord(
-  agent: Agent,
-  patch: ProfilePatch,
-): Promise<ProfileRecord> {
-  const did = agent.assertDid
-
-  // Read current so we patch instead of overwriting unrelated fields.
-  const current = await getProfileRecord(did)
-  const next = applyProfilePatch(current, patch)
-
-  await agent.com.atproto.repo.putRecord({
-    repo: did,
-    collection: PROFILE_LEXICON,
-    rkey: PROFILE_RKEY,
-    record: next,
-    validate: false,
-  })
-  return next
-}
-
-export async function deleteProfileRecord(agent: Agent): Promise<void> {
-  const did = agent.assertDid
-  await agent.com.atproto.repo.deleteRecord({
-    repo: did,
-    collection: PROFILE_LEXICON,
-    rkey: PROFILE_RKEY,
-  })
-}
-
-function isRecordNotFoundError(err: unknown): boolean {
-  if (typeof err !== 'object' || err === null) return false
-  const e = err as { status?: number; error?: string; message?: string }
-  if (e.error === 'RecordNotFound') return true
-  if (
-    e.status === 400 &&
-    typeof e.message === 'string' &&
-    /could not locate|not found|recordnotfound/i.test(e.message)
-  ) {
-    return true
-  }
-  return false
 }

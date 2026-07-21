@@ -6,8 +6,6 @@
 // (sharedObject from B's URL called on A's sdk → mirror via pinObject)
 // work the way the real SDK does: share URLs are identity-agnostic.
 
-import type { FakeRecordStore } from './fakeAgent'
-
 const SLAB_BYTES = 40 * 1024 * 1024 // ~40 MiB, real Sia slab capacity
 const DEFAULT_MAX_PINNED = 5 * 1024 * 1024 * 1024 // 5 GiB
 
@@ -91,12 +89,8 @@ export class FakeWorld {
   readonly accountMax = new Map<string, number>()
   // Monotonic object ID counter — deterministic across a test run.
   private _objectCounter = 0
-  // ATProto universe — populated when the first FakeAgent attaches to
-  // this world. Tests don't need this directly; the agent reads/writes it.
-  records?: FakeRecordStore
-  // DID → handle, populated by createFakeApp's createAccount. Backs the
-  // fake describeRepo (the unauthenticated DID↔handle resolution real Pin
-  // does for the directory + handle-follow reconcile).
+  // DID → handle, populated by createFakeApp's createAccount. A leftover from
+  // the atproto era; harmless test bookkeeping.
   readonly handles = new Map<string, string>()
   // pkarr universe — publicKey → its published TXT records. Backs the fake
   // lib/pkarr so channel-locator publish/resolve round-trips in-memory (no
