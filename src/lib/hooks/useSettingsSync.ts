@@ -71,7 +71,6 @@ export function useSettingsSync() {
               snap.follows ?? [],
               snap.handleFollows ?? [],
               snap.profile ?? null,
-              null,
             )
         } else {
           // No snapshot yet — first user mutation creates it.

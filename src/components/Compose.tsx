@@ -70,7 +70,6 @@ export function Compose({
   editing?: ComposeEditMode
 }) {
   const sdk = useAuthStore((s) => s.sdk)
-  const atprotoHandle = useAuthStore((s) => s.atprotoHandle)
   const enqueue = useActionStore((s) => s.enqueuePublish)
   const addToast = useToastStore((s) => s.addToast)
   const armedItem = useComposeStore((s) => s.armedItem)
@@ -184,7 +183,9 @@ export function Compose({
   const remaining = NOTE_CHAR_LIMIT - body.length
   const overLimit = remaining < 0
   const canSubmit = !overLimit && (!!trimmed || attachments.length > 0)
-  const handleForAvatar = atprotoHandle ?? ''
+  // The composer avatar is the selected channel's; authorHandle is just a
+  // mark-seed fallback, empty now that there's no atproto handle.
+  const handleForAvatar = ''
 
   function attachArmedItem() {
     if (!armedItem) return

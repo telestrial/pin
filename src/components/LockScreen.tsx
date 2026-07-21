@@ -6,16 +6,16 @@ import { AuthShell } from './auth/AuthShell'
 // instantly — nothing reconnects. Reuses AuthShell so the grey→green Pin
 // and fade-in match the real auth screen.
 export function LockScreen({ onContinue }: { onContinue: () => void }) {
-  const handle = useAuthStore((s) => s.atprotoHandle)
+  const username = useAuthStore((s) => s.profile?.username)
 
   return (
     <AuthShell ready>
       <div className="flex flex-col items-center gap-5 text-center">
         <p className="text-sm text-neutral-600">
-          {handle ? (
+          {username ? (
             <>
               Welcome back,{' '}
-              <span className="font-medium text-neutral-900">@{handle}</span>
+              <span className="font-medium text-neutral-900">@{username}</span>
             </>
           ) : (
             'Welcome back'

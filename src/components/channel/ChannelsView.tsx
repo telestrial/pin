@@ -23,7 +23,6 @@ export function ChannelsView({
 }) {
   const myChannels = useAuthStore((s) => s.myChannels)
   const subscriptions = useAuthStore((s) => s.subscriptions)
-  const atprotoHandle = useAuthStore((s) => s.atprotoHandle)
   const storedKeyHex = useAuthStore((s) => s.storedKeyHex)
   const errors = useFeedStore((s) => s.errors)
 
@@ -58,8 +57,8 @@ export function ChannelsView({
         ) : (
           <ul className="divide-y divide-neutral-200/80">
             {myChannels.map((c) => {
-              const sub = subscriptions.find((s) => s.channelID === c.channelID)
-              const handle = sub?.authorHandle ?? atprotoHandle
+              // The channel view resolves K by channelID (from your subs), so
+              // the authorHandle arg isn't load-bearing — pass empty.
               return (
                 <li
                   key={c.channelID}
@@ -67,11 +66,8 @@ export function ChannelsView({
                 >
                   <button
                     type="button"
-                    onClick={() =>
-                      handle && onChannelClick(handle, c.channelID)
-                    }
-                    disabled={!handle}
-                    className="min-w-0 flex-1 text-left hover:bg-neutral-50 -mx-2 px-2 py-1 rounded transition-colors disabled:opacity-50 cursor-pointer"
+                    onClick={() => onChannelClick('', c.channelID)}
+                    className="min-w-0 flex-1 text-left hover:bg-neutral-50 -mx-2 px-2 py-1 rounded transition-colors cursor-pointer"
                   >
                     <p className="text-sm text-neutral-900 truncate">
                       {c.name}
@@ -108,9 +104,17 @@ export function ChannelsView({
             {subscriptions.map((s) => {
               const error = errors.find((e) => e.channelID === s.channelID)
               const name = s.cachedName ?? s.channelID
+              // did:dht is the author identity now; legacy subs may carry only a
+              // handle. Show/navigate by whichever exists (short-form the did).
+              const author = s.didDht ?? s.authorHandle
+              const authorLabel = s.authorHandle
+                ? `@${s.authorHandle}`
+                : s.didDht
+                  ? `did:dht:…${s.didDht.replace(/^did:dht:/, '').slice(-6)}`
+                  : ''
               return (
                 <li
-                  key={`${s.authorHandle}/${s.channelID}`}
+                  key={`${author}/${s.channelID}`}
                   className="py-3 flex items-center gap-3"
                 >
                   <div className="min-w-0 flex-1 space-y-0.5">
@@ -123,13 +127,15 @@ export function ChannelsView({
                     >
                       {name}
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => onHandleClick(s.authorHandle)}
-                      className="block max-w-full text-left text-xs text-neutral-500 truncate hover:underline cursor-pointer"
-                    >
-                      @{s.authorHandle}
-                    </button>
+                    {author && (
+                      <button
+                        type="button"
+                        onClick={() => onHandleClick(author)}
+                        className="block max-w-full text-left text-xs text-neutral-500 truncate hover:underline cursor-pointer"
+                      >
+                        {authorLabel}
+                      </button>
+                    )}
                     {error && (
                       <p className="text-xs text-red-600 mt-1 wrap-break-word">
                         Failed to load: {error.error}

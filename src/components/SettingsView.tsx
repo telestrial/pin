@@ -22,14 +22,14 @@ export function SettingsView() {
   const handleFullReset = async () => {
     const confirmation = window.prompt(
       'FULL RESET permanently deletes everything — every channel, post, file, ' +
-        'subscription, profile, and setting, both on Sia and on your atproto ' +
-        'repo — and signs you out. This cannot be undone.\n\nType RESET to confirm.',
+        'subscription, profile, and setting on Sia — and signs you out. This ' +
+        'cannot be undone.\n\nType RESET to confirm.',
     )
     if (confirmation !== 'RESET') return
     setResetting(true)
-    const { sdk, atprotoAgent, atprotoDID } = useAuthStore.getState()
+    const { sdk } = useAuthStore.getState()
     // fullReset reloads the page on completion — nothing after this runs.
-    await fullReset({ sdk, agent: atprotoAgent, atprotoDID })
+    await fullReset({ sdk })
   }
 
   return (
@@ -76,8 +76,8 @@ export function SettingsView() {
           <h2 className="text-sm font-semibold text-red-900">Danger zone</h2>
           <p className="text-xs text-red-700 mt-1 leading-relaxed">
             Full reset wipes every channel, post, file, subscription, profile,
-            and setting — on Sia and on your atproto repo — then signs you out
-            and returns you to the welcome screen. There is no undo.
+            and setting on Sia, then signs you out and returns you to the
+            welcome screen. There is no undo.
           </p>
         </div>
         <button

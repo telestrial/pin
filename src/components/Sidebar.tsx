@@ -93,11 +93,6 @@ export function Sidebar({
     .sort((a, b) => b.addedAt.localeCompare(a.addedAt))
     .slice(0, CAP)
 
-  const ownedAuthorHandle = (channelID: string) => {
-    const sub = subscriptions.find((s) => s.channelID === channelID)
-    return sub?.authorHandle
-  }
-
   return (
     <aside className="w-full lg:w-60 shrink-0 border border-neutral-200 rounded-lg bg-white p-3 lg:max-h-full lg:overflow-y-auto">
       <section>
@@ -167,22 +162,20 @@ export function Sidebar({
         {channelsToShow.length > 0 && (
           <ul aria-label="Your channels">
             {channelsToShow.map((c) => {
-              const handle = ownedAuthorHandle(c.channelID)
               const active = c.channelID === activeChannelID
               return (
                 <li key={c.channelID}>
                   <button
                     type="button"
-                    onClick={() =>
-                      handle && onChannelClick(handle, c.channelID)
-                    }
-                    disabled={!handle}
-                    className="w-full px-3 py-1.5 text-sm rounded transition-colors disabled:opacity-50 cursor-pointer text-neutral-700 hover:text-neutral-900 hover:bg-neutral-50 flex items-center gap-2 text-left"
+                    // The channel view resolves K by channelID (from your subs),
+                    // so the authorHandle arg isn't load-bearing — pass empty.
+                    onClick={() => onChannelClick('', c.channelID)}
+                    className="w-full px-3 py-1.5 text-sm rounded transition-colors cursor-pointer text-neutral-700 hover:text-neutral-900 hover:bg-neutral-50 flex items-center gap-2 text-left"
                   >
                     <ChannelAvatar
                       channelID={c.channelID}
                       channelName={c.name}
-                      authorHandle={handle ?? ''}
+                      authorHandle=""
                       avatar={manifests[c.channelID]?.avatar}
                       size="xs"
                     />

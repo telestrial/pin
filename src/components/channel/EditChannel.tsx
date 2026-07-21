@@ -27,7 +27,6 @@ export function EditChannel({
   rightSidebar?: React.ReactNode
 }) {
   const sdk = useAuthStore((s) => s.sdk)
-  const atprotoDID = useAuthStore((s) => s.atprotoDID)
   const updateMyChannelName = useAuthStore((s) => s.updateMyChannelName)
   const updateSubscriptionName = useAuthStore((s) => s.updateSubscriptionName)
 
@@ -57,7 +56,7 @@ export function EditChannel({
     const cached = useFeedStore.getState().manifests[channelID]
     const load = cached
       ? Promise.resolve(cached)
-      : makeLocatorReader(sdk)(atprotoDID ?? '', channelID, channelKey)
+      : makeLocatorReader(sdk)('', channelID, channelKey)
     load
       .then((manifest) => {
         if (cancelled) return
@@ -74,7 +73,7 @@ export function EditChannel({
     return () => {
       cancelled = true
     }
-  }, [sdk, atprotoDID, channelID, channelKey])
+  }, [sdk, channelID, channelKey])
 
   useEffect(() => {
     if (!newAvatarFile) {

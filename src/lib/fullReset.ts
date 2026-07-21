@@ -1,42 +1,22 @@
-import type { Agent } from '@atproto/api'
 import type { Sdk } from '@siafoundation/sia-storage'
-import { wipeAllPinRecords, wipeAllSiaObjects } from '../core/reset'
-import { signOutOauth } from './atprotoClient'
+import { wipeAllSiaObjects } from '../core/reset'
 
-// Nuke everything and reload to the login screen. Order matters: do the network
-// deletes while sdk + agent are still alive, sign out of atproto so the reload
-// doesn't half-restore, then clear all local storage and reload — a fresh boot
-// with nothing persisted lands the user at the welcome screen.
+// Nuke everything and reload to the login screen. Order matters: do the Sia
+// wipe while the sdk is still alive, then clear all local storage and reload —
+// a fresh boot with nothing persisted lands the user at the welcome screen.
+// (did:dht/pkarr records aren't deleted; they expire by TTL.)
 //
 // Best-effort throughout: a failed leg is logged but never blocks the rest, so
 // the reset always reaches "logged out at welcome." (A QUIC failure mid Sia
 // wipe can strand a few objects; re-running the reset finishes them.)
-export async function fullReset(opts: {
-  sdk: Sdk | null
-  agent: Agent | null
-  atprotoDID: string | null
-}): Promise<void> {
-  const { sdk, agent, atprotoDID } = opts
+export async function fullReset(opts: { sdk: Sdk | null }): Promise<void> {
+  const { sdk } = opts
 
-  if (agent) {
-    try {
-      console.log('full reset: records', await wipeAllPinRecords(agent))
-    } catch (e) {
-      console.warn('full reset: record wipe failed', e)
-    }
-  }
   if (sdk) {
     try {
       console.log('full reset: objects', await wipeAllSiaObjects(sdk))
     } catch (e) {
       console.warn('full reset: object wipe failed', e)
-    }
-  }
-  if (atprotoDID) {
-    try {
-      await signOutOauth(atprotoDID)
-    } catch (e) {
-      console.warn('full reset: oauth revoke failed', e)
     }
   }
 
@@ -51,8 +31,8 @@ export async function fullReset(opts: {
   location.reload()
 }
 
-// Delete every IndexedDB database — item cache, action journal, and the OAuth
-// session store. Chrome (our dev/test target) supports indexedDB.databases().
+// Delete every IndexedDB database — item cache, action journal, etc.
+// Chrome (our dev/test target) supports indexedDB.databases().
 // A delete blocked by an open connection just resolves; the reload tears the
 // connections down regardless.
 async function clearAllIndexedDB(): Promise<void> {

@@ -3,7 +3,6 @@
 // NOT from a vi.mock factory (the factory would race the production
 // modules it's replacing). See fakeModules.ts for the lean mock side.
 
-import type { Agent } from '@atproto/api'
 import type { Sdk } from '@siafoundation/sia-storage'
 import {
   appendItemToChannel,
@@ -181,9 +180,6 @@ export function mountAs(
 ): void {
   useAuthStore.setState({
     sdk: account.sdk as unknown as Sdk,
-    atprotoAgent: account.agent as unknown as Agent,
-    atprotoDID: account.did,
-    atprotoHandle: account.handle,
     storedKeyHex: 'fake-key-hex',
     indexerURL: 'https://indexer.fake',
     step: 'connected',

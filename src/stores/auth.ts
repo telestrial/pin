@@ -1,4 +1,3 @@
-import type { Agent } from '@atproto/api'
 import type { Sdk } from '@siafoundation/sia-storage'
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
@@ -58,27 +57,21 @@ type AuthState = {
   // The user's own profile — canonical locally (settings-synced), published into
   // the identity-doc. Replaces the atproto dev.sia.pin.profile record.
   profile: ProfileRecord | null
-  atprotoAgent: Agent | null
-  atprotoDID: string | null
-  atprotoHandle: string | null
   // This identity's own did:dht, derived from the Sia AppKey (HKDF, same as the
   // keeper / identity-doc). The self-sovereign "who am I" — used for isSelf and
-  // profile navigation, replacing the atproto handle/DID. Persisted for instant
-  // availability on boot; re-derived at connect so it's never stale.
+  // profile navigation. Persisted for instant availability on boot; re-derived
+  // at connect so it's never stale.
   myDidDht: string | null
   feedSortOrder: FeedSortOrder
   theme: ThemeMode
   settingsObjectID: string | null
-  // CID of the current dev.sia.pin.settings/self record — the compare-and-swap
-  // guard for the next write. Runtime-only (re-fetched on load), not persisted.
-  settingsRecordCid: string | null
   settingsLoaded: boolean
   settingsDirty: boolean
   // Soft lock: when true, the connected surface is replaced by the lock
-  // screen. The session (sdk, agent, AppKey) stays live and the background
-  // runners keep going — this is a visual gate, not a teardown — so
-  // unlocking is instant. Runtime-only (not persisted): a real reload runs
-  // normal boot, so you can never be stuck locked across a refresh.
+  // screen. The session (sdk, AppKey) stays live and the background runners
+  // keep going — this is a visual gate, not a teardown — so unlocking is
+  // instant. Runtime-only (not persisted): a real reload runs normal boot, so
+  // you can never be stuck locked across a refresh.
   locked: boolean
   setSdk: (sdk: Sdk) => void
   setStep: (step: AuthStep) => void
@@ -101,12 +94,6 @@ type AuthState = {
   addHandleFollow: (didDht: string) => void
   removeHandleFollow: (didDht: string) => void
   setProfile: (patch: ProfilePatch) => void
-  setATProtoIdentity: (
-    agent: Agent | null,
-    did: string | null,
-    handle: string | null,
-  ) => void
-  setATProtoHandle: (handle: string) => void
   setMyDidDht: (did: string) => void
   setFeedSortOrder: (order: FeedSortOrder) => void
   setTheme: (theme: ThemeMode) => void
@@ -118,12 +105,8 @@ type AuthState = {
     follows: FollowEdge[],
     handleFollows: string[],
     profile: ProfileRecord | null,
-    // null when the freshest settings came from the Sia snapshot with no atproto
-    // record (no CID to CAS against — the next save is a fresh create).
-    cid: string | null,
   ) => void
   setSettingsObjectID: (id: string) => void
-  setSettingsRecordCid: (cid: string | null) => void
   setSettingsLoaded: (loaded: boolean) => void
   setSettingsDirty: (dirty: boolean) => void
   setLocked: (locked: boolean) => void
@@ -145,14 +128,10 @@ export const useAuthStore = create<AuthState>()(
       follows: [],
       handleFollows: [],
       profile: null,
-      atprotoAgent: null,
-      atprotoDID: null,
-      atprotoHandle: null,
       myDidDht: null,
       feedSortOrder: 'newest',
       theme: 'rounded',
       settingsObjectID: null,
-      settingsRecordCid: null,
       settingsLoaded: false,
       settingsDirty: false,
       locked: false,
@@ -244,19 +223,6 @@ export const useAuthStore = create<AuthState>()(
         })),
       setProfile: (patch) =>
         set((s) => ({ profile: applyProfilePatch(s.profile, patch) })),
-      setATProtoIdentity: (atprotoAgent, atprotoDID, atprotoHandle) =>
-        // Don't overwrite an already-cached handle with null. The OAuth
-        // scope doesn't permit app.bsky.actor.getProfile, so doBoot can
-        // legitimately resolve handle=null on a returning session — that
-        // shouldn't trash the persisted display value from the prior boot,
-        // nor a handle pre-seeded by BlueskyOnboardingScreen before the
-        // sign-in redirect.
-        set((s) => ({
-          atprotoAgent,
-          atprotoDID,
-          atprotoHandle: atprotoHandle ?? s.atprotoHandle,
-        })),
-      setATProtoHandle: (atprotoHandle) => set({ atprotoHandle }),
       setMyDidDht: (myDidDht) => set({ myDidDht }),
       setFeedSortOrder: (feedSortOrder) => set({ feedSortOrder }),
       setTheme: (theme) => set({ theme }),
@@ -268,7 +234,6 @@ export const useAuthStore = create<AuthState>()(
         follows,
         handleFollows,
         profile,
-        cid,
       ) =>
         set({
           myChannels,
@@ -278,11 +243,9 @@ export const useAuthStore = create<AuthState>()(
           follows,
           handleFollows,
           profile,
-          settingsRecordCid: cid,
           settingsLoaded: true,
         }),
       setSettingsObjectID: (settingsObjectID) => set({ settingsObjectID }),
-      setSettingsRecordCid: (settingsRecordCid) => set({ settingsRecordCid }),
       setSettingsLoaded: (settingsLoaded) => set({ settingsLoaded }),
       setSettingsDirty: (settingsDirty) => set({ settingsDirty }),
       setLocked: (locked) => set({ locked }),
@@ -302,12 +265,8 @@ export const useAuthStore = create<AuthState>()(
           follows: [],
           handleFollows: [],
           profile: null,
-          atprotoAgent: null,
-          atprotoDID: null,
-          atprotoHandle: null,
           myDidDht: null,
           settingsObjectID: null,
-          settingsRecordCid: null,
           settingsLoaded: false,
           settingsDirty: false,
           locked: false,
@@ -325,8 +284,6 @@ export const useAuthStore = create<AuthState>()(
         follows: state.follows,
         handleFollows: state.handleFollows,
         profile: state.profile,
-        atprotoDID: state.atprotoDID,
-        atprotoHandle: state.atprotoHandle,
         myDidDht: state.myDidDht,
         feedSortOrder: state.feedSortOrder,
         theme: state.theme,

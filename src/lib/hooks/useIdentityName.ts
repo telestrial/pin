@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
-import { resolveIdentityDoc } from '../identityDoc'
 import { useAuthStore } from '../../stores/auth'
+import { resolveIdentityDoc } from '../identityDoc'
 
 // Session cache: did:dht → the author's self-chosen Pin @handle (profile.username),
 // or null = "resolved, no username." The did:dht counterpart to useAuthorName, but
@@ -40,12 +40,18 @@ function resolve(sdk: unknown, didDht: string): Promise<string | null> {
 // so feeds render instantly and upgrade as identity-docs resolve.
 export function useIdentityName(didDht: string): string {
   const sdk = useAuthStore((s) => s.sdk)
+  // Your own identity resolves locally: profile is the source of truth (and the
+  // published doc may lag local edits / not have propagated yet on the DHT), so
+  // never network-resolve yourself.
+  const myDidDht = useAuthStore((s) => s.myDidDht)
+  const myUsername = useAuthStore((s) => s.profile?.username)
+  const isSelf = !!didDht && didDht === myDidDht
   const [username, setUsername] = useState<string | null>(
     () => cache.get(didDht) ?? null,
   )
 
   useEffect(() => {
-    if (!didDht || !sdk) return
+    if (!didDht || !sdk || isSelf) return
     const cached = cache.get(didDht)
     if (cached !== undefined) {
       setUsername(cached)
@@ -58,9 +64,11 @@ export function useIdentityName(didDht: string): string {
     return () => {
       cancelled = true
     }
-  }, [didDht, sdk])
+  }, [didDht, sdk, isSelf])
 
   // Fallback: `did:dht:iyyp…db4o` (last chars are the most distinguishing).
   const key = didDht.replace(/^did:dht:/, '')
-  return username || `did:dht:…${key.slice(-6)}`
+  const fallback = `did:dht:…${key.slice(-6)}`
+  if (isSelf) return myUsername || fallback
+  return username || fallback
 }

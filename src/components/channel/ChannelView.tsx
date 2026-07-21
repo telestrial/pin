@@ -41,10 +41,10 @@ export function ChannelView({
   rightSidebar: React.ReactNode
   composerSlot?: React.ReactNode
 }) {
+  // channelID (derived from K) uniquely identifies a subscription — match on it
+  // alone (authorHandle is empty for did:dht subs, so it's not a usable key).
   const sub = useAuthStore((s) =>
-    s.subscriptions.find(
-      (x) => x.authorHandle === authorHandle && x.channelID === channelID,
-    ),
+    s.subscriptions.find((x) => x.channelID === channelID),
   )
   const sortOrder = useAuthStore((s) => s.feedSortOrder)
   const setSortOrder = useAuthStore((s) => s.setFeedSortOrder)
@@ -142,12 +142,15 @@ export function ChannelView({
                         </span>
                       )}
                     </div>
-                    {/* did:dht channels carry no atproto handle; hide the line
-                        rather than render a bare "@" (identity-doc display = 5b). */}
-                    {authorHandle && (
+                    {/* Author line: navigate to the author's directory. did:dht
+                        (the identity now) → identity-doc name; legacy handle →
+                        raw handle. Hidden only when neither exists. */}
+                    {(manifest?.authorDidDht || authorHandle) && authorName && (
                       <button
                         type="button"
-                        onClick={() => onHandleClick(authorHandle)}
+                        onClick={() =>
+                          onHandleClick(manifest?.authorDidDht ?? authorHandle)
+                        }
                         className="block max-w-full text-sm text-neutral-500 truncate hover:underline cursor-pointer text-left"
                       >
                         @{authorName}
