@@ -62,6 +62,11 @@ type AuthState = {
   atprotoAgent: Agent | null
   atprotoDID: string | null
   atprotoHandle: string | null
+  // This identity's own did:dht, derived from the Sia AppKey (HKDF, same as the
+  // keeper / identity-doc). The self-sovereign "who am I" — used for isSelf and
+  // profile navigation, replacing the atproto handle/DID. Persisted for instant
+  // availability on boot; re-derived at connect so it's never stale.
+  myDidDht: string | null
   feedSortOrder: FeedSortOrder
   theme: ThemeMode
   settingsObjectID: string | null
@@ -103,6 +108,7 @@ type AuthState = {
     handle: string | null,
   ) => void
   setATProtoHandle: (handle: string) => void
+  setMyDidDht: (did: string) => void
   setFeedSortOrder: (order: FeedSortOrder) => void
   setTheme: (theme: ThemeMode) => void
   hydrateSettings: (
@@ -143,6 +149,7 @@ export const useAuthStore = create<AuthState>()(
       atprotoAgent: null,
       atprotoDID: null,
       atprotoHandle: null,
+      myDidDht: null,
       feedSortOrder: 'newest',
       theme: 'rounded',
       settingsObjectID: null,
@@ -251,6 +258,7 @@ export const useAuthStore = create<AuthState>()(
           atprotoHandle: atprotoHandle ?? s.atprotoHandle,
         })),
       setATProtoHandle: (atprotoHandle) => set({ atprotoHandle }),
+      setMyDidDht: (myDidDht) => set({ myDidDht }),
       setFeedSortOrder: (feedSortOrder) => set({ feedSortOrder }),
       setTheme: (theme) => set({ theme }),
       hydrateSettings: (
@@ -298,6 +306,7 @@ export const useAuthStore = create<AuthState>()(
           atprotoAgent: null,
           atprotoDID: null,
           atprotoHandle: null,
+          myDidDht: null,
           settingsObjectID: null,
           settingsRecordCid: null,
           settingsLoaded: false,
@@ -319,6 +328,7 @@ export const useAuthStore = create<AuthState>()(
         profile: state.profile,
         atprotoDID: state.atprotoDID,
         atprotoHandle: state.atprotoHandle,
+        myDidDht: state.myDidDht,
         feedSortOrder: state.feedSortOrder,
         theme: state.theme,
         settingsObjectID: state.settingsObjectID,

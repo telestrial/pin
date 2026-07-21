@@ -62,7 +62,7 @@ export function HandleDirectory({
   sidebar: React.ReactNode
   rightSidebar: React.ReactNode
 }) {
-  const myHandle = useAuthStore((s) => s.atprotoHandle)
+  const myDidDht = useAuthStore((s) => s.myDidDht)
   const [state, setState] = useState<State>({ kind: 'loading' })
 
   // Defensive normalize: callers should pass a bare handle, but a stray
@@ -218,7 +218,7 @@ export function HandleDirectory({
     }
   }, [handle])
 
-  const isSelf = myHandle === handle
+  const isSelf = !!myDidDht && myDidDht === handle
 
   // Inline back pill, used by loading / not-found / error states (no
   // cover banner there to overlay on). The loaded state renders its

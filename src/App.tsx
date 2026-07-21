@@ -6,6 +6,7 @@ import { Navbar } from './components/Navbar'
 import { Toasts } from './components/ui/Toast'
 import { bootOauth } from './lib/atprotoClient'
 import { inTauri } from './lib/openExternal'
+import { deriveDidDht } from './lib/pkarr'
 import './lib/debug'
 import {
   useActionQueueHydration,
@@ -127,6 +128,24 @@ export default function App() {
   useEffect(() => {
     if (!sdk) return
     usePinStore.getState().refreshAccount(sdk)
+  }, [sdk])
+
+  // Derive this identity's own did:dht from the AppKey once connected — the
+  // self-sovereign "who am I" used for isSelf + profile navigation. Deterministic
+  // (HKDF over the AppKey), so re-deriving on every connect keeps it correct
+  // even if the persisted value is from an older key.
+  useEffect(() => {
+    const storedKeyHex = useAuthStore.getState().storedKeyHex
+    if (!sdk || !storedKeyHex) return
+    let cancelled = false
+    deriveDidDht(Uint8Array.fromHex(storedKeyHex))
+      .then(({ did }) => {
+        if (!cancelled) useAuthStore.getState().setMyDidDht(did)
+      })
+      .catch((e) => console.warn('Failed to derive did:dht identity:', e))
+    return () => {
+      cancelled = true
+    }
   }, [sdk])
 
   const connected = step === 'connected'

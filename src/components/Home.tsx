@@ -71,7 +71,7 @@ export function Home() {
   const subscriptions = useAuthStore((s) => s.subscriptions)
   const myChannels = useAuthStore((s) => s.myChannels)
   const atprotoAgent = useAuthStore((s) => s.atprotoAgent)
-  const atprotoHandle = useAuthStore((s) => s.atprotoHandle)
+  const myDidDht = useAuthStore((s) => s.myDidDht)
   const settingsLoaded = useAuthStore((s) => s.settingsLoaded)
   const addToast = useToastStore((s) => s.addToast)
 
@@ -101,23 +101,24 @@ export function Home() {
   }
 
   function renderSidebar(activeChannelID?: string, activeHome = false) {
-    // The directory page for your own handle is what My Profile points
-    // at — same view as clicking your @handle anywhere else in the app.
-    // returnTo is captured from the live `view` closure so Back retraces
-    // to wherever the user opened the sidebar from.
+    // The directory page for your own did:dht is what My Profile points
+    // at — same view as clicking your identity anywhere else in the app,
+    // resolved off atproto via your identity-doc. returnTo is captured from
+    // the live `view` closure so Back retraces to wherever the user opened
+    // the sidebar from.
     const activeProfile =
-      view.kind === 'handle-directory' && view.handle === atprotoHandle
+      view.kind === 'handle-directory' && view.handle === myDidDht
     return (
       <Sidebar
         onHome={() => setView({ kind: 'idle' })}
         onProfile={
-          atprotoHandle
+          myDidDht
             ? () =>
                 // Primary nav: no returnTo → no Back on the profile.
                 // The sidebar IS the way back.
                 setView({
                   kind: 'handle-directory',
-                  handle: atprotoHandle,
+                  handle: myDidDht,
                 })
             : undefined
         }
