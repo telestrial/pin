@@ -9,7 +9,6 @@ import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
 import { objectIDsReferencedBy, usePinStore } from '../stores/pin'
 import { useToastStore } from '../stores/toast'
-import { BlueskyLoginScreen } from './auth/BlueskyLoginScreen'
 import { Compose } from './Compose'
 import { CurateView } from './CurateView'
 import { ChannelsView } from './channel/ChannelsView'
@@ -58,7 +57,6 @@ type View =
   | { kind: 'settings' }
   | { kind: 'curate' }
   | { kind: 'reading'; entry: FeedEntry; returnTo: View }
-  | { kind: 'bluesky-login'; resumeTo: View; cancelTo: View }
   | { kind: 'storage'; returnTo: View }
   // returnTo is OPTIONAL — sidebar's My Profile sets it undefined (primary
   // nav, no Back), @handle clicks set it to the calling view (contextual
@@ -70,7 +68,6 @@ export function Home() {
   const [view, setView] = useState<View>({ kind: 'idle' })
   const subscriptions = useAuthStore((s) => s.subscriptions)
   const myChannels = useAuthStore((s) => s.myChannels)
-  const atprotoAgent = useAuthStore((s) => s.atprotoAgent)
   const myDidDht = useAuthStore((s) => s.myDidDht)
   const settingsLoaded = useAuthStore((s) => s.settingsLoaded)
   const addToast = useToastStore((s) => s.addToast)
@@ -81,23 +78,8 @@ export function Home() {
   }
 
   function gotoCreating() {
-    if (useAuthStore.getState().atprotoAgent) {
-      setView({ kind: 'creating' })
-    } else {
-      setView({
-        kind: 'bluesky-login',
-        resumeTo: { kind: 'creating' },
-        cancelTo: view,
-      })
-    }
-  }
-
-  function gotoBlueskyLogin() {
-    setView({
-      kind: 'bluesky-login',
-      resumeTo: { kind: 'idle' },
-      cancelTo: view,
-    })
+    // Creating/publishing writes only to iroh/Sia now — no Bluesky session gate.
+    setView({ kind: 'creating' })
   }
 
   function renderSidebar(activeChannelID?: string, activeHome = false) {
@@ -158,19 +140,6 @@ export function Home() {
     )
   }
 
-  if (view.kind === 'bluesky-login') {
-    // No onSignedIn — sign-in redirects out and comes back through App.tsx's
-    // OAuth init effect, which hydrates the store. The user lands on the
-    // home view after the round-trip; resumeTo is no longer plumbed.
-    return (
-      <BlueskyLoginScreen
-        onCancel={() => setView(view.cancelTo)}
-        sidebar={renderSidebar()}
-        rightSidebar={renderPinSidebar()}
-      />
-    )
-  }
-
   if (view.kind === 'storage') {
     const returnTo = view.returnTo
     const storageView = view
@@ -217,22 +186,11 @@ export function Home() {
             returnTo: directoryView,
           })
         }
-        onEditProfile={() => {
-          // Profile edit writes a record under the user's DID — needs a
-          // live Bluesky session. Same gate pattern as gotoCreating: if
-          // the agent isn't live (scope-expansion re-consent pending,
-          // session not restored, etc.), route through bluesky-login
-          // first and resume to the edit view after sign-in.
-          if (useAuthStore.getState().atprotoAgent) {
-            setView({ kind: 'editing-profile', returnTo: directoryView })
-          } else {
-            setView({
-              kind: 'bluesky-login',
-              resumeTo: { kind: 'editing-profile', returnTo: directoryView },
-              cancelTo: directoryView,
-            })
-          }
-        }}
+        onEditProfile={() =>
+          // Profile edits write only to the local store + identity-doc (Sia +
+          // pkarr) — no Bluesky session gate.
+          setView({ kind: 'editing-profile', returnTo: directoryView })
+        }
         onCreate={gotoCreating}
         sidebar={renderSidebar()}
         rightSidebar={renderPinSidebar()}
@@ -377,17 +335,7 @@ export function Home() {
     const channelView = view
     const owned = myChannels.find((c) => c.channelID === view.channelID)
     const channelComposerSlot = owned ? (
-      atprotoAgent ? (
-        <Compose channels={[owned]} />
-      ) : (
-        <button
-          type="button"
-          onClick={gotoBlueskyLogin}
-          className="w-full text-left px-4 py-3 border border-neutral-200 rounded-lg bg-white text-sm text-neutral-500 hover:text-neutral-900 hover:bg-neutral-50 transition-colors cursor-pointer"
-        >
-          Sign in to Bluesky to publish →
-        </button>
-      )
+      <Compose channels={[owned]} />
     ) : undefined
     const handleUnpinChannel = async () => {
       const sdk = useAuthStore.getState().sdk
@@ -586,18 +534,13 @@ export function Home() {
     // legacy items wouldn't go through the same machinery).
     const onEdit =
       ownedForEdit && item.type === 'text'
-        ? () => {
-            if (!useAuthStore.getState().atprotoAgent) {
-              gotoBlueskyLogin()
-              return
-            }
+        ? () =>
             setView({
               kind: 'editing-post',
               item,
               channelID: channel.channelID,
               returnTo: readingView,
             })
-          }
         : undefined
     const readerProps = {
       item,
@@ -640,17 +583,6 @@ export function Home() {
           className="w-full text-left px-4 py-3 border border-neutral-200 rounded-lg bg-white text-sm text-neutral-500 hover:text-neutral-900 hover:bg-neutral-50 transition-colors cursor-pointer"
         >
           Create a channel to start publishing →
-        </button>
-      )
-    }
-    if (!atprotoAgent) {
-      return (
-        <button
-          type="button"
-          onClick={gotoBlueskyLogin}
-          className="w-full text-left px-4 py-3 border border-neutral-200 rounded-lg bg-white text-sm text-neutral-500 hover:text-neutral-900 hover:bg-neutral-50 transition-colors cursor-pointer"
-        >
-          Sign in to Bluesky to publish →
         </button>
       )
     }

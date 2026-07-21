@@ -22,9 +22,6 @@ export function CreateChannel({
   rightSidebar?: React.ReactNode
 }) {
   const sdk = useAuthStore((s) => s.sdk)
-  const agent = useAuthStore((s) => s.atprotoAgent)
-  const atprotoDID = useAuthStore((s) => s.atprotoDID)
-  const atprotoHandle = useAuthStore((s) => s.atprotoHandle)
   const storedKeyHex = useAuthStore((s) => s.storedKeyHex)
   const addMyChannel = useAuthStore((s) => s.addMyChannel)
   const addSubscription = useAuthStore((s) => s.addSubscription)
@@ -84,10 +81,6 @@ export function CreateChannel({
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     if (!sdk || !storedKeyHex) return
-    if (!agent || !atprotoDID || !atprotoHandle) {
-      setError('Bluesky session not active. Cancel and try again to sign in.')
-      return
-    }
     const trimmedName = name.trim()
     if (!trimmedName) return
     setSubmitting(true)
@@ -120,8 +113,10 @@ export function CreateChannel({
         createdAt: result.manifest.publishedAt,
       })
       addSubscription({
-        authorHandle: atprotoHandle,
-        authorDID: atprotoDID,
+        // did:dht is the identity now; the legacy atproto handle/DID fields
+        // stay on the type but are empty for did:dht-native subscriptions.
+        authorHandle: '',
+        authorDID: '',
         didDht: did,
         channelID: result.channelID,
         channelKey: result.channelKey,

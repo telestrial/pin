@@ -70,7 +70,6 @@ export function Compose({
   editing?: ComposeEditMode
 }) {
   const sdk = useAuthStore((s) => s.sdk)
-  const agent = useAuthStore((s) => s.atprotoAgent)
   const atprotoHandle = useAuthStore((s) => s.atprotoHandle)
   const enqueue = useActionStore((s) => s.enqueuePublish)
   const addToast = useToastStore((s) => s.addToast)
@@ -374,10 +373,6 @@ export function Compose({
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     if (!sdk || !canSubmit) return
-    if (!agent?.did) {
-      setError('Bluesky session not active. Cancel and try again to sign in.')
-      return
-    }
     setError(null)
     const attachmentSources: AttachmentSource[] = attachments.map((a) =>
       a.source === 'url'
