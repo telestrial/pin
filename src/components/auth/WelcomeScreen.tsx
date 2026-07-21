@@ -6,11 +6,9 @@ import { useAuthStore } from '../../stores/auth'
 export function WelcomeScreen({
   builder,
   isReturning,
-  knownHandle,
 }: {
   builder: React.RefObject<Builder | null>
   isReturning: boolean
-  knownHandle: string | null
 }) {
   const indexerURL = useAuthStore((s) => s.indexerURL)
   const setIndexerURL = useAuthStore((s) => s.setIndexerURL)
@@ -42,58 +40,27 @@ export function WelcomeScreen({
     }
   }
 
-  function handleGetStarted() {
-    setStep('bluesky-onboarding')
-  }
-
   return (
     <div className="text-center space-y-6">
       <div className="space-y-3">
         <h1 className="text-2xl font-semibold text-neutral-900 tracking-tight">
-          {isReturning
-            ? knownHandle
-              ? `Welcome back, @${knownHandle}`
-              : 'Welcome back'
-            : 'Welcome to Pin'}
+          {isReturning ? 'Welcome back' : 'Welcome to Pin'}
         </h1>
         <p className="text-neutral-600 text-[15px] leading-relaxed">
           {isReturning
             ? 'Your storage session needs a quick refresh. Approve again at sia.storage to pick up where you left off.'
-            : 'Publish to your friends, not to an algorithm. Your bytes live on Sia, your channels live in your ATProto repo, and the link you share is the only way in.'}
+            : 'Publish to your friends, not to an algorithm. Your identity and your bytes live on Sia and the peer network — no company in between — and the link you share is the only way in.'}
         </p>
       </div>
 
       <div className="space-y-2">
-        {isReturning ? (
-          <button
-            type="button"
-            onClick={startSiaConnect}
-            disabled={loading || !url}
-            className="w-full py-3 bg-green-600 hover:bg-green-700 disabled:bg-neutral-200 disabled:text-neutral-400 text-white font-medium rounded-lg transition-colors"
-          >
-            {loading
-              ? 'Connecting…'
-              : knownHandle
-                ? `Continue as @${knownHandle}`
-                : 'Continue'}
-          </button>
-        ) : (
-          <button
-            type="button"
-            onClick={handleGetStarted}
-            disabled={loading || !url}
-            className="w-full py-3 bg-green-600 hover:bg-green-700 disabled:bg-neutral-200 disabled:text-neutral-400 text-white font-medium rounded-lg transition-colors"
-          >
-            Get started
-          </button>
-        )}
         <button
           type="button"
           onClick={startSiaConnect}
           disabled={loading || !url}
-          className="w-full py-3 bg-neutral-100 hover:bg-neutral-200 disabled:bg-neutral-50 disabled:text-neutral-400 text-neutral-900 font-medium rounded-lg transition-colors"
+          className="w-full py-3 bg-green-600 hover:bg-green-700 disabled:bg-neutral-200 disabled:text-neutral-400 text-white font-medium rounded-lg transition-colors"
         >
-          {loading ? 'Connecting…' : 'Just reading'}
+          {loading ? 'Connecting…' : isReturning ? 'Continue' : 'Get started'}
         </button>
       </div>
 

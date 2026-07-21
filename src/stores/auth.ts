@@ -21,7 +21,6 @@ import { usePinStore } from './pin'
 export type AuthStep =
   | 'loading'
   | 'welcome'
-  | 'bluesky-onboarding'
   | 'connect'
   | 'approve'
   | 'recovery'

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { AuthFlow } from './components/auth/AuthFlow'
+import { NamingScreen } from './components/auth/NamingScreen'
 import { Home } from './components/Home'
 import { LockScreen } from './components/LockScreen'
 import { Navbar } from './components/Navbar'
@@ -31,6 +32,8 @@ export default function App() {
   const step = useAuthStore((s) => s.step)
   const sdk = useAuthStore((s) => s.sdk)
   const locked = useAuthStore((s) => s.locked)
+  const settingsLoaded = useAuthStore((s) => s.settingsLoaded)
+  const hasUsername = useAuthStore((s) => !!s.profile?.username)
   const theme = useAuthStore((s) => s.theme)
   const armedItem = useComposeStore((s) => s.armedItem)
   const [fading, setFading] = useState(false)
@@ -149,13 +152,17 @@ export default function App() {
   }, [sdk])
 
   const connected = step === 'connected'
+  // Genesis naming gate: a connected identity with no chosen @name yet lands on
+  // the naming beat before Home. settingsLoaded first so we don't flash it while
+  // the profile is still hydrating from the Sia snapshot.
+  const needsNaming = connected && settingsLoaded && !hasUsername
 
   return (
     <div
       id="app-shell"
       className="min-h-screen lg:h-screen flex flex-col lg:overflow-hidden"
     >
-      {connected && !locked && <Navbar onLock={lock} />}
+      {connected && !locked && !needsNaming && <Navbar onLock={lock} />}
       {/* Desktop (lg+): the app is locked to the viewport — the navbar is a
           fixed-height flex child and this region fills the rest without
           scrolling itself (lg:overflow-hidden). Each column inside then
@@ -165,6 +172,8 @@ export default function App() {
         {connected ? (
           locked ? (
             <LockScreen onContinue={unlock} />
+          ) : needsNaming ? (
+            <NamingScreen />
           ) : (
             <Home />
           )

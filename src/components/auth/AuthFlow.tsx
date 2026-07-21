@@ -1,11 +1,9 @@
 import { AppKey, Builder, initSia } from '@siafoundation/sia-storage'
 import { useEffect, useRef } from 'react'
-import { bootOauth } from '../../lib/atprotoClient'
-import { APP_META, DEFAULT_INDEXER_URL } from '../../lib/constants'
+import { APP_META } from '../../lib/constants'
 import { useAuthStore } from '../../stores/auth'
 import { ApproveScreen } from './ApproveScreen'
 import { AuthShell } from './AuthShell'
-import { BlueskyOnboardingScreen } from './BlueskyOnboardingScreen'
 import { RecoveryScreen } from './RecoveryScreen'
 import { WelcomeScreen } from './WelcomeScreen'
 
@@ -14,25 +12,16 @@ export function AuthFlow() {
   const error = useAuthStore((s) => s.error)
   const setError = useAuthStore((s) => s.setError)
   const storedKeyHex = useAuthStore((s) => s.storedKeyHex)
-  const atprotoHandle = useAuthStore((s) => s.atprotoHandle)
   const builderRef = useRef<Builder | null>(null)
 
   useEffect(() => {
     let cancelled = false
 
     async function init() {
-      const {
-        storedKeyHex,
-        indexerURL,
-        setSdk,
-        setStep,
-        setIndexerURL,
-        setApprovalURL,
-      } = useAuthStore.getState()
+      const { storedKeyHex, indexerURL, setSdk, setStep } =
+        useAuthStore.getState()
       try {
-        // Run WASM init and OAuth restore in parallel. Both are memoized;
-        // re-entry from elsewhere reuses the same promises.
-        const [, oauthResult] = await Promise.all([initSia(), bootOauth()])
+        await initSia()
         if (cancelled) return
 
         // Try to restore Sia using the persisted AppKey, if any.
@@ -48,30 +37,14 @@ export function AuthFlow() {
               return
             }
           } catch {
-            // Connect failed — fall through to deciding what to show.
+            // Connect failed — fall through to welcome.
           }
         }
 
-        // Sia is not connected. Decide what step to show.
-        const hasBluesky = oauthResult !== null
-        if (!storedKeyHex && hasBluesky) {
-          // Mid-flow: user just came back from a Bluesky OAuth round-trip
-          // started from the welcome screen's "Get started" path. Continue
-          // straight to Sia approval — no need to show welcome again.
-          const url = indexerURL || DEFAULT_INDEXER_URL
-          const b = new Builder(url, APP_META)
-          builderRef.current = b
-          setIndexerURL(url)
-          await b.requestConnection()
-          if (cancelled) return
-          setApprovalURL(b.responseUrl())
-          setStep('approve')
-        } else {
-          // Either brand new user or returning user whose Sia session needs
-          // a refresh. WelcomeScreen handles both variants by reading
-          // storedKeyHex + atprotoHandle from the store directly.
-          setStep('welcome')
-        }
+        // Sia is not connected: brand-new user, or a returning user whose
+        // session needs a refresh. WelcomeScreen handles both by reading
+        // storedKeyHex from the store directly.
+        setStep('welcome')
       } catch (e) {
         if (cancelled) return
         console.error('Init error:', e)
@@ -104,16 +77,7 @@ export function AuthFlow() {
 
       <AuthShell ready={isReady}>
         {step === 'welcome' && (
-          <WelcomeScreen
-            builder={builderRef}
-            isReturning={!!storedKeyHex}
-            knownHandle={atprotoHandle}
-          />
-        )}
-        {step === 'bluesky-onboarding' && (
-          <BlueskyOnboardingScreen
-            onCancel={() => useAuthStore.getState().setStep('welcome')}
-          />
+          <WelcomeScreen builder={builderRef} isReturning={!!storedKeyHex} />
         )}
         {step === 'approve' && <ApproveScreen builder={builderRef} />}
         {step === 'recovery' && <RecoveryScreen builder={builderRef} />}
