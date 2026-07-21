@@ -1,20 +1,19 @@
 import { useEffect } from 'react'
 import { useAuthStore } from '../../stores/auth'
-import { useFeedStore } from '../../stores/feed'
-import { commitChannelManifest } from '../channelLocator'
+import { refreshChannelLocator } from '../channelLocator'
 
 // Keep-alive for owned channels' pkarr locators. Publishing a channel write
 // commits its locator inline (lib/channelWrites → commitChannelManifest), so
-// this hook no longer reacts to manifest *changes* — that would double-publish
-// on every write. Its one remaining job is TTL keep-alive: a pkarr record
-// carries a 1h TTL and ages off the Mainline DHT if nobody republishes it, so a
-// channel published in an earlier session (tab since closed) would become
-// unresolvable to subscribers. On load we republish each owned channel's
-// current manifest ONCE, refreshing the DHT pointer for the session.
+// this hook doesn't react to manifest changes. Its one job is TTL keep-alive: a
+// pkarr record carries a ~1h TTL and ages off the Mainline DHT if nobody
+// republishes it, so a channel published in an earlier session (tab since
+// closed) could become unresolvable to subscribers.
 //
-// Guarded by a per-channel "kept alive this session" set so a subsequent inline
-// commit (which updates feedStore.manifests) doesn't retrigger a republish.
-// Lazy: pkarr wasm only boots once you actually own a channel with a manifest.
+// It refreshes the POINTER only (re-sign + re-publish the existing records) — no
+// new Sia object, no delete. Re-uploading the manifest here would churn a 40 MiB
+// slab per session AND force an extra supersede-delete, widening the window where
+// a reader resolves a stale pointer to a just-deleted object. Once per channel
+// per session, guarded by keptAlive. Lazy: pkarr wasm only boots for an owner.
 
 export function useChannelLocatorPublish() {
   const sdk = useAuthStore((s) => s.sdk)
@@ -26,32 +25,24 @@ export function useChannelLocatorPublish() {
     const keptAlive = new Set<string>()
 
     const keepAlive = async () => {
-      const owned = new Map(
-        useAuthStore
-          .getState()
-          .myChannels.map((c) => [c.channelID, c.channelKey]),
-      )
-      const { manifests } = useFeedStore.getState()
-      for (const [channelID, channelKey] of owned) {
+      const owned = useAuthStore.getState().myChannels
+      for (const c of owned) {
         if (cancelled) return
-        if (keptAlive.has(channelID)) continue
-        const manifest = manifests[channelID]
-        if (!manifest) continue // not loaded yet — a later change fires this again
-        keptAlive.add(channelID)
+        if (keptAlive.has(c.channelID)) continue
+        keptAlive.add(c.channelID)
         try {
-          await commitChannelManifest(sdk, channelID, channelKey, manifest)
+          await refreshChannelLocator(c.channelKey)
         } catch (e) {
-          keptAlive.delete(channelID) // let a later tick retry
-          console.warn(`channel locator keep-alive failed for ${channelID}:`, e)
+          keptAlive.delete(c.channelID) // let a later tick retry
+          console.warn(
+            `channel locator keep-alive failed for ${c.channelID}:`,
+            e,
+          )
         }
       }
     }
 
-    // Manifests load asynchronously after mount, and myChannels can change; both
-    // may reveal an owned channel we haven't kept alive yet.
-    const unsubFeed = useFeedStore.subscribe((s, p) => {
-      if (s.manifests !== p.manifests) void keepAlive()
-    })
+    // myChannels can populate/change after mount; re-run to catch new owners.
     const unsubAuth = useAuthStore.subscribe((s, p) => {
       if (s.myChannels !== p.myChannels) void keepAlive()
     })
@@ -59,7 +50,6 @@ export function useChannelLocatorPublish() {
 
     return () => {
       cancelled = true
-      unsubFeed()
       unsubAuth()
     }
   }, [sdk])

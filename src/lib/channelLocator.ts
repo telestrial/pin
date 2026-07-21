@@ -31,12 +31,13 @@ import {
 // TXT record name prefix for the chunked Sia pointer in a channel-locator document.
 const POINTER_PREFIX = '_c'
 
-// localStorage key prefix for the "current Sia manifest object" pointer, one per
-// owned channel. It lets a republish (or a retract) delete the object it
-// supersedes — positive-id reclamation, no orphan sweep. localStorage is a
-// cache: losing it only risks a stray small manifest object, never data.
+// localStorage key prefix for the manifest-object generations behind a channel's
+// locator, one entry per owned channel. `id` = the current object the pkarr
+// pointer names; `olderId` = the immediately-previous generation, kept ALIVE as
+// a grace window. localStorage is a cache: losing it only risks a couple of
+// stray small manifest objects, never data.
 const OBJECT_POINTER_PREFIX = 'pin:chanloc:'
-type LocatorObjectPointer = { id: string }
+type LocatorObjectPointer = { id: string; url?: string; olderId?: string }
 
 export function readLocatorObjectPointer(
   channelID: string,
@@ -48,11 +49,14 @@ export function readLocatorObjectPointer(
     return null
   }
 }
-function writeLocatorObjectPointer(channelID: string, id: string): void {
+function writeLocatorObjectPointer(
+  channelID: string,
+  pointer: LocatorObjectPointer,
+): void {
   try {
     localStorage.setItem(
       OBJECT_POINTER_PREFIX + channelID,
-      JSON.stringify({ id }),
+      JSON.stringify(pointer),
     )
   } catch {
     // localStorage unavailable/quota — the pointer is a cache, safe to skip.
@@ -133,12 +137,17 @@ export function makeLocatorReader(sdk: Sdk): FetchChannel {
 }
 
 /** Commit a channel's manifest as its canonical published state: upload the new
- *  Sia object under K + publish the K-derived pkarr locator, then reclaim the
- *  Sia object this supersedes. Awaited — when it resolves, the Sia object and
- *  the DHT pointer are both live (the "done" bar for a channel write). The
- *  superseded-object delete is best-effort positive-id (a tiny, frequently
- *  replaced housekeeping object; a failed delete leaks at most one small
- *  object). */
+ *  Sia object under K + publish the K-derived pkarr locator, then reclaim an
+ *  OLD generation. Awaited — when it resolves, the Sia object and the DHT
+ *  pointer are both live (the "done" bar for a channel write).
+ *
+ *  Grace deletion (keep-2): a pkarr publish takes seconds to propagate on the
+ *  Mainline DHT, so right after a commit a reader can still resolve the PREVIOUS
+ *  pointer. If we deleted the previous object immediately, that reader would hit
+ *  "object not found". So we keep the current + the immediately-previous
+ *  generation alive, and only reclaim the one TWO commits back (which no
+ *  up-to-date-within-one-commit reader can still be pointed at). Bounded to two
+ *  live manifest objects per channel. */
 export async function commitChannelManifest(
   sdk: Sdk,
   channelID: string,
@@ -146,12 +155,37 @@ export async function commitChannelManifest(
   manifest: ChannelManifest,
 ): Promise<void> {
   const prev = readLocatorObjectPointer(channelID)
-  const { id } = await publishChannelLocator(sdk, channelKeyB64, manifest)
-  writeLocatorObjectPointer(channelID, id)
-  if (prev && prev.id !== id) {
+  const { id, url } = await publishChannelLocator(sdk, channelKeyB64, manifest)
+  // New current = id; keep prev.id as the grace generation; reclaim prev.olderId.
+  writeLocatorObjectPointer(channelID, {
+    id,
+    url,
+    olderId: prev && prev.id !== id ? prev.id : prev?.olderId,
+  })
+  const toReclaim = prev?.olderId
+  if (toReclaim && toReclaim !== id && toReclaim !== prev?.id) {
     await sdk
-      .deleteObject(prev.id)
+      .deleteObject(toReclaim)
       .then(() => sdk.pruneSlabs())
       .catch(() => {})
   }
+}
+
+/** Keep-alive: refresh a channel locator's pkarr TTL WITHOUT minting a new Sia
+ *  object. Resolves the current pointer and re-signs/re-publishes the same
+ *  records, so a long-idle session's channels stay resolvable past the ~1h TTL.
+ *  No upload, no delete — cheap, and it doesn't churn a manifest generation the
+ *  way a re-commit would. No-op if nothing is published yet / it's already
+ *  expired (a commit re-establishes it). */
+export async function refreshChannelLocator(
+  channelKeyB64: string,
+): Promise<void> {
+  const kBytes = channelKeyFromBase64(channelKeyB64)
+  const { keypair, publicKey } = await identityFromSeed(
+    await deriveChannelLocatorSeed(kBytes),
+  )
+  const records = await resolveDidDht(publicKey)
+  const url = reassembleTxt(records, POINTER_PREFIX)
+  if (!url) return
+  await publishRecords(keypair, chunkForTxt(POINTER_PREFIX, url))
 }

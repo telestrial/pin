@@ -204,11 +204,12 @@ export async function retractChannel(
 
   const { objectIDs, urls } = unpinChannel(current, protectedObjectIDs)
 
-  // The Sia object holding the current manifest (the locator target) is itself
-  // an orphan on retract — include it so the journaled cleanup reclaims it.
+  // The Sia objects holding the manifest generations (current + the kept grace
+  // generation) are orphans on retract — include both so the journaled cleanup
+  // reclaims them.
   const manifestObject = readLocatorObjectPointer(channel.channelID)
-  if (manifestObject && !protectedObjectIDs?.has(manifestObject.id)) {
-    objectIDs.push(manifestObject.id)
+  for (const id of [manifestObject?.id, manifestObject?.olderId]) {
+    if (id && !protectedObjectIDs?.has(id)) objectIDs.push(id)
   }
   clearLocatorObjectPointer(channel.channelID)
 
