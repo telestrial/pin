@@ -1,16 +1,12 @@
-import { AtpAgent } from '@atproto/api'
 import { Plus } from 'lucide-react'
 import { useEffect, useState } from 'react'
-import { fetchChannel } from '../core/channels'
-import { listFollows, parseChannelAtURI } from '../core/follow'
-import { getProfileRecord, type ProfileRecord } from '../core/profile'
-import type { ChannelManifest } from '../core/types'
+import type { ProfileRecord } from '../core/profile'
+import type { ChannelManifest, FollowEdge } from '../core/types'
 import { resolveChannelViaLocator } from '../lib/channelLocator'
 import { formatBytes } from '../lib/format'
-import { resolveIdentityDoc } from '../lib/identityDoc'
 import { useItemBlobURL } from '../lib/hooks/useItemBytes'
+import { resolveIdentityDoc } from '../lib/identityDoc'
 import { useAuthStore } from '../stores/auth'
-import { useFeedStore } from '../stores/feed'
 import { ChannelAvatar } from './channel/ChannelAvatar'
 import { ChannelHeroCard } from './channel/ChannelHeroCard'
 import { FollowHandleButton } from './FollowHandleButton'
@@ -30,7 +26,11 @@ type State =
       did: string
       profile: ProfileRecord | null
       ownChannels: ChannelEntry[]
-      followedChannels: ChannelEntry[]
+      // Channel-follows from the identity-doc (did:dht + channelID + cached
+      // name, no K). Lightweight rows — they link to the author's directory
+      // rather than opening the channel directly (viewing needs K, which a
+      // follow edge doesn't carry).
+      follows: FollowEdge[]
     }
   | { kind: 'error'; message: string }
 
@@ -78,128 +78,49 @@ export function HandleDirectory({
     setState({ kind: 'loading' })
 
     async function load() {
-      // did:dht identity — resolve the identity-doc off atproto (pkarr → Sia):
-      // profile + the author's advertised public channels (each resolved via its
-      // locator). The Following section is omitted here: the identity-doc's follows
-      // are atproto AT-URIs that don't carry the followed channel's did:dht+K, so
-      // they can't be resolved off atproto yet (the follow-graph representation is
-      // the remaining piece). Legacy handles fall through to the atproto path below.
-      if (handle.startsWith('did:dht:')) {
-        const sdk = useAuthStore.getState().sdk
-        if (!sdk) {
-          if (!cancelled) setState({ kind: 'not-found' })
-          return
-        }
-        const doc = await resolveIdentityDoc(sdk, handle)
-        if (!doc) {
-          if (!cancelled) setState({ kind: 'not-found' })
-          return
-        }
-        const resolved = await Promise.all(
-          doc.channels.map(async (c): Promise<ChannelEntry | null> => {
-            try {
-              const manifest = await resolveChannelViaLocator(sdk, c.key)
-              return manifest
-                ? {
-                    authorDID: '',
-                    authorHandle: '',
-                    channelID: c.channelID,
-                    manifest,
-                  }
-                : null
-            } catch {
-              return null
-            }
-          }),
-        )
-        if (!cancelled) {
-          setState({
-            kind: 'loaded',
-            did: handle,
-            profile: doc.profile,
-            ownChannels: resolved.filter((c): c is ChannelEntry => c !== null),
-            followedChannels: [],
-          })
-        }
-        return
-      }
-
-      const unauthed = new AtpAgent({ service: 'https://bsky.social' })
-
-      // Resolve handle → DID. describeRepo is the unauthenticated path
-      // (the same one doBoot uses); it returns { handle, did, didDoc }
-      // for any repo on the network.
-      let did: string
-      try {
-        const r = await unauthed.com.atproto.repo.describeRepo({ repo: handle })
-        did = r.data.did
-      } catch {
+      // Identities are did:dht now — resolve the identity-doc off atproto
+      // (pkarr → Sia): profile + advertised public channels (each via its
+      // locator) + the channel-follow edges. A non-did:dht handle (a legacy
+      // pre-cutover channel/sub that never got a did:dht) simply doesn't
+      // resolve — replace-don't-bridge.
+      if (!handle.startsWith('did:dht:')) {
         if (!cancelled) setState({ kind: 'not-found' })
         return
       }
-
-      // Profile + follows in parallel. Both are best-effort — a missing
-      // profile or a refused listRecords just means an emptier page.
-      const [profile, follows] = await Promise.all([
-        getProfileRecord(handle).catch(() => null),
-        listFollows(handle).catch(() => []),
-      ])
-
-      // Resolve each follow's subject → channel manifest + author handle.
-      // Both lookups parallel within a follow (no dependency between them)
-      // and across follows (the outer Promise.all). For follows pointing
-      // at channels the user is also subscribed to, feedStore.manifests
-      // already has the decrypted manifest (JetStream keeps it fresh) —
-      // skip the fetchChannel round-trip in that case. Obscure channels
-      // in the follow list (which the Follow UI gates against, so mostly
-      // belt-and-suspenders) fail fetchChannel; we drop them silently.
-      const parsedFollows = follows.flatMap((f) => {
-        const parsed = parseChannelAtURI(f.record.subject)
-        return parsed ? [parsed] : []
-      })
-      const cachedManifests = useFeedStore.getState().manifests
-      const channelResults = await Promise.all(
-        parsedFollows.map(async (parsed) => {
+      const sdk = useAuthStore.getState().sdk
+      if (!sdk) {
+        if (!cancelled) setState({ kind: 'not-found' })
+        return
+      }
+      const doc = await resolveIdentityDoc(sdk, handle)
+      if (!doc) {
+        if (!cancelled) setState({ kind: 'not-found' })
+        return
+      }
+      const resolved = await Promise.all(
+        doc.channels.map(async (c): Promise<ChannelEntry | null> => {
           try {
-            const cached = cachedManifests[parsed.channelID]
-            // Only trust the cache when the cached manifest's authoring
-            // DID matches the follow's subject; the channelID alone isn't
-            // globally namespaced (it's derived from K).
-            const cacheHit =
-              cached && cached.authorATProtoDID === parsed.authorDID
-            const [manifest, handleResp] = await Promise.all([
-              cacheHit
-                ? Promise.resolve(cached)
-                : fetchChannel(parsed.authorDID, parsed.channelID),
-              unauthed.com.atproto.repo
-                .describeRepo({ repo: parsed.authorDID })
-                .catch(() => null),
-            ])
-            return {
-              authorDID: parsed.authorDID,
-              authorHandle: handleResp?.data.handle ?? '',
-              channelID: parsed.channelID,
-              manifest,
-            } as ChannelEntry
+            const manifest = await resolveChannelViaLocator(sdk, c.key)
+            return manifest
+              ? {
+                  authorDID: '',
+                  authorHandle: '',
+                  channelID: c.channelID,
+                  manifest,
+                }
+              : null
           } catch {
             return null
           }
         }),
       )
-      const channels = channelResults.filter(
-        (c): c is ChannelEntry => c !== null,
-      )
-
-      const ownChannels = channels.filter((c) => c.authorDID === did)
-      const followedChannels = channels.filter((c) => c.authorDID !== did)
-
       if (!cancelled) {
         setState({
           kind: 'loaded',
-          did,
-          profile,
-          ownChannels,
-          followedChannels,
+          did: handle,
+          profile: doc.profile,
+          ownChannels: resolved.filter((c): c is ChannelEntry => c !== null),
+          follows: doc.follows,
         })
       }
     }
@@ -219,6 +140,11 @@ export function HandleDirectory({
   }, [handle])
 
   const isSelf = !!myDidDht && myDidDht === handle
+  // A did:dht is a long key; show a short readable form in the status/heading
+  // copy (`did:dht:…db4o`), falling back to the raw value for anything else.
+  const shortHandle = handle.startsWith('did:dht:')
+    ? `did:dht:…${handle.replace(/^did:dht:/, '').slice(-6)}`
+    : handle
 
   // Inline back pill, used by loading / not-found / error states (no
   // cover banner there to overlay on). The loaded state renders its
@@ -242,7 +168,7 @@ export function HandleDirectory({
             <div className="bg-white border border-neutral-200 rounded-lg p-5 flex flex-col gap-4">
               {inlineBackButton}
               <p className="text-center text-sm text-neutral-500">
-                Loading @{handle}…
+                Loading {shortHandle}…
               </p>
             </div>
           )}
@@ -252,10 +178,10 @@ export function HandleDirectory({
               {inlineBackButton}
               <div className="text-center space-y-2">
                 <h1 className="text-lg font-semibold text-neutral-900">
-                  @{handle}
+                  {shortHandle}
                 </h1>
                 <p className="text-sm text-neutral-500">
-                  That handle doesn't resolve to an atproto identity.
+                  That identity doesn't resolve.
                 </p>
               </div>
             </div>
@@ -266,7 +192,7 @@ export function HandleDirectory({
               {inlineBackButton}
               <div className="text-center space-y-2">
                 <h1 className="text-lg font-semibold text-neutral-900">
-                  @{handle}
+                  {shortHandle}
                 </h1>
                 <p className="text-sm text-red-600">
                   Failed to load: {state.message}
@@ -279,11 +205,10 @@ export function HandleDirectory({
             <LoadedDirectory
               handle={handle}
               did={state.did}
-              isDidDht={handle.startsWith('did:dht:')}
               isSelf={isSelf}
               profile={state.profile}
               ownChannels={state.ownChannels}
-              followedChannels={state.followedChannels}
+              follows={state.follows}
               onBack={onBack}
               onChannelClick={onChannelClick}
               onHandleClick={onHandleClick}
@@ -301,11 +226,10 @@ export function HandleDirectory({
 function LoadedDirectory({
   handle,
   did,
-  isDidDht,
   isSelf,
   profile,
   ownChannels,
-  followedChannels,
+  follows,
   onBack,
   onChannelClick,
   onHandleClick,
@@ -314,29 +238,26 @@ function LoadedDirectory({
 }: {
   handle: string
   did: string
-  isDidDht: boolean
   isSelf: boolean
   profile: ProfileRecord | null
   ownChannels: ChannelEntry[]
-  followedChannels: ChannelEntry[]
+  follows: FollowEdge[]
   onBack?: () => void
   onChannelClick: (authorHandle: string, channelID: string) => void
   onHandleClick: (handle: string) => void
   onEditProfile?: () => void
   onCreate?: () => void
 }) {
-  const isEmpty =
-    !profile && ownChannels.length === 0 && followedChannels.length === 0
+  const isEmpty = !profile && ownChannels.length === 0 && follows.length === 0
 
   return (
     <div className="space-y-5">
       <ProfileHeader
         handle={handle}
         did={did}
-        isDidDht={isDidDht}
         isSelf={isSelf}
         profile={profile}
-        followingCount={followedChannels.length}
+        followingCount={follows.length}
         onBack={onBack}
         onEdit={onEditProfile}
       />
@@ -389,14 +310,12 @@ function LoadedDirectory({
         </div>
       )}
 
-      {followedChannels.length > 0 && (
+      {follows.length > 0 && (
         <Section title="Following">
-          {followedChannels.map((c) => (
-            <ChannelRow
-              key={`${c.authorDID}:${c.channelID}`}
-              entry={c}
-              showAuthor
-              onChannelClick={onChannelClick}
+          {follows.map((f) => (
+            <FollowRow
+              key={`${f.didDht}:${f.channelID}`}
+              edge={f}
               onHandleClick={onHandleClick}
             />
           ))}
@@ -420,7 +339,6 @@ function Stat({ value, label }: { value: number; label: string }) {
 function ProfileHeader({
   handle,
   did,
-  isDidDht,
   isSelf,
   profile,
   followingCount,
@@ -429,18 +347,15 @@ function ProfileHeader({
 }: {
   handle: string
   did: string
-  isDidDht: boolean
   isSelf: boolean
   profile: ProfileRecord | null
   followingCount: number
   onBack?: () => void
   onEdit?: () => void
 }) {
-  // For a did:dht identity the "handle" is a long key — show a short, readable
-  // form (`did:dht:…db4o`) as the fallback label, and no atproto-address suffix.
-  const handleLabel = isDidDht
-    ? `did:dht:…${handle.replace(/^did:dht:/, '').slice(-6)}`
-    : handle
+  // The identity is a did:dht key — show a short, readable form
+  // (`did:dht:…db4o`) as the fallback label when there's no chosen @name.
+  const handleLabel = `did:dht:…${handle.replace(/^did:dht:/, '').slice(-6)}`
   // Twitter/Bluesky-shape layout: cover banner at the top of the card
   // (full-bleed thanks to the card's overflow-hidden), avatar overlapping
   // the cover's bottom edge with a white ring, then identity row + Edit
@@ -488,21 +403,11 @@ function ProfileHeader({
                       ? `@${profile.username}`
                       : `@${handleLabel}`)}
                 </div>
-                {/* The chosen @-name is the handle people read; for a legacy
-                    atproto identity the handle recedes to a muted address suffix
-                    (still the router). did:dht identities have no atproto address,
-                    so no suffix — just the @-name (or the short did fallback). */}
+                {/* The chosen @-name is what people read; there's no atproto
+                    address underneath anymore, so no suffix — just the @-name
+                    (or the short did fallback when unnamed). */}
                 <div className="text-sm text-neutral-500 truncate">
-                  {profile?.username ? (
-                    <>
-                      @{profile.username}
-                      {!isDidDht && (
-                        <span className="text-neutral-400"> · {handle}</span>
-                      )}
-                    </>
-                  ) : (
-                    <>@{handleLabel}</>
-                  )}
+                  @{profile?.username || handleLabel}
                 </div>
               </div>
               <Stat value={followingCount} label="Following" />
@@ -517,10 +422,9 @@ function ProfileHeader({
               </button>
             )}
             {/* Handle-follow: follow the whole person (their did:dht) — an
-                iroh edge in local settings + the identity-doc. Shown on another
-                person's did:dht identity. (A legacy atproto directory has no
-                did:dht to follow by; that path is going away.) */}
-            {!isSelf && isDidDht && (
+                iroh edge in local settings + the identity-doc. Shown on
+                another person's identity. */}
+            {!isSelf && (
               <div className="shrink-0">
                 <FollowHandleButton
                   subjectDidDht={did}
@@ -662,63 +566,35 @@ function channelContentBytes(manifest: ChannelManifest): number {
   }, 0)
 }
 
-function ChannelRow({
-  entry,
-  showAuthor,
-  onChannelClick,
+// A channel-follow edge (did:dht + channelID + cached name, no K). Lightweight
+// row — clicking navigates to the author's directory (viewing the channel
+// directly needs K, which a follow edge doesn't carry), where the channel
+// resolves properly from the advertised list.
+function FollowRow({
+  edge,
   onHandleClick,
 }: {
-  entry: ChannelEntry
-  showAuthor: boolean
-  onChannelClick: (authorHandle: string, channelID: string) => void
+  edge: FollowEdge
   onHandleClick: (handle: string) => void
 }) {
-  const authorName = entry.authorHandle
-  const onRowClick = () => onChannelClick(entry.authorHandle, entry.channelID)
-  const onAuthorClick = (e: React.MouseEvent) => {
-    e.stopPropagation()
-    onHandleClick(entry.authorHandle)
-  }
+  const name = edge.name || 'Channel'
   return (
-    // biome-ignore lint/a11y/useSemanticElements: row contains a nested @handle button, which would nest interactives inside a <button>
-    <div
-      role="button"
-      tabIndex={0}
-      onClick={onRowClick}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault()
-          onRowClick()
-        }
-      }}
-      className="p-3 flex gap-3 items-start hover:bg-neutral-50 cursor-pointer transition-colors"
+    <button
+      type="button"
+      onClick={() => onHandleClick(edge.didDht)}
+      className="w-full p-3 flex gap-3 items-center text-left hover:bg-neutral-50 cursor-pointer transition-colors"
     >
       <ChannelAvatar
-        channelID={entry.channelID}
-        channelName={entry.manifest.name}
-        authorHandle={entry.authorHandle}
-        avatar={entry.manifest.avatar}
+        channelID={edge.channelID}
+        channelName={name}
+        authorHandle=""
         size="md"
       />
       <div className="flex-1 min-w-0">
         <div className="text-sm font-semibold text-neutral-900 truncate">
-          {entry.manifest.name}
+          {name}
         </div>
-        {showAuthor && entry.authorHandle && (
-          <button
-            type="button"
-            onClick={onAuthorClick}
-            className="block max-w-full text-xs text-neutral-500 truncate hover:underline cursor-pointer text-left"
-          >
-            @{authorName}
-          </button>
-        )}
-        {entry.manifest.description && (
-          <div className="text-sm text-neutral-700 truncate pt-0.5">
-            {entry.manifest.description}
-          </div>
-        )}
       </div>
-    </div>
+    </button>
   )
 }

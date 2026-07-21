@@ -1,5 +1,4 @@
 import { create } from 'zustand'
-import { fetchChannel } from '../core/channels'
 import {
   buildHomeFeed,
   type FeedEntry,
@@ -8,16 +7,23 @@ import {
 } from '../core/feed'
 import type { ChannelManifest, SubscriptionRef } from '../core/types'
 
+// Channels are read via the locator (pkarr → Sia). That reader needs the Sia
+// sdk, so App injects it (useChannelReader) once connected. Until then reads
+// can't work anyway — this default just fails loudly rather than falling back
+// to atproto.
+const notReady: FetchChannel = () =>
+  Promise.reject(new Error('channel reader not initialized'))
+
 type FeedState = {
   entries: FeedEntry[]
   errors: FeedFetchError[]
   manifests: Record<string, ChannelManifest>
   loading: boolean
   lastRefreshedAt: string | null
-  // How channels are read. Defaults to the atproto fetch; App injects the
-  // locator-first reader (pkarr → Sia → atproto fallback) once the sdk exists.
-  // Pluggable here (not imported) to keep this store off the auth store — auth
-  // already imports feed, so the reverse would be a circular import.
+  // How channels are read. Defaults to a not-ready reject; App injects the
+  // locator reader (pkarr → Sia) once the sdk exists. Pluggable here (not
+  // imported) to keep this store off the auth store — auth already imports
+  // feed, so the reverse would be a circular import.
   channelReader: FetchChannel
   setChannelReader: (reader: FetchChannel) => void
   refresh: (subscriptions: SubscriptionRef[]) => Promise<void>
@@ -36,7 +42,7 @@ export const useFeedStore = create<FeedState>()((set, get) => ({
   manifests: {},
   loading: false,
   lastRefreshedAt: null,
-  channelReader: fetchChannel,
+  channelReader: notReady,
   setChannelReader: (reader) => set({ channelReader: reader }),
   refresh: async (subscriptions) => {
     set({ loading: true })
