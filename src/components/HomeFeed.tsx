@@ -97,9 +97,21 @@ export function HomeFeed({
     )
   }
 
+  // Background re-resolve while content is already showing (stale-while-
+  // revalidate): a subtle signal that the feed is fetching current versions
+  // off the DHT — which is eventually consistent, so a just-published post may
+  // take a moment to appear.
+  const refreshing = loading && entries.length > 0
+
   return (
     <div className="border border-neutral-200 rounded-lg bg-white p-4 space-y-4">
       {toolbar}
+      {refreshing && (
+        <div className="flex items-center gap-2 text-xs text-neutral-500">
+          <span className="size-3 border-2 border-neutral-300 border-t-neutral-600 rounded-full animate-spin" />
+          Refreshing…
+        </div>
+      )}
       {errors.length > 0 && (
         <button
           type="button"

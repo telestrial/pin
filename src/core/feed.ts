@@ -43,6 +43,12 @@ export type FetchChannel = (
 export async function buildHomeFeed(
   subscriptions: SubscriptionRef[],
   fetcher: FetchChannel = fetchChannel,
+  // Last-known manifests, keyed by channelID. Stale-while-revalidate: reads go
+  // through the pkarr/Mainline-DHT locator, which is eventually consistent, so a
+  // momentary miss shouldn't blank a channel out of the feed. A channel that
+  // fails to re-resolve but HAS a cached manifest keeps its last-known content
+  // (no error); only channels with no cache at all surface as errors.
+  prevManifests: Record<string, ChannelManifest> = {},
 ): Promise<FeedFetchResult> {
   const settled = await Promise.allSettled(
     subscriptions.map((sub) =>
@@ -54,34 +60,43 @@ export async function buildHomeFeed(
   const errors: FeedFetchError[] = []
   const manifests: Record<string, ChannelManifest> = {}
 
+  const pushEntries = (sub: SubscriptionRef, manifest: ChannelManifest) => {
+    manifests[sub.channelID] = manifest
+    for (const item of manifest.items) {
+      entries.push({
+        item,
+        channel: {
+          authorHandle: sub.authorHandle,
+          authorDidDht: sub.didDht,
+          channelID: sub.channelID,
+          name: manifest.name,
+          avatar: manifest.avatar,
+        },
+      })
+    }
+  }
+
   for (let i = 0; i < settled.length; i++) {
     const result = settled[i]
     const sub = subscriptions[i]
     if (result.status === 'fulfilled') {
-      const manifest = result.value
-      manifests[sub.channelID] = manifest
-      for (const item of manifest.items) {
-        entries.push({
-          item,
-          channel: {
-            authorHandle: sub.authorHandle,
-            authorDidDht: sub.didDht,
-            channelID: sub.channelID,
-            name: manifest.name,
-            avatar: manifest.avatar,
-          },
+      pushEntries(sub, result.value)
+    } else {
+      const cached = prevManifests[sub.channelID]
+      if (cached) {
+        // Keep last-known content — the DHT will catch up on a later refresh.
+        pushEntries(sub, cached)
+      } else {
+        errors.push({
+          authorHandle: sub.authorHandle,
+          channelID: sub.channelID,
+          label: sub.label,
+          error:
+            result.reason instanceof Error
+              ? result.reason.message
+              : String(result.reason),
         })
       }
-    } else {
-      errors.push({
-        authorHandle: sub.authorHandle,
-        channelID: sub.channelID,
-        label: sub.label,
-        error:
-          result.reason instanceof Error
-            ? result.reason.message
-            : String(result.reason),
-      })
     }
   }
 

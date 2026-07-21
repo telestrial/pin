@@ -149,6 +149,35 @@ describe('buildHomeFeed', () => {
     expect(result.manifests.bbbb).toBeUndefined()
   })
 
+  it('keeps last-known content when a re-resolve fails but a manifest is cached', async () => {
+    const fetcher: FetchChannel = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('object not found'))
+    const cached = manifest('Alice', [item('2026-05-01T00:00:00.000Z')])
+    const result = await buildHomeFeed([sub({ channelID: 'aaaa' })], fetcher, {
+      aaaa: cached,
+    })
+    // Stale-while-revalidate: the channel stays in the feed, no error surfaced.
+    expect(result.entries).toHaveLength(1)
+    expect(result.entries[0].channel.channelID).toBe('aaaa')
+    expect(result.errors).toEqual([])
+    expect(result.manifests.aaaa).toBe(cached)
+  })
+
+  it('errors a failed re-resolve only when there is no cached manifest', async () => {
+    const fetcher: FetchChannel = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('object not found'))
+    const result = await buildHomeFeed(
+      [sub({ channelID: 'aaaa' })],
+      fetcher,
+      {},
+    )
+    expect(result.entries).toEqual([])
+    expect(result.errors).toHaveLength(1)
+    expect(result.errors[0].channelID).toBe('aaaa')
+  })
+
   it('coerces non-Error rejections to a string', async () => {
     const fetcher: FetchChannel = vi
       .fn()

@@ -40,7 +40,14 @@ export const useFeedStore = create<FeedState>()((set, get) => ({
   setChannelReader: (reader) => set({ channelReader: reader }),
   refresh: async (subscriptions) => {
     set({ loading: true })
-    const result = await buildHomeFeed(subscriptions, get().channelReader)
+    // Pass the current manifests as the stale-while-revalidate fallback so a
+    // channel that momentarily fails to re-resolve (DHT lag) keeps its
+    // last-known content instead of dropping out of the feed.
+    const result = await buildHomeFeed(
+      subscriptions,
+      get().channelReader,
+      get().manifests,
+    )
     set({
       entries: result.entries,
       errors: result.errors,
