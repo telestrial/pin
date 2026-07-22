@@ -1,5 +1,5 @@
 // E2E: granular pinning — pin the post vs pin the file — cross-account on
-// real Sia + real bsky.social.
+// real Sia + the public Mainline DHT (pkarr).
 //
 // alice publishes a post WITH a file attachment (the composer has no plain
 // file input, so we synthesize a drag-drop with a DataTransfer carrying a
@@ -22,10 +22,12 @@
 
 import { expect, type Page, test } from '@playwright/test'
 import {
+  createChannelButton,
   drainE2EChannels,
   drainE2ESubscriptions,
   loadAccount,
   signInAccount,
+  subscribeButton,
 } from '../authHelper'
 
 const PINS_KEY = 'sia-pins-f6b7539e181e45ee'
@@ -68,7 +70,7 @@ test('pin the file vs pin the post: independent cross-account custody', async ({
     bob = await signInAccount(bobContext, loadAccount('bob'))
 
     // -- Alice creates a channel and grabs its subscribe URL --
-    await alice.getByRole('button', { name: '+ Create a channel' }).click()
+    await createChannelButton(alice).click()
     const channelName = `e2e test ${Date.now()}`
     await alice.getByPlaceholder(/e\.g\. John Williams/i).fill(channelName)
     await alice.getByRole('button', { name: /Create channel/i }).click()
@@ -139,7 +141,7 @@ test('pin the file vs pin the post: independent cross-account custody', async ({
     await expect(alice.getByText(postBody)).toBeVisible({ timeout: 90_000 })
 
     // -- Bob subscribes and sees the post + its attachment --
-    await bob.getByRole('button', { name: '+ Subscribe' }).click()
+    await subscribeButton(bob).click()
     await bob.getByPlaceholder(/pin:\/\//i).fill(subscribeURL)
     await bob.getByRole('button', { name: 'Subscribe', exact: true }).click()
     await expect(bob.getByText(postBody)).toBeVisible({ timeout: 90_000 })

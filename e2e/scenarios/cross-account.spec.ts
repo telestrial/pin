@@ -4,19 +4,21 @@
 // sharedObject + pinObject fan-out into his Sia scope) and unpins it.
 //
 // Runs against a built `dist/` served by `bun run preview --port 4173`,
-// using real Sia hosts + real bsky.social. The single test in this file
-// is the reconciliation point for our fake-SDK contract — if the fake
-// drifts from real SDK behavior, this test fails and we fix the fake.
+// using real Sia hosts + the public Mainline DHT (pkarr). The single test
+// in this file is the reconciliation point for our fake-SDK contract — if
+// the fake drifts from real SDK behavior, this test fails and we fix the fake.
 //
-// Auth happens per-test via signInAccount() (~5s each). See
-// e2e/authHelper.ts for why we're not using storageState fixtures.
+// Auth is per-test via signInAccount() — it just seeds the Sia AppKey and
+// lets the app restore the did:dht identity. See e2e/authHelper.ts.
 
 import { expect, type Page, test } from '@playwright/test'
 import {
+  createChannelButton,
   drainE2EChannels,
   drainE2ESubscriptions,
   loadAccount,
   signInAccount,
+  subscribeButton,
 } from '../authHelper'
 
 test('alice publishes a post; bob subscribes via URL and sees it', async ({
@@ -53,10 +55,10 @@ test('alice publishes a post; bob subscribes via URL and sees it', async ({
 
     // -- Alice creates a channel --
 
-    // Sidebar button — always present once Sia is connected; welcome
-    // "Create a channel" only renders for fresh empty-feed accounts and
-    // alice may have accumulated state from prior runs.
-    await alice.getByRole('button', { name: '+ Create a channel' }).click()
+    // Sidebar "+" — always present once Sia is connected. Scoped to the
+    // sidebar because the empty-feed welcome renders a button with the same
+    // "Create a channel" name (see createChannelButton).
+    await createChannelButton(alice).click()
 
     channelName = `e2e test ${Date.now()}`
     await alice.getByPlaceholder(/e\.g\. John Williams/i).fill(channelName)
@@ -84,7 +86,7 @@ test('alice publishes a post; bob subscribes via URL and sees it', async ({
 
     // -- Bob subscribes via URL --
 
-    await bob.getByRole('button', { name: '+ Subscribe' }).click()
+    await subscribeButton(bob).click()
 
     await expect(
       bob.getByRole('heading', { name: /Subscribe to a channel/i }),
@@ -94,7 +96,8 @@ test('alice publishes a post; bob subscribes via URL and sees it', async ({
     // submit is the exact "Subscribe", the sidebar is "+ Subscribe".
     await bob.getByRole('button', { name: 'Subscribe', exact: true }).click()
 
-    // Bob's feed populates via the encrypted ATProto record fetch + Sia bytes.
+    // Bob's feed populates by resolving the channel's pkarr locator off the
+    // DHT, then fetching + decrypting the Sia manifest and its item bytes.
     await expect(bob.getByText(postBody)).toBeVisible({ timeout: 90_000 })
     // Channel name appears in two places (sidebar subscribed-channels entry
     // AND feed-row channel header); .first() picks whichever resolves.

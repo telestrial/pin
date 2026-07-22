@@ -1,7 +1,7 @@
 // Maintenance utility, NOT part of the normal suite (guarded by E2E_DRAIN).
 // Drains the alice account's accumulated "e2e test" channels — prior runs'
 // in-finally cleanup hasn't kept up (it shares the test's time budget and
-// gets cut off), so they pile up in Sia settings and slow/flaky every run.
+// gets cut off), so they pile up in the account and slow/flaky every run.
 //
 // Run explicitly:
 //   E2E_DRAIN=1 bunx playwright test drain-e2e-channels --project=chromium

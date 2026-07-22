@@ -1,22 +1,38 @@
-// E2E: the persistent upload queue resume loop, against real Sia + real
-// bsky.social, driven through the real UI in Chrome.
+// E2E: the persistent upload queue resume loop, against real Sia + the public
+// Mainline DHT (pkarr), driven through the real UI in Chrome.
 //
-// Simulates "tab closed mid-publish" by blocking the manifest-write XRPC
-// call (com.atproto.repo.putRecord) so the runner's Sia upload completes and
-// the checkpoint persists to IndexedDB, but the post never lands. Then we
-// reload (the "reopen") and confirm hydration + the runner resume the task
-// from its checkpoint — the post lands without re-uploading, and the
-// succeeded task doesn't linger or reappear.
+// Simulates "tab closed mid-publish" by HANGING the manifest-commit leg — the
+// pkarr relay PUT that publishes a channel's locator to the DHT (atproto's
+// putRecord is gone). The runner's Sia byte upload completes and the checkpoint
+// persists to IndexedDB, but the locator never publishes, so the post never
+// lands. Then we reload (the "reopen") and confirm hydration + the runner
+// resume the task from its checkpoint — the post lands without re-uploading,
+// and the succeeded task doesn't linger or reappear.
 //
-// Channel creation uses applyWrites (not putRecord), so blocking putRecord
-// only catches the publish-append, not the channel setup.
+// The block must HANG, not abort: a publish that FAILS after the checkpoint is
+// persisted as 'failed' (a deliberate-retry state that doesn't auto-resume),
+// whereas a hung publish stays parked as a resumable 'pending' snapshot — which
+// is exactly what hydration re-runs on reload. The pkarr publish client's
+// timeout is generous (Mainline stores take ~5s), so hanging the PUT keeps the
+// task parked long enough; we reload promptly once the checkpoint lands.
+//
+// We arm the block AFTER the channel is created (its initial locator publish is
+// a background best-effort pkarr PUT that may hang harmlessly) and just before
+// Publish, so it catches the post's manifest commit specifically.
 
 import { expect, type Page, test } from '@playwright/test'
-import { drainE2EChannels, loadAccount, signInAccount } from '../authHelper'
+import {
+  createChannelButton,
+  drainE2EChannels,
+  loadAccount,
+  signInAccount,
+} from '../authHelper'
 
 const SIA_KEY = 'sia-auth-f6b7539e181e45ee'
 const QUEUE_DB = 'pin-upload-queue'
-const PUT_RECORD = '**/xrpc/com.atproto.repo.putRecord'
+// Public pkarr relays the browser publishes/resolves DHT records through. The
+// publish is a PUT; resolves are GETs, which we let through.
+const PKARR_RELAY = /pkarr\.pubky\.(app|org)/
 
 type QueueSnapshot = {
   total: number
@@ -35,13 +51,16 @@ async function readQueue(page: Page): Promise<QueueSnapshot> {
             const tx = req.result.transaction('tasks', 'readonly')
             const all = tx.objectStore('tasks').getAll()
             all.onsuccess = () => {
+              // The persisted record is an Action; a publish's checkpoint lives
+              // under ledger.uploadedItemRef (state stays top-level).
               const tasks = all.result as Array<{
-                uploadedItemRef?: unknown
+                ledger?: { uploadedItemRef?: unknown }
                 state?: string
               }>
               resolve({
                 total: tasks.length,
-                checkpointed: tasks.filter((t) => t.uploadedItemRef).length,
+                checkpointed: tasks.filter((t) => t.ledger?.uploadedItemRef)
+                  .length,
                 states: tasks.map((t) => t.state ?? '?'),
               })
             }
@@ -69,7 +88,7 @@ test('an interrupted publish resumes from its checkpoint on reload', async ({
     alice = await signInAccount(context, loadAccount('alice'))
 
     // -- Create a channel to publish into --
-    await alice.getByRole('button', { name: '+ Create a channel' }).click()
+    await createChannelButton(alice).click()
     const channelName = `e2e test ${Date.now()}`
     await alice.getByPlaceholder(/e\.g\. John Williams/i).fill(channelName)
     await alice.getByRole('button', { name: /Create channel/i }).click()
@@ -78,25 +97,40 @@ test('an interrupted publish resumes from its checkpoint on reload', async ({
     ).toBeVisible({ timeout: 60_000 })
     await alice.getByRole('button', { name: /^Done$/ }).click()
 
-    // The composer defaults its voice to one of the account's channels,
-    // which (on an account with a backlog of older "e2e test" channels) may
-    // be a stale/retracted one. Explicitly publish AS the channel we just
-    // created so the resume targets a record that exists.
-    await alice.getByRole('button', { name: /^Voice:/ }).click()
-    await alice
-      .getByRole('menuitem', { name: channelName })
-      .click({ timeout: 10_000 })
-
-    // -- Block the manifest write, then publish --
-    // The runner uploads the body bytes to Sia (real), writes the checkpoint,
-    // then hangs on the blocked putRecord — the post is stuck mid-publish.
-    await alice.route(PUT_RECORD, () => {
-      // never continue/fulfill/abort → the request hangs, as if the tab
-      // were closed before the manifest write returned.
-    })
-
+    // Fill the body first — that expands the composer so the voice picker (if
+    // any) renders and canSubmit is satisfied.
     const postBody = `Resume me — ${Date.now()}`
     await alice.getByPlaceholder(/What are you thinking about/i).fill(postBody)
+
+    // The composer only renders a "Voice:" picker when the account owns more
+    // than one channel; with a single channel (common once the backlog is
+    // drained) the default voice is already the one we just created. When
+    // present, pick the new channel explicitly so the resumed publish targets a
+    // channel that exists. waitFor (not isVisible) — it renders a beat after
+    // the composer expands.
+    const voicePicker = alice.getByRole('button', { name: /^Voice:/ })
+    const hasPicker = await voicePicker
+      .waitFor({ state: 'visible', timeout: 8_000 })
+      .then(() => true)
+      .catch(() => false)
+    if (hasPicker) {
+      await voicePicker.click()
+      await alice
+        .getByRole('menuitem', { name: channelName })
+        .click({ timeout: 10_000 })
+    }
+
+    // -- Block the manifest commit, then publish --
+    // Hang the pkarr locator PUT: the runner uploads the body bytes to Sia
+    // (real) and writes the checkpoint, then hangs publishing the locator — the
+    // post is stuck mid-publish. Resolves (GETs) pass through so feed reads
+    // don't wedge. Must hang, not abort, so the task stays a resumable
+    // 'pending' snapshot rather than failing (see the header note).
+    await alice.route(PKARR_RELAY, (route) => {
+      if (route.request().method() === 'PUT') return // hang the publish
+      route.continue()
+    })
+
     await alice.getByRole('button', { name: /^Publish$/ }).click()
 
     // The checkpoint lands in IndexedDB once the Sia upload completes.
@@ -115,9 +149,11 @@ test('an interrupted publish resumes from its checkpoint on reload', async ({
     // -- Reopen the tab --
     // Reseed the live auth state (now holding myChannels + the auto-sub to
     // alice's own channel) so the resumed task finds its channel. The auth
-    // helper's init script reseeds an EMPTY myChannels on every load — a
-    // harness artifact; in production localStorage already holds myChannels
-    // on reload, so this restores production-faithful state.
+    // helper's init script seeds no myChannels, so a plain reload would
+    // rehydrate them empty — a harness artifact; in production localStorage
+    // already holds myChannels on reload, so this restores production-faithful
+    // state. (A later-registered init script runs after the helper's, so this
+    // full-state seed wins.)
     const liveAuth = await alice.evaluate((k) => localStorage.getItem(k), SIA_KEY)
     await context.addInitScript(
       ({ key, payload }) => {
@@ -132,7 +168,7 @@ test('an interrupted publish resumes from its checkpoint on reload', async ({
       { key: SIA_KEY, payload: liveAuth },
     )
 
-    await alice.unroute(PUT_RECORD)
+    await alice.unroute(PKARR_RELAY)
     await alice.reload()
 
     // Resume: hydration loads the pending checkpointed task, the runner

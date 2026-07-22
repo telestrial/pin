@@ -1,25 +1,59 @@
 // Per-test authentication helper. Each scenario test creates fresh
 // browser contexts and runs this for each account.
 //
-// Why not Playwright's setup-project + storageState fixtures? The
-// @atproto/oauth-client-browser session getter uses an in-memory
-// CachedGetter wrapping an IndexedDB store. Restoring just the
-// IndexedDB via storageState doesn't restore the cache; the first
-// "isStale" check after restore triggers a refresh, the refresh
-// reads from IndexedDB and finds nothing matching the in-memory key,
-// and the lib throws "The session was deleted by another process".
+// Identity is self-sovereign now: a did:dht derived from the Sia recovery
+// phrase — no Bluesky/atproto session, no OAuth. So "signing in" is just
+// restoring the Sia AppKey. We seed it (bake-once-then-replay; see the
+// one-time capture in e2e/README.md) into localStorage and let the app's
+// normal boot restore the session from it — no UI flow to drive.
 //
-// Auth-per-test is ~5s of overhead per scenario. We'll re-investigate
-// shared sessions if/when test count makes that overhead matter.
+// We also seed a chosen @-name (profile.username), which makes the context
+// behave as a *returning* identity. The app's genesis naming gate only fires
+// for a connected identity with no username, so seeding one keeps us landing
+// straight on Home instead of the NamingScreen. Same replay spirit as seeding
+// the AppKey — the naming beat isn't what these scenarios exercise.
 
-import { type BrowserContext, expect, type Page } from '@playwright/test'
+import {
+  type BrowserContext,
+  expect,
+  type Locator,
+  type Page,
+} from '@playwright/test'
 
 const SIA_LOCALSTORAGE_KEY = 'sia-auth-f6b7539e181e45ee'
 
+// The left nav sidebar, scoped by its unique Home button. Several <aside>s and
+// surfaces carry overlapping accessible names — the sidebar's add-actions are
+// `+` icon buttons labeled "Create a channel" / "Subscribe to a channel", and
+// the EMPTY-home welcome renders CTA buttons with those exact same names — so
+// create/subscribe clicks must be scoped here to avoid a strict-mode match on
+// two elements. Mirrors the scoping the drain helpers already use.
+export function leftSidebar(page: Page): Locator {
+  return page.locator('aside').filter({
+    has: page.getByRole('button', { name: 'Home', exact: true }),
+  })
+}
+
+// The sidebar's "+" create-a-channel action (aria-label, not the old
+// "+ Create a channel" text CTA that the pre-redesign sidebar had).
+export function createChannelButton(page: Page): Locator {
+  return leftSidebar(page).getByRole('button', {
+    name: 'Create a channel',
+    exact: true,
+  })
+}
+
+// The sidebar's "+" subscribe action. Distinct from the subscribe FORM's submit
+// button (name "Subscribe", exact) — this is "Subscribe to a channel".
+export function subscribeButton(page: Page): Locator {
+  return leftSidebar(page).getByRole('button', {
+    name: 'Subscribe to a channel',
+    exact: true,
+  })
+}
+
 type Account = {
   name: 'alice' | 'bob'
-  blueskyHandle: string
-  blueskyPassword: string
   siaKeyHex: string
   siaIndexerURL: string
 }
@@ -38,27 +72,24 @@ export function loadAccount(name: 'alice' | 'bob'): Account {
   const prefix = name.toUpperCase()
   return {
     name,
-    blueskyHandle: envOrFail(`${prefix}_BLUESKY_HANDLE`),
-    blueskyPassword: envOrFail(`${prefix}_BLUESKY_PASSWORD`),
     siaKeyHex: envOrFail(`${prefix}_SIA_KEY_HEX`),
     siaIndexerURL:
       process.env[`${prefix}_SIA_INDEXER_URL`] ?? 'https://sia.storage',
   }
 }
 
-// Seeds the Sia AppKey into localStorage + drives the Bluesky OAuth
-// flow. On return, the context is signed in for both Sia and Bluesky
-// and parked at the empty-state home page.
+// Seeds the Sia AppKey (+ a chosen @-name) into localStorage and lets the app
+// restore the session on load. On return, the context is connected and parked
+// on the home feed.
 export async function signInAccount(
   context: BrowserContext,
   account: Account,
 ): Promise<Page> {
   await context.addInitScript(
     ({ key, payload, pinOrigin }) => {
-      // The init script fires on every page load in the context,
-      // including bsky.social during the OAuth redirect — that origin
-      // blocks localStorage and throws SecurityError on bare access.
-      // Only seed on Pin's own origin.
+      // The init script fires on every page load in the context. Seed only on
+      // Pin's own origin (belt-and-suspenders — the app is single-origin now,
+      // but other origins can block localStorage and throw).
       try {
         if (window.location.origin === pinOrigin) {
           localStorage.setItem(key, payload)
@@ -74,19 +105,17 @@ export async function signInAccount(
         state: {
           storedKeyHex: account.siaKeyHex,
           indexerURL: account.siaIndexerURL,
-          myChannels: [],
-          subscriptions: [],
-          atprotoDID: null,
-          // Seed the handle even though it's normally null until OAuth
-          // resolves — Pin's narrow OAuth scope means getProfile 403s
-          // and atprotoHandle would stay null on first sign-in, which
-          // CreateChannel rejects. setATProtoIdentity null-coalesces, so
-          // a pre-seeded handle survives the OAuth callback's null
-          // result. Production has the same "first-sign-in handle is
-          // null" gap (flagged as a future thread in CLAUDE.md).
-          atprotoHandle: account.blueskyHandle,
-          feedSortOrder: 'newest',
-          settingsObjectID: null,
+          // Seed a chosen @-name so we replay as a returning did:dht identity:
+          // the genesis naming gate (connected + settingsLoaded + no username)
+          // stays shut and we land straight on Home. The Sia snapshot load may
+          // replace this with the account's own persisted profile — which also
+          // carries a username once the account has been used — so the gate
+          // stays shut either way.
+          profile: {
+            $type: 'dev.sia.pin.profile',
+            username: account.name,
+            updatedAt: '2026-01-01T00:00:00.000Z',
+          },
         },
         version: 0,
       }),
@@ -96,56 +125,15 @@ export async function signInAccount(
   const page = await context.newPage()
   await page.goto('/')
 
-  // Sia restore lands us in empty-state home. If the seeded hex didn't
-  // validate at the indexer, we'd be on the "Welcome back" screen
-  // instead — fail loudly so the user re-bakes the AppKey.
-  // Universal "we're at home, Sia is connected" signal — present whether
-  // the home is empty, loading, or populated, but NOT on the Welcome
-  // back screen. If Sia restore failed, this times out → fail loudly.
-  await expect(page.getByRole('button', { name: /Sign Out/i })).toBeVisible({
-    timeout: 20_000,
-  })
-
-  // Trigger the lazy Bluesky gate via the sidebar "+ Create a channel"
-  // button. gotoCreating() checks for atprotoAgent; with none yet, it
-  // routes to the BlueskyLoginScreen. (Welcome-screen "Create a channel"
-  // only appears for fresh accounts with no subscriptions; the sidebar
-  // entry is always present, so it's the safer selector for an account
-  // that may have accumulated state from prior test runs.)
-  await page
-    .getByRole('button', { name: '+ Create a channel' })
-    .click()
-
+  // Universal "connected + on Home" signal: the left sidebar's Home button.
+  // Present on the connected home surface (empty or populated), absent on the
+  // auth/naming screens — it replaces the removed "Sign Out" button. Sia
+  // restore from the seeded AppKey lands us here; a restore failure (bad or
+  // revoked hex) leaves us on the Welcome screen and this times out — fail
+  // loudly so the AppKey gets re-baked.
   await expect(
-    page.getByRole('heading', { name: /Sign in with Bluesky/i }),
-  ).toBeVisible({ timeout: 10_000 })
-
-  await page
-    .getByPlaceholder(/yourname\.bsky\.social/i)
-    .fill(account.blueskyHandle)
-  await page.getByRole('button', { name: /Continue with Bluesky/i }).click()
-
-  // bsky.social OAuth screens. Selectors are best-effort scrapes of
-  // their UI; when they redesign, this breaks loudly — signal we should
-  // look at what changed.
-  await page.waitForURL(/bsky\.social/, { timeout: 30_000 })
-  await page.getByPlaceholder(/password/i).first().fill(account.blueskyPassword)
-  await page.getByRole('button', { name: /Next|Sign in/i }).first().click()
-  await page
-    .getByRole('button', { name: /Accept|Authorize|Continue/i })
-    .first()
-    .click({ timeout: 30_000 })
-  await page.waitForURL(/127\.0\.0\.1:4173/, { timeout: 30_000 })
-
-  // Returned to Pin. We may land on the create-channel form (resumeTo
-  // target); back out so callers see a clean home.
-  const back = page.getByRole('button', { name: /Back/i }).first()
-  if (await back.isVisible({ timeout: 5_000 }).catch(() => false)) {
-    await back.click()
-  }
-  await expect(page.getByRole('button', { name: /Sign Out/i })).toBeVisible({
-    timeout: 10_000,
-  })
+    page.getByRole('button', { name: 'Home', exact: true }).first(),
+  ).toBeVisible({ timeout: 30_000 })
 
   return page
 }
