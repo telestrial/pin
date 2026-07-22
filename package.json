@@ -18,7 +18,7 @@
     "test:ui": "vitest --ui"
   },
   "dependencies": {
-    "@siafoundation/sia-storage": "^0.0.12",
+    "@siafoundation/sia-storage": "^0.0.13",
     "@synonymdev/pkarr": "0.1.4",
     "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/plugin-opener": "^2.5.4",
