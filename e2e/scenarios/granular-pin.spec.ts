@@ -26,6 +26,7 @@ import {
   drainE2EChannels,
   drainE2ESubscriptions,
   loadAccount,
+  refreshUntilVisible,
   signInAccount,
   subscribeButton,
 } from '../authHelper'
@@ -147,8 +148,10 @@ test('pin the file vs pin the post: independent cross-account custody', async ({
     await subscribeButton(bob).click()
     await bob.getByPlaceholder(/pin:\/\//i).fill(subscribeURL)
     await bob.getByRole('button', { name: 'Subscribe', exact: true }).click()
-    await expect(bob.getByText(postBody)).toBeVisible({ timeout: 90_000 })
-    // The attachment tile renders inline in the feed row.
+    // Read-on-refresh + eventually-consistent DHT: re-resolve until alice's post
+    // propagates into bob's feed (see refreshUntilVisible).
+    await refreshUntilVisible(bob, postBody)
+    // The attachment tile renders inline in the same feed row.
     await expect(bob.getByText(fileName).first()).toBeVisible({
       timeout: 90_000,
     })

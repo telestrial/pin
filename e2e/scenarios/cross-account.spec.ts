@@ -17,6 +17,7 @@ import {
   drainE2EChannels,
   drainE2ESubscriptions,
   loadAccount,
+  refreshUntilVisible,
   signInAccount,
   subscribeButton,
 } from '../authHelper'
@@ -102,8 +103,11 @@ test('alice publishes a post; bob subscribes via URL and sees it', async ({
     await bob.getByRole('button', { name: 'Subscribe', exact: true }).click()
 
     // Bob's feed populates by resolving the channel's pkarr locator off the
-    // DHT, then fetching + decrypting the Sia manifest and its item bytes.
-    await expect(bob.getByText(postBody)).toBeVisible({ timeout: 90_000 })
+    // DHT, then fetching + decrypting the Sia manifest and its item bytes. But
+    // the locator is eventually-consistent and there's no live push, so alice's
+    // just-published post may not be in the manifest bob first resolves — poll
+    // by re-resolving (Refresh) until it propagates and lands.
+    await refreshUntilVisible(bob, postBody)
     // Channel name appears in two places (sidebar subscribed-channels entry
     // AND feed-row channel header); .first() picks whichever resolves.
     await expect(bob.getByText(channelName).first()).toBeVisible()

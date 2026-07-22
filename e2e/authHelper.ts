@@ -84,6 +84,26 @@ export function attachDiagnostics(page: Page, label: string): void {
   })
 }
 
+// Poll the home feed by clicking Refresh until `text` shows. The subscriber
+// feed is read-on-refresh (no live push since JetStream left with atproto): a
+// just-published post appears only once its channel locator has propagated
+// across the Mainline DHT AND the reader re-resolves. So a single wait can't
+// work — we re-resolve on a loop until it lands (harmless when propagation was
+// already fast; the first check just passes). The Refresh button is disabled +
+// its label hidden while a resolve is in flight, so `.click()` naturally waits
+// for the prior resolve to finish before firing again.
+export async function refreshUntilVisible(
+  page: Page,
+  text: string,
+  { timeout = 150_000 }: { timeout?: number } = {},
+): Promise<void> {
+  const refresh = page.getByRole('button', { name: 'Refresh', exact: true })
+  await expect(async () => {
+    await refresh.click()
+    await expect(page.getByText(text).first()).toBeVisible({ timeout: 10_000 })
+  }).toPass({ timeout, intervals: [1_000, 2_000, 3_000] })
+}
+
 type Account = {
   name: 'alice' | 'bob'
   siaKeyHex: string
