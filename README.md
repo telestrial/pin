@@ -14,9 +14,9 @@ There is no Pin server, no Pin database, no company between authors and readers.
 
 ## Demo flow
 
-### ▶ [pin-liard.vercel.app](https://pin-liard.vercel.app/)
+### ▶ Clone and run it — [Run it locally](#run-it-locally)
 
-Best in Chrome. Best with a friend — pair up, each open the URL on your own machine, walk through it together. One of you plays the author, the other the subscriber. (Solo? Two browser windows on one machine, Incognito for the second so the Sia accounts stay distinct.)
+Best in Chrome. Best with a friend — pair up, each run it on your own machine, walk through it together. One of you plays the author, the other the subscriber. (Solo? Two browser windows on one machine, Incognito for the second so the Sia accounts stay distinct.)
 
 1. **Both of you**: finish onboarding — approve at sia.storage, save your recovery phrase, then pick a name for yourself. That's it; your identity is a `did:dht` derived from that phrase, no account to create anywhere.
 2. **Author** (one of you): click **+ Create a channel**, give it a name and (optionally) a cover image. Copy the subscribe URL — it's `pin://did:dht:…#k=…`, the channel's identity plus its secret key — and send it to the subscriber.
@@ -27,7 +27,7 @@ Best in Chrome. Best with a friend — pair up, each open the URL on your own ma
 
 ---
 
-The rest of this README goes deeper: the specific Sia SDK calls Pin uses (and where), the architecture, the sandboxed App Host API, the roadmap, and how to run locally if you want to clone instead of clicking the link above.
+The rest of this README goes deeper: the specific Sia SDK calls Pin uses (and where), the architecture, the sandboxed App Host API, the roadmap, and the full local setup.
 
 ## Sia SDK usage
 

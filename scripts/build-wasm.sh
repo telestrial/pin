@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Build crates/pin-core to wasm for the browser (release + wasm-opt).
 #
-# The generated crates/pin-core/pkg is COMMITTED to the repo so the deploy (Vercel,
-# which has no Rust toolchain) can build the frontend. Re-run this and commit the
+# The generated crates/pin-core/pkg is COMMITTED to the repo so the deploy (a static
+# host with no Rust toolchain) can build the frontend. Re-run this and commit the
 # pkg whenever pin-core changes. See CLAUDE.md (2026-07-14, the atproto->iroh-docs
 # jump) for why.
 set -euo pipefail

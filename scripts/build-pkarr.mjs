@@ -4,7 +4,7 @@
 // wasm via Node `fs`/`__dirname` and has CJS-style `exports.X =` lines — both break
 // in a browser ESM bundle. This transform makes a browser-loadable copy (swap the
 // fs-loader tail for an async `fetch`+instantiate `initPkarr(wasmUrl)`), committed
-// under src/vendor/pkarr/ so the Vercel build needs no pkarr build step — the same
+// under src/vendor/pkarr/ so a static-host build needs no pkarr build step — the same
 // deploy-safe posture as the committed pin-core wasm. Rerun after bumping the dep:
 //   bun run pkarr
 //
