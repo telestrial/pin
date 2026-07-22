@@ -86,6 +86,27 @@ test('alice publishes a post; bob subscribes via URL and sees it', async ({
 
     const postBody = `Hello from alice — ${Date.now()}`
     await alice.getByPlaceholder(/What are you thinking about/i).fill(postBody)
+
+    // Pick the just-created channel as the voice. The composer defaults to
+    // channels[0] — the OLDEST owned channel (new channels are appended), not
+    // the one we just made — so on an account with a backlog of older e2e
+    // channels the post would publish to the wrong channel: alice's own home
+    // feed shows it (it lists all her channels), but bob is subscribed to the
+    // NEW channel and would never see it, however much he refreshes. The picker
+    // only renders with >1 owned channel; a clean single-channel account
+    // already defaults correctly. waitFor (not isVisible) — it renders a beat
+    // after the composer expands on fill.
+    const voicePicker = alice.getByRole('button', { name: /^Voice:/ })
+    const hasPicker = await voicePicker
+      .waitFor({ state: 'visible', timeout: 8_000 })
+      .then(() => true)
+      .catch(() => false)
+    if (hasPicker) {
+      await voicePicker.click()
+      await alice
+        .getByRole('menuitem', { name: channelName })
+        .click({ timeout: 10_000 })
+    }
     await alice.getByRole('button', { name: /^Publish$/ }).click()
 
     await expect(alice.getByText(postBody)).toBeVisible({ timeout: 90_000 })
