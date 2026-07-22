@@ -52,6 +52,38 @@ export function subscribeButton(page: Page): Locator {
   })
 }
 
+// Surface where a create/publish stalls. Channel create/publish does real
+// network I/O inline — a Sia manifest upload AND a pkarr publish to the Mainline
+// DHT — so a "hang" is one of those legs stalling, not a selector problem. This
+// makes it visible in the test output:
+//   - Console errors/warnings: a flood of QUIC / NETWORK_IDLE_TIMEOUT lines is
+//     the Sia upload churning through hosts (Sia's QUIC traffic is not `fetch`,
+//     so it only shows via the SDK's own console logging, not the request hooks).
+//   - pkarr relay HTTP (pubky/pkarr): a "→" PUT with no matching "←" response is
+//     a stuck DHT publish — the other likely hang.
+// Opt-in (E2E_DEBUG=1) — it's noisy (the QUIC churn alone floods the log), so a
+// normal run stays quiet; flip it on to localize a hang.
+export function attachDiagnostics(page: Page, label: string): void {
+  if (!process.env.E2E_DEBUG) return
+  page.on('console', (m) => {
+    const t = m.type()
+    if (t === 'error' || t === 'warning') {
+      console.log(`[${label} ${t}] ${m.text()}`)
+    }
+  })
+  const isPkarr = (u: string) => /pubky|pkarr/i.test(u)
+  page.on('request', (r) => {
+    if (isPkarr(r.url())) console.log(`[${label} pkarr →] ${r.method()} ${r.url()}`)
+  })
+  page.on('response', (r) => {
+    if (isPkarr(r.url())) console.log(`[${label} pkarr ←] ${r.status()} ${r.url()}`)
+  })
+  page.on('requestfailed', (r) => {
+    if (isPkarr(r.url()))
+      console.log(`[${label} pkarr ✗] ${r.url()} — ${r.failure()?.errorText}`)
+  })
+}
+
 type Account = {
   name: 'alice' | 'bob'
   siaKeyHex: string
@@ -123,6 +155,7 @@ export async function signInAccount(
   )
 
   const page = await context.newPage()
+  attachDiagnostics(page, account.name)
   await page.goto('/')
 
   // Universal "connected + on Home" signal: the left sidebar's Home button.

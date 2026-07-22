@@ -74,9 +74,12 @@ test('pin the file vs pin the post: independent cross-account custody', async ({
     const channelName = `e2e test ${Date.now()}`
     await alice.getByPlaceholder(/e\.g\. John Williams/i).fill(channelName)
     await alice.getByRole('button', { name: /Create channel/i }).click()
+    // Generous: create now does two serial Sia uploads (manifest + settings
+    // snapshot) + a pkarr publish before the confirmation, and Sia uploads churn
+    // through QUIC-failing hosts. See cross-account.spec.ts for the rationale.
     await expect(
       alice.getByRole('heading', { name: /Channel created/i }),
-    ).toBeVisible({ timeout: 60_000 })
+    ).toBeVisible({ timeout: 150_000 })
     await alice.getByRole('button', { name: /Copy subscribe URL/i }).click()
     const subscribeURL = await alice.evaluate(() =>
       navigator.clipboard.readText(),

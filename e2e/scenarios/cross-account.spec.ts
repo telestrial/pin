@@ -64,9 +64,14 @@ test('alice publishes a post; bob subscribes via URL and sees it', async ({
     await alice.getByPlaceholder(/e\.g\. John Williams/i).fill(channelName)
     await alice.getByRole('button', { name: /Create channel/i }).click()
 
+    // Generous: creating a channel now does two serial Sia uploads on the
+    // critical path (the manifest object + the settings snapshot) plus a pkarr
+    // publish, before the confirmation shows — vs the old atproto putRecord that
+    // did none of that. Sia uploads churn through QUIC-failing hosts, so this
+    // needs the same headroom the other Sia-touching waits have.
     await expect(
       alice.getByRole('heading', { name: /Channel created/i }),
-    ).toBeVisible({ timeout: 60_000 })
+    ).toBeVisible({ timeout: 150_000 })
 
     await alice.getByRole('button', { name: /Copy subscribe URL/i }).click()
     const subscribeURL = await alice.evaluate(() =>
