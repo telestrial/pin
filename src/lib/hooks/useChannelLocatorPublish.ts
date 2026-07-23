@@ -31,7 +31,7 @@ export function useChannelLocatorPublish() {
         if (keptAlive.has(c.channelID)) continue
         keptAlive.add(c.channelID)
         try {
-          await refreshChannelLocator(c.channelKey)
+          await refreshChannelLocator(c.channelKey, c.channelID)
         } catch (e) {
           keptAlive.delete(c.channelID) // let a later tick retry
           console.warn(

@@ -172,20 +172,22 @@ export async function commitChannelManifest(
 }
 
 /** Keep-alive: refresh a channel locator's pkarr TTL WITHOUT minting a new Sia
- *  object. Resolves the current pointer and re-signs/re-publishes the same
- *  records, so a long-idle session's channels stay resolvable past the ~1h TTL.
- *  No upload, no delete — cheap, and it doesn't churn a manifest generation the
- *  way a re-commit would. No-op if nothing is published yet / it's already
- *  expired (a commit re-establishes it). */
+ *  object, so a channel published in an earlier session stays resolvable as the
+ *  record ages off the DHT. Re-signs/re-publishes the author's OWN current
+ *  pointer — read from the LOCAL locator record, NOT a fresh DHT resolve. A
+ *  resolve here could read back a stale value from a lagging relay and then
+ *  re-sign it with a newer timestamp, burying the real current pointer; the
+ *  author already knows their current pointer locally, so use that. No-op if
+ *  nothing's published for this channel yet (a commit establishes it). */
 export async function refreshChannelLocator(
   channelKeyB64: string,
+  channelID: string,
 ): Promise<void> {
+  const pointer = readLocatorObjectPointer(channelID)
+  if (!pointer?.url) return
   const kBytes = channelKeyFromBase64(channelKeyB64)
-  const { keypair, publicKey } = await identityFromSeed(
+  const { keypair } = await identityFromSeed(
     await deriveChannelLocatorSeed(kBytes),
   )
-  const records = await resolveDidDht(publicKey)
-  const url = reassembleTxt(records, POINTER_PREFIX)
-  if (!url) return
-  await publishRecords(keypair, chunkForTxt(POINTER_PREFIX, url))
+  await publishRecords(keypair, chunkForTxt(POINTER_PREFIX, pointer.url))
 }

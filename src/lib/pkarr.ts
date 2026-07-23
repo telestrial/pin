@@ -26,21 +26,44 @@ function ensureReady(): Promise<void> {
   return ready
 }
 
-// Resolve gets a short timeout so a MISS (no locator published yet) falls back to
-// atproto promptly instead of stalling a feed read for the client's 30s default. A
-// hit is ~150ms (spike). Publish keeps the long default (Mainline store is ~5s).
-const RESOLVE_TIMEOUT_MS = 4000
-let publishClient: Client | null = null
-let resolveClient: Client | null = null
-async function getPublishClient(): Promise<Client> {
+// Resolve timeout. This is also resolveMostRecent's gather window across relays:
+// too short and a fast relay serving a STALE packet wins before the slower relay
+// holding the fresh one can answer — the exact stale-read that hid a
+// just-published post (a write lands on one relay; the read must wait long enough
+// to hear from it). A hit is ~150ms when warm, but relays run seconds slow under
+// load, so give the gather real room rather than optimizing for the miss case
+// (a miss now just errors — there's no atproto fallback to race to).
+const RESOLVE_TIMEOUT_MS = 12000
+// Per-relay publish timeout — bounds the await-all fan-out below so one dead or
+// slow relay can't stall it (a Mainline store via a relay legitimately takes a
+// few seconds).
+const PUBLISH_TIMEOUT_MS = 15000
+
+// DNS TTL published on every record. This governs how long resolvers/relays and
+// the client CACHE a resolved packet — NOT how long the record lives on the DHT
+// (that's the DHT's own ~2h expiry, refreshed by keep-alive republish). A high
+// TTL means a just-published change stays invisible behind stale caches for that
+// long — which is exactly why a subscriber couldn't see a new post — so keep it
+// short: mutable channel/identity pointers want fast propagation, not long
+// caching. The cost is more frequent re-resolves (fine at friend scale).
+const RECORD_TTL_SECS = 60
+
+// One publish client PER relay. The default multi-relay client publishes to all
+// relays but CANCELS the rest as soon as one succeeds — so a record reliably
+// lands on only ONE relay, and a resolve that answers from a different relay
+// reads stale data (the "subscriber can't see new posts" bug). Publishing
+// through per-relay clients and awaiting them all fans the write out to every
+// relay, so whichever relay a resolve happens to hit already has the fresh
+// packet.
+let publishClients: Client[] | null = null
+async function getPublishClients(): Promise<Client[]> {
   await ensureReady()
-  if (!publishClient) publishClient = new Client()
-  return publishClient
-}
-async function getResolveClient(): Promise<Client> {
-  await ensureReady()
-  if (!resolveClient) resolveClient = new Client(undefined, RESOLVE_TIMEOUT_MS)
-  return resolveClient
+  if (!publishClients) {
+    publishClients = Client.defaultRelays().map(
+      (relay) => new Client([relay], PUBLISH_TIMEOUT_MS),
+    )
+  }
+  return publishClients
 }
 
 /** A name/value pair to publish as a TXT record in a pkarr document. */
@@ -116,9 +139,10 @@ const PUBLISH_RETRIES = 3
 const PUBLISH_RETRY_DELAY_MS = 2000
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
-/** Publish a set of TXT records to the DHT under `keypair`. Overwrites the prior
- *  document for this key. ~5s (Mainline store latency); call in the background.
- *  Retries transient failures; throws only if every attempt fails. */
+/** Publish a set of TXT records under `keypair`, fanned out to EVERY relay (see
+ *  getPublishClients for why). Overwrites the prior document for this key.
+ *  ~seconds (Mainline store latency); call in the background. Succeeds if any
+ *  relay accepts it; throws only if every relay fails on every attempt. */
 export async function publishRecords(
   keypair: Keypair,
   records: PkarrTxt[],
@@ -128,21 +152,24 @@ export async function publishRecords(
   for (const { name, value } of records) {
     // One TXT string caps at 255 bytes (spike-confirmed); callers chunk longer
     // values across multiple records before reaching here.
-    builder.addTxtRecord(name, value, 3600)
+    builder.addTxtRecord(name, value, RECORD_TTL_SECS)
   }
   const packet = builder.buildAndSign(keypair)
-  const c = await getPublishClient()
+  const clients = await getPublishClients()
   let lastErr: unknown
   for (let attempt = 0; attempt < PUBLISH_RETRIES; attempt++) {
     if (attempt > 0) await sleep(PUBLISH_RETRY_DELAY_MS)
-    try {
-      await c.publish(packet)
-      return
-    } catch (e) {
-      lastErr = e
-    }
+    // Fan the write out to every relay and await them all (best-effort per
+    // relay). Success = at least one relay accepted it; a relay that failed
+    // this round just won't carry this packet until the next publish /
+    // keep-alive re-fans. Retry the whole fan-out only if EVERY relay failed.
+    const results = await Promise.allSettled(
+      clients.map((c) => c.publish(packet)),
+    )
+    if (results.some((r) => r.status === 'fulfilled')) return
+    lastErr = results.find((r) => r.status === 'rejected')?.reason
   }
-  throw lastErr
+  throw lastErr ?? new Error('pkarr publish failed on all relays')
 }
 
 /** Resolve a `did:dht:<key>` (or a bare pkarr public-key string) to its current TXT
@@ -151,10 +178,30 @@ export async function resolveDidDht(didOrKey: string): Promise<PkarrTxt[]> {
   const publicKey = didOrKey.startsWith('did:dht:')
     ? didOrKey.slice('did:dht:'.length)
     : didOrKey
-  const c = await getResolveClient()
-  const packet = await c.resolveMostRecent(publicKey)
-  if (!packet) return []
-  return packet.records
+  await ensureReady()
+  // Resolve from every relay INDEPENDENTLY and pick the newest packet ourselves.
+  // The built-in multi-relay client returns the FIRST relay to answer and aborts
+  // the rest — so a fast relay serving a STALE packet beats a slower relay
+  // holding the fresh one (the stale read that hid just-published posts). Fresh
+  // per-relay clients each call (no shared/cached client) also defeat the
+  // client-side resolve cache, which otherwise pins the first-seen (stale)
+  // packet for the session. Friend-scale: a handful of relays × infrequent
+  // resolves, so the extra fan-out is cheap.
+  const relays = Client.defaultRelays()
+  const settled = await Promise.allSettled(
+    relays.map((relay) =>
+      new Client([relay], RESOLVE_TIMEOUT_MS).resolveMostRecent(publicKey),
+    ),
+  )
+  const packets = settled.flatMap((r) =>
+    r.status === 'fulfilled' && r.value ? [r.value] : [],
+  )
+  if (packets.length === 0) return []
+  // Highest timestamp = the most recently published packet across all relays.
+  const newest = packets.reduce((a, b) =>
+    b.timestampMs > a.timestampMs ? b : a,
+  )
+  return newest.records
     .filter((r: PkarrRecord) => (r.rdata?.type || '').toUpperCase() === 'TXT')
     .map((r: PkarrRecord) => ({
       name: r.name,
