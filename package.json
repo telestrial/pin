@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:lan": "PIN_LAN=1 vite",
     "build": "tsc -b && vite build",
     "wasm": "bash scripts/build-wasm.sh",
     "pkarr": "node scripts/build-pkarr.mjs",
@@ -40,6 +41,7 @@
     "@types/dompurify": "^3.2.0",
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-basic-ssl": "^2.3.0",
     "@vitejs/plugin-react": "^5.1.1",
     "@vitest/ui": "^4.1.7",
     "fake-indexeddb": "^6.2.5",
