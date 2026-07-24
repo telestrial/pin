@@ -1,7 +1,6 @@
 import { useEffect } from 'react'
-import type { FetchChannel } from '../../core/feed'
 import { useAuthStore } from '../../stores/auth'
-import { useFeedStore } from '../../stores/feed'
+import { notReady, useFeedStore } from '../../stores/feed'
 import { makeLocatorReader } from '../channelLocator'
 
 // Channel reads are locator-only (Phase D step 6): when the sdk is present,
@@ -13,15 +12,28 @@ import { makeLocatorReader } from '../channelLocator'
 //
 // Importing channelLocator pulls pkarr into the bundle, but the wasm only boots on
 // the first actual locator resolve (lazy) — a feed refresh.
-const notReady: FetchChannel = () =>
-  Promise.reject(new Error('channel reader not initialized'))
+//
+// notReady is shared with the feed store (same identity) so refresh can detect a
+// racing boot-time load and skip it rather than flash a not-initialized error.
 
 export function useChannelReader() {
   const sdk = useAuthStore((s) => s.sdk)
 
   useEffect(() => {
-    const setReader = useFeedStore.getState().setChannelReader
-    setReader(sdk ? makeLocatorReader(sdk) : notReady)
-    return () => setReader(notReady)
+    const feed = useFeedStore.getState()
+    if (!sdk) {
+      feed.setChannelReader(notReady)
+      return
+    }
+    feed.setChannelReader(makeLocatorReader(sdk))
+    // HomeFeed's first load fires as a child effect, which React runs BEFORE
+    // this App-level parent effect — so on the connect commit it can read with
+    // the not-ready placeholder and error out. Now that the reader is live,
+    // re-run the load so those reads resolve, rather than sitting on the
+    // boot-race error until a manual refresh. Fresh onboarding has no
+    // subscriptions, so the guard skips the extra load there.
+    const subs = useAuthStore.getState().subscriptions
+    if (subs.length > 0) feed.refresh(subs)
+    return () => useFeedStore.getState().setChannelReader(notReady)
   }, [sdk])
 }

@@ -10,8 +10,9 @@ import type { ChannelManifest, SubscriptionRef } from '../core/types'
 // Channels are read via the locator (pkarr → Sia). That reader needs the Sia
 // sdk, so App injects it (useChannelReader) once connected. Until then reads
 // can't work anyway — this default just fails loudly rather than falling back
-// to atproto.
-const notReady: FetchChannel = () =>
+// to atproto. Exported so useChannelReader shares the same identity: refresh
+// compares against it to skip the boot-race load (see refresh below).
+export const notReady: FetchChannel = () =>
   Promise.reject(new Error('channel reader not initialized'))
 
 type FeedState = {
@@ -45,6 +46,12 @@ export const useFeedStore = create<FeedState>()((set, get) => ({
   channelReader: notReady,
   setChannelReader: (reader) => set({ channelReader: reader }),
   refresh: async (subscriptions) => {
+    // Boot race: on the connect commit HomeFeed's load effect (a child effect)
+    // fires before App's useChannelReader (a parent effect) injects the real
+    // reader, so channelReader is still the not-ready placeholder here. Skip
+    // rather than paint a "channel reader not initialized" error flash —
+    // useChannelReader re-runs refresh with the real reader a beat later.
+    if (get().channelReader === notReady) return
     set({ loading: true })
     // Pass the current manifests as the stale-while-revalidate fallback so a
     // channel that momentarily fails to re-resolve (DHT lag) keeps its
