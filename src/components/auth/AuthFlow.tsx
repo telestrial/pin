@@ -1,5 +1,6 @@
 import { AppKey, Builder, initSia } from '@siafoundation/sia-storage'
 import { useEffect, useRef } from 'react'
+import { connectSiaClient } from '../../lib/connectSiaClient'
 import { APP_META } from '../../lib/constants'
 import { useAuthStore } from '../../stores/auth'
 import { ApproveScreen } from './ApproveScreen'
@@ -18,7 +19,7 @@ export function AuthFlow() {
     let cancelled = false
 
     async function init() {
-      const { storedKeyHex, indexerURL, setSdk, setStep } =
+      const { storedKeyHex, indexerURL, setClient, setStep } =
         useAuthStore.getState()
       try {
         await initSia()
@@ -33,7 +34,7 @@ export function AuthFlow() {
             const sdk = await builder.connected(appKey)
             if (cancelled) return
             if (sdk) {
-              setSdk(sdk)
+              setClient(await connectSiaClient(sdk, indexerURL))
               return
             }
           } catch {

@@ -4,6 +4,7 @@ import {
   validateRecoveryPhrase,
 } from '@siafoundation/sia-storage'
 import { useState } from 'react'
+import { connectSiaClient } from '../../lib/connectSiaClient'
 import { useAuthStore } from '../../stores/auth'
 import { CopyButton } from '../ui/CopyButton'
 
@@ -12,7 +13,7 @@ export function RecoveryScreen({
 }: {
   builder: React.RefObject<Builder | null>
 }) {
-  const { setSdk, setStoredKeyHex, setError } = useAuthStore()
+  const { setClient, setStoredKeyHex, setError } = useAuthStore()
   const [mode, setMode] = useState<'choose' | 'generate' | 'import'>('choose')
   const [phrase, setPhrase] = useState('')
   const [generatedPhrase, setGeneratedPhrase] = useState('')
@@ -57,7 +58,8 @@ export function RecoveryScreen({
     try {
       const sdk = await b.register(mnemonic)
       setStoredKeyHex(sdk.appKey().export().toHex())
-      setSdk(sdk)
+      const { indexerURL } = useAuthStore.getState()
+      setClient(await connectSiaClient(sdk, indexerURL))
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Registration failed')
     } finally {

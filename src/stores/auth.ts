@@ -1,4 +1,3 @@
-import type { Sdk } from '@siafoundation/sia-storage'
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import {
@@ -6,7 +5,7 @@ import {
   type ProfilePatch,
   type ProfileRecord,
 } from '../core/profile'
-import { makeWasmSiaClient, type SiaClient } from '../core/siaClient'
+import type { SiaClient } from '../core/siaClient'
 import type {
   FollowEdge,
   OwnedChannel,
@@ -74,7 +73,9 @@ type AuthState = {
   // instant. Runtime-only (not persisted): a real reload runs normal boot, so
   // you can never be stuck locked across a refresh.
   locked: boolean
-  setSdk: (sdk: Sdk) => void
+  // The platform-appropriate Sia client is built by connectSiaClient (web = WASM,
+  // desktop = native Tauri backend); the store just holds it and flips connected.
+  setClient: (client: SiaClient) => void
   setStep: (step: AuthStep) => void
   setError: (error: string | null) => void
   setStoredKeyHex: (hex: string) => void
@@ -136,12 +137,7 @@ export const useAuthStore = create<AuthState>()(
       settingsLoaded: false,
       settingsDirty: false,
       locked: false,
-      setSdk: (sdk) =>
-        set({
-          client: makeWasmSiaClient(sdk),
-          step: 'connected',
-          error: null,
-        }),
+      setClient: (client) => set({ client, step: 'connected', error: null }),
       setStep: (step) => set({ step, error: null }),
       setError: (error) => set({ error }),
       setStoredKeyHex: (hex) => set({ storedKeyHex: hex }),
