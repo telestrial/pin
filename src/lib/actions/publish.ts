@@ -1,6 +1,5 @@
-import type { Sdk } from '@siafoundation/sia-storage'
 import { buildItemRef } from '../../core/channels'
-import { uploadItemsPacked } from '../../core/sia'
+import type { SiaClient } from '../../core/siaClient'
 import type { AttachmentRef, ItemRef } from '../../core/types'
 import { type PublishAction, useActionStore } from '../../stores/actionQueue'
 import { useAuthStore } from '../../stores/auth'
@@ -25,7 +24,7 @@ export class SilentActionError extends Error {}
 // handler reads auth/feed/pin via getState directly; it writes only progress,
 // phase, and ledger through these (so persistence + UI stay consistent).
 export type PublishContext = {
-  sdk: Sdk
+  client: SiaClient
   setPhase: (phase: string, progress?: number) => void
   setProgress: (progress: number) => void
   checkpoint: (uploadedItemRef: ItemRef) => void
@@ -42,7 +41,7 @@ export async function runPublish(
   action: PublishAction,
   ctx: PublishContext,
 ): Promise<void> {
-  const { sdk, setPhase, setProgress, checkpoint, markPublished } = ctx
+  const { client, setPhase, setProgress, checkpoint, markPublished } = ctx
   const intent = action.intent
   const auth = useAuthStore.getState()
   const pin = usePinStore.getState()
@@ -86,7 +85,7 @@ export async function runPublish(
       setProgress(Math.min(95, (count / totalExpected) * 100))
     }
 
-    const uploadedItems = await uploadItemsPacked(sdk, bytesToUpload, onShard)
+    const uploadedItems = await client.uploadItemsPacked(bytesToUpload, onShard)
 
     // Map results back to attachmentRefs in the original sources order;
     // URL-shape attachments interleave with the freshly-packed ones.
@@ -134,7 +133,7 @@ export async function runPublish(
   if (intent.destination === 'library') {
     // itemRef.itemURL is stable across resumes (from the checkpoint) and
     // pinStore dedups library pins by URL, so a resumed pin is idempotent.
-    await pin.pin(sdk, { item: itemRef, channel: LIBRARY_CHANNEL })
+    await pin.pin(client, { item: itemRef, channel: LIBRARY_CHANNEL })
   } else {
     // Publishing to a channel no longer touches atproto — each write commits the
     // manifest to the channel's pkarr locator (Sia object + DHT pointer) and
@@ -154,7 +153,7 @@ export async function runPublish(
           editedAt: new Date().toISOString(),
         }
         const { orphanedObjectIDs } = await editPublishedItem(
-          sdk,
+          client,
           ch,
           intent.editingItemID,
           editedItem,
@@ -162,7 +161,7 @@ export async function runPublish(
         )
         for (const id of orphanedObjectIDs) orphanedFromEdits.add(id)
       } else {
-        await publishItemToChannel(sdk, ch, itemRef)
+        await publishItemToChannel(client, ch, itemRef)
       }
       // Record this channel as done (and persist) before the next one.
       markPublished(ch.channelID)

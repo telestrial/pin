@@ -7,12 +7,8 @@
 // IS the `_dir` pointer anyone resolving the did:dht receives) is the only layer, so
 // it's public-by-capability. Anyone who can resolve your did:dht can read it.
 
-import type { Sdk } from '@siafoundation/sia-storage'
-import {
-  DIRECTORY_DOC_VERSION,
-  type DirectoryDoc,
-} from '../core/identityDoc'
-import { downloadItem, uploadItem } from '../core/sia'
+import { DIRECTORY_DOC_VERSION, type DirectoryDoc } from '../core/identityDoc'
+import type { SiaClient } from '../core/siaClient'
 import {
   chunkForTxt,
   deriveDidDht,
@@ -30,12 +26,11 @@ const POINTER_PREFIX = '_dir'
  *  keeper↔browser convergence is the deferred multi-instance problem). Returns the
  *  Sia object id (for the caller to reclaim the superseded one) + URL. */
 export async function publishIdentityDoc(
-  sdk: Sdk,
+  client: SiaClient,
   appKeyBytes: Uint8Array,
   doc: DirectoryDoc,
 ): Promise<{ id: string; url: string }> {
-  const uploaded = await uploadItem(
-    sdk,
+  const uploaded = await client.uploadItem(
     new TextEncoder().encode(JSON.stringify(doc)),
   )
   const { keypair } = await deriveDidDht(appKeyBytes)
@@ -46,14 +41,14 @@ export async function publishIdentityDoc(
 /** Resolve an identity's directory document from its did:dht (or bare pkarr key).
  *  null when no `_dir` pointer is published / resolvable. */
 export async function resolveIdentityDoc(
-  sdk: Sdk,
+  client: SiaClient,
   didDht: string,
 ): Promise<DirectoryDoc | null> {
   const records = await resolveDidDht(didDht)
   const url = reassembleTxt(records, POINTER_PREFIX)
   if (!url) return null
 
-  const bytes = await downloadItem(sdk, url)
+  const bytes = await client.downloadItem(url)
   const doc = JSON.parse(new TextDecoder().decode(bytes))
   if (doc?.version !== DIRECTORY_DOC_VERSION) {
     throw new Error(

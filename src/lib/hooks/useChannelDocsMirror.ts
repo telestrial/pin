@@ -21,11 +21,11 @@ import { snapshotToSia } from '../docsMirror'
 const DEBOUNCE_MS = 2000
 
 export function useChannelDocsMirror() {
-  const sdk = useAuthStore((s) => s.sdk)
+  const client = useAuthStore((s) => s.client)
   const storedKeyHex = useAuthStore((s) => s.storedKeyHex)
 
   useEffect(() => {
-    if (!sdk || !storedKeyHex) return
+    if (!client || !storedKeyHex) return
 
     const appKeyBytes = Uint8Array.fromHex(storedKeyHex)
     let cancelled = false
@@ -80,7 +80,7 @@ export function useChannelDocsMirror() {
           }
         }
 
-        if (dirty) await snapshotToSia(sdk, appKeyBytes)
+        if (dirty) await snapshotToSia(client, appKeyBytes)
       } catch (e) {
         console.warn('channel docs-mirror failed:', e)
       } finally {
@@ -116,5 +116,5 @@ export function useChannelDocsMirror() {
       unsubFeed()
       unsubAuth()
     }
-  }, [sdk, storedKeyHex])
+  }, [client, storedKeyHex])
 }

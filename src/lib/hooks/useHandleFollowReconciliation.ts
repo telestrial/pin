@@ -24,9 +24,9 @@ let reconciled = false
 async function resolveAutoWatchCandidates(
   followedDidDht: string,
 ): Promise<SubscriptionRef[]> {
-  const sdk = useAuthStore.getState().sdk
-  if (!sdk) return []
-  const doc = await resolveIdentityDoc(sdk, followedDidDht).catch(() => null)
+  const client = useAuthStore.getState().client
+  if (!client) return []
+  const doc = await resolveIdentityDoc(client, followedDidDht).catch(() => null)
   if (!doc) return []
   const addedAt = new Date().toISOString()
   return doc.channels.map((c) => ({
@@ -106,10 +106,10 @@ export async function sweepHandleFollow(
 // being loaded + an sdk (needed to resolve identity-docs).
 export function useHandleFollowReconciliation() {
   const settingsLoaded = useAuthStore((s) => s.settingsLoaded)
-  const sdk = useAuthStore((s) => s.sdk)
+  const client = useAuthStore((s) => s.client)
 
   useEffect(() => {
-    if (!settingsLoaded || !sdk || reconciled) return
+    if (!settingsLoaded || !client || reconciled) return
     reconciled = true
 
     void (async () => {
@@ -132,5 +132,5 @@ export function useHandleFollowReconciliation() {
           )
       }
     })()
-  }, [settingsLoaded, sdk])
+  }, [settingsLoaded, client])
 }

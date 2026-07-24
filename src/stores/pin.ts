@@ -1,11 +1,7 @@
-import type { Sdk } from '@siafoundation/sia-storage'
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import {
-  type AccountSnapshot,
-  fetchAccountSnapshot,
-  pinItem,
-} from '../core/pin'
+import { type AccountSnapshot, pinItem } from '../core/pin'
+import type { SiaClient } from '../core/siaClient'
 import type { ItemRef } from '../core/types'
 import { APP_KEY } from '../lib/constants'
 import { useActionStore } from './actionQueue'
@@ -13,9 +9,9 @@ import { useActionStore } from './actionQueue'
 // At-most-one-in-flight account refresh. Coalesces bursts (e.g.
 // loop-until-clean repack with N batches, each calling refreshAccount)
 // into at most one follow-up round-trip after the current one settles —
-// so N batches produce 1 or 2 sdk.account() calls instead of N.
+// so N batches produce 1 or 2 accountSnapshot() calls instead of N.
 let accountRefreshInFlight: Promise<void> | null = null
-let accountRefreshPending: Sdk | null = null
+let accountRefreshPending: SiaClient | null = null
 
 export type PinnedItemRef = {
   item: ItemRef
@@ -59,8 +55,8 @@ type PinState = {
   // navigate-away keeps pinning and the sidebar keeps showing it. Not
   // persisted.
   channelPins: Record<string, ChannelPinJob>
-  pin: (sdk: Sdk, input: PinInput) => Promise<void>
-  unpin: (sdk: Sdk, itemURL: string) => Promise<void>
+  pin: (client: SiaClient, input: PinInput) => Promise<void>
+  unpin: (client: SiaClient, itemURL: string) => Promise<void>
   // Snapshot a whole channel: fan out pin() over every current item
   // (body + attachments). Reuses pin()'s dedup + drift-swap, so this
   // doubles as catch-up — already-held items are skipped, drifted ones
@@ -68,13 +64,16 @@ type PinState = {
   // item failing doesn't abort the batch; the count comes back so the
   // caller can surface "pinned 44 of 47."
   pinChannel: (
-    sdk: Sdk,
+    client: SiaClient,
     items: readonly ItemRef[],
     channel: PinInput['channel'],
   ) => Promise<ChannelFanoutResult>
   // Release a whole channel: unpin every item currently held for it.
-  unpinChannel: (sdk: Sdk, channelID: string) => Promise<ChannelFanoutResult>
-  refreshAccount: (sdk: Sdk) => Promise<void>
+  unpinChannel: (
+    client: SiaClient,
+    channelID: string,
+  ) => Promise<ChannelFanoutResult>
+  refreshAccount: (client: SiaClient) => Promise<void>
   isPinned: (itemURL: string) => boolean
   isPinning: (itemURL: string) => boolean
   // Used by the repack runner: swap the underlying object identity for one
@@ -144,7 +143,7 @@ export const usePinStore = create<PinState>()(
       account: null,
       pinning: new Set<string>(),
       channelPins: {},
-      pin: async (sdk, input) => {
+      pin: async (client, input) => {
         const url = input.item.itemURL
         // Drift case: an existing pin matches the same logical post
         // (same channelID + publishedAt) but at a different itemURL
@@ -171,7 +170,7 @@ export const usePinStore = create<PinState>()(
           // Unpin of the old (body + its attachments) is best-effort —
           // orphan sweep catches strays.
           const { objectID, attachmentObjectIDs } = await pinItem(
-            sdk,
+            client,
             input.item,
           )
           if (driftedFrom) {
@@ -207,7 +206,7 @@ export const usePinStore = create<PinState>()(
               : [...s.pinned, ref],
             pinning: next,
           }))
-          get().refreshAccount(sdk)
+          get().refreshAccount(client)
         } catch (e) {
           const next = new Set(get().pinning)
           next.delete(url)
@@ -215,7 +214,7 @@ export const usePinStore = create<PinState>()(
           throw e
         }
       },
-      unpin: async (sdk, itemURL) => {
+      unpin: async (client, itemURL) => {
         const ref = get().pinned.find((p) => p.item.itemURL === itemURL)
         if (!ref) return
         // Reference-aware: reclaim only the bytes no other pin still holds.
@@ -237,9 +236,9 @@ export const usePinStore = create<PinState>()(
           objectIDs: toDelete,
           label: `Reclaiming “${ref.item.title || 'item'}”`,
         })
-        get().refreshAccount(sdk)
+        get().refreshAccount(client)
       },
-      pinChannel: async (sdk, items, channel) => {
+      pinChannel: async (client, items, channel) => {
         const { channelID } = channel
         startChannelJob(set, {
           channelID,
@@ -252,7 +251,7 @@ export const usePinStore = create<PinState>()(
         try {
           for (const item of items) {
             try {
-              await get().pin(sdk, { item, channel })
+              await get().pin(client, { item, channel })
             } catch {
               failed++
             }
@@ -263,7 +262,7 @@ export const usePinStore = create<PinState>()(
         }
         return { total: items.length, failed }
       },
-      unpinChannel: async (sdk, channelID) => {
+      unpinChannel: async (client, channelID) => {
         const targets = get().pinned.filter(
           (p) => p.channel.channelID === channelID,
         )
@@ -278,7 +277,7 @@ export const usePinStore = create<PinState>()(
         try {
           for (const p of targets) {
             try {
-              await get().unpin(sdk, p.item.itemURL)
+              await get().unpin(client, p.item.itemURL)
             } catch {
               failed++
             }
@@ -289,14 +288,14 @@ export const usePinStore = create<PinState>()(
         }
         return { total: targets.length, failed }
       },
-      refreshAccount: async (sdk) => {
+      refreshAccount: async (client) => {
         if (accountRefreshInFlight) {
-          accountRefreshPending = sdk
+          accountRefreshPending = client
           return accountRefreshInFlight
         }
         accountRefreshInFlight = (async () => {
           try {
-            const account = await fetchAccountSnapshot(sdk)
+            const account = await client.accountSnapshot()
             set({ account })
           } catch {
             // best-effort

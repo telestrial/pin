@@ -21,7 +21,7 @@ export function CreateChannel({
   sidebar?: React.ReactNode
   rightSidebar?: React.ReactNode
 }) {
-  const sdk = useAuthStore((s) => s.sdk)
+  const client = useAuthStore((s) => s.client)
   const storedKeyHex = useAuthStore((s) => s.storedKeyHex)
   const addMyChannel = useAuthStore((s) => s.addMyChannel)
   const addSubscription = useAuthStore((s) => s.addSubscription)
@@ -80,7 +80,7 @@ export function CreateChannel({
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    if (!sdk || !storedKeyHex) return
+    if (!client || !storedKeyHex) return
     const trimmedName = name.trim()
     if (!trimmedName) return
     setSubmitting(true)
@@ -97,7 +97,7 @@ export function CreateChannel({
       // identity-doc use) up front: it's stamped into the manifest as the
       // iroh-world author identity AND carried in the shareable capability link.
       const { did } = await deriveDidDht(Uint8Array.fromHex(storedKeyHex))
-      const result = await createAndPublishChannel(sdk, {
+      const result = await createAndPublishChannel(client, {
         name: trimmedName,
         description: description.trim(),
         visibility,

@@ -15,14 +15,14 @@ export function useReachablePeople(): {
   loading: boolean
   error: string | null
 } {
-  const sdk = useAuthStore((s) => s.sdk)
+  const client = useAuthStore((s) => s.client)
   const storedKeyHex = useAuthStore((s) => s.storedKeyHex)
   const [reach, setReach] = useState<NetworkReach | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    if (!sdk || !storedKeyHex) return
+    if (!client || !storedKeyHex) return
     let cancelled = false
     void (async () => {
       const { did: me } = await deriveDidDht(Uint8Array.fromHex(storedKeyHex))
@@ -43,7 +43,7 @@ export function useReachablePeople(): {
       ]
       try {
         const res = await countReachablePeople(me, r0, {
-          fetch: makeReach(sdk).fetch,
+          fetch: makeReach(client).fetch,
         })
         if (cancelled) return
         cache.set(me, res)
@@ -57,7 +57,7 @@ export function useReachablePeople(): {
     return () => {
       cancelled = true
     }
-  }, [sdk, storedKeyHex])
+  }, [client, storedKeyHex])
 
   return { reach, loading, error }
 }

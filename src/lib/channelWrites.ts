@@ -8,7 +8,6 @@
 // are both live. This is where orchestration lives so core stays pure of the
 // pkarr/wasm layer and components/actions stay thin.
 
-import type { Sdk } from '@siafoundation/sia-storage'
 import {
   appendItemToChannel,
   type CreatedChannel,
@@ -20,6 +19,7 @@ import {
   removeAttachmentFromItem,
   unpinChannel,
 } from '../core/channels'
+import type { SiaClient } from '../core/siaClient'
 import type { ChannelManifest, ItemRef } from '../core/types'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
@@ -36,12 +36,12 @@ type Channel = { channelID: string; channelKey: string }
 // authoritative for single-device authoring and avoids a DHT round-trip; fall
 // back to resolving the locator when it's not cached (cold start / new device).
 async function loadCurrentManifest(
-  sdk: Sdk,
+  client: SiaClient,
   channel: Channel,
 ): Promise<ChannelManifest> {
   const cached = useFeedStore.getState().manifests[channel.channelID]
   if (cached) return cached
-  const resolved = await resolveChannelViaLocator(sdk, channel.channelKey)
+  const resolved = await resolveChannelViaLocator(client, channel.channelKey)
   if (!resolved) {
     throw new Error(`Channel ${channel.channelID} not found (no locator)`)
   }
@@ -62,12 +62,12 @@ function reflectInFeed(channelID: string, manifest: ChannelManifest): void {
 }
 
 export async function createAndPublishChannel(
-  sdk: Sdk,
+  client: SiaClient,
   args: Parameters<typeof createChannel>[1],
 ): Promise<CreatedChannel> {
-  const created = await createChannel(sdk, args)
+  const created = await createChannel(client, args)
   await commitChannelManifest(
-    sdk,
+    client,
     created.channelID,
     created.channelKey,
     created.manifest,
@@ -77,14 +77,14 @@ export async function createAndPublishChannel(
 }
 
 export async function saveChannelEdits(
-  sdk: Sdk,
+  client: SiaClient,
   channel: Channel,
   patch: EditChannelPatch,
 ): Promise<{ manifest: ChannelManifest; reclaimURLs: string[] }> {
-  const current = await loadCurrentManifest(sdk, channel)
-  const { manifest, reclaimURLs } = await editChannel(sdk, current, patch)
+  const current = await loadCurrentManifest(client, channel)
+  const { manifest, reclaimURLs } = await editChannel(client, current, patch)
   await commitChannelManifest(
-    sdk,
+    client,
     channel.channelID,
     channel.channelKey,
     manifest,
@@ -94,14 +94,14 @@ export async function saveChannelEdits(
 }
 
 export async function publishItemToChannel(
-  sdk: Sdk,
+  client: SiaClient,
   channel: Channel,
   itemRef: ItemRef,
 ): Promise<ChannelManifest> {
-  const current = await loadCurrentManifest(sdk, channel)
+  const current = await loadCurrentManifest(client, channel)
   const manifest = appendItemToChannel(current, itemRef)
   await commitChannelManifest(
-    sdk,
+    client,
     channel.channelID,
     channel.channelKey,
     manifest,
@@ -111,7 +111,7 @@ export async function publishItemToChannel(
 }
 
 export async function editPublishedItem(
-  sdk: Sdk,
+  client: SiaClient,
   channel: Channel,
   oldItemID: string,
   newItem: ItemRef,
@@ -121,7 +121,7 @@ export async function editPublishedItem(
   item: ItemRef
   orphanedObjectIDs: string[]
 }> {
-  const current = await loadCurrentManifest(sdk, channel)
+  const current = await loadCurrentManifest(client, channel)
   const result = editItem(
     current,
     oldItemID,
@@ -129,7 +129,7 @@ export async function editPublishedItem(
     removedAttachmentObjectIDs,
   )
   await commitChannelManifest(
-    sdk,
+    client,
     channel.channelID,
     channel.channelKey,
     result.manifest,
@@ -139,15 +139,15 @@ export async function editPublishedItem(
 }
 
 export async function deleteItemFromChannel(
-  sdk: Sdk,
+  client: SiaClient,
   channel: Channel,
   itemID: string,
   protectedObjectIDs?: ReadonlySet<string>,
 ): Promise<{ manifest: ChannelManifest; orphanedObjectIDs: string[] }> {
-  const current = await loadCurrentManifest(sdk, channel)
+  const current = await loadCurrentManifest(client, channel)
   const result = deletePublishedItem(current, itemID, protectedObjectIDs)
   await commitChannelManifest(
-    sdk,
+    client,
     channel.channelID,
     channel.channelKey,
     result.manifest,
@@ -157,7 +157,7 @@ export async function deleteItemFromChannel(
 }
 
 export async function removeAttachment(
-  sdk: Sdk,
+  client: SiaClient,
   channel: Channel,
   itemID: string,
   attachmentURL: string,
@@ -167,7 +167,7 @@ export async function removeAttachment(
   item: ItemRef
   orphanedObjectIDs: string[]
 }> {
-  const current = await loadCurrentManifest(sdk, channel)
+  const current = await loadCurrentManifest(client, channel)
   const result = removeAttachmentFromItem(
     current,
     itemID,
@@ -175,7 +175,7 @@ export async function removeAttachment(
     protectedObjectIDs,
   )
   await commitChannelManifest(
-    sdk,
+    client,
     channel.channelID,
     channel.channelKey,
     result.manifest,
@@ -191,13 +191,13 @@ export async function removeAttachment(
 // object (the locator target) is included, and its pkarr record expires by TTL
 // once we stop republishing it.
 export async function retractChannel(
-  sdk: Sdk,
+  client: SiaClient,
   channel: Channel,
   protectedObjectIDs?: ReadonlySet<string>,
 ): Promise<{ objectIDs: string[]; urls: string[] }> {
   let current: ChannelManifest | null = null
   try {
-    current = await loadCurrentManifest(sdk, channel)
+    current = await loadCurrentManifest(client, channel)
   } catch {
     // Locator unresolvable — treat as already gone; enumerate nothing.
   }

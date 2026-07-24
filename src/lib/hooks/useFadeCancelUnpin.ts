@@ -11,7 +11,7 @@ const DEFAULT_FADE_MS = 1500
 // caller can restore opacity. On unpin failure the URL is also pulled
 // out of the set, giving the user a chance to retry.
 export function useFadeCancelUnpin(opts?: { fadeMs?: number }) {
-  const sdk = useAuthStore((s) => s.sdk)
+  const client = useAuthStore((s) => s.client)
   const unpin = usePinStore((s) => s.unpin)
   const addToast = useToastStore((s) => s.addToast)
 
@@ -30,9 +30,9 @@ export function useFadeCancelUnpin(opts?: { fadeMs?: number }) {
     })
     const id = setTimeout(async () => {
       removeTimers.current.delete(url)
-      if (!sdk) return
+      if (!client) return
       try {
-        await unpin(sdk, url)
+        await unpin(client, url)
       } catch (err) {
         // Restore opacity on failure so the user can retry.
         setRemovingURLs((prev) => {

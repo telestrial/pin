@@ -1,4 +1,3 @@
-import type { Sdk } from '@siafoundation/sia-storage'
 import { useEffect } from 'react'
 import { resolveChannelImageIDs } from '../../core/channelImages'
 import {
@@ -6,6 +5,7 @@ import {
   runRepackBatch,
   type ScopeRef,
 } from '../../core/repack'
+import type { SiaClient } from '../../core/siaClient'
 import { isValidAttachment } from '../../core/types'
 import { checkpointedObjectIDs, useActionStore } from '../../stores/actionQueue'
 import { useAuthStore } from '../../stores/auth'
@@ -30,7 +30,7 @@ import { LIBRARY_CHANNEL } from '../pinUpload'
 // store the cover's object ID directly. Without this step, cover-art
 // slabs are invisible to the repacker and stay in their own dedicated
 // 40 MiB slabs forever.
-async function buildScope(sdk: Sdk): Promise<ScopeRef[]> {
+async function buildScope(client: SiaClient): Promise<ScopeRef[]> {
   const auth = useAuthStore.getState()
   const feed = useFeedStore.getState()
   const pin = usePinStore.getState()
@@ -94,7 +94,7 @@ async function buildScope(sdk: Sdk): Promise<ScopeRef[]> {
   // Channel images (avatar + cover) per owned channel — resolution failures
   // are best-effort, missing images just don't get repacked this pass.
   const images = await resolveChannelImageIDs(
-    sdk,
+    client,
     auth.myChannels,
     feed.manifests,
   )
@@ -138,10 +138,10 @@ async function buildScope(sdk: Sdk): Promise<ScopeRef[]> {
 }
 
 export function useRepackRunner() {
-  const sdk = useAuthStore((s) => s.sdk)
+  const client = useAuthStore((s) => s.client)
 
   useEffect(() => {
-    if (!sdk) return
+    if (!client) return
 
     // Channel manifest I/O over the locator: prefer the local cache for the
     // read (fresh + no DHT round-trip), commit the rewrite to the locator.
@@ -149,12 +149,12 @@ export function useRepackRunner() {
       readManifest: async (channelID, channelKey) => {
         const cached = useFeedStore.getState().manifests[channelID]
         if (cached) return cached
-        const resolved = await resolveChannelViaLocator(sdk, channelKey)
+        const resolved = await resolveChannelViaLocator(client, channelKey)
         if (!resolved) throw new Error(`repack: no locator for ${channelID}`)
         return resolved
       },
       commitManifest: (channelID, channelKey, manifest) =>
-        commitChannelManifest(sdk, channelID, channelKey, manifest),
+        commitChannelManifest(client, channelID, channelKey, manifest),
     }
 
     let running = false
@@ -174,12 +174,12 @@ export function useRepackRunner() {
         // there's nothing worth doing.
         while (!stopped) {
           const auth = useAuthStore.getState()
-          const scope = await buildScope(sdk)
+          const scope = await buildScope(client)
           if (scope.length === 0) break
 
           let result: Awaited<ReturnType<typeof runRepackBatch>>
           try {
-            result = await runRepackBatch(sdk, scope, channelIO)
+            result = await runRepackBatch(client, scope, channelIO)
           } catch (e) {
             // One batch failing shouldn't kill the runner. Log and bail
             // out of this tick; next pin event will try again.
@@ -203,7 +203,7 @@ export function useRepackRunner() {
 
           // Refresh account snapshot so the storage bar reflects the
           // freed pinnedData.
-          usePinStore.getState().refreshAccount(sdk)
+          usePinStore.getState().refreshAccount(client)
 
           useToastStore
             .getState()
@@ -270,5 +270,5 @@ export function useRepackRunner() {
       unsubQueue()
       unsubPin()
     }
-  }, [sdk])
+  }, [client])
 }

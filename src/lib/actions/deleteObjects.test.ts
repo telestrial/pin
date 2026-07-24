@@ -1,5 +1,5 @@
-import type { Sdk } from '@siafoundation/sia-storage'
 import { describe, expect, it, vi } from 'vitest'
+import type { SiaClient } from '../../core/siaClient'
 import type { DeleteObjectsAction } from '../../stores/actionQueue'
 import { runDeleteObjects } from './deleteObjects'
 
@@ -23,60 +23,71 @@ function action(intent: {
   }
 }
 
-function fakeSdk(
+function fakeClient(
   over: Partial<
-    Record<'deleteObject' | 'sharedObject' | 'pruneSlabs', unknown>
+    Record<'deleteObject' | 'resolveObjectID' | 'pruneSlabs', unknown>
   > = {},
 ) {
   const deleteObject = vi.fn().mockResolvedValue(undefined)
-  const sharedObject = vi.fn().mockResolvedValue({ id: () => 'resolved-id' })
+  const resolveObjectID = vi.fn().mockResolvedValue('resolved-id')
   const pruneSlabs = vi.fn().mockResolvedValue(undefined)
   return {
-    sdk: { deleteObject, sharedObject, pruneSlabs, ...over } as unknown as Sdk,
+    client: {
+      deleteObject,
+      resolveObjectID,
+      pruneSlabs,
+      ...over,
+    } as unknown as SiaClient,
     deleteObject,
-    sharedObject,
+    resolveObjectID,
     pruneSlabs,
   }
 }
 
 describe('runDeleteObjects', () => {
   it('deletes each objectID and marks it done', async () => {
-    const { sdk, deleteObject } = fakeSdk()
+    const { client, deleteObject } = fakeClient()
     const markDone = vi.fn()
-    await runDeleteObjects(action({ objectIDs: ['a', 'b'] }), { sdk, markDone })
+    await runDeleteObjects(action({ objectIDs: ['a', 'b'] }), {
+      client,
+      markDone,
+    })
     expect(deleteObject.mock.calls.map((c) => c[0])).toEqual(['a', 'b'])
     expect(markDone.mock.calls.map((c) => c[0])).toEqual(['a', 'b'])
   })
 
   it('resolves a URL then deletes its object', async () => {
-    const { sdk, deleteObject, sharedObject } = fakeSdk()
+    const { client, deleteObject, resolveObjectID } = fakeClient()
     const markDone = vi.fn()
-    await runDeleteObjects(action({ urls: ['sia://x#k=1'] }), { sdk, markDone })
-    expect(sharedObject).toHaveBeenCalledWith('sia://x#k=1')
+    await runDeleteObjects(action({ urls: ['sia://x#k=1'] }), {
+      client,
+      markDone,
+    })
+    expect(resolveObjectID).toHaveBeenCalledWith('sia://x#k=1')
     expect(deleteObject).toHaveBeenCalledWith('resolved-id')
     expect(markDone).toHaveBeenCalledWith('sia://x#k=1')
   })
 
   it('treats an already-gone object as success', async () => {
-    const { sdk } = fakeSdk({
+    const { client } = fakeClient({
       deleteObject: vi.fn().mockRejectedValue(new Error('object not found')),
     })
     const markDone = vi.fn()
     await expect(
-      runDeleteObjects(action({ objectIDs: ['gone'] }), { sdk, markDone }),
+      runDeleteObjects(action({ objectIDs: ['gone'] }), { client, markDone }),
     ).resolves.toBeUndefined()
     expect(markDone).toHaveBeenCalledWith('gone')
   })
 
   it('marks an unresolvable URL done without deleting', async () => {
     const deleteObject = vi.fn().mockResolvedValue(undefined)
-    const { sdk } = fakeSdk({
+    const { client } = fakeClient({
       deleteObject,
-      sharedObject: vi.fn().mockRejectedValue(new Error('could not locate')),
+      resolveObjectID: vi.fn().mockRejectedValue(new Error('could not locate')),
     })
     const markDone = vi.fn()
     await runDeleteObjects(action({ urls: ['sia://gone#k=1'] }), {
-      sdk,
+      client,
       markDone,
     })
     expect(deleteObject).not.toHaveBeenCalled()
@@ -84,10 +95,10 @@ describe('runDeleteObjects', () => {
   })
 
   it('skips keys already recorded done (resume)', async () => {
-    const { sdk, deleteObject } = fakeSdk()
+    const { client, deleteObject } = fakeClient()
     const markDone = vi.fn()
     await runDeleteObjects(action({ objectIDs: ['a', 'b'], done: ['a'] }), {
-      sdk,
+      client,
       markDone,
     })
     expect(deleteObject.mock.calls.map((c) => c[0])).toEqual(['b'])
@@ -95,29 +106,29 @@ describe('runDeleteObjects', () => {
   })
 
   it('rethrows a non-not-found error and leaves the key unmarked', async () => {
-    const { sdk } = fakeSdk({
+    const { client } = fakeClient({
       deleteObject: vi.fn().mockRejectedValue(new Error('network down')),
     })
     const markDone = vi.fn()
     await expect(
-      runDeleteObjects(action({ objectIDs: ['a'] }), { sdk, markDone }),
+      runDeleteObjects(action({ objectIDs: ['a'] }), { client, markDone }),
     ).rejects.toThrow('network down')
     expect(markDone).not.toHaveBeenCalled()
   })
 
   it('prunes slabs after deleting (reclaims the emptied capacity)', async () => {
-    const { sdk, pruneSlabs } = fakeSdk()
+    const { client, pruneSlabs } = fakeClient()
     await runDeleteObjects(action({ objectIDs: ['a', 'b'] }), {
-      sdk,
+      client,
       markDone: vi.fn(),
     })
     expect(pruneSlabs).toHaveBeenCalledTimes(1)
   })
 
   it('does not prune on a no-op resume (nothing deleted this run)', async () => {
-    const { sdk, pruneSlabs } = fakeSdk()
+    const { client, pruneSlabs } = fakeClient()
     await runDeleteObjects(action({ objectIDs: ['a'], done: ['a'] }), {
-      sdk,
+      client,
       markDone: vi.fn(),
     })
     expect(pruneSlabs).not.toHaveBeenCalled()

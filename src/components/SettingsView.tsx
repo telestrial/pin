@@ -6,18 +6,18 @@ import { CopyButton } from './ui/CopyButton'
 // Settings page (rendered inside a FormCard by Home). The author public key
 // and the danger-zone full reset.
 export function SettingsView() {
-  const sdk = useAuthStore((s) => s.sdk)
+  const client = useAuthStore((s) => s.client)
   const theme = useAuthStore((s) => s.theme)
   const setTheme = useAuthStore((s) => s.setTheme)
   const [resetting, setResetting] = useState(false)
 
   const publicKey = useMemo(() => {
     try {
-      return sdk?.appKey().publicKey() ?? null
+      return client?.appKeyPublicKey() ?? null
     } catch {
       return null
     }
-  }, [sdk])
+  }, [client])
 
   const handleFullReset = async () => {
     const confirmation = window.prompt(
@@ -27,9 +27,9 @@ export function SettingsView() {
     )
     if (confirmation !== 'RESET') return
     setResetting(true)
-    const { sdk } = useAuthStore.getState()
+    const { client } = useAuthStore.getState()
     // fullReset reloads the page on completion — nothing after this runs.
-    await fullReset({ sdk })
+    await fullReset({ client })
   }
 
   return (

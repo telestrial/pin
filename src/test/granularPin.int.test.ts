@@ -17,7 +17,6 @@ vi.mock('../lib/pkarr', async () =>
   (await import('./fakeModules')).fakePkarrModule(),
 )
 
-import type { Sdk } from '@siafoundation/sia-storage'
 import {
   appendItemToChannel,
   buildItemRef,
@@ -26,7 +25,6 @@ import {
   removeAttachmentFromItem,
   unpinChannel,
 } from '../core/channels'
-import { uploadItem } from '../core/sia'
 import type { AttachmentRef, ChannelManifest, ItemRef } from '../core/types'
 import { runDeleteObjects } from '../lib/actions/deleteObjects'
 import type { DeleteObjectsAction } from '../stores/actionQueue'
@@ -48,12 +46,12 @@ async function publishPostWithAttachments(
   bodyObjectID: string
   attachmentObjectIDs: string[]
 }> {
-  const sdk = author.sdk as unknown as Sdk
+  const client = author.client
 
   const attachments: AttachmentRef[] = []
   const attachmentObjectIDs: string[] = []
   for (const f of files) {
-    const up = await uploadItem(sdk, new Uint8Array(f.size))
+    const up = await client.uploadItem(new Uint8Array(f.size))
     attachments.push({
       url: up.itemURL,
       mimeType: f.mime,
@@ -65,7 +63,7 @@ async function publishPostWithAttachments(
   }
 
   const bytes = new TextEncoder().encode(body)
-  const uploaded = await uploadItem(sdk, bytes)
+  const uploaded = await client.uploadItem(bytes)
   const item: ItemRef = {
     ...buildItemRef(uploaded, {
       type: 'text',
@@ -97,7 +95,7 @@ describe('integration: author-side granular pinning', () => {
     })
     // Build the channel WITHOUT committing a locator, so alice's scope holds
     // only the content objects the enumeration tests assert on.
-    const channel = await createChannel(alice.sdk as unknown as Sdk, {
+    const channel = await createChannel(alice.client, {
       name: "Alice's voice",
       description: '',
     })
@@ -147,7 +145,7 @@ describe('integration: author-side granular pinning', () => {
 
     const { orphanedObjectIDs } = deletePublishedItem(manifest, item.id)
     await runDeleteObjects(cleanup(orphanedObjectIDs), {
-      sdk: alice.sdk as unknown as Sdk,
+      client: alice.client,
       markDone: () => {},
     })
 
@@ -246,7 +244,7 @@ describe('integration: author-side granular pinning', () => {
     )
     const { objectIDs } = unpinChannel(manifest)
     await runDeleteObjects(cleanup(objectIDs), {
-      sdk: alice.sdk as unknown as Sdk,
+      client: alice.client,
       markDone: () => {},
     })
     expect(app.world.scopeOf('did:plc:alice').size).toBe(0)

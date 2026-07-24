@@ -6,6 +6,7 @@ import {
   type ProfilePatch,
   type ProfileRecord,
 } from '../core/profile'
+import { makeWasmSiaClient, type SiaClient } from '../core/siaClient'
 import type {
   FollowEdge,
   OwnedChannel,
@@ -33,7 +34,7 @@ export type FeedSortOrder = 'oldest' | 'newest'
 export type { ThemeMode }
 
 type AuthState = {
-  sdk: Sdk | null
+  client: SiaClient | null
   storedKeyHex: string | null
   indexerURL: string
   step: AuthStep
@@ -116,7 +117,7 @@ type AuthState = {
 export const useAuthStore = create<AuthState>()(
   persist(
     (set) => ({
-      sdk: null,
+      client: null,
       storedKeyHex: null,
       indexerURL: '',
       step: 'loading',
@@ -135,7 +136,12 @@ export const useAuthStore = create<AuthState>()(
       settingsLoaded: false,
       settingsDirty: false,
       locked: false,
-      setSdk: (sdk) => set({ sdk, step: 'connected', error: null }),
+      setSdk: (sdk) =>
+        set({
+          client: makeWasmSiaClient(sdk),
+          step: 'connected',
+          error: null,
+        }),
       setStep: (step) => set({ step, error: null }),
       setError: (error) => set({ error }),
       setStoredKeyHex: (hex) => set({ storedKeyHex: hex }),
@@ -254,7 +260,7 @@ export const useAuthStore = create<AuthState>()(
         usePinStore.getState().reset()
         useActionStore.getState().reset()
         set({
-          sdk: null,
+          client: null,
           storedKeyHex: null,
           step: 'loading',
           error: null,

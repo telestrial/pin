@@ -1,4 +1,4 @@
-import type { Sdk } from '@siafoundation/sia-storage'
+import type { SiaClient } from './siaClient'
 import type { ChannelManifest } from './types'
 
 export type ChannelImageKind = 'avatar' | 'cover'
@@ -23,7 +23,7 @@ export type ChannelImageResolveResult = {
 // inspector continue without the failed image). Resolves BOTH images per
 // channel and returns a flat list.
 export async function resolveChannelImageIDs(
-  sdk: Sdk,
+  client: SiaClient,
   channels: ReadonlyArray<{ channelID: string }>,
   manifests: Record<string, ChannelManifest>,
 ): Promise<ChannelImageResolveResult> {
@@ -43,11 +43,11 @@ export async function resolveChannelImageIDs(
         const image = manifest[kind]
         if (!image) continue
         try {
-          const obj = await sdk.sharedObject(image.itemURL)
+          const objectID = await client.resolveObjectID(image.itemURL)
           resolved.push({
             channelID: channel.channelID,
             kind,
-            objectID: obj.id(),
+            objectID,
             itemURL: image.itemURL,
           })
         } catch (error) {

@@ -1,7 +1,7 @@
-import type { Sdk } from '@siafoundation/sia-storage'
 import { useEffect, useRef } from 'react'
 import { decryptSettings, deriveSettingsKey } from '../../core/crypto'
 import { type DispatchSettings, SETTINGS_VERSION } from '../../core/settings'
+import type { SiaClient } from '../../core/siaClient'
 import { useAuthStore } from '../../stores/auth'
 import { readRecordFromSnapshot } from '../docsMirror'
 import { flushSettingsMirror } from './useSettingsDocsMirror'
@@ -30,12 +30,12 @@ export async function flushSettingsBestEffort(): Promise<void> {
 // AppKey alone, so a session-less did:dht-native user rehydrates from Sia just
 // the same.
 export function useSettingsSync() {
-  const sdk = useAuthStore((s) => s.sdk)
+  const client = useAuthStore((s) => s.client)
   const storedKeyHex = useAuthStore((s) => s.storedKeyHex)
   const settingsKeyRef = useRef<Uint8Array | null>(null)
 
   useEffect(() => {
-    if (!sdk || !storedKeyHex) return
+    if (!client || !storedKeyHex) return
     if (useAuthStore.getState().settingsLoaded) return
 
     let cancelled = false
@@ -55,7 +55,7 @@ export function useSettingsSync() {
         }
 
         const snap = await readSettingsFromSnapshot(
-          sdk,
+          client,
           appKeyBytes,
           key,
         ).catch(() => null)
@@ -88,19 +88,19 @@ export function useSettingsSync() {
     return () => {
       cancelled = true
     }
-  }, [sdk, storedKeyHex])
+  }, [client, storedKeyHex])
 }
 
 // Read + decrypt settings/self straight from the latest Sia snapshot (the doc's
 // durable projection), without the pin-core engine. Returns null if there's no
 // snapshot, no settings entry, or a version mismatch.
 async function readSettingsFromSnapshot(
-  sdk: Sdk,
+  client: SiaClient,
   appKeyBytes: Uint8Array,
   key: Uint8Array,
 ): Promise<DispatchSettings | null> {
   const bytes = await readRecordFromSnapshot(
-    sdk,
+    client,
     appKeyBytes,
     'settings',
     'self',

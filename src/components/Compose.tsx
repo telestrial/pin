@@ -69,7 +69,7 @@ export function Compose({
   channels: OwnedChannel[]
   editing?: ComposeEditMode
 }) {
-  const sdk = useAuthStore((s) => s.sdk)
+  const client = useAuthStore((s) => s.client)
   const enqueue = useActionStore((s) => s.enqueuePublish)
   const addToast = useToastStore((s) => s.addToast)
   const armedItem = useComposeStore((s) => s.armedItem)
@@ -373,7 +373,7 @@ export function Compose({
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    if (!sdk || !canSubmit) return
+    if (!client || !canSubmit) return
     setError(null)
     const attachmentSources: AttachmentSource[] = attachments.map((a) =>
       a.source === 'url'

@@ -1,4 +1,5 @@
 import type { Sdk } from '@siafoundation/sia-storage'
+import type { SiaClient } from './siaClient'
 import { type ItemRef, isValidAttachment } from './types'
 
 export type AccountSnapshot = {
@@ -40,14 +41,14 @@ export async function unpinItemBytes(
 // attachment propagates too, and the already-pinned body becomes a stray the
 // orphan sweep reclaims after its age gate — a retry re-pins idempotently.
 export async function pinItem(
-  sdk: Sdk,
+  client: SiaClient,
   item: ItemRef,
 ): Promise<{ objectID: string; attachmentObjectIDs: string[] }> {
-  const { objectID } = await pinItemBytes(sdk, item.itemURL)
+  const { objectID } = await client.pinFromShareURL(item.itemURL)
   const attachmentObjectIDs: string[] = []
   for (const att of item.attachments ?? []) {
     if (!isValidAttachment(att)) continue
-    const { objectID: aid } = await pinItemBytes(sdk, att.url)
+    const { objectID: aid } = await client.pinFromShareURL(att.url)
     attachmentObjectIDs.push(aid)
   }
   return { objectID, attachmentObjectIDs }

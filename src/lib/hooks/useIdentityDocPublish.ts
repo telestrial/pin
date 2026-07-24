@@ -40,11 +40,11 @@ function writePointerId(id: string): void {
 }
 
 export function useIdentityDocPublish() {
-  const sdk = useAuthStore((s) => s.sdk)
+  const client = useAuthStore((s) => s.client)
   const storedKeyHex = useAuthStore((s) => s.storedKeyHex)
 
   useEffect(() => {
-    if (!sdk || !storedKeyHex) return
+    if (!client || !storedKeyHex) return
     const appKeyBytes = Uint8Array.fromHex(storedKeyHex)
 
     let cancelled = false
@@ -102,12 +102,12 @@ export function useIdentityDocPublish() {
         if (fingerprint === lastFingerprint) return
 
         const prevId = readPointerId()
-        const { id } = await publishIdentityDoc(sdk, appKeyBytes, doc)
+        const { id } = await publishIdentityDoc(client, appKeyBytes, doc)
         writePointerId(id)
         if (prevId && prevId !== id) {
-          await sdk
+          await client
             .deleteObject(prevId)
-            .then(() => sdk.pruneSlabs())
+            .then(() => client.pruneSlabs())
             .catch(() => {})
         }
         lastFingerprint = fingerprint
@@ -152,5 +152,5 @@ export function useIdentityDocPublish() {
       unsubFeed()
       unsubAuth()
     }
-  }, [sdk, storedKeyHex])
+  }, [client, storedKeyHex])
 }

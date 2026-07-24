@@ -10,7 +10,6 @@
 // namespace and Pin's is per-channel K, so obscure channels stay unenumerable — you
 // can't derive a channel's locator without its K.
 
-import type { Sdk } from '@siafoundation/sia-storage'
 import {
   channelKeyFromBase64,
   decryptForChannel,
@@ -18,7 +17,7 @@ import {
   encryptForChannel,
 } from '../core/crypto'
 import type { FetchChannel } from '../core/feed'
-import { downloadItem, uploadItem } from '../core/sia'
+import type { SiaClient } from '../core/siaClient'
 import { CHANNEL_MANIFEST_VERSION, type ChannelManifest } from '../core/types'
 import {
   chunkForTxt,
@@ -75,13 +74,13 @@ export function clearLocatorObjectPointer(channelID: string): void {
  *  Returns the locator key + the Sia object's id/URL. The caller (the publish hook)
  *  deletes the superseded object using the returned id. */
 export async function publishChannelLocator(
-  sdk: Sdk,
+  client: SiaClient,
   channelKeyB64: string,
   manifest: ChannelManifest,
 ): Promise<{ locatorKey: string; id: string; url: string }> {
   const kBytes = channelKeyFromBase64(channelKeyB64)
   const ciphertext = await encryptForChannel(kBytes, JSON.stringify(manifest))
-  const uploaded = await uploadItem(sdk, new TextEncoder().encode(ciphertext))
+  const uploaded = await client.uploadItem(new TextEncoder().encode(ciphertext))
 
   const { keypair, publicKey } = await identityFromSeed(
     await deriveChannelLocatorSeed(kBytes),
@@ -94,7 +93,7 @@ export async function publishChannelLocator(
  *  Derive the locator → resolve the Sia pointer off the DHT → download + decrypt
  *  with K. Returns null when the locator isn't published / resolvable. */
 export async function resolveChannelViaLocator(
-  sdk: Sdk,
+  client: SiaClient,
   channelKeyB64: string,
 ): Promise<ChannelManifest | null> {
   const kBytes = channelKeyFromBase64(channelKeyB64)
@@ -105,7 +104,7 @@ export async function resolveChannelViaLocator(
   const url = reassembleTxt(records, POINTER_PREFIX)
   if (!url) return null
 
-  const bytes = await downloadItem(sdk, url)
+  const bytes = await client.downloadItem(url)
   const plaintext = await decryptForChannel(
     kBytes,
     new TextDecoder().decode(bytes),
@@ -126,9 +125,9 @@ export async function resolveChannelViaLocator(
  *  no longer has anything to serve). The sdk is closed over; the `FetchChannel`
  *  signature keeps its author-identifier arg (unused here) so this drops in
  *  wherever the feed's fetcher is injected. */
-export function makeLocatorReader(sdk: Sdk): FetchChannel {
+export function makeLocatorReader(client: SiaClient): FetchChannel {
   return async (_authorHandleOrDID, channelID, channelKey) => {
-    const manifest = await resolveChannelViaLocator(sdk, channelKey)
+    const manifest = await resolveChannelViaLocator(client, channelKey)
     if (!manifest) {
       throw new Error(`Channel ${channelID} not resolvable (no locator)`)
     }
@@ -149,13 +148,17 @@ export function makeLocatorReader(sdk: Sdk): FetchChannel {
  *  up-to-date-within-one-commit reader can still be pointed at). Bounded to two
  *  live manifest objects per channel. */
 export async function commitChannelManifest(
-  sdk: Sdk,
+  client: SiaClient,
   channelID: string,
   channelKeyB64: string,
   manifest: ChannelManifest,
 ): Promise<void> {
   const prev = readLocatorObjectPointer(channelID)
-  const { id, url } = await publishChannelLocator(sdk, channelKeyB64, manifest)
+  const { id, url } = await publishChannelLocator(
+    client,
+    channelKeyB64,
+    manifest,
+  )
   // New current = id; keep prev.id as the grace generation; reclaim prev.olderId.
   writeLocatorObjectPointer(channelID, {
     id,
@@ -164,9 +167,9 @@ export async function commitChannelManifest(
   })
   const toReclaim = prev?.olderId
   if (toReclaim && toReclaim !== id && toReclaim !== prev?.id) {
-    await sdk
+    await client
       .deleteObject(toReclaim)
-      .then(() => sdk.pruneSlabs())
+      .then(() => client.pruneSlabs())
       .catch(() => {})
   }
 }

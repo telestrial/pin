@@ -59,7 +59,7 @@ export function PinSidebar({
   onItemClick?: (ref: PinnedItemRef) => void
   onStorageClick?: () => void
 }) {
-  const sdk = useAuthStore((s) => s.sdk)
+  const client = useAuthStore((s) => s.client)
   const myChannels = useAuthStore((s) => s.myChannels)
   const account = usePinStore((s) => s.account)
   const pinned = usePinStore((s) => s.pinned)
@@ -512,7 +512,7 @@ export function PinSidebar({
                       <button
                         type="button"
                         onClick={(e) => handlePinIconClick(e, url)}
-                        disabled={busy || !sdk}
+                        disabled={busy || !client}
                         title={removing ? 'Click to undo · Pin back' : 'Unpin'}
                         aria-label={
                           removing

@@ -1,11 +1,10 @@
-import type { Sdk } from '@siafoundation/sia-storage'
 import {
   channelKeyFromBase64,
   channelKeyToBase64,
   deriveChannelID,
   generateChannelKey,
 } from './crypto'
-import { downloadItem, uploadItem } from './sia'
+import type { SiaClient } from './siaClient'
 import {
   type AttachmentRef,
   CHANNEL_MANIFEST_VERSION,
@@ -39,11 +38,11 @@ function survivingObjectIDs(
 // Upload an optional channel image (avatar or cover) to Sia and shape it into
 // a ChannelImage ref. Shared by createChannel and editChannel.
 async function uploadChannelImage(
-  sdk: Sdk,
+  client: SiaClient,
   img?: { bytes: Uint8Array; mimeType: string },
 ): Promise<ChannelImage | undefined> {
   if (!img) return undefined
-  const uploaded = await uploadItem(sdk, img.bytes)
+  const uploaded = await client.uploadItem(img.bytes)
   return {
     itemURL: uploaded.itemURL,
     mimeType: img.mimeType,
@@ -93,7 +92,7 @@ export type ItemPayload = {
 }
 
 export async function createChannel(
-  sdk: Sdk,
+  client: SiaClient,
   args: {
     name: string
     description: string
@@ -114,14 +113,14 @@ export async function createChannel(
   const channelKey = channelKeyToBase64(keyBytes)
   const channelID = await deriveChannelID(keyBytes)
 
-  const avatar = await uploadChannelImage(sdk, args.avatarImage)
-  const cover = await uploadChannelImage(sdk, args.coverImage)
+  const avatar = await uploadChannelImage(client, args.avatarImage)
+  const cover = await uploadChannelImage(client, args.coverImage)
 
   const manifest: ChannelManifest = {
     version: CHANNEL_MANIFEST_VERSION,
     name: args.name,
     description: args.description,
-    authorPubkey: sdk.appKey().publicKey(),
+    authorPubkey: client.appKeyPublicKey(),
     authorDidDht: args.authorDidDht,
     publishedAt: new Date().toISOString(),
     visibility: args.visibility ?? 'public',
@@ -146,7 +145,7 @@ export type EditChannelPatch = {
 }
 
 export async function editChannel(
-  sdk: Sdk,
+  client: SiaClient,
   current: ChannelManifest,
   patch: EditChannelPatch,
 ): Promise<{ manifest: ChannelManifest; reclaimURLs: string[] }> {
@@ -154,14 +153,14 @@ export async function editChannel(
   if (patch.removeAvatar) {
     avatar = undefined
   } else if (patch.avatarImage) {
-    avatar = await uploadChannelImage(sdk, patch.avatarImage)
+    avatar = await uploadChannelImage(client, patch.avatarImage)
   }
 
   let cover: ChannelImage | undefined = current.cover
   if (patch.removeCover) {
     cover = undefined
   } else if (patch.coverImage) {
-    cover = await uploadChannelImage(sdk, patch.coverImage)
+    cover = await uploadChannelImage(client, patch.coverImage)
   }
 
   const updated: ChannelManifest = {
@@ -386,10 +385,10 @@ export function appendItemToChannel(
 }
 
 export async function downloadItemBytes(
-  sdk: Sdk,
+  client: SiaClient,
   itemURL: string,
 ): Promise<Uint8Array> {
-  return downloadItem(sdk, itemURL)
+  return client.downloadItem(itemURL)
 }
 
 // Phase D: the shared capability link carries the author's stable did:dht

@@ -9,14 +9,14 @@ import { resolveIdentityDoc } from '../identityDoc'
 const cache = new Map<string, string | null>()
 const inFlight = new Map<string, Promise<string | null>>()
 
-function resolve(sdk: unknown, didDht: string): Promise<string | null> {
+function resolve(client: unknown, didDht: string): Promise<string | null> {
   const cached = cache.get(didDht)
   if (cached !== undefined) return Promise.resolve(cached)
   const existing = inFlight.get(didDht)
   if (existing) return existing
   const p = resolveIdentityDoc(
-    // biome-ignore lint/suspicious/noExplicitAny: sdk typed loosely to keep the hook off the SDK import
-    sdk as any,
+    // biome-ignore lint/suspicious/noExplicitAny: client typed loosely to keep the hook off the SDK import
+    client as any,
     didDht,
   )
     .then((doc) => {
@@ -39,7 +39,7 @@ function resolve(sdk: unknown, didDht: string): Promise<string | null> {
 // short truncation of the did:dht (never a bare, unreadable key). Lazy + cached,
 // so feeds render instantly and upgrade as identity-docs resolve.
 export function useIdentityName(didDht: string): string {
-  const sdk = useAuthStore((s) => s.sdk)
+  const client = useAuthStore((s) => s.client)
   // Your own identity resolves locally: profile is the source of truth (and the
   // published doc may lag local edits / not have propagated yet on the DHT), so
   // never network-resolve yourself.
@@ -51,20 +51,20 @@ export function useIdentityName(didDht: string): string {
   )
 
   useEffect(() => {
-    if (!didDht || !sdk || isSelf) return
+    if (!didDht || !client || isSelf) return
     const cached = cache.get(didDht)
     if (cached !== undefined) {
       setUsername(cached)
       return
     }
     let cancelled = false
-    resolve(sdk, didDht).then((u) => {
+    resolve(client, didDht).then((u) => {
       if (!cancelled) setUsername(u)
     })
     return () => {
       cancelled = true
     }
-  }, [didDht, sdk, isSelf])
+  }, [didDht, client, isSelf])
 
   // Fallback: `did:dht:iyyp…db4o` (last chars are the most distinguishing).
   const key = didDht.replace(/^did:dht:/, '')

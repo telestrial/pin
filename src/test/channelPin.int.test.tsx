@@ -16,8 +16,8 @@ vi.mock('../lib/pkarr', async () =>
   (await import('./fakeModules')).fakePkarrModule(),
 )
 
-import type { Sdk } from '@siafoundation/sia-storage'
 import { ChannelView } from '../components/channel/ChannelView'
+import type { SiaClient } from '../core/siaClient'
 import type { SubscriptionRef } from '../core/types'
 import { runDeleteObjects } from '../lib/actions/deleteObjects'
 import { type DeleteObjectsAction, useActionStore } from '../stores/actionQueue'
@@ -44,13 +44,13 @@ async function tickMs(): Promise<void> {
 // Unpin journals the byte reclaim as delete-objects actions; this test doesn't
 // mount the runner, so drain the pending cleanups through the handler to make
 // bob's scope actually shrink.
-async function drainCleanups(sdk: Sdk): Promise<void> {
+async function drainCleanups(client: SiaClient): Promise<void> {
   const pending = useActionStore
     .getState()
     .actions.filter((a) => a.kind === 'delete-objects' && a.state === 'pending')
   for (const a of pending) {
     await runDeleteObjects(a as DeleteObjectsAction, {
-      sdk,
+      client,
       markDone: () => {},
     })
     useActionStore.getState().remove(a.id)
@@ -189,7 +189,7 @@ describe('integration: channel pin', () => {
 
     await waitFor(() => expect(usePinStore.getState().pinned).toHaveLength(0))
     await act(async () => {
-      await drainCleanups(bob.sdk as unknown as Sdk)
+      await drainCleanups(bob.client)
     })
     expect((await bob.sdk.account()).pinnedData).toBe(0)
     // Icon returns to the pinnable state.

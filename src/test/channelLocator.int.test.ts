@@ -16,7 +16,6 @@ vi.mock('../lib/pkarr', async () =>
   (await import('./fakeModules')).fakePkarrModule(),
 )
 
-import type { Sdk } from '@siafoundation/sia-storage'
 import { createChannel } from '../core/channels'
 import type { ChannelManifest, ItemRef } from '../core/types'
 import {
@@ -51,9 +50,9 @@ describe('integration: channel locator grace deletion', () => {
       did: 'did:plc:alice',
       handle: 'alice.test',
     })
-    const sdk = alice.sdk as unknown as Sdk
+    const client = alice.client
 
-    const created = await createChannel(sdk, {
+    const created = await createChannel(client, {
       name: "Alice's voice",
       description: '',
     })
@@ -64,7 +63,7 @@ describe('integration: channel locator grace deletion', () => {
 
     // Commit 1 (empty). One manifest object, nothing to reclaim yet.
     await commitChannelManifest(
-      sdk,
+      client,
       channel.channelID,
       channel.channelKey,
       created.manifest,
@@ -74,21 +73,36 @@ describe('integration: channel locator grace deletion', () => {
     // Commit 2. Both generations kept — a reader still resolving gen-1's pointer
     // during DHT propagation must find it.
     const m2 = withItem(created.manifest, 2)
-    await commitChannelManifest(sdk, channel.channelID, channel.channelKey, m2)
+    await commitChannelManifest(
+      client,
+      channel.channelID,
+      channel.channelKey,
+      m2,
+    )
     expect(app.world.objects.size).toBe(2)
 
     // Commit 3. Gen-1 (two back) is reclaimed; gen-2 + gen-3 stay live.
     const m3 = withItem(m2, 3)
-    await commitChannelManifest(sdk, channel.channelID, channel.channelKey, m3)
+    await commitChannelManifest(
+      client,
+      channel.channelID,
+      channel.channelKey,
+      m3,
+    )
     expect(app.world.objects.size).toBe(2)
 
     // Steady state: further commits stay bounded at two live objects.
     const m4 = withItem(m3, 4)
-    await commitChannelManifest(sdk, channel.channelID, channel.channelKey, m4)
+    await commitChannelManifest(
+      client,
+      channel.channelID,
+      channel.channelKey,
+      m4,
+    )
     expect(app.world.objects.size).toBe(2)
 
     // And the locator resolves to the latest manifest throughout.
-    const resolved = await resolveChannelViaLocator(sdk, channel.channelKey)
+    const resolved = await resolveChannelViaLocator(client, channel.channelKey)
     expect(resolved?.items.map((i) => i.summary)).toEqual([
       'post 4',
       'post 3',

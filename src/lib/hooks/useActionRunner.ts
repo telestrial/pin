@@ -55,13 +55,13 @@ export function useActionQueueHydration() {
 }
 
 export function useActionRunner() {
-  const sdk = useAuthStore((s) => s.sdk)
+  const client = useAuthStore((s) => s.client)
 
   useEffect(() => {
-    // Library publishes only need the Sia SDK; channel publishes need an agent
+    // Library publishes only need the Sia client; channel publishes need an agent
     // too, checked inside the handler so a missing agent fails just that action
     // instead of silently parking the whole journal.
-    if (!sdk) return
+    if (!client) return
     let running = false
 
     const processNext = async () => {
@@ -86,7 +86,7 @@ export function useActionRunner() {
         case 'publish': {
           const store = useActionStore.getState()
           const ctx: PublishContext = {
-            sdk,
+            client,
             setPhase: (phase, progress) =>
               store.setPhase(action.id, phase, progress),
             setProgress: (progress) => store.setProgress(action.id, progress),
@@ -99,7 +99,7 @@ export function useActionRunner() {
         case 'delete-objects': {
           const store = useActionStore.getState()
           const ctx: DeleteObjectsContext = {
-            sdk,
+            client,
             markDone: (key) => store.markObjectDeleted(action.id, key),
           }
           return runDeleteObjects(action, ctx)
@@ -119,7 +119,7 @@ export function useActionRunner() {
           toast.addToast(`${action.successLabel} “${action.title}”`)
         // A completed byte reclaim changed Sia storage — refresh the meter.
         if (action.kind === 'delete-objects') {
-          usePinStore.getState().refreshAccount(sdk)
+          usePinStore.getState().refreshAccount(client)
         }
         setTimeout(() => {
           useActionStore.getState().remove(action.id)
@@ -142,5 +142,5 @@ export function useActionRunner() {
     processNext()
 
     return unsub
-  }, [sdk])
+  }, [client])
 }

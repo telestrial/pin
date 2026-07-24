@@ -11,7 +11,7 @@ import {
   createChannel,
   editItem,
 } from '../core/channels'
-import { uploadItem } from '../core/sia'
+import { makeWasmSiaClient, type SiaClient } from '../core/siaClient'
 import type { ChannelManifest, ItemRef, SubscriptionRef } from '../core/types'
 import {
   commitChannelManifest,
@@ -29,6 +29,10 @@ import { createFakeWorld, FakeSdk, type FakeWorld } from './fakeSdk'
 
 export type FakeAccount = {
   sdk: FakeSdk
+  // The SiaClient the app talks to, wrapping this account's fake sdk once. Pass
+  // this where a SiaClient is expected (migrated core/lib fns, store actions);
+  // `.sdk` stays for tests that read the raw fake directly (e.g. account()).
+  client: SiaClient
   // did/handle are test bookkeeping for building SubscriptionRefs; identity is
   // did:dht (derived from the AppKey) in the app itself.
   did: string
@@ -53,7 +57,8 @@ export function createFakeApp(): FakeApp {
       if (maxPinned !== undefined) world.accountMax.set(did, maxPinned)
       world.handles.set(did, handle)
       const sdk = new FakeSdk(did, world)
-      return { sdk, did, handle }
+      const client = makeWasmSiaClient(sdk as unknown as Sdk)
+      return { sdk, client, did, handle }
     },
   }
 }
@@ -75,10 +80,10 @@ export function resetAllStores(): void {
 // same path a reader uses). Helpers read-modify-write against this instead of
 // threading the manifest through the test.
 async function loadChannelManifest(
-  sdk: Sdk,
+  client: SiaClient,
   channel: { channelKey: string },
 ): Promise<ChannelManifest> {
-  const manifest = await resolveChannelViaLocator(sdk, channel.channelKey)
+  const manifest = await resolveChannelViaLocator(client, channel.channelKey)
   if (!manifest) throw new Error('channel locator not resolvable')
   return manifest
 }
@@ -90,9 +95,9 @@ export async function publishTextPost(
   channel: { channelID: string; channelKey: string },
   body: string,
 ): Promise<ItemRef> {
-  const sdk = author.sdk as unknown as Sdk
+  const client = author.client
   const bytes = new TextEncoder().encode(body)
-  const uploaded = await uploadItem(sdk, bytes)
+  const uploaded = await client.uploadItem(bytes)
   const item = buildItemRef(uploaded, {
     type: 'text',
     title: '',
@@ -100,10 +105,10 @@ export async function publishTextPost(
     mimeType: 'text/markdown',
     bytes,
   })
-  const current = await loadChannelManifest(sdk, channel)
+  const current = await loadChannelManifest(client, channel)
   const manifest = appendItemToChannel(current, item)
   await commitChannelManifest(
-    sdk,
+    client,
     channel.channelID,
     channel.channelKey,
     manifest,
@@ -119,9 +124,9 @@ export async function editTextPost(
   oldItemID: string,
   newBody: string,
 ): Promise<ItemRef> {
-  const sdk = author.sdk as unknown as Sdk
+  const client = author.client
   const bytes = new TextEncoder().encode(newBody)
-  const uploaded = await uploadItem(sdk, bytes)
+  const uploaded = await client.uploadItem(bytes)
   const newItem: ItemRef = {
     ...buildItemRef(uploaded, {
       type: 'text',
@@ -132,10 +137,10 @@ export async function editTextPost(
     }),
     editedAt: new Date().toISOString(),
   }
-  const current = await loadChannelManifest(sdk, channel)
+  const current = await loadChannelManifest(client, channel)
   const { manifest, item } = editItem(current, oldItemID, newItem)
   await commitChannelManifest(
-    sdk,
+    client,
     channel.channelID,
     channel.channelKey,
     manifest,
@@ -148,13 +153,13 @@ export async function authorCreateChannel(
   author: FakeAccount,
   args: { name: string; description?: string } = { name: 'Channel' },
 ): Promise<CreatedChannel> {
-  const sdk = author.sdk as unknown as Sdk
-  const created = await createChannel(sdk, {
+  const client = author.client
+  const created = await createChannel(client, {
     name: args.name,
     description: args.description ?? '',
   })
   await commitChannelManifest(
-    sdk,
+    client,
     created.channelID,
     created.channelKey,
     created.manifest,
@@ -175,7 +180,7 @@ export function mountAs(
   } = {},
 ): void {
   useAuthStore.setState({
-    sdk: account.sdk as unknown as Sdk,
+    client: account.client,
     storedKeyHex: 'fake-key-hex',
     indexerURL: 'https://indexer.fake',
     step: 'connected',
@@ -190,7 +195,5 @@ export function mountAs(
   // Reads go through the locator (pkarr → Sia), matching what App's
   // useChannelReader injects in production — so a subscriber's feed reads the
   // channel the author committed to the locator.
-  useFeedStore
-    .getState()
-    .setChannelReader(makeLocatorReader(account.sdk as unknown as Sdk))
+  useFeedStore.getState().setChannelReader(makeLocatorReader(account.client))
 }

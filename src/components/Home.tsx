@@ -338,8 +338,8 @@ export function Home() {
       <Compose channels={[owned]} />
     ) : undefined
     const handleUnpinChannel = async () => {
-      const sdk = useAuthStore.getState().sdk
-      if (!sdk || !owned) return
+      const client = useAuthStore.getState().client
+      if (!client || !owned) return
       const confirmation = window.prompt(
         'This drops every item in this channel from your storage and stops publishing it. Subscribers who pinned individual items keep their copies; their share URLs keep working.\n\nType DELETE to confirm.',
       )
@@ -358,7 +358,7 @@ export function Home() {
         // clears the locator pointer, and drops the channel from the feed. The
         // pkarr record expires by TTL once we stop republishing it.
         const { objectIDs, urls } = await retractChannel(
-          sdk,
+          client,
           owned,
           protectedIDs,
         )
@@ -375,7 +375,7 @@ export function Home() {
           urls,
           label: `Reclaiming “${owned.name}”`,
         })
-        usePinStore.getState().refreshAccount(sdk)
+        usePinStore.getState().refreshAccount(client)
         addToast(`Unpinned “${owned.name}”`)
         setView({ kind: 'idle' })
       } catch (err) {

@@ -30,7 +30,7 @@ export function ChannelPinButton({
   channelID: string
   channelName: string
 }) {
-  const sdk = useAuthStore((s) => s.sdk)
+  const client = useAuthStore((s) => s.client)
   const pinChannel = usePinStore((s) => s.pinChannel)
   const unpinChannel = usePinStore((s) => s.unpinChannel)
   // The in-flight batch job (if any) — drives the in-place progress pin.
@@ -42,18 +42,18 @@ export function ChannelPinButton({
   const state = useChannelPinState(manifest, channelID)
   const [confirming, setConfirming] = useState(false)
 
-  if (!sdk || !manifest) return null
+  if (!client || !manifest) return null
 
   const size = channelPinByteSize(manifest)
   const channel = { authorHandle, channelID, name: channelName }
 
   async function handleClick() {
-    if (!sdk || !manifest || busy) return
+    if (!client || !manifest || busy) return
     if (state === 'pinned') {
       setConfirming(true)
       return
     }
-    const { total, failed } = await pinChannel(sdk, manifest.items, channel)
+    const { total, failed } = await pinChannel(client, manifest.items, channel)
     if (failed === 0) {
       addToast(
         state === 'edited'
@@ -67,8 +67,8 @@ export function ChannelPinButton({
 
   async function confirmUnpin() {
     setConfirming(false)
-    if (!sdk) return
-    const { total, failed } = await unpinChannel(sdk, channelID)
+    if (!client) return
+    const { total, failed } = await unpinChannel(client, channelID)
     addToast(
       failed === 0
         ? 'Channel unpinned'

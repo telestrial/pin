@@ -4,7 +4,6 @@ import {
   type ProfilePatch,
   type ProfileRecord,
 } from '../core/profile'
-import { uploadItem } from '../core/sia'
 import { useItemBlobURL } from '../lib/hooks/useItemBytes'
 import { useActionStore } from '../stores/actionQueue'
 import { useAuthStore } from '../stores/auth'
@@ -23,7 +22,7 @@ export function EditProfile({
   sidebar?: React.ReactNode
   rightSidebar?: React.ReactNode
 }) {
-  const sdk = useAuthStore((s) => s.sdk)
+  const client = useAuthStore((s) => s.client)
   const setProfile = useAuthStore((s) => s.setProfile)
 
   const [loading, setLoading] = useState(true)
@@ -127,7 +126,7 @@ export function EditProfile({
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    if (!sdk) {
+    if (!client) {
       setError('Sia session not active. Reload and reconnect.')
       return
     }
@@ -145,7 +144,7 @@ export function EditProfile({
       // sub-slab cost today; future repack scope expansion can consolidate.
       if (newAvatarFile) {
         const buf = await newAvatarFile.arrayBuffer()
-        const uploaded = await uploadItem(sdk, new Uint8Array(buf))
+        const uploaded = await client.uploadItem(new Uint8Array(buf))
         patch.avatarURL = uploaded.itemURL
       } else if (removeExistingAvatar) {
         patch.removeAvatar = true
@@ -153,7 +152,7 @@ export function EditProfile({
 
       if (newCoverFile) {
         const buf = await newCoverFile.arrayBuffer()
-        const uploaded = await uploadItem(sdk, new Uint8Array(buf))
+        const uploaded = await client.uploadItem(new Uint8Array(buf))
         patch.coverURL = uploaded.itemURL
       } else if (removeExistingCover) {
         patch.removeCover = true

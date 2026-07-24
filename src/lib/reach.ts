@@ -1,6 +1,6 @@
-import type { Sdk } from '@siafoundation/sia-storage'
 import type { DirectoryDoc } from '../core/identityDoc'
 import type { IdentityResolver, ReachFetcher } from '../core/network'
+import type { SiaClient } from '../core/siaClient'
 import { resolveIdentityDoc } from './identityDoc'
 
 // Short, readable fallback label for a did:dht with no chosen @-name.
@@ -11,7 +11,7 @@ function shortDid(didDht: string): string {
 // The production reach edges + display resolver, both backed by identity-doc
 // resolution (pkarr → Sia) and sharing a per-build memo so each person's doc is
 // fetched at most once across the fetch (edges) and resolve (display) passes.
-export function makeReach(sdk: Sdk): {
+export function makeReach(client: SiaClient): {
   fetch: ReachFetcher
   resolve: IdentityResolver
 } {
@@ -19,7 +19,7 @@ export function makeReach(sdk: Sdk): {
   const doc = (didDht: string) => {
     let p = memo.get(didDht)
     if (!p) {
-      p = resolveIdentityDoc(sdk, didDht).catch(() => null)
+      p = resolveIdentityDoc(client, didDht).catch(() => null)
       memo.set(didDht, p)
     }
     return p

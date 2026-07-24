@@ -17,15 +17,15 @@ import { makeLocatorReader } from '../channelLocator'
 // racing boot-time load and skip it rather than flash a not-initialized error.
 
 export function useChannelReader() {
-  const sdk = useAuthStore((s) => s.sdk)
+  const client = useAuthStore((s) => s.client)
 
   useEffect(() => {
     const feed = useFeedStore.getState()
-    if (!sdk) {
+    if (!client) {
       feed.setChannelReader(notReady)
       return
     }
-    feed.setChannelReader(makeLocatorReader(sdk))
+    feed.setChannelReader(makeLocatorReader(client))
     // HomeFeed's first load fires as a child effect, which React runs BEFORE
     // this App-level parent effect — so on the connect commit it can read with
     // the not-ready placeholder and error out. Now that the reader is live,
@@ -35,5 +35,5 @@ export function useChannelReader() {
     const subs = useAuthStore.getState().subscriptions
     if (subs.length > 0) feed.refresh(subs)
     return () => useFeedStore.getState().setChannelReader(notReady)
-  }, [sdk])
+  }, [client])
 }

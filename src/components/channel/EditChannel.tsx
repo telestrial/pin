@@ -26,7 +26,7 @@ export function EditChannel({
   sidebar?: React.ReactNode
   rightSidebar?: React.ReactNode
 }) {
-  const sdk = useAuthStore((s) => s.sdk)
+  const client = useAuthStore((s) => s.client)
   const updateMyChannelName = useAuthStore((s) => s.updateMyChannelName)
   const updateSubscriptionName = useAuthStore((s) => s.updateSubscriptionName)
 
@@ -47,7 +47,7 @@ export function EditChannel({
 
   useEffect(() => {
     let cancelled = false
-    if (!sdk) {
+    if (!client) {
       setLoadError('Not connected to Sia.')
       setLoading(false)
       return
@@ -56,7 +56,7 @@ export function EditChannel({
     const cached = useFeedStore.getState().manifests[channelID]
     const load = cached
       ? Promise.resolve(cached)
-      : makeLocatorReader(sdk)('', channelID, channelKey)
+      : makeLocatorReader(client)('', channelID, channelKey)
     load
       .then((manifest) => {
         if (cancelled) return
@@ -73,7 +73,7 @@ export function EditChannel({
     return () => {
       cancelled = true
     }
-  }, [sdk, channelID, channelKey])
+  }, [client, channelID, channelKey])
 
   useEffect(() => {
     if (!newAvatarFile) {
@@ -120,7 +120,7 @@ export function EditChannel({
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    if (!sdk || !original) return
+    if (!client || !original) return
     const trimmedName = name.trim()
     if (!trimmedName) return
     setSubmitting(true)
@@ -140,7 +140,7 @@ export function EditChannel({
       else if (removeCover) patch.removeCover = true
 
       const { manifest: updated, reclaimURLs } = await saveChannelEdits(
-        sdk,
+        client,
         { channelID, channelKey },
         patch,
       )

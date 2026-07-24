@@ -35,7 +35,7 @@ export function FilePinButton({
   channelID: string
   itemID: string
 }) {
-  const sdk = useAuthStore((s) => s.sdk)
+  const client = useAuthStore((s) => s.client)
   const ownedChannel = useAuthStore((s) =>
     s.myChannels.find((c) => c.channelID === channelID),
   )
@@ -50,7 +50,7 @@ export function FilePinButton({
   const busy = isPinning || removing
 
   const retractFile = async () => {
-    if (!sdk || !ownedChannel) return
+    if (!client || !ownedChannel) return
     const ok = window.confirm(
       'Remove this file from the post? Subscribers who pinned it keep their copies.',
     )
@@ -68,7 +68,7 @@ export function FilePinButton({
       ])
       // Commits the updated manifest to the locator + reflects it in the feed.
       const { orphanedObjectIDs } = await removeAttachment(
-        sdk,
+        client,
         ownedChannel,
         itemID,
         attachment.url,
@@ -79,7 +79,7 @@ export function FilePinButton({
         objectIDs: orphanedObjectIDs,
         label: `Reclaiming ${attachment.filename || 'file'}`,
       })
-      usePinStore.getState().refreshAccount(sdk)
+      usePinStore.getState().refreshAccount(client)
       addToast('File removed from the post')
     } catch (err) {
       addToast(err instanceof Error ? err.message : 'Remove failed')
@@ -89,13 +89,13 @@ export function FilePinButton({
   }
 
   const toggleLibraryPin = async () => {
-    if (!sdk) return
+    if (!client) return
     try {
       if (isPinned) {
-        await unpin(sdk, attachment.url)
+        await unpin(client, attachment.url)
         addToast('File removed from your library')
       } else {
-        await pin(sdk, {
+        await pin(client, {
           item: itemRefFromAttachment(attachment),
           channel: LIBRARY_CHANNEL,
         })
@@ -108,7 +108,7 @@ export function FilePinButton({
 
   const handleClick = (e: React.MouseEvent) => {
     e.stopPropagation()
-    if (!sdk || busy) return
+    if (!client || busy) return
     if (isOwned) {
       void retractFile()
     } else {
@@ -149,7 +149,7 @@ export function FilePinButton({
     <button
       type="button"
       onClick={handleClick}
-      disabled={busy || !sdk}
+      disabled={busy || !client}
       title={title}
       aria-label={title}
       aria-pressed={!isOwned && isPinned}

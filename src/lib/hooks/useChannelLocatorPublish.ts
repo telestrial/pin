@@ -16,10 +16,10 @@ import { refreshChannelLocator } from '../channelLocator'
 // per session, guarded by keptAlive. Lazy: pkarr wasm only boots for an owner.
 
 export function useChannelLocatorPublish() {
-  const sdk = useAuthStore((s) => s.sdk)
+  const client = useAuthStore((s) => s.client)
 
   useEffect(() => {
-    if (!sdk) return
+    if (!client) return
 
     let cancelled = false
     const keptAlive = new Set<string>()
@@ -52,5 +52,5 @@ export function useChannelLocatorPublish() {
       cancelled = true
       unsubAuth()
     }
-  }, [sdk])
+  }, [client])
 }

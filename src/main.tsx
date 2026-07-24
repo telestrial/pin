@@ -18,7 +18,7 @@ if (import.meta.env.DEV) {
   const session = async () => {
     const { useAuthStore } = await import('./stores/auth')
     const s = useAuthStore.getState()
-    return { sdk: s.sdk, hex: s.storedKeyHex }
+    return { client: s.client, hex: s.storedKeyHex }
   }
   const g = window as unknown as {
     __pinMirrorWrite?: (text: string) => Promise<string>
@@ -32,22 +32,22 @@ if (import.meta.env.DEV) {
     __pinIdentityDocRoundTrip?: () => Promise<string>
   }
   g.__pinMirrorWrite = async (text: string) => {
-    const { sdk, hex } = await session()
-    if (!sdk || !hex) return 'not signed in'
+    const { client, hex } = await session()
+    if (!client || !hex) return 'not signed in'
     const { openDocs, putRecord } = await import('./lib/docs')
     const { snapshotToSia } = await import('./lib/docsMirror')
     await openDocs(hex)
     await putRecord('probe', 'persist', new TextEncoder().encode(text))
-    const p = await snapshotToSia(sdk, hexToBytes(hex))
+    const p = await snapshotToSia(client, hexToBytes(hex))
     return `snapshotted (${p.url.slice(0, 48)}...)`
   }
   g.__pinMirrorRead = async () => {
-    const { sdk, hex } = await session()
-    if (!sdk || !hex) return 'not signed in'
+    const { client, hex } = await session()
+    if (!client || !hex) return 'not signed in'
     const { openDocs, getRecord } = await import('./lib/docs')
     const { hydrateFromSia } = await import('./lib/docsMirror')
     await openDocs(hex)
-    const n = await hydrateFromSia(sdk, hexToBytes(hex))
+    const n = await hydrateFromSia(client, hexToBytes(hex))
     const v = await getRecord('probe', 'persist')
     return `hydrated ${n} record(s); probe/persist = ${v ? new TextDecoder().decode(v) : 'MISSING'}`
   }
@@ -55,13 +55,13 @@ if (import.meta.env.DEV) {
   // Sia? Change a setting (subscribe / theme), wait ~2s, RELOAD, run this — it
   // hydrates from Sia and reads settings/self back out of the doc.
   g.__pinSettingsDocsCheck = async () => {
-    const { sdk, hex } = await session()
-    if (!sdk || !hex) return 'not signed in'
+    const { client, hex } = await session()
+    if (!client || !hex) return 'not signed in'
     const { openDocs, getRecord } = await import('./lib/docs')
     const { hydrateFromSia } = await import('./lib/docsMirror')
     const { deriveSettingsKey, decryptSettings } = await import('./core/crypto')
     await openDocs(hex)
-    const n = await hydrateFromSia(sdk, hexToBytes(hex))
+    const n = await hydrateFromSia(client, hexToBytes(hex))
     const raw = await getRecord('settings', 'self')
     if (!raw) return `hydrated ${n} record(s); no settings/self in the doc yet`
     const key = await deriveSettingsKey(hexToBytes(hex))
@@ -74,12 +74,12 @@ if (import.meta.env.DEV) {
   // record key (settings/self, channel/<id>, ...) — proves channels are mirrored
   // + durable across a reload.
   g.__pinDocsList = async () => {
-    const { sdk, hex } = await session()
-    if (!sdk || !hex) return 'not signed in'
+    const { client, hex } = await session()
+    if (!client || !hex) return 'not signed in'
     const { openDocs, listAll } = await import('./lib/docs')
     const { hydrateFromSia } = await import('./lib/docsMirror')
     await openDocs(hex)
-    const n = await hydrateFromSia(sdk, hexToBytes(hex))
+    const n = await hydrateFromSia(client, hexToBytes(hex))
     const keys = await listAll()
     return `hydrated ${n} record(s):\n${keys.map((k) => `  ${k.collection}/${k.rkey}`).join('\n')}`
   }
@@ -88,12 +88,12 @@ if (import.meta.env.DEV) {
   // means atproto usually wins on load, so this is how we confirm the snapshot
   // source itself is valid before inc.4 drops atproto and relies on it.
   g.__pinSettingsFromSnapshot = async () => {
-    const { sdk, hex } = await session()
-    if (!sdk || !hex) return 'not signed in'
+    const { client, hex } = await session()
+    if (!client || !hex) return 'not signed in'
     const { readRecordFromSnapshot } = await import('./lib/docsMirror')
     const { deriveSettingsKey, decryptSettings } = await import('./core/crypto')
     const bytes = await readRecordFromSnapshot(
-      sdk,
+      client,
       hexToBytes(hex),
       'settings',
       'self',
@@ -147,14 +147,18 @@ if (import.meta.env.DEV) {
     const { useFeedStore } = await import('./stores/feed')
     const auth = useAuthStore.getState()
     const ch = auth.myChannels[0]
-    if (!auth.sdk || !ch) return 'no sdk / no owned channel'
+    if (!auth.client || !ch) return 'no client / no owned channel'
     const manifest = useFeedStore.getState().manifests[ch.channelID]
     if (!manifest) return `manifest for ${ch.channelID} not loaded yet`
     const { publishChannelLocator, resolveChannelViaLocator } = await import(
       './lib/channelLocator'
     )
-    const pub = await publishChannelLocator(auth.sdk, ch.channelKey, manifest)
-    const got = await resolveChannelViaLocator(auth.sdk, ch.channelKey)
+    const pub = await publishChannelLocator(
+      auth.client,
+      ch.channelKey,
+      manifest,
+    )
+    const got = await resolveChannelViaLocator(auth.client, ch.channelKey)
     const match =
       got?.name === manifest.name && got?.items.length === manifest.items.length
     return `locator ${pub.locatorKey.slice(0, 12)}… → reader resolved "${got?.name}" (${got?.items.length ?? 0}/${manifest.items.length} items) — ${match ? 'MATCH' : 'MISMATCH'}`
@@ -167,7 +171,7 @@ if (import.meta.env.DEV) {
     const { useAuthStore } = await import('./stores/auth')
     const { useFeedStore } = await import('./stores/feed')
     const auth = useAuthStore.getState()
-    if (!auth.sdk || !auth.storedKeyHex) return 'not signed in'
+    if (!auth.client || !auth.storedKeyHex) return 'not signed in'
     const appKeyBytes = hexToBytes(auth.storedKeyHex)
     const { deriveDidDht } = await import('./lib/pkarr')
     const { publishIdentityDoc, resolveIdentityDoc } = await import(
@@ -188,9 +192,9 @@ if (import.meta.env.DEV) {
       handleFollows: [],
       updatedAt: new Date().toISOString(),
     }
-    await publishIdentityDoc(auth.sdk, appKeyBytes, doc)
+    await publishIdentityDoc(auth.client, appKeyBytes, doc)
     const { did } = await deriveDidDht(appKeyBytes)
-    const got = await resolveIdentityDoc(auth.sdk, did)
+    const got = await resolveIdentityDoc(auth.client, did)
     const match = got?.channels.length === channels.length
     return `identity-doc → resolved ${got?.channels.length ?? 0}/${channels.length} public channels, ${got?.follows.length ?? 0} follows — ${match ? 'MATCH' : 'MISMATCH'}`
   }

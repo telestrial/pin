@@ -13,7 +13,7 @@ function cacheKey(itemURL: string, contentHash: string | undefined): string {
 const memCache = new Map<string, Uint8Array>()
 
 export function useItemBytes(itemURL: string, contentHash?: string) {
-  const sdk = useAuthStore((s) => s.sdk)
+  const client = useAuthStore((s) => s.client)
   const key = cacheKey(itemURL, contentHash)
   const [bytes, setBytes] = useState<Uint8Array | null>(
     () => memCache.get(key) ?? null,
@@ -21,7 +21,7 @@ export function useItemBytes(itemURL: string, contentHash?: string) {
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    if (!sdk) return
+    if (!client) return
 
     const mem = memCache.get(key)
     if (mem) {
@@ -46,7 +46,7 @@ export function useItemBytes(itemURL: string, contentHash?: string) {
           setBytes(arr)
           return
         }
-        const fetched = await downloadItemBytes(sdk, itemURL)
+        const fetched = await downloadItemBytes(client, itemURL)
         if (cancelled) return
         memCache.set(key, fetched)
         setBytes(fetched)
@@ -60,7 +60,7 @@ export function useItemBytes(itemURL: string, contentHash?: string) {
     return () => {
       cancelled = true
     }
-  }, [sdk, key, itemURL])
+  }, [client, key, itemURL])
 
   return { bytes, error }
 }

@@ -5,12 +5,38 @@ import {
   fetchAccountSnapshot,
   fetchRawContentBytes,
   pinItem,
+  pinItemBytes,
   unpinItemBytes,
 } from './pin'
+import type { SiaClient } from './siaClient'
 import type { ItemRef } from './types'
 
 function asSdk(fake: FakeSdk): Sdk {
   return fake as unknown as Sdk
+}
+
+// A SiaClient over a FakeSdk, built here (NOT via makeWasmSiaClient) so this
+// unit test — which doesn't mock @siafoundation/sia-storage — never pulls the
+// real WASM module in through core/sia. Only pinFromShareURL is exercised (by
+// pinItem); the rest throw if reached.
+function asClient(fake: FakeSdk): SiaClient {
+  const sdk = fake as unknown as Sdk
+  const unused = async (): Promise<never> => {
+    throw new Error('SiaClient method not used in this test')
+  }
+  return {
+    uploadItem: unused,
+    uploadItemsPacked: unused,
+    downloadItem: unused,
+    pinFromShareURL: (url) => pinItemBytes(sdk, url),
+    resolveObjectID: async (url) => (await fake.sharedObject(url)).id(),
+    deleteObject: (id) => fake.deleteObject(id),
+    pruneSlabs: () => fake.pruneSlabs(),
+    accountSnapshot: () => fetchAccountSnapshot(sdk),
+    listPinnedObjects: unused,
+    getObjectSlabs: async () => null,
+    appKeyPublicKey: () => fake.appKey().publicKey(),
+  }
 }
 
 async function uploadBytes(fake: FakeSdk, bytes: Uint8Array): Promise<void> {
@@ -109,7 +135,7 @@ describe('pinItem / unpinItemBytes', () => {
     const audURL = await uploadAndShare(alice, new Uint8Array(300))
 
     const { objectID, attachmentObjectIDs } = await pinItem(
-      asSdk(bob),
+      asClient(bob),
       makeItem(bodyURL, [imgURL, audURL]),
     )
 
@@ -127,7 +153,10 @@ describe('pinItem / unpinItemBytes', () => {
     const bob = new FakeSdk('bob', world)
     const bodyURL = await uploadAndShare(alice, new Uint8Array(100))
 
-    const { attachmentObjectIDs } = await pinItem(asSdk(bob), makeItem(bodyURL))
+    const { attachmentObjectIDs } = await pinItem(
+      asClient(bob),
+      makeItem(bodyURL),
+    )
 
     expect(attachmentObjectIDs).toHaveLength(0)
     expect(world.scopeOf('bob').size).toBe(1)
@@ -148,7 +177,7 @@ describe('pinItem / unpinItemBytes', () => {
       { mimeType: 'image/png' } as unknown as never,
     ]
 
-    const { attachmentObjectIDs } = await pinItem(asSdk(bob), item)
+    const { attachmentObjectIDs } = await pinItem(asClient(bob), item)
     expect(attachmentObjectIDs).toHaveLength(1)
     expect(world.scopeOf('bob').size).toBe(2)
   })
@@ -161,7 +190,7 @@ describe('pinItem / unpinItemBytes', () => {
     const imgURL = await uploadAndShare(alice, new Uint8Array(200))
 
     const { objectID, attachmentObjectIDs } = await pinItem(
-      asSdk(bob),
+      asClient(bob),
       makeItem(bodyURL, [imgURL]),
     )
     expect(world.scopeOf('bob').size).toBe(2)
@@ -181,7 +210,7 @@ describe('pinItem / unpinItemBytes', () => {
     expect(world.scopeOf('alice').size).toBe(2)
 
     const { objectID, attachmentObjectIDs } = await pinItem(
-      asSdk(bob),
+      asClient(bob),
       makeItem(bodyURL, [imgURL]),
     )
     await unpinItemBytes(asSdk(bob), objectID)

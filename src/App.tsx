@@ -29,7 +29,7 @@ const FADE_MS = 300
 
 export default function App() {
   const step = useAuthStore((s) => s.step)
-  const sdk = useAuthStore((s) => s.sdk)
+  const client = useAuthStore((s) => s.client)
   const locked = useAuthStore((s) => s.locked)
   const settingsLoaded = useAuthStore((s) => s.settingsLoaded)
   const hasUsername = useAuthStore((s) => !!s.profile?.username)
@@ -110,9 +110,9 @@ export default function App() {
   }, [armedItem])
 
   useEffect(() => {
-    if (!sdk) return
-    usePinStore.getState().refreshAccount(sdk)
-  }, [sdk])
+    if (!client) return
+    usePinStore.getState().refreshAccount(client)
+  }, [client])
 
   // Derive this identity's own did:dht from the AppKey once connected — the
   // self-sovereign "who am I" used for isSelf + profile navigation. Deterministic
@@ -120,7 +120,7 @@ export default function App() {
   // even if the persisted value is from an older key.
   useEffect(() => {
     const storedKeyHex = useAuthStore.getState().storedKeyHex
-    if (!sdk || !storedKeyHex) return
+    if (!client || !storedKeyHex) return
     let cancelled = false
     deriveDidDht(Uint8Array.fromHex(storedKeyHex))
       .then(({ did }) => {
@@ -130,7 +130,7 @@ export default function App() {
     return () => {
       cancelled = true
     }
-  }, [sdk])
+  }, [client])
 
   const connected = step === 'connected'
   // Genesis naming gate: a connected identity with no chosen @name yet lands on

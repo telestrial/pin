@@ -87,12 +87,12 @@ export function HandleDirectory({
         if (!cancelled) setState({ kind: 'not-found' })
         return
       }
-      const sdk = useAuthStore.getState().sdk
-      if (!sdk) {
+      const client = useAuthStore.getState().client
+      if (!client) {
         if (!cancelled) setState({ kind: 'not-found' })
         return
       }
-      const doc = await resolveIdentityDoc(sdk, handle)
+      const doc = await resolveIdentityDoc(client, handle)
       if (!doc) {
         if (!cancelled) setState({ kind: 'not-found' })
         return
@@ -100,7 +100,7 @@ export function HandleDirectory({
       const resolved = await Promise.all(
         doc.channels.map(async (c): Promise<ChannelEntry | null> => {
           try {
-            const manifest = await resolveChannelViaLocator(sdk, c.key)
+            const manifest = await resolveChannelViaLocator(client, c.key)
             return manifest
               ? {
                   authorDID: '',

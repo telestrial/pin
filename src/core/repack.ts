@@ -1,5 +1,4 @@
-import type { Sdk } from '@siafoundation/sia-storage'
-import { downloadItem, uploadItemsPacked } from './sia'
+import type { SiaClient } from './siaClient'
 import type { ChannelManifest } from './types'
 
 // Manifest I/O injected by the runner (lib), so core/repack stays pure of the
@@ -75,7 +74,7 @@ export type RepackBatchResult = {
 }
 
 async function buildSlabAggregates(
-  sdk: Sdk,
+  client: SiaClient,
   scope: ScopeRef[],
 ): Promise<{ slabs: SlabAggregate[]; refsByID: Map<string, ScopeRef> }> {
   const groups = new Map<string, SlabAggregate>()
@@ -84,9 +83,12 @@ async function buildSlabAggregates(
   await Promise.all(
     scope.map(async (ref) => {
       try {
-        const obj = await sdk.object(ref.objectID)
-        const objSlabs = obj.slabs()
-        const createdAt = obj.createdAt()
+        const info = await client.getObjectSlabs(ref.objectID)
+        if (!info) return
+        const objSlabs = info.slabs
+        // getObjectSlabs returns createdAt as an ISO string; the batch
+        // picker works in Date, so parse it back here (behavior preserved).
+        const createdAt = new Date(info.createdAt)
         for (const s of objSlabs) {
           let g = groups.get(s.encryptionKey)
           if (!g) {
@@ -102,7 +104,7 @@ async function buildSlabAggregates(
           g.objects.push({ id: ref.objectID, length: s.length, createdAt })
         }
       } catch (e) {
-        // Best-effort: a single failed sdk.object lookup shouldn't poison
+        // Best-effort: a single failed object lookup shouldn't poison
         // the whole pass. We just won't consider that object's slab.
         console.warn(`repack: failed to inspect object ${ref.objectID}:`, e)
       }
@@ -138,14 +140,14 @@ function pickBatch(slabs: SlabAggregate[], now = Date.now()): SlabAggregate[] {
 }
 
 export async function runRepackBatch(
-  sdk: Sdk,
+  client: SiaClient,
   scope: ScopeRef[],
   // Present when the caller can rewrite channel manifests (locator I/O). Absent
   // → channel objects are dropped from the batch (library + external still
   // pack), so a reader with no owned channels stays productive.
   channelIO?: ChannelManifestIO,
 ): Promise<RepackBatchResult | null> {
-  const { slabs, refsByID } = await buildSlabAggregates(sdk, scope)
+  const { slabs, refsByID } = await buildSlabAggregates(client, scope)
   const batch = pickBatch(slabs)
   if (batch.length === 0) return null
 
@@ -170,11 +172,11 @@ export async function runRepackBatch(
   // Download bytes for each — uses the existing useItemBytes cache path
   // by going through downloadItem (sharedObject + download stream).
   const allBytes = await Promise.all(
-    filteredRefs.map((r) => downloadItem(sdk, r.itemURL)),
+    filteredRefs.map((r) => client.downloadItem(r.itemURL)),
   )
 
   // Pack into a freshly-allocated slab.
-  const uploaded = await uploadItemsPacked(sdk, allBytes)
+  const uploaded = await client.uploadItemsPacked(allBytes)
 
   // Build mapping: old object → new object.
   type Mapping = {
@@ -300,7 +302,7 @@ export async function runRepackBatch(
   const oldObjectIDs = mappings.map((m) => m.oldRef.objectID)
   for (const id of oldObjectIDs) {
     try {
-      await sdk.deleteObject(id)
+      await client.deleteObject(id)
     } catch (e) {
       console.warn(`repack: failed to delete old object ${id}:`, e)
     }
@@ -311,7 +313,7 @@ export async function runRepackBatch(
   // −(N−1) × 40 MiB reclaim. pruneSlabs releases all slabs in our scope
   // that no live object references.
   try {
-    await sdk.pruneSlabs()
+    await client.pruneSlabs()
   } catch (e) {
     console.warn('repack: pruneSlabs failed:', e)
   }

@@ -17,9 +17,7 @@ vi.mock('../lib/pkarr', async () =>
   (await import('./fakeModules')).fakePkarrModule(),
 )
 
-import type { Sdk } from '@siafoundation/sia-storage'
 import { buildItemRef } from '../core/channels'
-import { uploadItem } from '../core/sia'
 import { resolveChannelViaLocator } from '../lib/channelLocator'
 import { useActionRunner } from '../lib/hooks/useActionRunner'
 import { type PublishAction, useActionStore } from '../stores/actionQueue'
@@ -87,7 +85,7 @@ describe('integration: action journal resume', () => {
 
     // The append landed in the manifest committed to the locator.
     const manifest = await resolveChannelViaLocator(
-      alice.sdk as unknown as Sdk,
+      alice.client,
       channel.channelKey,
     )
     expect(manifest?.items.some((i) => i.summary === 'fresh post')).toBe(true)
@@ -104,7 +102,7 @@ describe('integration: action journal resume', () => {
     // Simulate the upload having completed in a prior session: bytes are on
     // Sia, the checkpoint holds the resolved ItemRef.
     const body = 'resumed post'
-    const uploaded = await uploadItem(alice.sdk as unknown as Sdk, enc(body))
+    const uploaded = await alice.client.uploadItem(enc(body))
     const itemRef = buildItemRef(uploaded, {
       type: 'text',
       title: '',
@@ -169,7 +167,7 @@ describe('integration: action journal resume', () => {
 
     // The append still landed, pointing at the checkpoint's bytes.
     const manifest = await resolveChannelViaLocator(
-      alice.sdk as unknown as Sdk,
+      alice.client,
       channel.channelKey,
     )
     expect(manifest?.items.some((i) => i.itemURL === itemRef.itemURL)).toBe(

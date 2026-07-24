@@ -23,7 +23,7 @@ export function ReadFile({
   rightSidebar: React.ReactNode
   pinInput: PinInput
 }) {
-  const sdk = useAuthStore((s) => s.sdk)
+  const client = useAuthStore((s) => s.client)
   const [downloading, setDownloading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const blobURLRef = useRef<string | null>(null)
@@ -37,11 +37,11 @@ export function ReadFile({
   }, [])
 
   async function handleDownload() {
-    if (!sdk || downloading) return
+    if (!client || downloading) return
     setError(null)
     setDownloading(true)
     try {
-      const bytes = await downloadItemBytes(sdk, item.itemURL)
+      const bytes = await downloadItemBytes(client, item.itemURL)
       const blob = new Blob([bytes as BlobPart], {
         type: item.mimeType || 'application/octet-stream',
       })

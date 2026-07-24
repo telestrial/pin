@@ -9,13 +9,12 @@
 // pointer, so hydrate is a no-op today — the objectEvents cold-recovery walk
 // (find the newest pin:docsnapshot-tagged object) is a deferred follow-up.
 
-import type { Sdk } from '@siafoundation/sia-storage'
 import {
   decryptForChannel,
   deriveSnapshotKey,
   encryptForChannel,
 } from '../core/crypto'
-import { downloadItem, uploadItem } from '../core/sia'
+import type { SiaClient } from '../core/siaClient'
 import { getRecord, listAll, putRecord } from './docs'
 
 const POINTER_KEY = 'pin:docsnapshot:pointer'
@@ -57,7 +56,7 @@ function b64decode(b64: string): Uint8Array {
 /** Snapshot the whole doc to Sia (encrypted), update the pointer, prune the
  *  previous snapshot. Call (debounced) after writes. */
 export async function snapshotToSia(
-  sdk: Sdk,
+  client: SiaClient,
   appKeyBytes: Uint8Array,
 ): Promise<Pointer> {
   const key = await deriveSnapshotKey(appKeyBytes)
@@ -67,7 +66,7 @@ export async function snapshotToSia(
     if (value) entries.push({ c: collection, k: rkey, v: b64encode(value) })
   }
   const ciphertext = await encryptForChannel(key, JSON.stringify(entries))
-  const uploaded = await uploadItem(sdk, new TextEncoder().encode(ciphertext))
+  const uploaded = await client.uploadItem(new TextEncoder().encode(ciphertext))
 
   const prev = readPointer()
   writePointer({ id: uploaded.id, url: uploaded.itemURL })
@@ -75,9 +74,9 @@ export async function snapshotToSia(
   // Best-effort prune of the superseded snapshot object (the new one is already
   // pointed at, so a failed prune only leaves a reclaimable orphan).
   if (prev && prev.id !== uploaded.id) {
-    await sdk
+    await client
       .deleteObject(prev.id)
-      .then(() => sdk.pruneSlabs())
+      .then(() => client.pruneSlabs())
       .catch(() => {})
   }
   return { id: uploaded.id, url: uploaded.itemURL }
@@ -89,13 +88,13 @@ export async function snapshotToSia(
 // wasm, no relay). [] when there's no pointer (cold device — objectEvents
 // fallback deferred).
 async function fetchSnapshotEntries(
-  sdk: Sdk,
+  client: SiaClient,
   appKeyBytes: Uint8Array,
 ): Promise<SnapshotEntry[]> {
   const ptr = readPointer()
   if (!ptr) return []
   const key = await deriveSnapshotKey(appKeyBytes)
-  const bytes = await downloadItem(sdk, ptr.url)
+  const bytes = await client.downloadItem(ptr.url)
   const ciphertext = new TextDecoder().decode(bytes)
   return JSON.parse(await decryptForChannel(key, ciphertext)) as SnapshotEntry[]
 }
@@ -103,10 +102,10 @@ async function fetchSnapshotEntries(
 /** Re-hydrate the fresh doc from the latest Sia snapshot (into pin-core). Call
  *  after openDocs, before any reads. Returns how many records were restored. */
 export async function hydrateFromSia(
-  sdk: Sdk,
+  client: SiaClient,
   appKeyBytes: Uint8Array,
 ): Promise<number> {
-  const entries = await fetchSnapshotEntries(sdk, appKeyBytes)
+  const entries = await fetchSnapshotEntries(client, appKeyBytes)
   for (const e of entries) {
     await putRecord(e.c, e.k, b64decode(e.v))
   }
@@ -118,12 +117,12 @@ export async function hydrateFromSia(
  *  channels can be sourced from the durable snapshot on boot cheaply. undefined
  *  if there's no snapshot or the record isn't in it. */
 export async function readRecordFromSnapshot(
-  sdk: Sdk,
+  client: SiaClient,
   appKeyBytes: Uint8Array,
   collection: string,
   rkey: string,
 ): Promise<Uint8Array | undefined> {
-  const entries = await fetchSnapshotEntries(sdk, appKeyBytes)
+  const entries = await fetchSnapshotEntries(client, appKeyBytes)
   const hit = entries.find((e) => e.c === collection && e.k === rkey)
   return hit ? b64decode(hit.v) : undefined
 }

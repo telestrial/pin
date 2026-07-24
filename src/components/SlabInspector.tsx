@@ -1,6 +1,7 @@
 import { RotateCw } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { resolveChannelImageIDs } from '../core/channelImages'
+import type { SiaClient } from '../core/siaClient'
 import { formatBytes } from '../lib/format'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
@@ -9,8 +10,6 @@ import { usePinStore } from '../stores/pin'
 // SDK default: 10 data shards × ~4 MiB each = ~40 MiB usable per slab
 // (the same constant the publish handler in lib/actions/publish uses).
 const SHARD_BYTES = 4 * 1024 * 1024
-const EVENTS_PAGE_LIMIT = 200
-const EVENTS_MAX_PAGES = 50
 
 type SlabPiece = {
   objectID: string
@@ -44,10 +43,7 @@ function shortID(id: string): string {
 // when the local state is empty) fall back to their metadata `kind`, then to a
 // generic marker. This is enrichment only; the authoritative object set comes
 // from the objectEvents walk below, so an unlabeled object still shows up.
-async function buildLabelMap(
-  // biome-ignore lint/suspicious/noExplicitAny: SDK type isn't re-exported here
-  sdk: any,
-): Promise<Map<string, string>> {
+async function buildLabelMap(client: SiaClient): Promise<Map<string, string>> {
   const labelByID = new Map<string, string>()
   const auth = useAuthStore.getState()
   const feed = useFeedStore.getState()
@@ -69,7 +65,7 @@ async function buildLabelMap(
 
   try {
     const images = await resolveChannelImageIDs(
-      sdk,
+      client,
       auth.myChannels,
       feed.manifests,
     )
@@ -89,7 +85,7 @@ async function buildLabelMap(
 }
 
 export function SlabInspector() {
-  const sdk = useAuthStore((s) => s.sdk)
+  const client = useAuthStore((s) => s.client)
   const account = usePinStore((s) => s.account)
 
   const [slabs, setSlabs] = useState<SlabGroup[] | null>(null)
@@ -99,59 +95,28 @@ export function SlabInspector() {
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: refreshTick is a manual-refresh trigger — bumping it re-runs the fetch
   useEffect(() => {
-    if (!sdk) return
+    if (!client) return
     let cancelled = false
     setLoading(true)
     setError(null)
     ;(async () => {
       try {
-        const labelByID = await buildLabelMap(sdk)
+        const labelByID = await buildLabelMap(client)
 
-        // Walk EVERY pinned object in scope (account-wide), keeping the
-        // latest event per id — the same enumeration the storage meter's
-        // rawContentBytes uses. This is what makes the inspector complete:
-        // it no longer depends on local channel/pin state, so profile assets
-        // and anything the app has forgotten still show up.
-        // biome-ignore lint/suspicious/noExplicitAny: SDK ObjectEvent / cursor types aren't exported
-        const latestByID = new Map<string, any>()
-        // biome-ignore lint/suspicious/noExplicitAny: SDK cursor type isn't exported
-        let cursor: any = null
-        for (let page = 0; page < EVENTS_MAX_PAGES; page++) {
-          const events = await sdk.objectEvents(cursor, EVENTS_PAGE_LIMIT)
-          if (events.length === 0) break
-          for (const ev of events) {
-            const prev = latestByID.get(ev.id)
-            if (!prev || ev.updatedAt > prev.updatedAt)
-              latestByID.set(ev.id, ev)
-          }
-          if (events.length < EVENTS_PAGE_LIMIT) break
-          const last = events[events.length - 1]
-          cursor = { id: last.id, after: last.updatedAt }
-        }
+        // Walk EVERY pinned object in scope (account-wide) via the client —
+        // the same enumeration the storage meter's rawContentBytes uses. This
+        // is what makes the inspector complete: it no longer depends on local
+        // channel/pin state, so profile assets and anything the app has
+        // forgotten still show up. (Objects the local label map doesn't know
+        // fall back to a generic marker — the client's descriptor carries no
+        // metadata to derive a `kind` from.)
+        const pinnedObjects = await client.listPinnedObjects()
 
         const groups = new Map<string, SlabGroup>()
-        for (const ev of latestByID.values()) {
-          if (ev.deleted || !ev.object) continue
-          const id: string = ev.id
-          let label = labelByID.get(id)
-          if (!label) {
-            let kind = ''
-            try {
-              const mb: Uint8Array = ev.object.metadata()
-              if (mb && mb.length > 0) {
-                kind = JSON.parse(new TextDecoder().decode(mb)).kind ?? ''
-              }
-            } catch {
-              // unreadable metadata — fall through to generic label
-            }
-            label = kind ? `(${kind})` : '(unlabeled object)'
-          }
-          let objSlabs: ReturnType<typeof ev.object.slabs>
-          try {
-            objSlabs = ev.object.slabs()
-          } catch {
-            continue
-          }
+        for (const info of pinnedObjects) {
+          const id: string = info.id
+          const label = labelByID.get(id) ?? '(unlabeled object)'
+          const objSlabs = info.slabs
           for (const s of objSlabs) {
             let g = groups.get(s.encryptionKey)
             if (!g) {
@@ -189,9 +154,9 @@ export function SlabInspector() {
     return () => {
       cancelled = true
     }
-  }, [sdk, refreshTick])
+  }, [client, refreshTick])
 
-  if (!sdk) return null
+  if (!client) return null
 
   const totalUsed = slabs?.reduce((acc, s) => acc + s.bytesUsed, 0) ?? 0
   const totalCapacity = slabs?.reduce((acc, s) => acc + s.capacityBytes, 0) ?? 0

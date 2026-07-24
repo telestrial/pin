@@ -1,10 +1,10 @@
-import type { Sdk } from '@siafoundation/sia-storage'
+import type { SiaClient } from '../../core/siaClient'
 import type { DeleteObjectsAction } from '../../stores/actionQueue'
 
-// What the runner hands the handler: the SDK plus an id-bound mutator that
+// What the runner hands the handler: the SiaClient plus an id-bound mutator that
 // records one intent key (object ID or URL) as reclaimed, so a resume skips it.
 export type DeleteObjectsContext = {
-  sdk: Sdk
+  client: SiaClient
   markDone: (key: string) => void
 }
 
@@ -15,9 +15,9 @@ function isNotFound(e: unknown): boolean {
 
 // Delete an object, treating "already gone" as success — so a retry after a
 // partial failure (or a duplicate enqueue) converges instead of looping.
-async function deleteIdempotent(sdk: Sdk, id: string): Promise<void> {
+async function deleteIdempotent(client: SiaClient, id: string): Promise<void> {
   try {
-    await sdk.deleteObject(id)
+    await client.deleteObject(id)
   } catch (e) {
     if (isNotFound(e)) return
     throw e
@@ -32,13 +32,13 @@ export async function runDeleteObjects(
   action: DeleteObjectsAction,
   ctx: DeleteObjectsContext,
 ): Promise<void> {
-  const { sdk, markDone } = ctx
+  const { client, markDone } = ctx
   const done = new Set(action.ledger.done ?? [])
   let didWork = false
 
   for (const id of action.intent.objectIDs) {
     if (done.has(id)) continue
-    await deleteIdempotent(sdk, id)
+    await deleteIdempotent(client, id)
     markDone(id)
     didWork = true
   }
@@ -47,7 +47,7 @@ export async function runDeleteObjects(
     if (done.has(url)) continue
     let objectID: string
     try {
-      objectID = (await sdk.sharedObject(url)).id()
+      objectID = await client.resolveObjectID(url)
     } catch (e) {
       // Can't resolve the URL → the bytes aren't reachable in our scope, so
       // there's nothing to delete. Treat the key as done.
@@ -58,7 +58,7 @@ export async function runDeleteObjects(
       }
       throw e
     }
-    await deleteIdempotent(sdk, objectID)
+    await deleteIdempotent(client, objectID)
     markDone(url)
     didWork = true
   }
@@ -68,5 +68,5 @@ export async function runDeleteObjects(
   // `pinnedData` inflated until some later repack happens to prune. This is the
   // only prune on the delete path (repack covers the pin path). Best-effort and
   // skipped on a no-op resume so we don't prune for nothing.
-  if (didWork) await sdk.pruneSlabs().catch(() => {})
+  if (didWork) await client.pruneSlabs().catch(() => {})
 }

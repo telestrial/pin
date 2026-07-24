@@ -66,11 +66,11 @@ function writeFingerprint(fp: string): void {
 }
 
 export function useSettingsDocsMirror() {
-  const sdk = useAuthStore((s) => s.sdk)
+  const client = useAuthStore((s) => s.client)
   const storedKeyHex = useAuthStore((s) => s.storedKeyHex)
 
   useEffect(() => {
-    if (!sdk || !storedKeyHex) return
+    if (!client || !storedKeyHex) return
 
     const appKeyBytes = Uint8Array.fromHex(storedKeyHex)
     let cancelled = false
@@ -110,7 +110,7 @@ export function useSettingsDocsMirror() {
         const key = await deriveSettingsKey(appKeyBytes)
         const enc = await encryptSettings(key, JSON.stringify(settings))
         await putRecord('settings', 'self', new TextEncoder().encode(enc))
-        await snapshotToSia(sdk, appKeyBytes)
+        await snapshotToSia(client, appKeyBytes)
         // Only advance the fingerprint on full success — a failure leaves it
         // stale so the next change/boot retries (no silent loss).
         writeFingerprint(fp)
@@ -169,5 +169,5 @@ export function useSettingsDocsMirror() {
       if (timer) clearTimeout(timer)
       unsub()
     }
-  }, [sdk, storedKeyHex])
+  }, [client, storedKeyHex])
 }

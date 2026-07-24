@@ -16,7 +16,7 @@ import { useToastStore } from '../../stores/toast'
 import { PinIcon } from './PinIcon'
 
 export function PinButton({ input }: { input: PinInput }) {
-  const sdk = useAuthStore((s) => s.sdk)
+  const client = useAuthStore((s) => s.client)
   const myChannels = useAuthStore((s) => s.myChannels)
   const isPinned = usePinStore((s) => s.isPinned(input.item.itemURL))
   const isPinning = usePinStore((s) => s.isPinning(input.item.itemURL))
@@ -35,7 +35,7 @@ export function PinButton({ input }: { input: PinInput }) {
 
   const handleClick = async (e: React.MouseEvent) => {
     e.stopPropagation()
-    if (!sdk || busy) return
+    if (!client || busy) return
 
     if (isOwned && ownedChannel) {
       const confirmation = window.prompt(
@@ -56,7 +56,7 @@ export function PinButton({ input }: { input: PinInput }) {
         ])
         // Commits the updated manifest to the locator + reflects it in the feed.
         const { orphanedObjectIDs } = await deleteItemFromChannel(
-          sdk,
+          client,
           ownedChannel,
           input.item.id,
           protectedIDs,
@@ -67,7 +67,7 @@ export function PinButton({ input }: { input: PinInput }) {
           objectIDs: orphanedObjectIDs,
           label: `Reclaiming “${input.item.title || 'post'}”`,
         })
-        usePinStore.getState().refreshAccount(sdk)
+        usePinStore.getState().refreshAccount(client)
         addToast('Item retracted')
       } catch (err) {
         addToast(err instanceof Error ? err.message : 'Delete failed')
@@ -79,10 +79,10 @@ export function PinButton({ input }: { input: PinInput }) {
 
     try {
       if (isPinned) {
-        await unpin(sdk, input.item.itemURL)
+        await unpin(client, input.item.itemURL)
         addToast('Unpinned')
       } else {
-        await pin(sdk, input)
+        await pin(client, input)
         addToast('Pinned to your storage')
       }
     } catch (err) {
@@ -118,7 +118,7 @@ export function PinButton({ input }: { input: PinInput }) {
     <button
       type="button"
       onClick={handleClick}
-      disabled={busy || !sdk}
+      disabled={busy || !client}
       title={title}
       aria-pressed={pinState === 'pinned'}
       className={`p-1 cursor-pointer transition-all duration-300 disabled:cursor-default disabled:opacity-50 ${colorClass}`}

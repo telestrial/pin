@@ -18,7 +18,6 @@ vi.mock('../lib/pkarr', async () =>
   (await import('./fakeModules')).fakePkarrModule(),
 )
 
-import type { Sdk } from '@siafoundation/sia-storage'
 import { HomeFeed } from '../components/HomeFeed'
 import type { SubscriptionRef } from '../core/types'
 import { deleteItemFromChannel } from '../lib/channelWrites'
@@ -257,11 +256,7 @@ describe('integration: custody', () => {
     // and commits the update to the channel's locator (Sia + pkarr). Bob's
     // independent pin keeps the bytes alive because he's still a pinner; his
     // snapshot is unaffected by alice's retract regardless.
-    await deleteItemFromChannel(
-      alice.sdk as unknown as Sdk,
-      channel,
-      postItemID,
-    )
+    await deleteItemFromChannel(alice.client, channel, postItemID)
 
     // Read the updated manifest back off the locator into bob's feed.
     await act(async () => {

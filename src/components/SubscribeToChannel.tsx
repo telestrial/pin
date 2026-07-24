@@ -20,7 +20,7 @@ export function SubscribeToChannel({
 }) {
   const subscriptions = useAuthStore((s) => s.subscriptions)
   const addSubscription = useAuthStore((s) => s.addSubscription)
-  const sdk = useAuthStore((s) => s.sdk)
+  const client = useAuthStore((s) => s.client)
 
   const [url, setUrl] = useState('')
   const [submitting, setSubmitting] = useState(false)
@@ -31,7 +31,7 @@ export function SubscribeToChannel({
     const trimmed = url.trim()
     if (!trimmed) return
 
-    if (!sdk) {
+    if (!client) {
       setError('Not connected to Sia yet.')
       return
     }
@@ -49,7 +49,7 @@ export function SubscribeToChannel({
       // Locator-only read (via K from the URL), same reader as the feed. A
       // legacy authorATProtoDID off the manifest is stored when present, but
       // identity is the did:dht from the subscribe URL.
-      const manifest = await makeLocatorReader(sdk)(
+      const manifest = await makeLocatorReader(client)(
         parsed.didDht ?? parsed.authorHandle,
         parsed.channelID,
         parsed.channelKey,
