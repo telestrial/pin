@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "dev:lan": "PIN_LAN=1 vite",
+    "dev:desktop": "bun run build && tauri dev",
     "build": "tsc -b && vite build",
     "wasm": "bash scripts/build-wasm.sh",
     "pkarr": "node scripts/build-pkarr.mjs",

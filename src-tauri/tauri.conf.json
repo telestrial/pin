@@ -5,8 +5,7 @@
   "identifier": "tech.sia.pin",
   "build": {
     "frontendDist": "../dist",
-    "beforeBuildCommand": "bun run build",
-    "beforeDevCommand": "bun run build"
+    "beforeBuildCommand": "bun run build"
   },
   "app": {
     "windows": [
