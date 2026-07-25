@@ -15,6 +15,7 @@ import {
 import { useChannelDocsMirror } from './lib/hooks/useChannelDocsMirror'
 import { useChannelLocatorPublish } from './lib/hooks/useChannelLocatorPublish'
 import { useChannelReader } from './lib/hooks/useChannelReader'
+import { useCuratorAutostart } from './lib/hooks/useCuratorAutostart'
 import { useHandleFollowReconciliation } from './lib/hooks/useHandleFollowReconciliation'
 import { useIdentityDocPublish } from './lib/hooks/useIdentityDocPublish'
 import { useRepackRunner } from './lib/hooks/useRepackRunner'
@@ -70,6 +71,7 @@ export default function App() {
 
   useActionQueueHydration()
   useActionRunner()
+  useCuratorAutostart()
   useRepackRunner()
   useSettingsSync()
   useSettingsDocsMirror()
