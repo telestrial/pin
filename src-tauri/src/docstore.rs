@@ -21,7 +21,7 @@ use std::path::Path;
 
 use iroh::Endpoint;
 use iroh_blobs::store::fs::FsStore;
-use iroh_docs::{api::Doc, protocol::Docs, Author, Capability, NamespaceSecret};
+use iroh_docs::{api::Doc, protocol::Docs, Author, AuthorId, Capability, NamespaceSecret};
 use iroh_gossip::net::Gossip;
 // Shared with pin-core (the browser engine): the doc namespace/author `info`s +
 // hkdf32 + decode_app_key. Domain-separated from the did:dht identity
@@ -49,6 +49,9 @@ pub struct DocEngine {
     pub blobs: FsStore,
     /// The gossip overlay (mount on `iroh_gossip::ALPN`; drives live-sync).
     pub gossip: Gossip,
+    /// The doc's author id (derived from the AppKey). Every read/write to `doc`
+    /// is scoped to this author, so record CRUD over IPC needs it too.
+    pub author_id: AuthorId,
     /// The Curator's doc namespace id (the doc's public identifier).
     pub namespace_id: String,
     /// True if the marker was already present on load — i.e. the doc persisted from
@@ -117,6 +120,7 @@ pub async fn open_or_create(
         docs,
         blobs,
         gossip,
+        author_id,
         namespace_id,
         reopened,
     })

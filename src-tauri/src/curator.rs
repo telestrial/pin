@@ -22,10 +22,20 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use futures_lite::StreamExt as _;
 use iroh::endpoint::presets;
 use iroh::{Endpoint, SecretKey};
 use iroh_docs::api::protocol::{AddrInfoOptions, ShareMode};
+use iroh_docs::store::Query;
 use tauri::Manager;
+
+use crate::docstore::DocEngine;
+
+/// Shared handle to the running Curator's doc engine. Populated by the Curator loop
+/// when the engine comes up and cleared on stop; the `docs_*` IPC commands read it to
+/// serve the frontend's record CRUD against the SAME persistent replica the Curator
+/// serves over iroh. `None` whenever curation is off / the engine hasn't come up.
+type DocSlot = Arc<Mutex<Option<Arc<DocEngine>>>>;
 
 /// What the frontend reads. snake_case fields are renamed to camelCase on the
 /// wire for the TS client.
@@ -137,6 +147,10 @@ struct Inner {
     running: Arc<AtomicBool>,
     handle: Option<JoinHandle<()>>,
     diag: Option<Arc<Mutex<Diag>>>,
+    /// Live handle to the running engine's doc, for the `docs_*` commands. A fresh
+    /// slot is minted per start (like `diag`), so a stopped loop clearing its old
+    /// slot can't clear the current one.
+    doc_slot: DocSlot,
 }
 
 /// Tauri-managed state holding the running Curator, if any.
@@ -245,13 +259,17 @@ pub fn start_curator(
 
     let running = Arc::new(AtomicBool::new(true));
     let diag = Arc::new(Mutex::new(Diag::off()));
+    let doc_slot: DocSlot = Arc::new(Mutex::new(None));
     {
         let mut d = diag.lock().unwrap();
         d.phase = "binding";
     }
     inner.running = running.clone();
     inner.diag = Some(diag.clone());
-    inner.handle = Some(thread::spawn(move || run_curator(running, diag, data_dir, creds)));
+    inner.doc_slot = doc_slot.clone();
+    inner.handle = Some(thread::spawn(move || {
+        run_curator(running, diag, doc_slot, data_dir, creds)
+    }));
 
     CuratorState::snapshot(&inner)
 }
@@ -282,11 +300,147 @@ pub fn curator_doc_ticket(state: tauri::State<CuratorState>) -> Option<String> {
         .and_then(|d| d.lock().unwrap().doc_ticket.clone())
 }
 
+// --- Record CRUD over IPC (the desktop transport for src/lib/docs.ts) --------
+//
+// These serve the frontend's doc-engine surface against the Curator's OWN persistent
+// replica — the same one it serves over iroh — instead of the ephemeral in-webview
+// wasm replica. Record identity + value semantics MUST match pin-core (src/lib.rs):
+// key = `collection/rkey` bytes, value = opaque bytes (the app's encrypted blob),
+// scoped to the doc's derived author. Every command errors cleanly ("Curator is not
+// running") when the engine is down, so callers degrade rather than hang.
+//
+// Slice A: these exist and are proven by a dev self-test; docs.ts doesn't route here
+// yet. Byte values ride as plain JSON arrays — fine at record scale (settings /
+// channel manifests are KB, media bytes live on Sia) — not the raw-body path sia.rs
+// needs for multi-MB uploads.
+
+/// The `collection/rkey` key, byte-identical to pin-core's `record_key`.
+fn record_key(collection: &str, rkey: &str) -> Vec<u8> {
+    format!("{collection}/{rkey}").into_bytes()
+}
+
+/// Clone out the running engine handle without holding the state lock across an await.
+/// `Err` when curation is off / the engine hasn't come up.
+fn current_engine(state: &CuratorState) -> Result<Arc<DocEngine>, String> {
+    let slot = state.0.lock().unwrap().doc_slot.clone();
+    let engine = slot.lock().unwrap().clone();
+    engine.ok_or_else(|| "Curator is not running".to_string())
+}
+
+/// The running engine's namespace id (the doc's public identifier), or `None` if the
+/// engine isn't up — the desktop equivalent of pin-core's `open` return value.
+#[tauri::command]
+pub fn docs_namespace(state: tauri::State<CuratorState>) -> Option<String> {
+    current_engine(&state).ok().map(|e| e.namespace_id.clone())
+}
+
+#[tauri::command]
+pub async fn docs_put_record(
+    state: tauri::State<'_, CuratorState>,
+    collection: String,
+    rkey: String,
+    value: Vec<u8>,
+) -> Result<(), String> {
+    let engine = current_engine(&state)?;
+    engine
+        .doc
+        .set_bytes(engine.author_id, record_key(&collection, &rkey), value)
+        .await
+        .map_err(|e| format!("set_bytes: {e}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn docs_get_record(
+    state: tauri::State<'_, CuratorState>,
+    collection: String,
+    rkey: String,
+) -> Result<Option<Vec<u8>>, String> {
+    let engine = current_engine(&state)?;
+    let entry = engine
+        .doc
+        .get_exact(engine.author_id, record_key(&collection, &rkey), false)
+        .await
+        .map_err(|e| format!("get_exact: {e}"))?;
+    match entry {
+        None => Ok(None),
+        Some(e) => {
+            let bytes = engine
+                .blobs
+                .get_bytes(e.content_hash())
+                .await
+                .map_err(|e| format!("get_bytes: {e}"))?;
+            Ok(Some(bytes.to_vec()))
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn docs_delete_record(
+    state: tauri::State<'_, CuratorState>,
+    collection: String,
+    rkey: String,
+) -> Result<(), String> {
+    let engine = current_engine(&state)?;
+    engine
+        .doc
+        .del(engine.author_id, record_key(&collection, &rkey))
+        .await
+        .map_err(|e| format!("del: {e}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn docs_list_records(
+    state: tauri::State<'_, CuratorState>,
+    collection: String,
+) -> Result<Vec<String>, String> {
+    let engine = current_engine(&state)?;
+    let prefix = format!("{collection}/");
+    let mut stream = Box::pin(
+        engine
+            .doc
+            .get_many(Query::all().build())
+            .await
+            .map_err(|e| format!("get_many: {e}"))?,
+    );
+    let mut out = Vec::new();
+    while let Some(res) = stream.next().await {
+        let entry = res.map_err(|e| format!("entry: {e}"))?;
+        let key = String::from_utf8_lossy(entry.key());
+        if let Some(rkey) = key.strip_prefix(&prefix) {
+            out.push(rkey.to_string());
+        }
+    }
+    Ok(out)
+}
+
+#[tauri::command]
+pub async fn docs_list_all(
+    state: tauri::State<'_, CuratorState>,
+) -> Result<Vec<String>, String> {
+    let engine = current_engine(&state)?;
+    let mut stream = Box::pin(
+        engine
+            .doc
+            .get_many(Query::all().build())
+            .await
+            .map_err(|e| format!("get_many: {e}"))?,
+    );
+    let mut out = Vec::new();
+    while let Some(res) = stream.next().await {
+        let entry = res.map_err(|e| format!("entry: {e}"))?;
+        out.push(String::from_utf8_lossy(entry.key()).to_string());
+    }
+    Ok(out)
+}
+
 /// Owns a dedicated tokio runtime for the Curator's lifetime and drives the
 /// async endpoint loop on it.
 fn run_curator(
     running: Arc<AtomicBool>,
     diag: Arc<Mutex<Diag>>,
+    doc_slot: DocSlot,
     data_dir: Option<PathBuf>,
     creds: Option<SiaCreds>,
 ) {
@@ -302,7 +456,7 @@ fn run_curator(
             return;
         }
     };
-    rt.block_on(curator_loop(running, diag, data_dir, creds));
+    rt.block_on(curator_loop(running, diag, doc_slot, data_dir, creds));
 }
 
 /// Load the persisted iroh secret key, or generate one and persist it. The key
@@ -333,6 +487,7 @@ fn load_or_create_key(path: Option<&Path>) -> (SecretKey, bool) {
 async fn curator_loop(
     running: Arc<AtomicBool>,
     diag: Arc<Mutex<Diag>>,
+    doc_slot: DocSlot,
     data_dir: Option<PathBuf>,
     creds: Option<SiaCreds>,
 ) {
@@ -374,39 +529,40 @@ async fn curator_loop(
     // them. "reopened from disk" is the persistence proof — the marker written on
     // first run survives restarts. Best-effort; needs the AppKey (the doc's identity
     // derives from it) and a data dir.
-    let doc_engine: Option<crate::docstore::DocEngine> =
-        match (creds.as_ref(), data_dir.as_deref()) {
-            (Some(c), Some(dir)) => {
-                match crate::docstore::open_or_create(&endpoint, dir, &c.app_key_hex).await {
-                    Ok(engine) => {
-                        log::info!(
-                            "curator docs engine online: ns={} ({})",
-                            engine.namespace_id,
-                            if engine.reopened {
-                                "reopened from disk"
-                            } else {
-                                "created fresh"
-                            }
-                        );
-                        Some(engine)
-                    }
-                    Err(e) => {
-                        log::warn!("curator docs engine failed: {e}");
-                        None
-                    }
+    let doc_engine: Option<Arc<DocEngine>> = match (creds.as_ref(), data_dir.as_deref()) {
+        (Some(c), Some(dir)) => {
+            match crate::docstore::open_or_create(&endpoint, dir, &c.app_key_hex).await {
+                Ok(engine) => {
+                    log::info!(
+                        "curator docs engine online: ns={} ({})",
+                        engine.namespace_id,
+                        if engine.reopened {
+                            "reopened from disk"
+                        } else {
+                            "created fresh"
+                        }
+                    );
+                    Some(Arc::new(engine))
+                }
+                Err(e) => {
+                    log::warn!("curator docs engine failed: {e}");
+                    None
                 }
             }
-            _ => {
-                log::info!("curator docs engine: skipped (no Sia session / data dir)");
-                None
-            }
-        };
-    // Feed the repo diagnostics from the docs engine.
+        }
+        _ => {
+            log::info!("curator docs engine: skipped (no Sia session / data dir)");
+            None
+        }
+    };
+    // Feed the repo diagnostics from the docs engine, and publish the engine handle
+    // so the `docs_*` IPC commands serve the frontend against this same replica.
     if let Some(engine) = doc_engine.as_ref() {
         let mut d = diag.lock().unwrap();
         d.docs_namespace = Some(engine.namespace_id.clone());
         d.docs_reopened = engine.reopened;
     }
+    *doc_slot.lock().unwrap() = doc_engine.clone();
 
     // Serve the /hey inbox over iroh, plus the iroh-docs / blobs / gossip protocols
     // when the docs engine is up — one ALPN-multiplexed Router. The atrium repo and
@@ -571,6 +727,8 @@ async fn curator_loop(
         let mut d = diag.lock().unwrap();
         d.phase = "stopping";
     }
+    // Doc goes unavailable to the `docs_*` commands the moment teardown begins.
+    *doc_slot.lock().unwrap() = None;
     if let Some(r) = router {
         r.shutdown().await.ok();
     }
