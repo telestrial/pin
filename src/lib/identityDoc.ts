@@ -7,15 +7,11 @@
 // IS the `_dir` pointer anyone resolving the did:dht receives) is the only layer, so
 // it's public-by-capability. Anyone who can resolve your did:dht can read it.
 
+import { deriveDidDhtSeed } from '../core/crypto'
 import { DIRECTORY_DOC_VERSION, type DirectoryDoc } from '../core/identityDoc'
 import type { SiaClient } from '../core/siaClient'
-import {
-  chunkForTxt,
-  deriveDidDht,
-  publishRecords,
-  reassembleTxt,
-  resolveDidDht,
-} from './pkarr'
+import { chunkForTxt, reassembleTxt } from './pkarr'
+import { pkarrTransport } from './pkarrTransport'
 
 // TXT record name prefix for the chunked Sia pointer in an identity document.
 const POINTER_PREFIX = '_dir'
@@ -33,8 +29,11 @@ export async function publishIdentityDoc(
   const uploaded = await client.uploadItem(
     new TextEncoder().encode(JSON.stringify(doc)),
   )
-  const { keypair } = await deriveDidDht(appKeyBytes)
-  await publishRecords(keypair, chunkForTxt(POINTER_PREFIX, uploaded.itemURL))
+  const seed = await deriveDidDhtSeed(appKeyBytes)
+  await (await pkarrTransport()).publish(
+    seed,
+    chunkForTxt(POINTER_PREFIX, uploaded.itemURL),
+  )
   return { id: uploaded.id, url: uploaded.itemURL }
 }
 
@@ -44,7 +43,7 @@ export async function resolveIdentityDoc(
   client: SiaClient,
   didDht: string,
 ): Promise<DirectoryDoc | null> {
-  const records = await resolveDidDht(didDht)
+  const records = await (await pkarrTransport()).resolve(didDht)
   const url = reassembleTxt(records, POINTER_PREFIX)
   if (!url) return null
 

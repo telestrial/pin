@@ -19,13 +19,8 @@ import {
 import type { FetchChannel } from '../core/feed'
 import type { SiaClient } from '../core/siaClient'
 import { CHANNEL_MANIFEST_VERSION, type ChannelManifest } from '../core/types'
-import {
-  chunkForTxt,
-  identityFromSeed,
-  publishRecords,
-  reassembleTxt,
-  resolveDidDht,
-} from './pkarr'
+import { chunkForTxt, identityFromSeed, reassembleTxt } from './pkarr'
+import { pkarrTransport } from './pkarrTransport'
 
 // TXT record name prefix for the chunked Sia pointer in a channel-locator document.
 const POINTER_PREFIX = '_c'
@@ -82,10 +77,12 @@ export async function publishChannelLocator(
   const ciphertext = await encryptForChannel(kBytes, JSON.stringify(manifest))
   const uploaded = await client.uploadItem(new TextEncoder().encode(ciphertext))
 
-  const { keypair, publicKey } = await identityFromSeed(
-    await deriveChannelLocatorSeed(kBytes),
+  const seed = await deriveChannelLocatorSeed(kBytes)
+  const { publicKey } = await identityFromSeed(seed)
+  await (await pkarrTransport()).publish(
+    seed,
+    chunkForTxt(POINTER_PREFIX, uploaded.itemURL),
   )
-  await publishRecords(keypair, chunkForTxt(POINTER_PREFIX, uploaded.itemURL))
   return { locatorKey: publicKey, id: uploaded.id, url: uploaded.itemURL }
 }
 
@@ -100,7 +97,7 @@ export async function resolveChannelViaLocator(
   const { publicKey } = await identityFromSeed(
     await deriveChannelLocatorSeed(kBytes),
   )
-  const records = await resolveDidDht(publicKey)
+  const records = await (await pkarrTransport()).resolve(publicKey)
   const url = reassembleTxt(records, POINTER_PREFIX)
   if (!url) return null
 
@@ -189,8 +186,9 @@ export async function refreshChannelLocator(
   const pointer = readLocatorObjectPointer(channelID)
   if (!pointer?.url) return
   const kBytes = channelKeyFromBase64(channelKeyB64)
-  const { keypair } = await identityFromSeed(
-    await deriveChannelLocatorSeed(kBytes),
+  const seed = await deriveChannelLocatorSeed(kBytes)
+  await (await pkarrTransport()).publish(
+    seed,
+    chunkForTxt(POINTER_PREFIX, pointer.url),
   )
-  await publishRecords(keypair, chunkForTxt(POINTER_PREFIX, pointer.url))
 }
