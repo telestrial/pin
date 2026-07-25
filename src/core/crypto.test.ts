@@ -8,6 +8,7 @@ import {
   deriveChannelLocatorSeed,
   deriveDidDhtSeed,
   deriveSettingsKey,
+  deriveSettingsLocatorSeed,
   encryptForChannel,
   encryptSettings,
   generateChannelKey,
@@ -243,6 +244,38 @@ describe('deriveChannelLocatorSeed', () => {
     const seed = await deriveChannelLocatorSeed(new Uint8Array(32))
     expect(toHex(seed)).toBe(
       '78aa2d69cfe77badc0d0d7cd976e0c1b6c3fe4964958145793d153b03a3442eb',
+    )
+  })
+})
+
+describe('deriveSettingsLocatorSeed', () => {
+  it('produces a 32-byte ed25519 seed', async () => {
+    const seed = await deriveSettingsLocatorSeed(new Uint8Array(32))
+    expect(seed.length).toBe(32)
+  })
+
+  it('is deterministic for the same AppKey (recovery: a fresh device must re-derive the same locator)', async () => {
+    const appKey = crypto.getRandomValues(new Uint8Array(32))
+    expect(await deriveSettingsLocatorSeed(appKey)).toEqual(
+      await deriveSettingsLocatorSeed(appKey),
+    )
+  })
+
+  it('differs from the settings key, did:dht seed, and channel locator for the same bytes (domain separation)', async () => {
+    const bytes = new Uint8Array(32).fill(7)
+    const locator = await deriveSettingsLocatorSeed(bytes)
+    expect(locator).not.toEqual(await deriveSettingsKey(bytes))
+    expect(locator).not.toEqual(await deriveDidDhtSeed(bytes))
+    expect(locator).not.toEqual(await deriveChannelLocatorSeed(bytes))
+  })
+
+  it('matches a fixed value for the all-zeros AppKey (regression lock)', async () => {
+    // Locks salt='' + info='pin:settings-locator:v1' + SHA-256. A silent change
+    // here would move every existing user's settings pointer on the DHT, breaking
+    // fresh-device recovery — the whole point of the durable locator.
+    const seed = await deriveSettingsLocatorSeed(new Uint8Array(32))
+    expect(toHex(seed)).toBe(
+      '049e8a3f64287d45448ab3fc4dfbdd1e27ab9858ce4262abd7c9163841031689',
     )
   })
 })

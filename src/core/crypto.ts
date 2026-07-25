@@ -202,6 +202,20 @@ export async function deriveChannelLocatorSeed(
   return deriveAppSubkey(channelKeyBytes, CHANNEL_LOCATOR_KEY_INFO)
 }
 
+// The 32-byte ed25519 seed for your SETTINGS pkarr LOCATOR key — the mutable
+// pointer to the current encrypted settings snapshot on Sia lives on the DHT under
+// this key. AppKey-derived, so it's unlisted (only you can compute it → only you can
+// find your settings pointer, exactly like a channel locator) and domain-separated
+// from the PUBLIC did:dht identity, so resolving someone's did:dht never surfaces
+// their settings pointer. Recoverable from the recovery phrase alone — the durable
+// replacement for the device-local localStorage pointer.
+const SETTINGS_LOCATOR_KEY_INFO = 'pin:settings-locator:v1'
+export async function deriveSettingsLocatorSeed(
+  appKeyBytes: Uint8Array,
+): Promise<Uint8Array> {
+  return deriveAppSubkey(appKeyBytes, SETTINGS_LOCATOR_KEY_INFO)
+}
+
 export async function encryptSettings(
   key: Uint8Array,
   plaintext: string,

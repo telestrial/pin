@@ -11,13 +11,18 @@
 
 import {
   decryptForChannel,
+  deriveSettingsLocatorSeed,
   deriveSnapshotKey,
   encryptForChannel,
 } from '../core/crypto'
 import type { SiaClient } from '../core/siaClient'
 import { getRecord, listAll, putRecord } from './docs'
+import { chunkForTxt } from './pkarr'
+import { pkarrTransport } from './pkarrTransport'
 
 const POINTER_KEY = 'pin:docsnapshot:pointer'
+// TXT prefix for the chunked Sia-snapshot URL in the settings-locator document.
+const SETTINGS_POINTER_PREFIX = '_s'
 
 // collection, rkey, value(base64). Short keys keep the snapshot JSON compact.
 type SnapshotEntry = { c: string; k: string; v: string }
@@ -53,8 +58,30 @@ function b64decode(b64: string): Uint8Array {
   return out
 }
 
-/** Snapshot the whole doc to Sia (encrypted), update the pointer, prune the
- *  previous snapshot. Call (debounced) after writes. */
+// Publish the durable settings pointer: a pkarr record (AppKey-keyed) naming the
+// current Sia snapshot URL. This is what lets a fresh device recover settings from
+// the recovery phrase alone (phrase → AppKey → locator key → DHT → Sia URL) — the
+// localStorage pointer is only a fast cache in front of it. Routed through the
+// pkarrTransport seam, so desktop publishes over the direct Mainline DHT (no relay
+// lag) and web over the relays, same as channel locators.
+async function publishSettingsLocator(
+  appKeyBytes: Uint8Array,
+  url: string,
+): Promise<void> {
+  const seed = await deriveSettingsLocatorSeed(appKeyBytes)
+  await (await pkarrTransport()).publish(
+    seed,
+    chunkForTxt(SETTINGS_POINTER_PREFIX, url),
+  )
+}
+
+// (The recovery read — resolve this locator off the DHT on a device with no local
+// pointer — is a deliberate follow-up: it needs the new-user first-boot latency
+// handled, so it's split from this publish-only, additive change.)
+
+/** Snapshot the whole doc to Sia (encrypted), update the pointer, publish the
+ *  durable pkarr locator, prune the previous snapshot. Call (debounced) after
+ *  writes. */
 export async function snapshotToSia(
   client: SiaClient,
   appKeyBytes: Uint8Array,
@@ -70,6 +97,13 @@ export async function snapshotToSia(
 
   const prev = readPointer()
   writePointer({ id: uploaded.id, url: uploaded.itemURL })
+
+  // Publish the durable DHT pointer (best-effort — the localStorage pointer above
+  // already made this snapshot readable on THIS device; a failed publish just
+  // retries on the next snapshot, and the previous locator still resolves).
+  await publishSettingsLocator(appKeyBytes, uploaded.itemURL).catch((e) =>
+    console.warn('settings locator publish failed (will retry):', e),
+  )
 
   // Best-effort prune of the superseded snapshot object (the new one is already
   // pointed at, so a failed prune only leaves a reclaimable orphan).
