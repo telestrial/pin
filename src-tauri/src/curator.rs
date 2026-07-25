@@ -24,6 +24,7 @@ use std::time::{Duration, Instant};
 
 use iroh::endpoint::presets;
 use iroh::{Endpoint, SecretKey};
+use iroh_docs::api::protocol::{AddrInfoOptions, ShareMode};
 use tauri::Manager;
 
 /// What the frontend reads. snake_case fields are renamed to camelCase on the
@@ -96,6 +97,10 @@ struct Diag {
     mirror_root: Option<String>,
     mirror_url: Option<String>,
     mirror_error: Option<String>,
+    /// The keeper's shareable DocTicket — a browser peer imports it to sync the
+    /// keeper's iroh-docs replica. Read out-of-band via `curator_doc_ticket` (kept
+    /// off the status payload since it's large and only fetched on demand).
+    doc_ticket: Option<String>,
     last_error: Option<String>,
     started: Option<Instant>,
 }
@@ -120,6 +125,7 @@ impl Diag {
             mirror_root: None,
             mirror_url: None,
             mirror_error: None,
+            doc_ticket: None,
             last_error: None,
             started: None,
         }
@@ -263,6 +269,17 @@ pub fn stop_curator(state: tauri::State<CuratorState>) -> CuratorStatus {
 #[tauri::command]
 pub fn curator_status(state: tauri::State<CuratorState>) -> CuratorStatus {
     CuratorState::snapshot(&state.0.lock().unwrap())
+}
+
+/// The keeper's shareable DocTicket, or `None` until the doc engine is up and has
+/// produced one. A browser peer imports this to sync the keeper's iroh-docs replica.
+#[tauri::command]
+pub fn curator_doc_ticket(state: tauri::State<CuratorState>) -> Option<String> {
+    let inner = state.0.lock().unwrap();
+    inner
+        .diag
+        .as_ref()
+        .and_then(|d| d.lock().unwrap().doc_ticket.clone())
 }
 
 /// Owns a dedicated tokio runtime for the Curator's lifetime and drives the
@@ -487,6 +504,7 @@ async fn curator_loop(
 
     // Poll the endpoint's address set so relay connection + discovered direct
     // addresses (LAN, then public via STUN) surface as they come up.
+    let mut ticket_logged = false;
     while running.load(Ordering::SeqCst) {
         let addr = endpoint.addr();
         let mut relays = Vec::new();
@@ -515,6 +533,29 @@ async fn curator_loop(
             d.other_addrs = other;
             d.hey_queued = hey_queued;
             d.phase = if online { "online" } else { "connecting" };
+        }
+
+        // Refresh the shareable DocTicket so a browser peer can import + sync the
+        // keeper's replica. Recomputed each poll so late-discovered direct addrs land
+        // in it; `share` is a pure read of the capability + current addrs (the Router
+        // is what actually serves the doc), so recomputing is cheap and side-effect
+        // free. A browser reaches us relay-first regardless.
+        if let Some(engine) = doc_engine.as_ref() {
+            match engine
+                .doc
+                .share(ShareMode::Write, AddrInfoOptions::RelayAndAddresses)
+                .await
+            {
+                Ok(ticket) => {
+                    let ticket = ticket.to_string();
+                    if !ticket_logged {
+                        log::info!("curator doc ticket ready ({} chars)", ticket.len());
+                        ticket_logged = true;
+                    }
+                    diag.lock().unwrap().doc_ticket = Some(ticket);
+                }
+                Err(e) => log::warn!("curator doc share failed: {e}"),
+            }
         }
 
         // ~2s between polls, in short slices so stop is honored promptly.

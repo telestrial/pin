@@ -16,6 +16,7 @@ pub fn run() {
       curator::start_curator,
       curator::stop_curator,
       curator::curator_status,
+      curator::curator_doc_ticket,
       sia::sia_connect,
       sia::sia_upload_item,
       sia::sia_upload_items_packed,

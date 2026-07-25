@@ -21,7 +21,7 @@ use std::path::Path;
 
 use iroh::Endpoint;
 use iroh_blobs::store::fs::FsStore;
-use iroh_docs::{protocol::Docs, Author, Capability, NamespaceSecret};
+use iroh_docs::{api::Doc, protocol::Docs, Author, Capability, NamespaceSecret};
 use iroh_gossip::net::Gossip;
 // Shared with pin-core (the browser engine): the doc namespace/author `info`s +
 // hkdf32 + decode_app_key. Domain-separated from the did:dht identity
@@ -38,6 +38,9 @@ const MARKER_KEY: &[u8] = b"dev.sia.pin.marker/self";
 /// `Clone` and `blobs` derefs to the blobs `Store`, so the Router takes clones/refs
 /// and this struct stays whole.
 pub struct DocEngine {
+    /// The keeper's own doc replica (this namespace). Handle for reading/writing
+    /// entries and for `share()`ing a `DocTicket` a browser peer imports to sync.
+    pub doc: Doc,
     /// The docs protocol handler (mount on `iroh_docs::ALPN`; also the API for
     /// reading/writing the keeper's doc).
     pub docs: Docs,
@@ -110,6 +113,7 @@ pub async fn open_or_create(
     }
 
     Ok(DocEngine {
+        doc,
         docs,
         blobs,
         gossip,
