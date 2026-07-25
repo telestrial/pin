@@ -13,6 +13,8 @@ import initWasm, {
   list_all,
   list_records,
   put_record,
+  share as coreShare,
+  start_sync as coreStartSync,
 } from '../../crates/pin-core/pkg/pin_core.js'
 
 let wasmReady: Promise<void> | null = null
@@ -69,6 +71,27 @@ export async function listAll(): Promise<
     const i = key.indexOf('/')
     return { collection: key.slice(0, i), rkey: key.slice(i + 1) }
   })
+}
+
+/** Produce a shareable DocTicket for this identity's doc (write cap + relay addr).
+ *  A peer imports it via {@link startSync} to live-sync. Symmetric with the keeper's
+ *  ticket — useful as a tab-to-tab sync counterpart during dev. Requires an open doc
+ *  ({@link openDocs}). */
+export async function shareDoc(): Promise<string> {
+  await ensureReady()
+  return coreShare()
+}
+
+/** Join the peer(s) in `ticket` and live-sync this identity's doc with them —
+ *  the front end of the Curator. `onEvent` fires with a short label per sync event
+ *  (insert-local / insert-remote / sync-finished / neighbor-up|down). The doc must
+ *  already be open ({@link openDocs}); the same-namespace keeper is the peer. */
+export async function startSync(
+  ticket: string,
+  onEvent: (label: string) => void,
+): Promise<void> {
+  await ensureReady()
+  await coreStartSync(ticket, onEvent)
 }
 
 /** Dev-only Vite⨉wasm proof: open + put + get + list + delete roundtrip through the

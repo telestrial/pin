@@ -69,7 +69,24 @@ export function open(app_key_hex: string): Promise<string>;
  */
 export function put_record(collection: string, rkey: string, value: Uint8Array): Promise<void>;
 
+/**
+ * Produce a shareable DocTicket for this identity's doc (write capability + this
+ * node's relay address). A peer imports it to sync. Lets a second browser tab act
+ * as a sync counterpart during dev.
+ */
+export function share(): Promise<string>;
+
 export function start(): void;
+
+/**
+ * Join the peer(s) in `ticket` and live-sync this identity's doc with them.
+ * `on_event` is invoked with a short label string per `LiveEvent` (insert-local /
+ * insert-remote / sync-finished / neighbor-up|down) so the UI can show the loop is
+ * alive. Subscribes BEFORE starting sync (mirroring iroh-docs' import_and_subscribe)
+ * so no events are missed; the event pump runs on the local executor for the life
+ * of the engine.
+ */
+export function start_sync(ticket: string, on_event: Function): Promise<void>;
 
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
@@ -81,6 +98,8 @@ export interface InitOutput {
     readonly list_records: (a: number, b: number) => any;
     readonly open: (a: number, b: number) => any;
     readonly put_record: (a: number, b: number, c: number, d: number, e: number, f: number) => any;
+    readonly share: () => any;
+    readonly start_sync: (a: number, b: number, c: any) => any;
     readonly start: () => void;
     readonly __wbg_intounderlyingbytesource_free: (a: number, b: number) => void;
     readonly intounderlyingbytesource_autoAllocateChunkSize: (a: number) => number;
@@ -96,14 +115,14 @@ export interface InitOutput {
     readonly intounderlyingsource_cancel: (a: number) => void;
     readonly intounderlyingsource_pull: (a: number, b: any) => any;
     readonly ring_core_0_17_14__bn_mul_mont: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
-    readonly wasm_bindgen__convert__closures_____invoke__hd5db4addbd66c50a: (a: number, b: number, c: any) => [number, number];
-    readonly wasm_bindgen__convert__closures_____invoke__h32ca3517c0856aa3: (a: number, b: number, c: any, d: any) => void;
-    readonly wasm_bindgen__convert__closures_____invoke__h3083644178357d32: (a: number, b: number, c: any) => void;
-    readonly wasm_bindgen__convert__closures_____invoke__h19a1235879b3830c: (a: number, b: number, c: any) => void;
-    readonly wasm_bindgen__convert__closures_____invoke__h22cf045be9df4569: (a: number, b: number, c: any) => void;
-    readonly wasm_bindgen__convert__closures_____invoke__h1897a61d1a5b3e1d: (a: number, b: number) => void;
-    readonly wasm_bindgen__convert__closures_____invoke__h064b383873395853: (a: number, b: number) => void;
-    readonly wasm_bindgen__convert__closures_____invoke__ha18f15979365619b: (a: number, b: number) => void;
+    readonly wasm_bindgen__convert__closures_____invoke__hc5f3e21d0efe8974: (a: number, b: number, c: any) => [number, number];
+    readonly wasm_bindgen__convert__closures_____invoke__h08f43aa7048968fb: (a: number, b: number, c: any, d: any) => void;
+    readonly wasm_bindgen__convert__closures_____invoke__h88edf5d76da6fe27: (a: number, b: number, c: any) => void;
+    readonly wasm_bindgen__convert__closures_____invoke__hab35a47f448791db: (a: number, b: number, c: any) => void;
+    readonly wasm_bindgen__convert__closures_____invoke__h106cbabba281c03b: (a: number, b: number, c: any) => void;
+    readonly wasm_bindgen__convert__closures_____invoke__h9ac60b4f9395e24b: (a: number, b: number) => void;
+    readonly wasm_bindgen__convert__closures_____invoke__h8daa9f8fce1ac3eb: (a: number, b: number) => void;
+    readonly wasm_bindgen__convert__closures_____invoke__ha3a167bd92644a00: (a: number, b: number) => void;
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
     readonly __wbindgen_exn_store: (a: number) => void;

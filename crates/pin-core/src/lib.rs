@@ -14,13 +14,20 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::str::FromStr;
 
 use futures_lite::StreamExt as _;
 use iroh::{endpoint::presets, protocol::Router, Endpoint};
 use iroh_blobs::{store::mem::MemStore, BlobsProtocol, ALPN as BLOBS_ALPN};
 use iroh_docs::{
-    api::Doc, protocol::Docs, store::Query, Author, AuthorId, Capability, NamespaceSecret,
-    ALPN as DOCS_ALPN,
+    api::{
+        protocol::{AddrInfoOptions, ShareMode},
+        Doc,
+    },
+    engine::LiveEvent,
+    protocol::Docs,
+    store::Query,
+    Author, AuthorId, Capability, DocTicket, NamespaceSecret, ALPN as DOCS_ALPN,
 };
 use iroh_gossip::{net::Gossip, ALPN as GOSSIP_ALPN};
 // Shared with the native keeper: same domain-separated derivation so a browser and a
@@ -181,4 +188,67 @@ pub async fn list_all() -> Result<JsValue, JsValue> {
         arr.push(&JsValue::from_str(&String::from_utf8_lossy(entry.key())));
     }
     Ok(arr.into())
+}
+
+// ── Live sync ──────────────────────────────────────────────────────────────
+// The browser opens its own replica of the AppKey-derived namespace (via `open`);
+// the keeper opens the SAME namespace (same recovery phrase -> same AppKey -> same
+// HKDF). `start_sync` joins the keeper as a sync peer so the two replicas reconcile
+// live over iroh — the front end of the Curator. `share` is the symmetric verb (a
+// tab can serve for dev). Same-identity: both hold the write capability already, so
+// the ticket only carries where to reach the peer.
+
+/// Produce a shareable DocTicket for this identity's doc (write capability + this
+/// node's relay address). A peer imports it to sync. Lets a second browser tab act
+/// as a sync counterpart during dev.
+#[wasm_bindgen]
+pub async fn share() -> Result<String, JsValue> {
+    let eng = engine()?;
+    let ticket = eng
+        .doc
+        .share(ShareMode::Write, AddrInfoOptions::RelayAndAddresses)
+        .await
+        .map_err(je)?;
+    Ok(ticket.to_string())
+}
+
+/// Join the peer(s) in `ticket` and live-sync this identity's doc with them.
+/// `on_event` is invoked with a short label string per `LiveEvent` (insert-local /
+/// insert-remote / sync-finished / neighbor-up|down) so the UI can show the loop is
+/// alive. Subscribes BEFORE starting sync (mirroring iroh-docs' import_and_subscribe)
+/// so no events are missed; the event pump runs on the local executor for the life
+/// of the engine.
+#[wasm_bindgen]
+pub async fn start_sync(ticket: String, on_event: js_sys::Function) -> Result<(), JsValue> {
+    let eng = engine()?;
+    let ticket = DocTicket::from_str(&ticket).map_err(je)?;
+    let mut events = eng.doc.subscribe().await.map_err(je)?;
+    eng.doc.start_sync(ticket.nodes).await.map_err(je)?;
+    wasm_bindgen_futures::spawn_local(async move {
+        while let Some(res) = events.next().await {
+            let label = match res {
+                Ok(ev) => live_event_label(&ev),
+                Err(e) => format!("error: {e}"),
+            };
+            // Ignore a JS callback throw; keep pumping.
+            let _ = on_event.call1(&JsValue::NULL, &JsValue::from_str(&label));
+        }
+    });
+    Ok(())
+}
+
+fn live_event_label(ev: &LiveEvent) -> String {
+    match ev {
+        LiveEvent::InsertLocal { entry } => {
+            format!("insert-local {}", String::from_utf8_lossy(entry.key()))
+        }
+        LiveEvent::InsertRemote { entry, .. } => {
+            format!("insert-remote {}", String::from_utf8_lossy(entry.key()))
+        }
+        LiveEvent::ContentReady { .. } => "content-ready".to_string(),
+        LiveEvent::PendingContentReady => "pending-content-ready".to_string(),
+        LiveEvent::NeighborUp(_) => "neighbor-up".to_string(),
+        LiveEvent::NeighborDown(_) => "neighbor-down".to_string(),
+        LiveEvent::SyncFinished(_) => "sync-finished".to_string(),
+    }
 }
