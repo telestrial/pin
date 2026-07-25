@@ -20,8 +20,9 @@ iroh = "1.0.1"
 iroh-docs = { version = "0.101", default-features = false }
 iroh-blobs = { version = "0.103", default-features = false }
 iroh-gossip = "0.101"
-hkdf = "0.12"
-sha2 = "0.10"
+# Shared AppKey->doc-seed derivation (NS/AUTHOR info + hkdf32 + decode_app_key),
+# identical to the native keeper's so both land on the same namespace.
+pin-derive = { path = "../pin-derive" }
 futures-lite = "2"
 # Browser glue (compiles harmlessly on native; the exports are just inert there).
 wasm-bindgen = "0.2"

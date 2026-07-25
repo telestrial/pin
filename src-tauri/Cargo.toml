@@ -43,3 +43,6 @@ sia_storage = "0.9.1"
 hkdf = "0.12"
 sha2 = "0.10"
 pkarr = "3"
+# Shared AppKey->doc-seed derivation, identical to pin-core's so the keeper and the
+# browser land on the same iroh-docs namespace (hkdf/sha2 above stay for identity.rs).
+pin-derive = { path = "../crates/pin-derive" }

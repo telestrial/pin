@@ -16,7 +16,6 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use futures_lite::StreamExt as _;
-use hkdf::Hkdf;
 use iroh::{endpoint::presets, protocol::Router, Endpoint};
 use iroh_blobs::{store::mem::MemStore, BlobsProtocol, ALPN as BLOBS_ALPN};
 use iroh_docs::{
@@ -24,14 +23,11 @@ use iroh_docs::{
     ALPN as DOCS_ALPN,
 };
 use iroh_gossip::{net::Gossip, ALPN as GOSSIP_ALPN};
-use sha2::Sha256;
+// Shared with the native keeper: same domain-separated derivation so a browser and a
+// desktop signed in with the same Sia recovery phrase land on the same namespace +
+// author (the one-root-secret move).
+use pin_derive::{decode_app_key, hkdf32, AUTHOR_INFO, NS_INFO};
 use wasm_bindgen::prelude::*;
-
-// HKDF `info`s — same domain-separated derivation the native keeper uses, so a
-// browser and a desktop signed in with the same Sia recovery phrase land on the
-// same namespace + author (the one-root-secret move).
-const NS_INFO: &[u8] = b"pin:iroh-docs-namespace:v1";
-const AUTHOR_INFO: &[u8] = b"pin:iroh-docs-author:v1";
 
 // The live engine. Single-threaded on wasm, so a thread_local is the app singleton.
 // Held as Rc so calls clone it out (cheap) and never hold the RefCell borrow across
@@ -59,26 +55,6 @@ fn je<E: std::fmt::Display>(e: E) -> JsValue {
     JsValue::from_str(&e.to_string())
 }
 
-fn hkdf32(ikm: &[u8], info: &[u8]) -> Result<[u8; 32], JsValue> {
-    let hk = Hkdf::<Sha256>::new(None, ikm);
-    let mut okm = [0u8; 32];
-    hk.expand(info, &mut okm).map_err(je)?;
-    Ok(okm)
-}
-
-fn decode_app_key(hex: &str) -> Result<[u8; 32], JsValue> {
-    if hex.len() != 64 {
-        return Err(JsValue::from_str(
-            "app key hex must be 32 bytes (64 hex chars)",
-        ));
-    }
-    let mut out = [0u8; 32];
-    for (i, b) in out.iter_mut().enumerate() {
-        *b = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).map_err(je)?;
-    }
-    Ok(out)
-}
-
 fn engine() -> Result<Rc<Engine>, JsValue> {
     ENGINE
         .with(|e| e.borrow().clone())
@@ -93,9 +69,10 @@ fn record_key(collection: &str, rkey: &str) -> Vec<u8> {
 /// the Sia AppKey. Returns the namespace id. A second call rebuilds from scratch.
 #[wasm_bindgen]
 pub async fn open(app_key_hex: String) -> Result<String, JsValue> {
-    let app_key = decode_app_key(&app_key_hex)?;
-    let ns_seed = hkdf32(&app_key, NS_INFO)?;
-    let author_seed = hkdf32(&app_key, AUTHOR_INFO)?;
+    let app_key = decode_app_key(&app_key_hex)
+        .ok_or_else(|| JsValue::from_str("app key hex must be 32 bytes (64 hex chars)"))?;
+    let ns_seed = hkdf32(&app_key, NS_INFO);
+    let author_seed = hkdf32(&app_key, AUTHOR_INFO);
 
     let endpoint = Endpoint::bind(presets::N0).await.map_err(je)?;
     let blobs = MemStore::default();

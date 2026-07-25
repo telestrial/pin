@@ -434,7 +434,7 @@ async fn curator_loop(
     // self-resolve to verify. Best-effort: a failure leaves the node serving.
     let identity = creds
         .as_ref()
-        .and_then(|c| crate::docstore::decode_app_key(&c.app_key_hex))
+        .and_then(|c| pin_derive::decode_app_key(&c.app_key_hex))
         .and_then(|k| match crate::identity::derive_identity(&k) {
             Ok(kp) => Some(kp),
             Err(e) => {

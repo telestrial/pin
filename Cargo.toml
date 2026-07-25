@@ -6,4 +6,4 @@
 # alongside Tauri's windows deps.
 [workspace]
 resolver = "3"
-members = ["src-tauri", "crates/pin-core"]
+members = ["src-tauri", "crates/pin-core", "crates/pin-derive"]

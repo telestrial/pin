@@ -1,0 +1,15 @@
+# Shared AppKey-derived seeds for the iroh-docs engine. The doc namespace + author
+# keys are HKDF-derived from the Sia AppKey with the same domain-separated `info`s in
+# both engines — the browser (pin-core, wasm) and the desktop keeper (src-tauri,
+# native) — so the same recovery phrase lands on the same doc namespace on every
+# device. These constants MUST match across both; one crate removes the drift risk.
+# Pure hkdf+sha2, no iroh — builds on wasm and native alike.
+[package]
+name = "pin-derive"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+
+[dependencies]
+hkdf = "0.12"
+sha2 = "0.10"

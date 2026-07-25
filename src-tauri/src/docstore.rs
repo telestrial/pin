@@ -19,44 +19,19 @@
 
 use std::path::Path;
 
-use hkdf::Hkdf;
 use iroh::Endpoint;
 use iroh_blobs::store::fs::FsStore;
 use iroh_docs::{protocol::Docs, Author, Capability, NamespaceSecret};
 use iroh_gossip::net::Gossip;
-use sha2::Sha256;
-
-/// HKDF `info`s for the doc keys — domain-separated from the did:dht identity
-/// (`pin:did-dht:v1`), the atproto signing key (`pin:atproto-signing:v1`), and
-/// settings (`pin:settings:v1`), all off the same AppKey root.
-const NS_INFO: &[u8] = b"pin:iroh-docs-namespace:v1";
-const AUTHOR_INFO: &[u8] = b"pin:iroh-docs-author:v1";
+// Shared with pin-core (the browser engine): the doc namespace/author `info`s +
+// hkdf32 + decode_app_key. Domain-separated from the did:dht identity
+// (`pin:did-dht:v1`), the atproto signing key (`pin:atproto-signing:v1`), and
+// settings (`pin:settings:v1`), all off the same AppKey root.
+use pin_derive::{decode_app_key, hkdf32, AUTHOR_INFO, NS_INFO};
 
 /// The keeper's marker entry, mirroring the atrium repo's marker record — written
 /// once, then expected to survive every reopen (the persistence self-check).
 const MARKER_KEY: &[u8] = b"dev.sia.pin.marker/self";
-
-/// HKDF-SHA256 → 32 bytes. 32 is always a valid output length.
-fn hkdf32(ikm: &[u8], info: &[u8]) -> Result<[u8; 32], String> {
-    let hk = Hkdf::<Sha256>::new(None, ikm);
-    let mut okm = [0u8; 32];
-    hk.expand(info, &mut okm)
-        .map_err(|e| format!("hkdf expand: {e}"))?;
-    Ok(okm)
-}
-
-/// Decode the 32-byte Sia AppKey from its hex form (the HKDF IKM). Shared with
-/// curator (it derives the did:dht identity from the same AppKey).
-pub(crate) fn decode_app_key(hex: &str) -> Option<[u8; 32]> {
-    if hex.len() != 64 {
-        return None;
-    }
-    let mut out = [0u8; 32];
-    for (i, b) in out.iter_mut().enumerate() {
-        *b = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).ok()?;
-    }
-    Some(out)
-}
 
 /// The persistent iroh-docs engine, brought up on the keeper's endpoint and ready
 /// to mount on its Router. Held for the Curator's lifetime; `docs`/`gossip` are
@@ -88,8 +63,8 @@ pub async fn open_or_create(
     app_key_hex: &str,
 ) -> Result<DocEngine, String> {
     let app_key = decode_app_key(app_key_hex).ok_or("app key hex must be 32 bytes")?;
-    let ns_seed = hkdf32(&app_key, NS_INFO)?;
-    let author_seed = hkdf32(&app_key, AUTHOR_INFO)?;
+    let ns_seed = hkdf32(&app_key, NS_INFO);
+    let author_seed = hkdf32(&app_key, AUTHOR_INFO);
 
     let dir = data_dir.join("docs");
     std::fs::create_dir_all(&dir).map_err(|e| format!("create docs dir: {e}"))?;
