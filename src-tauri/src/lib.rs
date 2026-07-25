@@ -1,6 +1,7 @@
 mod curator;
 mod docstore;
 mod identity;
+mod pkarr;
 mod rpc;
 mod sia;
 
@@ -10,6 +11,7 @@ pub fn run() {
     .plugin(tauri_plugin_opener::init())
     .manage(curator::CuratorState::default())
     .manage(sia::SiaState::default())
+    .manage(pkarr::PkarrState::default())
     .invoke_handler(tauri::generate_handler![
       curator::start_curator,
       curator::stop_curator,
@@ -25,6 +27,8 @@ pub fn run() {
       sia::sia_account_snapshot,
       sia::sia_list_pinned_objects,
       sia::sia_get_object_slabs,
+      pkarr::pkarr_publish,
+      pkarr::pkarr_resolve,
     ])
     .setup(|app| {
       if cfg!(debug_assertions) {
