@@ -288,8 +288,26 @@ if (import.meta.env.DEV || inTauri()) {
 
 const root = document.getElementById('root')
 if (!root) throw new Error('Root element not found')
-createRoot(root).render(
-  <StrictMode>
-    <App />
-  </StrictMode>,
-)
+
+// Dev-only cross-device sync harness at `#synctest` — a standalone tap-driven UI
+// (no console, no USB) for proving iroh-docs live-sync between two devices. Gated
+// DEV || inTauri and lazy-imported, so it never enters a prod bundle. Everything
+// else boots the normal app.
+if (
+  (import.meta.env.DEV || inTauri()) &&
+  window.location.hash.toLowerCase().includes('synctest')
+) {
+  import('./components/dev/SyncTestPanel').then(({ SyncTestPanel }) =>
+    createRoot(root).render(
+      <StrictMode>
+        <SyncTestPanel />
+      </StrictMode>,
+    ),
+  )
+} else {
+  createRoot(root).render(
+    <StrictMode>
+      <App />
+    </StrictMode>,
+  )
+}
