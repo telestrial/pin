@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import {
   type CuratorStatus,
+  curatorDocTicket,
   curatorStatus,
   startCurator,
   stopCurator,
@@ -22,6 +23,7 @@ import { CopyButton } from './ui/CopyButton'
 // platform deciding for you.
 export function CurateView() {
   const [status, setStatus] = useState<CuratorStatus | null>(null)
+  const [ticket, setTicket] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const busyRef = useRef(false)
 
@@ -32,6 +34,10 @@ export function CurateView() {
       if (busyRef.current) return
       const s = await curatorStatus()
       if (!cancelled) setStatus(s)
+      // The doc ticket lives on a separate command (not in the status snapshot);
+      // fetch it alongside so it's copyable for the browser<->Curator sync test.
+      const t = await curatorDocTicket()
+      if (!cancelled) setTicket(t)
     }
     tick()
     const id = setInterval(tick, 2000)
@@ -132,7 +138,7 @@ export function CurateView() {
             </div>
           </section>
 
-          {running && status && <Diagnostics status={status} />}
+          {running && status && <Diagnostics status={status} ticket={ticket} />}
         </>
       ) : (
         <section className="border border-neutral-200 rounded-lg p-4">
@@ -191,7 +197,13 @@ function NetworkReach() {
 // Dev-facing network diagnostics for the running iroh endpoint. Verbose on
 // purpose — we want to read the node's reachability in detail while building
 // the Curator out.
-function Diagnostics({ status }: { status: CuratorStatus }) {
+function Diagnostics({
+  status,
+  ticket,
+}: {
+  status: CuratorStatus
+  ticket: string | null
+}) {
   return (
     <section className="border border-neutral-200 rounded-lg p-4 space-y-4">
       <h2 className="text-xs font-semibold tracking-wide uppercase text-neutral-500">
@@ -292,6 +304,27 @@ function Diagnostics({ status }: { status: CuratorStatus }) {
         ) : (
           <div className="text-xs text-neutral-400">—</div>
         )}
+      </div>
+
+      <div className="space-y-1 pt-1 border-t border-neutral-100">
+        <div className="text-xs font-medium text-neutral-500 pt-3">
+          Doc ticket
+        </div>
+        {ticket ? (
+          <div className="flex items-start gap-2">
+            <code className="text-xs font-mono text-neutral-700 break-all flex-1">
+              {ticket}
+            </code>
+            <CopyButton value={ticket} label="Doc ticket copied" />
+          </div>
+        ) : (
+          <div className="text-xs text-neutral-400">—</div>
+        )}
+        <p className="text-xs text-neutral-400 leading-relaxed">
+          A capability to live-sync this Curator's repo. A browser tab signed in
+          to the same account imports it (dev: __pinSync.sync) to reconcile with
+          the Curator — one import syncs both ways.
+        </p>
       </div>
 
       <div className="space-y-1 pt-1">

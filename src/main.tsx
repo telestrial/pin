@@ -34,8 +34,10 @@ if (import.meta.env.DEV || inTauri()) {
     __pinChannelLocatorRoundTrip?: () => Promise<string>
     __pinIdentityDocRoundTrip?: () => Promise<string>
     __pinCuratorDocsRoundTrip?: () => Promise<string>
+    __pinCuratorDocsList?: () => Promise<string>
     __pinSync?: {
       open: (hex: string) => Promise<string>
+      openSession: () => Promise<string>
       share: () => Promise<string>
       sync: (ticket: string) => Promise<void>
       put: (collection: string, rkey: string, value: string) => Promise<void>
@@ -221,6 +223,18 @@ if (import.meta.env.DEV || inTauri()) {
     const { curatorDocsSelfTest } = await import('./lib/tauriDocs')
     return curatorDocsSelfTest()
   }
+  // List the native Curator's records (DESKTOP ONLY) — read-only, no mutation.
+  // The verification for slice 1b: after a browser tab writes over sync, run this
+  // in the desktop shell to confirm the record landed in the Curator's repo.
+  g.__pinCuratorDocsList = async () => {
+    const { inTauri } = await import('./lib/openExternal')
+    if (!inTauri()) return 'desktop only (run in the Pin desktop app)'
+    const { listAllNative } = await import('./lib/tauriDocs')
+    const all = await listAllNative()
+    return all.length === 0
+      ? '(no records)'
+      : all.map((k) => `${k.collection}/${k.rkey}`).join('\n')
+  }
   // Sync-loopback harness (slice 1a): drive docs.ts's OWN sync verbs across two
   // browser tabs to prove two replicas of one identity converge bidirectionally
   // over the relay — a browser tab as the ticket PRODUCER (serving node), no
@@ -233,6 +247,18 @@ if (import.meta.env.DEV || inTauri()) {
     const docs = () => import('./lib/docs')
     g.__pinSync = {
       open: async (hex) => (await docs()).openDocs(hex),
+      // Open the doc under the signed-in account's AppKey — the desktop Curator's
+      // SAME namespace (both derive it from the one recovery phrase). The 1b
+      // browser-tab convenience: no need to fish the hex out of the store by hand.
+      // NOTE: open() rebuilds the engine from scratch, so this discards whatever the
+      // app already opened this session — fine for the sync test (we're proving the
+      // mechanism, not preserving app state).
+      openSession: async () => {
+        const { useAuthStore } = await import('./stores/auth')
+        const hex = useAuthStore.getState().storedKeyHex
+        if (!hex) throw new Error('not signed in')
+        return (await docs()).openDocs(hex)
+      },
       share: async () => (await docs()).shareDoc(),
       sync: async (ticket) =>
         (await docs()).startSync(ticket, (l) => {

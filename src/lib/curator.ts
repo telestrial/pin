@@ -115,3 +115,14 @@ export async function stopCurator(): Promise<CuratorStatus> {
   if (!inTauri()) return UNAVAILABLE
   return { ...(await invokeCommand('stop_curator')), available: true }
 }
+
+// The Curator's shareable DocTicket (its iroh-docs replica's write capability +
+// relay address), or null on web / before the doc engine has produced one. A plain
+// browser tab signed in to the SAME account imports this (docs.ts startSync) to
+// live-sync with the Curator — the browser<->Curator sync slice (1b). One import
+// reconciles both directions, so the Curator only needs to serve this, not import.
+export async function curatorDocTicket(): Promise<string | null> {
+  if (!inTauri()) return null
+  const { invoke } = await import('@tauri-apps/api/core')
+  return invoke<string | null>('curator_doc_ticket')
+}
