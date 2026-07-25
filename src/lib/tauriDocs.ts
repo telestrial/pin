@@ -67,6 +67,28 @@ export async function listAllNative(): Promise<
   })
 }
 
+/** The desktop analog of docs.ts `openDocs`: the native Curator opens its doc at
+ *  startup (auto-started once connected), so this waits briefly for the engine to
+ *  come up and returns its namespace. Bounded (~10s) so a caller isn't stuck if the
+ *  Curator never binds — callers are best-effort + retry. The AppKey isn't passed:
+ *  the Curator derives the SAME namespace from the same recovery-phrase AppKey. */
+export async function openDocsNative(): Promise<string> {
+  for (let i = 0; i < 40; i++) {
+    const ns = await docsNamespaceNative()
+    if (ns) return ns
+    await new Promise((r) => setTimeout(r, 250))
+  }
+  throw new Error('Curator doc engine did not come up')
+}
+
+/** The desktop analog of docs.ts `shareDoc`: the Curator already produces a DocTicket
+ *  for its replica (refreshed each poll), exposed via `curator_doc_ticket`. */
+export async function shareDocNative(): Promise<string> {
+  const ticket = await call<string | null>('curator_doc_ticket')
+  if (!ticket) throw new Error('Curator doc ticket not ready')
+  return ticket
+}
+
 /** Slice A proof: drive the native Curator doc through put / get / list / delete over
  *  IPC and report. Requires the Curator to be running (enable curation first). */
 export async function curatorDocsSelfTest(): Promise<string> {
