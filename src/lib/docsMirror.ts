@@ -2,7 +2,7 @@
 // and re-hydrate it on load. The browser has no persistent iroh-docs store
 // (MemStore only), so the doc's contents are mirrored to Sia (durable) and put
 // back into a fresh doc when the app boots. All in TS over the Sia SDK the app
-// already has — no Rust keeper / did:dht needed (that's Phase D).
+// already has — no Rust Curator / did:dht needed (that's Phase D).
 //
 // Pointer: "which Sia object is the latest snapshot" is cached in localStorage
 // (the data lives on Sia; the pointer is cache). A cold/wiped device has no

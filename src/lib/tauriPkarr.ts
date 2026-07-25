@@ -5,7 +5,7 @@
 // under Tauri (so `@tauri-apps/api` never enters the web bundle).
 //
 // This is what fixes the read-after-write lag on desktop: publish/resolve go
-// straight to the Mainline DHT (no relay in the read path), the way the keeper
+// straight to the Mainline DHT (no relay in the read path), the way the Curator
 // already does — a fresh publish is resolvable in seconds, not minutes.
 
 import type { PkarrTxt } from './pkarr'

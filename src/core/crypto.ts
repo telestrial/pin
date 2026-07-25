@@ -134,7 +134,7 @@ const SETTINGS_KEY_INFO = 'pin:settings:v1'
 // HKDF-SHA256 over the raw AppKey bytes, domain-separated by `info`. Deterministic,
 // so every derived subkey is re-derivable from the Sia recovery phrase alone after
 // a localStorage wipe — the recovery path. (Domain-separated from the ed25519
-// signing use, which lives in the keeper.)
+// signing use, which lives in the Curator.)
 async function deriveAppSubkey(
   appKeyBytes: Uint8Array,
   info: string,
@@ -176,8 +176,8 @@ export async function deriveSnapshotKey(
 }
 
 // The 32-byte ed25519 seed for this identity's did:dht key. MUST match the Rust
-// keeper's derivation byte-for-byte (identity.rs: HKDF-SHA256, empty salt, info
-// `pin:did-dht:v1`) so the browser's pkarr identity IS the keeper's did:dht — one
+// Curator's derivation byte-for-byte (identity.rs: HKDF-SHA256, empty salt, info
+// `pin:did-dht:v1`) so the browser's pkarr identity IS the Curator's did:dht — one
 // identity across both. Web Crypto's empty-salt HKDF equals Rust's `Hkdf::new(None,
 // …)` (HMAC pads any sub-block-size key with zeros, so empty == HashLen-zeros salt).
 // The seed feeds pkarr's `Keypair.from_secret_key` (in lib/pkarr.ts, needs the wasm);
@@ -193,7 +193,7 @@ export async function deriveDidDhtSeed(
 // channel key K (NOT the AppKey), because a reader only holds K (from the subscribe
 // URL) and must derive the same locator to resolve the channel's Sia pointer. So K
 // both locates (this key → pkarr record → Sia URL) and decrypts (the manifest). This
-// is the canonical definition; a future keeper that publishes channel locators must
+// is the canonical definition; a future Curator that publishes channel locators must
 // match it. Same HKDF family, different `info` + a different IKM (K, not AppKey).
 const CHANNEL_LOCATOR_KEY_INFO = 'pin:channel-locator:v1'
 export async function deriveChannelLocatorSeed(

@@ -15,7 +15,7 @@ import { PinIcon } from './pin/PinIcon'
 //    Minimize · Full screen · Lock · Close — since the native title bar is gone.
 //
 // Lock is the existing SOFT lock (visual gate, session stays live, no
-// credential). Close quits today; once the keeper runs it should mean
+// credential). Close quits today; once the Curator runs it should mean
 // hide-window-keep-backend (tray) — see CLAUDE.md.
 export function PinMenu({ onLock }: { onLock: () => void }) {
   const desktop = inTauri()

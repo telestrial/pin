@@ -2,8 +2,8 @@
 //!
 //! The doc namespace + author keys are HKDF-derived from the Sia AppKey with these
 //! domain-separated `info`s, identically in the browser (`pin-core`, wasm) and the
-//! desktop keeper (`src-tauri`, native). Same recovery phrase -> same AppKey -> same
-//! namespace on every device — which is what lets a browser and a keeper sync the
+//! desktop Curator (`src-tauri`, native). Same recovery phrase -> same AppKey -> same
+//! namespace on every device — which is what lets a browser and a Curator sync the
 //! same doc. These MUST match across both engines; keeping them in one crate removes
 //! the drift risk of two hand-copied constants.
 

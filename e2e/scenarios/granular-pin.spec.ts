@@ -54,11 +54,11 @@ test('pin the file vs pin the post: independent cross-account custody', async ({
 }) => {
   // Known browser boundary (not a code bug): bob can't promptly resolve alice's
   // just-published post — the public pkarr relays lag on read-after-write and we
-  // can't control their cache from the browser. The desktop keeper (direct
+  // can't control their cache from the browser. The desktop Curator (direct
   // Mainline DHT) is the fix. Re-enable when it lands. See CLAUDE.md, "pkarr
   // relay read-after-write" (2026-07-23). The granular pin/file custody this test
   // targets is still covered against fakes in the integration tier.
-  test.fixme(true, 'browser-relay pkarr read-after-write lag; keeper-era')
+  test.fixme(true, 'browser-relay pkarr read-after-write lag; Curator-era')
   const aliceContext = await browser.newContext({
     permissions: ['clipboard-read', 'clipboard-write'],
   })

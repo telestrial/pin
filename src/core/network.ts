@@ -26,7 +26,7 @@ export type ReachFetcher = (id: string) => Promise<string[]>
 // connections; …). Reach depth is a parameter on purpose — a mention picker or
 // search widens its reach by raising `hops`, with no change to consumers of the
 // result. Per-ring fan-out is bounded by `maxSeeds` (friend-scale guard; deeper
-// crawl is keeper work). A seed whose lookup fails contributes nothing.
+// crawl is Curator work). A seed whose lookup fails contributes nothing.
 export async function walkReachable(
   myId: string,
   r0: readonly string[],

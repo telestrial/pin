@@ -25,7 +25,7 @@ export type CuratorReport = {
   otherAddrs: string[]
   // Seconds since the endpoint bound.
   uptimeSecs: number | null
-  // The keeper's resolvable did:dht identity (ed25519, derived from the
+  // The Curator's resolvable did:dht identity (ed25519, derived from the
   // recovery phrase — stable across restarts, recoverable on any device).
   didDht: string | null
   // Result of publishing the did:dht document to Mainline DHT + self-resolve
@@ -94,9 +94,9 @@ export async function curatorStatus(): Promise<CuratorStatus> {
   return { ...(await invokeCommand('curator_status')), available: true }
 }
 
-// The keeper runs inside an authenticated Pin instance, so we hand it the
+// The Curator runs inside an authenticated Pin instance, so we hand it the
 // already-unlocked Sia AppKey + indexer URL at start — that's how it mirrors the
-// repo under the user's own Sia scope. Both are needed; absent them, the keeper
+// repo under the user's own Sia scope. Both are needed; absent them, the Curator
 // runs without a mirror.
 export async function startCurator(
   appKeyHex?: string | null,

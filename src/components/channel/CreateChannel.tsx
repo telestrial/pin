@@ -93,7 +93,7 @@ export function CreateChannel({
               mimeType: f.type,
             }
           : undefined
-      // Derive our did:dht (from the AppKey — same identity the keeper /
+      // Derive our did:dht (from the AppKey — same identity the Curator /
       // identity-doc use) up front: it's stamped into the manifest as the
       // iroh-world author identity AND carried in the shareable capability link.
       const { did } = await deriveDidDht(Uint8Array.fromHex(storedKeyHex))

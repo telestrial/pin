@@ -3,13 +3,13 @@
 // The record CRUD surface (open / put_record / get_record / delete_record /
 // list_records, keyed by `collection/rkey`) is the one interface the app talks to
 // in both environments: over wasm-bindgen in the browser (this file's exports) and
-// over Tauri IPC to the native keeper (B2). Record values are opaque bytes — the
+// over Tauri IPC to the native Curator (B2). Record values are opaque bytes — the
 // same encrypted blob the app writes to atproto today — so migrating a collection
 // is "write the same ciphertext into a doc entry instead of a PDS record."
 //
 // B1 scope: in-memory store (`MemStore`) everywhere, wasm-focused. Browser state is
 // ephemeral for now (persistence across reload is a later slice). The native
-// FsStore path returns in B2 when src-tauri adopts this crate for the keeper.
+// FsStore path returns in B2 when src-tauri adopts this crate for the Curator.
 #![allow(dead_code)]
 
 use std::cell::RefCell;
@@ -30,7 +30,7 @@ use iroh_docs::{
     Author, AuthorId, Capability, DocTicket, NamespaceSecret, ALPN as DOCS_ALPN,
 };
 use iroh_gossip::{net::Gossip, ALPN as GOSSIP_ALPN};
-// Shared with the native keeper: same domain-separated derivation so a browser and a
+// Shared with the native Curator: same domain-separated derivation so a browser and a
 // desktop signed in with the same Sia recovery phrase land on the same namespace +
 // author (the one-root-secret move).
 use pin_derive::{decode_app_key, hkdf32, AUTHOR_INFO, NS_INFO};
@@ -192,8 +192,8 @@ pub async fn list_all() -> Result<JsValue, JsValue> {
 
 // ── Live sync ──────────────────────────────────────────────────────────────
 // The browser opens its own replica of the AppKey-derived namespace (via `open`);
-// the keeper opens the SAME namespace (same recovery phrase -> same AppKey -> same
-// HKDF). `start_sync` joins the keeper as a sync peer so the two replicas reconcile
+// the Curator opens the SAME namespace (same recovery phrase -> same AppKey -> same
+// HKDF). `start_sync` joins the Curator as a sync peer so the two replicas reconcile
 // live over iroh — the front end of the Curator. `share` is the symmetric verb (a
 // tab can serve for dev). Same-identity: both hold the write capability already, so
 // the ticket only carries where to reach the peer.

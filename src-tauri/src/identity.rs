@@ -39,10 +39,10 @@ pub fn did_dht(keypair: &Keypair) -> String {
     format!("did:dht:{}", keypair.public_key())
 }
 
-/// Publish the keeper's DID document to the Mainline DHT and self-resolve it to
+/// Publish the Curator's DID document to the Mainline DHT and self-resolve it to
 /// verify. `records` are `(name, value)` TXT pairs — a pragmatic Pin convention
 /// (we resolve our own docs, so strict did:dht-spec DNS encoding can come later):
-/// `_iroh` = the keeper's iroh node id (where to dial), `_ns` = the keeper's
+/// `_iroh` = the Curator's iroh node id (where to dial), `_ns` = the Curator's
 /// iroh-docs namespace id (which doc to import + sync).
 ///
 /// DHT-only (`no_relays()`), so this proves the decentralized leg — no n0, no
@@ -77,7 +77,7 @@ pub async fn publish_doc(keypair: &Keypair, records: &[(String, String)]) -> Res
 
     // Publishing is best-effort UDP to the Mainline DHT and fails transiently —
     // especially from a freshly-bound node that hasn't warmed enough DHT contacts
-    // yet (e.g. a rapid keeper re-enable, observed 2026-07-08: first publish OK,
+    // yet (e.g. a rapid Curator re-enable, observed 2026-07-08: first publish OK,
     // immediate re-enable ~3s later failed). Retry a few times, the same posture the
     // resolve side already takes — DHT ops are best-effort, always retry.
     let mut published = false;
@@ -126,14 +126,14 @@ pub async fn publish_doc(keypair: &Keypair, records: &[(String, String)]) -> Res
 pub struct ResolvedIdentity {
     /// The iroh node id to dial (from the document's `_iroh` record).
     pub iroh_node: Option<String>,
-    /// The keeper's iroh-docs namespace id (from `_ns`) — the doc to import + sync.
+    /// The Curator's iroh-docs namespace id (from `_ns`) — the doc to import + sync.
     pub namespace: Option<String>,
 }
 
 /// Resolve a peer's `did:dht` from the Mainline DHT into the coordinates to reach +
 /// verify them. DHT-only (no relays, no n0). pkarr verifies the packet signature on
 /// resolve, so the records are provably the DID owner's. This is the read side the
-/// pull/reconcile loops use to turn a follow's DID into a dial-able keeper.
+/// pull/reconcile loops use to turn a follow's DID into a dial-able Curator.
 pub async fn resolve_did(did: &str) -> Result<ResolvedIdentity, String> {
     let z = did
         .strip_prefix("did:dht:")

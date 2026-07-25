@@ -3,7 +3,7 @@
 //
 // WHY: on the web these go through public pkarr RELAYS, which lag on read-after-
 // write (a just-published pointer isn't resolvable for minutes — the reader-tier
-// boundary). The Rust keeper already publishes/resolves over the DIRECT Mainline
+// boundary). The Rust Curator already publishes/resolves over the DIRECT Mainline
 // DHT (no relay, no lag — src-tauri/src/pkarr.rs / identity.rs). So on desktop we
 // route these two network legs natively and the lag disappears; the web path is
 // unchanged (relay-limited, honest reader tier — a browser can't do UDP to the DHT).
@@ -14,7 +14,7 @@
 //
 // The seam is publish-by-SEED, not by-keypair: a wasm Keypair object can't cross
 // IPC, but the 32-byte seed can, and the native side turns it back into a keypair
-// (Keypair::from_secret_key) — the same derivation the keeper does.
+// (Keypair::from_secret_key) — the same derivation the Curator does.
 
 import { inTauri } from './openExternal'
 import {

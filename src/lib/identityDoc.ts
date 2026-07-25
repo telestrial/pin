@@ -18,8 +18,8 @@ const POINTER_PREFIX = '_dir'
 
 /** Publish the directory blob to Sia and the pointer under this identity's did:dht.
  *  Browser owns the record (option i): a plain publish, which overwrites whatever
- *  was under the key (incl. a keeper's `_iroh`/`_ns` — no live consumer yet; true
- *  keeper↔browser convergence is the deferred multi-instance problem). Returns the
+ *  was under the key (incl. a Curator's `_iroh`/`_ns` — no live consumer yet; true
+ *  Curator↔browser convergence is the deferred multi-instance problem). Returns the
  *  Sia object id (for the caller to reclaim the superseded one) + URL. */
 export async function publishIdentityDoc(
   client: SiaClient,

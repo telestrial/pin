@@ -203,8 +203,8 @@ describe('deriveDidDhtSeed', () => {
 
   it('matches a fixed value for the all-zeros AppKey (regression lock)', async () => {
     // Locks salt='' + info='pin:did-dht:v1' + SHA-256, which MUST equal the Rust
-    // keeper's HKDF (identity.rs) so the browser derives the SAME did:dht. A silent
-    // change here would split the browser identity from the keeper's.
+    // Curator's HKDF (identity.rs) so the browser derives the SAME did:dht. A silent
+    // change here would split the browser identity from the Curator's.
     const seed = await deriveDidDhtSeed(new Uint8Array(32))
     expect(toHex(seed)).toBe(
       '30ff7f7764196617f118404f0b5b1c98298adf7aafcd54a86c92173d06682256',
@@ -240,7 +240,7 @@ describe('deriveChannelLocatorSeed', () => {
 
   it('matches a fixed value for the all-zeros key (regression lock)', async () => {
     // Locks salt='' + info='pin:channel-locator:v1' + SHA-256 — the canonical
-    // channel-locator derivation a reader (and any future keeper) must reproduce.
+    // channel-locator derivation a reader (and any future Curator) must reproduce.
     const seed = await deriveChannelLocatorSeed(new Uint8Array(32))
     expect(toHex(seed)).toBe(
       '78aa2d69cfe77badc0d0d7cd976e0c1b6c3fe4964958145793d153b03a3442eb',

@@ -106,9 +106,9 @@ if (import.meta.env.DEV) {
     return `snapshot settings: ${s.myChannels?.length ?? 0} channels, ${s.subscriptions?.length ?? 0} subs, theme=${s.theme}, updatedAt=${s.updatedAt}`
   }
   // Phase D step-1 proof: derive this browser's did:dht from the Sia AppKey. MUST
-  // equal the keeper's did:dht for the same account (rung-6a Rust identity.rs) —
-  // that's the whole point (one identity across browser + keeper). Compare the
-  // output to the keeper's logged DID.
+  // equal the Curator's did:dht for the same account (rung-6a Rust identity.rs) —
+  // that's the whole point (one identity across browser + Curator). Compare the
+  // output to the Curator's logged DID.
   g.__pinDidDht = async () => {
     const { hex } = await session()
     if (!hex) return 'not signed in'
@@ -118,14 +118,14 @@ if (import.meta.env.DEV) {
   }
   // Phase D step-1 proof: the vendored pkarr wasm publishes + resolves from the app
   // bundle. Uses a THROWAWAY random key (never the real identity — publishing under
-  // it would overwrite the keeper's DID document on the DHT). ~5s publish + retryless
+  // it would overwrite the Curator's DID document on the DHT). ~5s publish + retryless
   // resolve; expect the round-tripped value to match.
   g.__pinPkarrRoundTrip = async () => {
     const { deriveDidDht, publishRecords, resolveDidDht } = await import(
       './lib/pkarr'
     )
     // A throwaway identity from random bytes — never the real one, so publishing
-    // can't overwrite the keeper's DID document.
+    // can't overwrite the Curator's DID document.
     const throwaway = await deriveDidDht(
       crypto.getRandomValues(new Uint8Array(32)),
     )

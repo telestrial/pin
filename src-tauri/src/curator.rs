@@ -48,7 +48,7 @@ pub struct CuratorStatus {
     pub other_addrs: Vec<String>,
     /// Seconds since the endpoint bound, if running.
     pub uptime_secs: Option<u64>,
-    /// The keeper's resolvable `did:dht` identity (ed25519, derived from the
+    /// The Curator's resolvable `did:dht` identity (ed25519, derived from the
     /// recovery phrase — stable across restarts, recoverable on any device).
     pub did_dht: Option<String>,
     /// Result of publishing the did:dht document to Mainline DHT + self-resolve
@@ -97,8 +97,8 @@ struct Diag {
     mirror_root: Option<String>,
     mirror_url: Option<String>,
     mirror_error: Option<String>,
-    /// The keeper's shareable DocTicket — a browser peer imports it to sync the
-    /// keeper's iroh-docs replica. Read out-of-band via `curator_doc_ticket` (kept
+    /// The Curator's shareable DocTicket — a browser peer imports it to sync the
+    /// Curator's iroh-docs replica. Read out-of-band via `curator_doc_ticket` (kept
     /// off the status payload since it's large and only fetched on demand).
     doc_ticket: Option<String>,
     last_error: Option<String>,
@@ -220,7 +220,7 @@ pub fn start_curator(
         return CuratorState::snapshot(&inner);
     }
     // The frontend passes the already-unlocked Sia AppKey + indexer URL so the
-    // keeper can mirror under the user's own identity. Both or neither.
+    // Curator can mirror under the user's own identity. Both or neither.
     let creds = match (app_key_hex, indexer_url) {
         (Some(app_key_hex), Some(indexer_url)) if !app_key_hex.is_empty() => Some(SiaCreds {
             app_key_hex,
@@ -271,8 +271,8 @@ pub fn curator_status(state: tauri::State<CuratorState>) -> CuratorStatus {
     CuratorState::snapshot(&state.0.lock().unwrap())
 }
 
-/// The keeper's shareable DocTicket, or `None` until the doc engine is up and has
-/// produced one. A browser peer imports this to sync the keeper's iroh-docs replica.
+/// The Curator's shareable DocTicket, or `None` until the doc engine is up and has
+/// produced one. A browser peer imports this to sync the Curator's iroh-docs replica.
 #[tauri::command]
 pub fn curator_doc_ticket(state: tauri::State<CuratorState>) -> Option<String> {
     let inner = state.0.lock().unwrap();
@@ -367,7 +367,7 @@ async fn curator_loop(
         d.started = Some(Instant::now());
     }
 
-    // The persistent iroh-docs engine on the keeper's endpoint (step 3a: alongside
+    // The persistent iroh-docs engine on the Curator's endpoint (step 3a: alongside
     // atrium, mounted on the same Router below). It doesn't depend on the atrium
     // repo, so it comes up here; held for the loop's lifetime so its redb + fs blobs
     // stores (FsStore owns its own runtime) stay open as long as the Router serves
@@ -444,7 +444,7 @@ async fn curator_loop(
     let hey_inbox = Some(inbox);
     let router = Some(r);
 
-    // The keeper's did:dht identity (ed25519, derived from the AppKey) — was carried
+    // The Curator's did:dht identity (ed25519, derived from the AppKey) — was carried
     // on the atrium repo handle; now derived directly, since identity is independent
     // of the repo engine. Publish the DID document to Mainline DHT (just `_iroh`, the
     // node to dial — binding the doc namespace via `_ns` is the next slice) and
@@ -464,7 +464,7 @@ async fn curator_loop(
         diag.lock().unwrap().did_dht = Some(did_dht.clone());
         let node_id_str = endpoint.id().to_string();
         // The doc's namespace id — what a peer resolving this DID needs to import +
-        // sync the keeper's iroh-docs replica (alongside `_iroh`, where to dial).
+        // sync the Curator's iroh-docs replica (alongside `_iroh`, where to dial).
         let namespace = doc_engine.as_ref().map(|e| e.namespace_id.clone());
         let mut records = vec![("_iroh".to_string(), node_id_str.clone())];
         if let Some(ns) = &namespace {
@@ -536,7 +536,7 @@ async fn curator_loop(
         }
 
         // Refresh the shareable DocTicket so a browser peer can import + sync the
-        // keeper's replica. Recomputed each poll so late-discovered direct addrs land
+        // Curator's replica. Recomputed each poll so late-discovered direct addrs land
         // in it; `share` is a pure read of the capability + current addrs (the Router
         // is what actually serves the doc), so recomputing is cheap and side-effect
         // free. A browser reaches us relay-first regardless.

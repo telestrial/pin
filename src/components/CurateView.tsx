@@ -50,7 +50,7 @@ export function CurateView() {
       if (status.running) {
         next = await stopCurator()
       } else {
-        // Hand the keeper the already-unlocked Sia identity so it can mirror the
+        // Hand the Curator the already-unlocked Sia identity so it can mirror the
         // repo under the user's own scope.
         const { storedKeyHex, indexerURL } = useAuthStore.getState()
         next = await startCurator(storedKeyHex, indexerURL)
@@ -149,7 +149,7 @@ export function CurateView() {
 // How many distinct identities you can reach through your network — the people
 // you directly hold plus the people they follow, one hop out. Client-side (a
 // bounded walk of public follow records), so it renders on web and desktop
-// alike, keeper or not. Today it's just the raw number; a search over these
+// alike, Curator or not. Today it's just the raw number; a search over these
 // people is the eventual follow-on. ("People" is loose — the true unit is
 // distinct identities/DIDs; personas mean it can't collapse to humans — but
 // it's the warm word, and easily relabeled.)
@@ -190,7 +190,7 @@ function NetworkReach() {
 
 // Dev-facing network diagnostics for the running iroh endpoint. Verbose on
 // purpose — we want to read the node's reachability in detail while building
-// the keeper out.
+// the Curator out.
 function Diagnostics({ status }: { status: CuratorStatus }) {
   return (
     <section className="border border-neutral-200 rounded-lg p-4 space-y-4">

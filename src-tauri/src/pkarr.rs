@@ -4,17 +4,17 @@
 // WHY: on the web these go through public pkarr RELAYS, which lag on read-after-
 // write (a just-published channel/identity pointer isn't resolvable for minutes —
 // the reader-tier boundary that dominated the last few sessions). This talks
-// straight to the Mainline DHT (`no_relays()`), the way the keeper's identity.rs
+// straight to the Mainline DHT (`no_relays()`), the way the Curator's identity.rs
 // already does — so a fresh publish is resolvable in seconds, not minutes. It's the
 // desktop fix for that lag; the web path stays relay-limited (a browser can't do
 // UDP to the DHT — physics, honest reader tier).
 //
 // These are GENERIC TXT publish/resolve (any records under any key), distinct from
 // identity.rs's `publish_doc`/`resolve_did` (which self-verify and decode the
-// keeper's own `_iroh`/`_ns` doc). The frontend derives the key material on the
+// Curator's own `_iroh`/`_ns` doc). The frontend derives the key material on the
 // wasm (identityFromSeed / deriveDidDht) and hands us the 32-byte SEED to publish
 // under — a wasm Keypair can't cross IPC, but the seed can, and we rebuild the
-// keypair here the same way the keeper does (Keypair::from_secret_key).
+// keypair here the same way the Curator does (Keypair::from_secret_key).
 //
 // EXECUTION MODEL: like sia.rs, a dedicated multi-thread `enable_all` runtime so
 // the net/time drivers the Mainline DHT (UDP + timers) needs are guaranteed,

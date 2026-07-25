@@ -4,17 +4,17 @@
 // gossip, content-addressed values via iroh-blobs. Importing a peer's doc and
 // letting it sync IS "network surfacing" — the pull loop collapses into the engine.
 //
-// Step 2 proved surfacing works inside the real keeper (two namespaces reconcile,
+// Step 2 proved surfacing works inside the real Curator (two namespaces reconcile,
 // live write propagates, delta-only transfer). Step 3a (this slice) stands the
 // engine up for real: a PERSISTENT store (redb via iroh-blobs' fs-store, on disk)
-// mounted on the keeper's OWN endpoint, running ALONGSIDE the atrium repo. The
+// mounted on the Curator's OWN endpoint, running ALONGSIDE the atrium repo. The
 // persistence proof is the "reopened from disk" state — the marker entry written on
 // first run survives restarts. Removing atrium (and the head/record/diff verbs) is
 // the next slice; this one adds without subtracting.
 //
 // Identity binding: the namespace + author keys derive from the same Sia AppKey the
-// rest of the keeper's identity hangs off (HKDF, domain-separated `info`), so the
-// keeper's doc is recoverable from the recovery phrase — the same one-root-secret
+// rest of the Curator's identity hangs off (HKDF, domain-separated `info`), so the
+// Curator's doc is recoverable from the recovery phrase — the same one-root-secret
 // move as the did:dht key and settings encryption.
 
 use std::path::Path;
@@ -29,34 +29,34 @@ use iroh_gossip::net::Gossip;
 // settings (`pin:settings:v1`), all off the same AppKey root.
 use pin_derive::{decode_app_key, hkdf32, AUTHOR_INFO, NS_INFO};
 
-/// The keeper's marker entry, mirroring the atrium repo's marker record — written
+/// The Curator's marker entry, mirroring the atrium repo's marker record — written
 /// once, then expected to survive every reopen (the persistence self-check).
 const MARKER_KEY: &[u8] = b"dev.sia.pin.marker/self";
 
-/// The persistent iroh-docs engine, brought up on the keeper's endpoint and ready
+/// The persistent iroh-docs engine, brought up on the Curator's endpoint and ready
 /// to mount on its Router. Held for the Curator's lifetime; `docs`/`gossip` are
 /// `Clone` and `blobs` derefs to the blobs `Store`, so the Router takes clones/refs
 /// and this struct stays whole.
 pub struct DocEngine {
-    /// The keeper's own doc replica (this namespace). Handle for reading/writing
+    /// The Curator's own doc replica (this namespace). Handle for reading/writing
     /// entries and for `share()`ing a `DocTicket` a browser peer imports to sync.
     pub doc: Doc,
     /// The docs protocol handler (mount on `iroh_docs::ALPN`; also the API for
-    /// reading/writing the keeper's doc).
+    /// reading/writing the Curator's doc).
     pub docs: Docs,
     /// The persistent blobs store (mount on `iroh_blobs::ALPN`; holds record
     /// values content-addressed).
     pub blobs: FsStore,
     /// The gossip overlay (mount on `iroh_gossip::ALPN`; drives live-sync).
     pub gossip: Gossip,
-    /// The keeper's doc namespace id (the doc's public identifier).
+    /// The Curator's doc namespace id (the doc's public identifier).
     pub namespace_id: String,
     /// True if the marker was already present on load — i.e. the doc persisted from
     /// a prior run. False on first-ever creation. This is the persistence proof.
     pub reopened: bool,
 }
 
-/// Bring up (or reopen) the keeper's persistent iroh-docs engine on `endpoint`,
+/// Bring up (or reopen) the Curator's persistent iroh-docs engine on `endpoint`,
 /// under a namespace + author derived from the Sia AppKey. Stores live on disk under
 /// `<data_dir>/docs` (`blobs.db`, `docs.redb`, `default-author`). Writes the marker
 /// entry on first creation; finding it on a later run is what proves persistence.
@@ -72,7 +72,7 @@ pub async fn open_or_create(
     let dir = data_dir.join("docs");
     std::fs::create_dir_all(&dir).map_err(|e| format!("create docs dir: {e}"))?;
 
-    // Persistent stack on the keeper's endpoint: fs blobs store + redb-backed docs
+    // Persistent stack on the Curator's endpoint: fs blobs store + redb-backed docs
     // replica + gossip. `(*blobs).clone()` hands `spawn` the blobs `Store` (FsStore
     // derefs to it); `gossip.clone()` because gossip is also mounted on the Router.
     let gossip = Gossip::builder().spawn(endpoint.clone());

@@ -3,18 +3,18 @@
 // (the same encrypted blob the app writes to atproto today).
 //
 // B1: browser only, via the wasm pin-core module. B2 will add the desktop transport
-// (Tauri IPC to the native keeper) behind this same surface, picked by inTauri()
+// (Tauri IPC to the native Curator) behind this same surface, picked by inTauri()
 // — the curator.ts / desktop.ts pattern. For now everything routes through wasm.
 
 import initWasm, {
   open as coreOpen,
+  share as coreShare,
+  start_sync as coreStartSync,
   delete_record,
   get_record,
   list_all,
   list_records,
   put_record,
-  share as coreShare,
-  start_sync as coreStartSync,
 } from '../../crates/pin-core/pkg/pin_core.js'
 
 let wasmReady: Promise<void> | null = null
@@ -74,7 +74,7 @@ export async function listAll(): Promise<
 }
 
 /** Produce a shareable DocTicket for this identity's doc (write cap + relay addr).
- *  A peer imports it via {@link startSync} to live-sync. Symmetric with the keeper's
+ *  A peer imports it via {@link startSync} to live-sync. Symmetric with the Curator's
  *  ticket — useful as a tab-to-tab sync counterpart during dev. Requires an open doc
  *  ({@link openDocs}). */
 export async function shareDoc(): Promise<string> {
@@ -85,7 +85,7 @@ export async function shareDoc(): Promise<string> {
 /** Join the peer(s) in `ticket` and live-sync this identity's doc with them —
  *  the front end of the Curator. `onEvent` fires with a short label per sync event
  *  (insert-local / insert-remote / sync-finished / neighbor-up|down). The doc must
- *  already be open ({@link openDocs}); the same-namespace keeper is the peer. */
+ *  already be open ({@link openDocs}); the same-namespace Curator is the peer. */
 export async function startSync(
   ticket: string,
   onEvent: (label: string) => void,

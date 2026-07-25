@@ -1,5 +1,5 @@
 // Pin's browser did:dht layer over pkarr (Phase D). This is the app-side counterpart
-// to the Rust keeper's identity.rs: derive the SAME ed25519 identity from the Sia
+// to the Rust Curator's identity.rs: derive the SAME ed25519 identity from the Sia
 // AppKey, then publish/resolve records on the Mainline DHT via public pkarr relays —
 // the mutable, identity-keyed pointer that lets a reader find an author's content
 // without atproto. Proven end-to-end in the browser by the pkarr-web spike
@@ -87,11 +87,11 @@ export async function identityFromSeed(
 
 /** An identity's did:dht + its pkarr keypair (for publishing under it). */
 export type DidDhtIdentity = PkarrIdentity & {
-  /** `did:dht:<zbase32(ed25519 pubkey)>` — MUST equal the keeper's for this AppKey. */
+  /** `did:dht:<zbase32(ed25519 pubkey)>` — MUST equal the Curator's for this AppKey. */
   did: string
 }
 
-/** Derive this identity's did:dht from the Sia AppKey — byte-for-byte the keeper's
+/** Derive this identity's did:dht from the Sia AppKey — byte-for-byte the Curator's
  *  (HKDF `pin:did-dht:v1` → ed25519 seed → pkarr Keypair). */
 export async function deriveDidDht(
   appKeyBytes: Uint8Array,
@@ -131,9 +131,9 @@ export function reassembleTxt(records: PkarrTxt[], prefix: string): string {
 
 // DHT publishes fail transiently — network flakiness, and pkarr's concurrency guard
 // ("A different SignedPacket is being concurrently published for the same PublicKey")
-// when another publish to the same key is briefly in flight (e.g. the keeper + this
+// when another publish to the same key is briefly in flight (e.g. the Curator + this
 // browser both writing the identity key, or an overlapping re-publish). Retry a few
-// times with a short delay, the same posture the Rust keeper takes — the delay lets
+// times with a short delay, the same posture the Rust Curator takes — the delay lets
 // the competing publish finish, then the retry (of the same signed packet) lands.
 const PUBLISH_RETRIES = 3
 const PUBLISH_RETRY_DELAY_MS = 2000

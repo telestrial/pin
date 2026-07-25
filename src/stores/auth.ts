@@ -58,7 +58,7 @@ type AuthState = {
   // the identity-doc. Replaces the atproto dev.sia.pin.profile record.
   profile: ProfileRecord | null
   // This identity's own did:dht, derived from the Sia AppKey (HKDF, same as the
-  // keeper / identity-doc). The self-sovereign "who am I" — used for isSelf and
+  // Curator / identity-doc). The self-sovereign "who am I" — used for isSelf and
   // profile navigation. Persisted for instant availability on boot; re-derived
   // at connect so it's never stale.
   myDidDht: string | null
