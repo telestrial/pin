@@ -16,6 +16,7 @@
     "test:unit": "vitest run --exclude='**/*.int.test.ts' --exclude='**/*.int.test.tsx'",
     "test:int": "vitest run .int.test",
     "test:e2e": "bun run build && playwright test",
+    "test:sync": "playwright test --config playwright.sync.config.ts",
     "test:watch": "vitest",
     "test:ui": "vitest --ui"
   },

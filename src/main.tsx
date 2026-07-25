@@ -34,6 +34,14 @@ if (import.meta.env.DEV || inTauri()) {
     __pinChannelLocatorRoundTrip?: () => Promise<string>
     __pinIdentityDocRoundTrip?: () => Promise<string>
     __pinCuratorDocsRoundTrip?: () => Promise<string>
+    __pinSync?: {
+      open: (hex: string) => Promise<string>
+      share: () => Promise<string>
+      sync: (ticket: string) => Promise<void>
+      put: (collection: string, rkey: string, value: string) => Promise<void>
+      get: (collection: string, rkey: string) => Promise<string | null>
+      events: () => string[]
+    }
   }
   g.__pinMirrorWrite = async (text: string) => {
     const { client, hex } = await session()
@@ -212,6 +220,43 @@ if (import.meta.env.DEV || inTauri()) {
     if (!inTauri()) return 'desktop only (run in the Pin desktop app)'
     const { curatorDocsSelfTest } = await import('./lib/tauriDocs')
     return curatorDocsSelfTest()
+  }
+  // Sync-loopback harness (slice 1a): drive docs.ts's OWN sync verbs across two
+  // browser tabs to prove two replicas of one identity converge bidirectionally
+  // over the relay — a browser tab as the ticket PRODUCER (serving node), no
+  // desktop, no Sia. open() derives the namespace from the AppKey hex via HKDF and
+  // binds an iroh endpoint; it never touches Sia, so the hex can be any 32 bytes and
+  // no sign-in is needed. Driven by e2e/sync/sync-loopback.spec.ts. The verbs are
+  // lazy (docs.ts, and its 7 MB wasm, only load when a hook is first called).
+  {
+    const syncEvents: string[] = []
+    const docs = () => import('./lib/docs')
+    g.__pinSync = {
+      open: async (hex) => (await docs()).openDocs(hex),
+      share: async () => (await docs()).shareDoc(),
+      sync: async (ticket) =>
+        (await docs()).startSync(ticket, (l) => {
+          syncEvents.push(l)
+        }),
+      put: async (collection, rkey, value) =>
+        (await docs()).putRecord(
+          collection,
+          rkey,
+          new TextEncoder().encode(value),
+        ),
+      get: async (collection, rkey) => {
+        try {
+          const b = await (await docs()).getRecord(collection, rkey)
+          return b ? new TextDecoder().decode(b) : null
+        } catch {
+          // Content lags RBSR metadata in iroh-blobs — a key can sync before its
+          // blob lands, so get_bytes throws briefly. Treat as "not ready" and let
+          // the caller poll.
+          return null
+        }
+      },
+      events: () => syncEvents.slice(),
+    }
   }
 }
 
