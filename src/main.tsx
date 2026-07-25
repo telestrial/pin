@@ -2,12 +2,15 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import App from './App.tsx'
 import './index.css'
+import { inTauri } from './lib/openExternal'
 
-// Dev-only reload-persistence proof for the Sia-mirror durability layer
-// (docsMirror). In the console: `await __pinMirrorWrite('hello')`, RELOAD, then
-// `await __pinMirrorRead()` — it should come back from Sia. Removed once Phase C
-// wires the mirror into real load/save paths.
-if (import.meta.env.DEV) {
+// Dev diagnostics on `window`. Present in the web dev server (import.meta.env.DEV)
+// AND in the desktop shell (inTauri()) — the latter matters because `dev:desktop`
+// serves a PRODUCTION dist (DEV is false there), yet the Curator IPC hooks only run
+// on desktop. Both are false in a plain web production build, so nothing here ships
+// to a deployed web app. In the console: `await __pinMirrorWrite('hello')`, RELOAD,
+// then `await __pinMirrorRead()` — it should come back from Sia.
+if (import.meta.env.DEV || inTauri()) {
   const hexToBytes = (hex: string) => {
     const out = new Uint8Array(hex.length / 2)
     for (let i = 0; i < out.length; i++) {
@@ -30,6 +33,7 @@ if (import.meta.env.DEV) {
     __pinPkarrRoundTrip?: () => Promise<string>
     __pinChannelLocatorRoundTrip?: () => Promise<string>
     __pinIdentityDocRoundTrip?: () => Promise<string>
+    __pinCuratorDocsRoundTrip?: () => Promise<string>
   }
   g.__pinMirrorWrite = async (text: string) => {
     const { client, hex } = await session()
@@ -197,6 +201,17 @@ if (import.meta.env.DEV) {
     const got = await resolveIdentityDoc(auth.client, did)
     const match = got?.channels.length === channels.length
     return `identity-doc → resolved ${got?.channels.length ?? 0}/${channels.length} public channels, ${got?.follows.length ?? 0} follows — ${match ? 'MATCH' : 'MISMATCH'}`
+  }
+  // "One repo" Slice A proof (DESKTOP ONLY): drive the native Curator's persistent
+  // iroh-docs replica through put / get / list / delete over Tauri IPC. Proves the
+  // frontend can reach the SAME replica the Curator serves over iroh — the mechanic
+  // Slice B routes docs.ts through. Enable curation first (the doc lives in the
+  // running Curator), then run this in the desktop shell's console.
+  g.__pinCuratorDocsRoundTrip = async () => {
+    const { inTauri } = await import('./lib/openExternal')
+    if (!inTauri()) return 'desktop only (run in the Pin desktop app)'
+    const { curatorDocsSelfTest } = await import('./lib/tauriDocs')
+    return curatorDocsSelfTest()
   }
 }
 
