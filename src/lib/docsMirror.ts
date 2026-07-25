@@ -17,7 +17,7 @@ import {
 } from '../core/crypto'
 import type { SiaClient } from '../core/siaClient'
 import { getRecord, listAll, putRecord } from './docs'
-import { chunkForTxt } from './pkarr'
+import { chunkForTxt, identityFromSeed, reassembleTxt } from './pkarr'
 import { pkarrTransport } from './pkarrTransport'
 
 const POINTER_KEY = 'pin:docsnapshot:pointer'
@@ -75,9 +75,17 @@ async function publishSettingsLocator(
   )
 }
 
-// (The recovery read — resolve this locator off the DHT on a device with no local
-// pointer — is a deliberate follow-up: it needs the new-user first-boot latency
-// handled, so it's split from this publish-only, additive change.)
+// Resolve the durable settings pointer off the DHT → the current Sia snapshot URL.
+// null when nothing's published / resolvable. The recovery read path for a device
+// with no localStorage pointer (a restore, or a wiped-pointer catastrophe boot).
+async function resolveSettingsPointer(
+  appKeyBytes: Uint8Array,
+): Promise<string | null> {
+  const seed = await deriveSettingsLocatorSeed(appKeyBytes)
+  const { publicKey } = await identityFromSeed(seed)
+  const records = await (await pkarrTransport()).resolve(publicKey)
+  return reassembleTxt(records, SETTINGS_POINTER_PREFIX) || null
+}
 
 /** Snapshot the whole doc to Sia (encrypted), update the pointer, publish the
  *  durable pkarr locator, prune the previous snapshot. Call (debounced) after
@@ -106,8 +114,10 @@ export async function snapshotToSia(
   )
 
   // Best-effort prune of the superseded snapshot object (the new one is already
-  // pointed at, so a failed prune only leaves a reclaimable orphan).
-  if (prev && prev.id !== uploaded.id) {
+  // pointed at, so a failed prune only leaves a reclaimable orphan). Guard on a
+  // non-empty id: a pointer recovered from the DHT locator carries only the URL
+  // (id ''), which can't be pruned — that object is left for the sweep.
+  if (prev?.id && prev.id !== uploaded.id) {
     await client
       .deleteObject(prev.id)
       .then(() => client.pruneSlabs())
@@ -118,17 +128,26 @@ export async function snapshotToSia(
 
 // Download + decrypt the latest Sia snapshot into its entries — WITHOUT the
 // pin-core engine. The snapshot is a self-contained durable copy, so a plain Sia
-// download + decrypt is enough; this is the cheap read path for the migration (no
-// wasm, no relay). [] when there's no pointer (cold device — objectEvents
-// fallback deferred).
+// download + decrypt is enough. localStorage pointer first (fast, warm device);
+// when it's absent AND recovery is allowed (a restore / wiped-pointer boot, never a
+// brand-new account), fall back to resolving the durable DHT locator, and cache the
+// recovered URL so subsequent reads this session skip the resolve. [] when there's
+// no pointer and recovery is off or finds nothing.
 async function fetchSnapshotEntries(
   client: SiaClient,
   appKeyBytes: Uint8Array,
+  recoverViaLocator = false,
 ): Promise<SnapshotEntry[]> {
-  const ptr = readPointer()
-  if (!ptr) return []
+  let url = readPointer()?.url ?? null
+  if (!url && recoverViaLocator) {
+    url = await resolveSettingsPointer(appKeyBytes)
+    // Cache the recovered URL (id unknown — only the URL lives on the DHT; the
+    // next full snapshot supersedes it with a prunable pointer).
+    if (url) writePointer({ id: '', url })
+  }
+  if (!url) return []
   const key = await deriveSnapshotKey(appKeyBytes)
-  const bytes = await client.downloadItem(ptr.url)
+  const bytes = await client.downloadItem(url)
   const ciphertext = new TextDecoder().decode(bytes)
   return JSON.parse(await decryptForChannel(key, ciphertext)) as SnapshotEntry[]
 }
@@ -147,16 +166,23 @@ export async function hydrateFromSia(
 }
 
 /** Read one record's bytes straight from the latest Sia snapshot, WITHOUT the
- *  pin-core engine (no wasm, no relay). The migration read path: settings /
- *  channels can be sourced from the durable snapshot on boot cheaply. undefined
- *  if there's no snapshot or the record isn't in it. */
+ *  pin-core engine (no wasm, no relay). The boot read path: settings / channels
+ *  can be sourced from the durable snapshot cheaply. Pass `recoverViaLocator` to
+ *  fall back to the durable DHT locator when there's no local pointer (a restore /
+ *  wiped-pointer boot — never a brand-new account). undefined if there's no
+ *  snapshot or the record isn't in it. */
 export async function readRecordFromSnapshot(
   client: SiaClient,
   appKeyBytes: Uint8Array,
   collection: string,
   rkey: string,
+  recoverViaLocator = false,
 ): Promise<Uint8Array | undefined> {
-  const entries = await fetchSnapshotEntries(client, appKeyBytes)
+  const entries = await fetchSnapshotEntries(
+    client,
+    appKeyBytes,
+    recoverViaLocator,
+  )
   const hit = entries.find((e) => e.c === collection && e.k === rkey)
   return hit ? b64decode(hit.v) : undefined
 }

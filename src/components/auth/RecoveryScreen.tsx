@@ -13,7 +13,8 @@ export function RecoveryScreen({
 }: {
   builder: React.RefObject<Builder | null>
 }) {
-  const { setClient, setStoredKeyHex, setError } = useAuthStore()
+  const { setClient, setStoredKeyHex, setError, setJustCreatedAccount } =
+    useAuthStore()
   const [mode, setMode] = useState<'choose' | 'generate' | 'import'>('choose')
   const [phrase, setPhrase] = useState('')
   const [generatedPhrase, setGeneratedPhrase] = useState('')
@@ -58,6 +59,11 @@ export function RecoveryScreen({
     try {
       const sdk = await b.register(mnemonic)
       setStoredKeyHex(sdk.appKey().export().toHex())
+      // Generate = a brand-new account (nothing to recover); import = restoring an
+      // existing one (recover settings from the DHT locator). Set BEFORE setClient
+      // (which transitions to connected + runs the settings load) so the load knows
+      // whether to attempt recovery.
+      setJustCreatedAccount(mode === 'generate')
       const { indexerURL } = useAuthStore.getState()
       setClient(await connectSiaClient(sdk, indexerURL))
     } catch (e) {

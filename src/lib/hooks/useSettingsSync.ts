@@ -54,10 +54,15 @@ export function useSettingsSync() {
           return
         }
 
+        // A brand-new account (this session created it) has nothing to recover, so
+        // skip the DHT locator resolve. A restore / wiped-pointer boot recovers
+        // settings from the durable locator when there's no local pointer.
+        const recoverViaLocator = !useAuthStore.getState().justCreatedAccount
         const snap = await readSettingsFromSnapshot(
           client,
           appKeyBytes,
           key,
+          recoverViaLocator,
         ).catch(() => null)
         if (cancelled) return
         if (snap) {
@@ -98,12 +103,14 @@ async function readSettingsFromSnapshot(
   client: SiaClient,
   appKeyBytes: Uint8Array,
   key: Uint8Array,
+  recoverViaLocator: boolean,
 ): Promise<DispatchSettings | null> {
   const bytes = await readRecordFromSnapshot(
     client,
     appKeyBytes,
     'settings',
     'self',
+    recoverViaLocator,
   )
   if (!bytes) return null
   const json = await decryptSettings(key, new TextDecoder().decode(bytes))
