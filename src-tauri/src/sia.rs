@@ -17,16 +17,18 @@
 // runtime we know has the net driver, and awaiting the JoinHandle from Tauri's
 // runtime is a plain future poll.
 //
-// BYTES OVER IPC: downloads return raw bytes via `tauri::ipc::Response` (JS gets an
-// ArrayBuffer — no JSON blow-up). Uploads RECEIVE bytes as base64 strings (a raw
-// request body can't be taken by an async command, and a `Vec<u8>` arg from a raw
-// body is broken upstream). base64 has ~33% overhead — a first-cut cost, fine for
-// the friend-scale payloads here; a raw upload path can replace it later.
+// BYTES OVER IPC: raw both ways, no base64. Downloads return raw bytes via
+// `tauri::ipc::Response` (JS gets an ArrayBuffer). Uploads RECEIVE the raw request
+// body via `tauri::ipc::Request` (`InvokeBody::Raw`) — Tauri v2 async commands DO
+// accept a borrowed `Request`, so we read the bytes off it before the first await.
+// A `Vec<u8>` typed arg from a raw body is broken upstream (tauri #9948: raw→typed
+// does `serde_json::from_slice`), which is why it's `Request`, not a `Vec<u8>` arg.
+// Packed uploads carry N buffers in one raw body via a little-endian
+// [u32 count][u32 len][bytes]... frame (see `unframe`).
 
 use std::io::Cursor;
 use std::sync::Arc;
 
-use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use sia_storage::{
     app_id, AppKey, AppMetadata, Builder, DateTime, DownloadOptions, Hash256, Object,
     ObjectsCursor, Sdk, Slab, UploadOptions, Utc,
@@ -60,6 +62,32 @@ fn hex_to_32(s: &str) -> Option<[u8; 32]> {
         *b = u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).ok()?;
     }
     Some(out)
+}
+
+// Split a framed raw payload — [u32 count][u32 len][bytes]... little-endian — back
+// into the individual buffers. The frontend frames N packed-upload buffers into
+// one raw IPC body (a raw request body is a single blob, so N buffers get framed).
+fn unframe(data: &[u8]) -> Result<Vec<Vec<u8>>, String> {
+    let read_u32 = |o: usize| -> Result<u32, String> {
+        data.get(o..o + 4)
+            .map(|s| u32::from_le_bytes([s[0], s[1], s[2], s[3]]))
+            .ok_or_else(|| "framed payload truncated".to_string())
+    };
+    let mut off = 0usize;
+    let count = read_u32(off)? as usize;
+    off += 4;
+    let mut out = Vec::with_capacity(count);
+    for _ in 0..count {
+        let len = read_u32(off)? as usize;
+        off += 4;
+        let chunk = data
+            .get(off..off + len)
+            .ok_or_else(|| "framed payload truncated".to_string())?
+            .to_vec();
+        off += len;
+        out.push(chunk);
+    }
+    Ok(out)
 }
 
 /// Tauri-managed state: the dedicated Sia runtime + the connected Sdk (if any).
@@ -213,11 +241,12 @@ pub async fn sia_connect(
 #[tauri::command]
 pub async fn sia_upload_item(
     state: tauri::State<'_, SiaState>,
-    bytes_base64: String,
+    request: tauri::ipc::Request<'_>,
 ) -> Result<UploadDto, String> {
-    let bytes = B64
-        .decode(bytes_base64.as_bytes())
-        .map_err(|e| format!("base64: {e}"))?;
+    let bytes = match request.body() {
+        tauri::ipc::InvokeBody::Raw(v) => v.clone(),
+        _ => return Err("upload requires a raw byte body".to_string()),
+    };
     let sdk = current_sdk(&state).await?;
     state
         .rt
@@ -243,12 +272,12 @@ pub async fn sia_upload_item(
 #[tauri::command]
 pub async fn sia_upload_items_packed(
     state: tauri::State<'_, SiaState>,
-    items_base64: Vec<String>,
+    request: tauri::ipc::Request<'_>,
 ) -> Result<Vec<UploadDto>, String> {
-    let mut buffers = Vec::with_capacity(items_base64.len());
-    for s in &items_base64 {
-        buffers.push(B64.decode(s.as_bytes()).map_err(|e| format!("base64: {e}"))?);
-    }
+    let buffers = match request.body() {
+        tauri::ipc::InvokeBody::Raw(v) => unframe(v)?,
+        _ => return Err("packed upload requires a raw byte body".to_string()),
+    };
     let sdk = current_sdk(&state).await?;
     state
         .rt

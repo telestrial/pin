@@ -12,17 +12,23 @@ import type { AccountSnapshot } from '../core/pin'
 import type { PinnedObjectInfo, SiaClient } from '../core/siaClient'
 import type { UploadedItem } from '../core/sia'
 
-// base64-encode in chunks — String.fromCharCode(...bytes) blows the call stack on
-// large uploads, and a per-byte loop is slow for MB-scale media.
-function toBase64(bytes: Uint8Array): string {
-  let binary = ''
-  const CHUNK = 0x8000
-  for (let i = 0; i < bytes.length; i += CHUNK) {
-    binary += String.fromCharCode(
-      ...(bytes.subarray(i, i + CHUNK) as unknown as number[]),
-    )
+// Frame N buffers into one raw payload — [u32 count][u32 len][bytes]...
+// little-endian — since a raw IPC body is a single blob. Rust's `unframe` splits
+// it back. Keeps packed uploads on the raw path (no base64) like single uploads.
+function frameBuffers(items: Uint8Array[]): Uint8Array {
+  const total = 4 + items.reduce((n, b) => n + 4 + b.length, 0)
+  const out = new Uint8Array(total)
+  const dv = new DataView(out.buffer)
+  let off = 0
+  dv.setUint32(off, items.length, true)
+  off += 4
+  for (const b of items) {
+    dv.setUint32(off, b.length, true)
+    off += 4
+    out.set(b, off)
+    off += b.length
   }
-  return btoa(binary)
+  return out
 }
 
 type UploadDto = { id: string; itemUrl: string }
@@ -54,15 +60,16 @@ export async function makeTauriSiaClient(
     // cut — the upload still completes; per-shard progress bars just won't tick on
     // desktop. A Tauri event channel can drive them later.
     uploadItem: async (bytes) => {
-      const dto = await invoke<UploadDto>('sia_upload_item', {
-        bytesBase64: toBase64(bytes),
-      })
+      // Pass the Uint8Array as the payload → Tauri sends it as a raw request body
+      // (no JSON number-array / base64 blow-up), read on the Rust side as InvokeBody::Raw.
+      const dto = await invoke<UploadDto>('sia_upload_item', bytes)
       return toUploadedItem(dto, bytes)
     },
     uploadItemsPacked: async (items) => {
-      const dtos = await invoke<UploadDto[]>('sia_upload_items_packed', {
-        itemsBase64: items.map(toBase64),
-      })
+      const dtos = await invoke<UploadDto[]>(
+        'sia_upload_items_packed',
+        frameBuffers(items),
+      )
       return Promise.all(dtos.map((dto, i) => toUploadedItem(dto, items[i])))
     },
     downloadItem: async (url) => {
