@@ -18,6 +18,7 @@ import { useChannelReader } from './lib/hooks/useChannelReader'
 import { useCuratorAutostart } from './lib/hooks/useCuratorAutostart'
 import { useHandleFollowReconciliation } from './lib/hooks/useHandleFollowReconciliation'
 import { useIdentityDocPublish } from './lib/hooks/useIdentityDocPublish'
+import { useRendezvousSync } from './lib/hooks/useRendezvousSync'
 import { useRepackRunner } from './lib/hooks/useRepackRunner'
 import { useSettingsDocsMirror } from './lib/hooks/useSettingsDocsMirror'
 import { useSettingsSync } from './lib/hooks/useSettingsSync'
@@ -80,6 +81,7 @@ export default function App() {
   useChannelLocatorPublish()
   useIdentityDocPublish()
   useHandleFollowReconciliation()
+  useRendezvousSync()
 
   // While a pinned item is armed, mark the body so a global CSS rule
   // (in index.css) swaps the cursor to a Pin-green arrow everywhere on

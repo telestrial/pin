@@ -8,6 +8,7 @@ import {
 } from '../lib/curator'
 import { useReachablePeople } from '../lib/hooks/useReachablePeople'
 import { useAuthStore } from '../stores/auth'
+import { useSyncStore } from '../stores/sync'
 import { CopyButton } from './ui/CopyButton'
 
 // The Curate page (rendered inside a FormCard by Home). Reachable from the
@@ -89,6 +90,8 @@ export function CurateView() {
       </section>
 
       <NetworkReach />
+
+      <SyncStatus />
 
       {available ? (
         <>
@@ -189,6 +192,51 @@ function NetworkReach() {
         <p className="text-sm text-neutral-500">
           Follow some channels to start building your network.
         </p>
+      )}
+    </section>
+  )
+}
+
+// Live-sync status — keeps your identity's repo in parity across your devices.
+// Reflects the symmetric rendezvous loop (useRendezvousSync): every device is a full
+// peer that advertises itself and syncs to the others. First-person, calm — this is
+// your data staying together, not a network dashboard.
+function SyncStatus() {
+  const advertising = useSyncStore((s) => s.advertising)
+  const phase = useSyncStore((s) => s.phase)
+  const detail = useSyncStore((s) => s.detail)
+  const lastEvent = useSyncStore((s) => s.lastEvent)
+
+  const dot =
+    phase === 'live'
+      ? 'bg-green-500'
+      : phase === 'error'
+        ? 'bg-red-500'
+        : phase === 'off'
+          ? 'bg-neutral-300'
+          : 'bg-amber-500'
+
+  const headline =
+    phase === 'live'
+      ? 'In sync with your other devices'
+      : phase === 'error'
+        ? "Couldn't sync right now"
+        : advertising
+          ? 'This device is discoverable'
+          : 'Getting ready to sync…'
+
+  return (
+    <section className="border border-neutral-200 rounded-lg p-4 space-y-1">
+      <h2 className="text-sm font-semibold text-neutral-900 flex items-center gap-1.5">
+        <span aria-hidden="true" className={`size-1.5 rounded-full ${dot}`} />
+        {headline}
+      </h2>
+      <p className="text-xs text-neutral-500 leading-relaxed">
+        {detail ??
+          'Your channels, keys, and settings stay in parity across every device you sign in on — one identity, one repo.'}
+      </p>
+      {phase === 'live' && lastEvent && (
+        <p className="text-xs text-neutral-400 font-mono">{lastEvent}</p>
       )}
     </section>
   )

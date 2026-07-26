@@ -230,6 +230,24 @@ export async function deriveRendezvousSeed(
   return deriveAppSubkey(appKeyBytes, RENDEZVOUS_KEY_INFO)
 }
 
+// Per-instance rendezvous key. The multi-instance rendezvous is a small DIRECTORY
+// record (under the rendezvous key) listing each live instance, plus each instance's
+// full iroh DocTicket published under its OWN key derived here — because one pkarr
+// packet (~1000 B) can't hold several full tickets. Derived from the RENDEZVOUS seed
+// (not the AppKey) so it stays private to your instances; the instanceId is a public
+// per-session salt, so both the advertiser and any resolver holding the rendezvous
+// seed can derive the same per-instance key from a directory entry's id.
+const RENDEZVOUS_INSTANCE_KEY_INFO = 'pin:iroh-rendezvous-instance:v1:'
+export async function deriveRendezvousInstanceSeed(
+  rendezvousSeed: Uint8Array,
+  instanceId: string,
+): Promise<Uint8Array> {
+  return deriveAppSubkey(
+    rendezvousSeed,
+    RENDEZVOUS_INSTANCE_KEY_INFO + instanceId,
+  )
+}
+
 export async function encryptSettings(
   key: Uint8Array,
   plaintext: string,

@@ -246,15 +246,20 @@ if (import.meta.env.DEV || inTauri()) {
   // lazy (docs.ts, and its 7 MB wasm, only load when a hook is first called).
   {
     const syncEvents: string[] = []
+    // A per-page-load instance id for the rendezvous directory (the app uses its own
+    // in useRendezvousSync; this is the harness's).
+    const RZ_INSTANCE = Array.from(crypto.getRandomValues(new Uint8Array(8)))
+      .map((b) => b.toString(16).padStart(2, '0'))
+      .join('')
     const docs = () => import('./lib/docs')
     g.__pinSync = {
       open: async (hex) => (await docs()).openDocs(hex),
       // Open the doc under the signed-in account's AppKey — the desktop Curator's
       // SAME namespace (both derive it from the one recovery phrase). The 1b
       // browser-tab convenience: no need to fish the hex out of the store by hand.
-      // NOTE: open() rebuilds the engine from scratch, so this discards whatever the
-      // app already opened this session — fine for the sync test (we're proving the
-      // mechanism, not preserving app state).
+      // NOTE: openDocs is now memoized (docs.ts) — same key returns the app's live
+      // engine, so this shares whatever the app already opened this session rather
+      // than rebuilding a throwaway one.
       openSession: async () => {
         const { useAuthStore } = await import('./stores/auth')
         const hex = useAuthStore.getState().storedKeyHex
@@ -266,14 +271,25 @@ if (import.meta.env.DEV || inTauri()) {
         (await docs()).startSync(ticket, (l) => {
           syncEvents.push(l)
         }),
-      // Rendezvous auto-discovery: one instance publishes its ticket under the
-      // AppKey-derived rendezvous key; another resolves + startSyncs it, no copy.
-      rendezvousPublish: async (hex) =>
-        (await import('./lib/rendezvous')).publishRendezvous(hex),
+      // Rendezvous auto-discovery: one instance advertises its coords in the
+      // additive directory (per this page's instance id); another discovers + resolves
+      // + startSyncs, no manual copy. Each page (context) gets its own RZ_INSTANCE.
+      rendezvousPublish: async (hex) => {
+        await (await import('./lib/rendezvous')).advertiseInstance(
+          hex,
+          RZ_INSTANCE,
+          false,
+        )
+        return 'advertised'
+      },
       rendezvousConnect: async (hex) =>
-        (await import('./lib/rendezvous')).autoConnectRendezvous(hex, (l) => {
-          syncEvents.push(l)
-        }),
+        (await import('./lib/rendezvous')).autoConnectRendezvous(
+          hex,
+          RZ_INSTANCE,
+          (l) => {
+            syncEvents.push(l)
+          },
+        ),
       put: async (collection, rkey, value) =>
         (await docs()).putRecord(
           collection,

@@ -19,11 +19,16 @@ import {
   shareDoc,
   startSync,
 } from '../../lib/docs'
-import { autoConnectRendezvous, publishRendezvous } from '../../lib/rendezvous'
+import { advertiseInstance, autoConnectRendezvous } from '../../lib/rendezvous'
 
 // Any 32 bytes; openDocs is pure HKDF. The same value on both devices => the same
 // namespace + author => two replicas of one identity.
 const DEFAULT_HEX = '5eed'.repeat(16)
+
+// A per-device instance id for the additive rendezvous directory.
+const RZ_INSTANCE = Array.from(crypto.getRandomValues(new Uint8Array(8)))
+  .map((b) => b.toString(16).padStart(2, '0'))
+  .join('')
 
 export function SyncTestPanel() {
   const [hex, setHex] = useState(DEFAULT_HEX)
@@ -77,16 +82,18 @@ export function SyncTestPanel() {
   const [rzBusy, setRzBusy] = useState(false)
   const doRzPublish = async () => {
     try {
-      await publishRendezvous(hex)
-      say('published rendezvous — the other device can auto-connect now')
+      await advertiseInstance(hex, RZ_INSTANCE, false)
+      say(
+        'advertised to the rendezvous — the other device can auto-connect now',
+      )
     } catch (e) {
-      say(`rendezvous publish failed: ${e}`)
+      say(`rendezvous advertise failed: ${e}`)
     }
   }
   const doRzConnect = async () => {
     setRzBusy(true)
     try {
-      await autoConnectRendezvous(hex, (l) =>
+      await autoConnectRendezvous(hex, RZ_INSTANCE, (l) =>
         setEvents((ev) => [l, ...ev].slice(0, 50)),
       )
       say('auto-connected via rendezvous — no ticket copied')
