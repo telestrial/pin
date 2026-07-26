@@ -31,6 +31,7 @@ import {
   openDocsNative,
   putRecordNative,
   shareDocNative,
+  startSyncNative,
 } from './tauriDocs'
 
 let wasmReady: Promise<void> | null = null
@@ -39,13 +40,32 @@ function ensureReady(): Promise<void> {
   return wasmReady
 }
 
+// Open the engine exactly ONCE per identity and share it across every caller.
+// pin-core's `open` REBUILDS the engine from scratch on each call (fresh endpoint,
+// fresh MemStore) — so a second open would drop an active start_sync subscription
+// AND wipe other hooks' in-memory writes. Memoizing (keyed on the AppKey hex) makes
+// every doc hook + the sync loop talk to one stable engine. A key change (sign
+// out/in a different identity) re-opens for the new identity; a failed open clears
+// the cache so a later call retries.
+let openState: { key: string; promise: Promise<string> } | null = null
+
 /** Open/create the doc for this identity (namespace + author derived from the Sia
  *  AppKey). Returns the namespace id. On desktop this waits for the auto-started
- *  Curator's doc; on web it opens the in-page wasm engine. */
+ *  Curator's doc; on web it opens the in-page wasm engine. Idempotent per identity —
+ *  the underlying engine is opened once and reused. */
 export async function openDocs(appKeyHex: string): Promise<string> {
-  if (inTauri()) return openDocsNative()
-  await ensureReady()
-  return coreOpen(appKeyHex)
+  if (openState && openState.key === appKeyHex) return openState.promise
+  const promise = (async () => {
+    if (inTauri()) return openDocsNative()
+    await ensureReady()
+    return coreOpen(appKeyHex)
+  })()
+  openState = { key: appKeyHex, promise }
+  // On failure, drop the cache so the next call can re-attempt the open.
+  promise.catch(() => {
+    if (openState?.promise === promise) openState = null
+  })
+  return promise
 }
 
 export async function putRecord(
@@ -106,21 +126,20 @@ export async function shareDoc(): Promise<string> {
   return coreShare()
 }
 
-/** Join the peer(s) in `ticket` and live-sync this identity's doc with them —
- *  the front end of the Curator. `onEvent` fires with a short label per sync event
- *  (insert-local / insert-remote / sync-finished / neighbor-up|down). The doc must
- *  already be open ({@link openDocs}); the same-namespace Curator is the peer.
+/** Join the peer(s) in `ticket` and live-sync this identity's doc with them.
+ *  `onEvent` fires with a short label per sync event (insert-local / insert-remote /
+ *  sync-finished / neighbor-up|down). The doc must already be open ({@link openDocs}).
  *
- *  Web (wasm) only for now. On desktop, live-sync is the Curator's own job (its
- *  serve/pull loops), not something driven through this binding — wiring that is the
- *  sync arc, not this slice. */
+ *  Symmetric across platforms: web drives the wasm engine; desktop drives the native
+ *  Curator's engine via `curator_start_sync`. One import reconciles both directions,
+ *  so this is what lets a desktop actively pull from a peer too — not just be
+ *  synced-from. (Desktop sync events aren't surfaced over IPC, so onEvent stays quiet
+ *  there; reconciliation doesn't need a subscriber.) */
 export async function startSync(
   ticket: string,
   onEvent: (label: string) => void,
 ): Promise<void> {
-  if (inTauri()) {
-    throw new Error('desktop live-sync runs in the Curator, not via docs.ts')
-  }
+  if (inTauri()) return startSyncNative(ticket)
   await ensureReady()
   await coreStartSync(ticket, onEvent)
 }

@@ -22,11 +22,14 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use std::str::FromStr as _;
+
 use futures_lite::StreamExt as _;
 use iroh::endpoint::presets;
 use iroh::{Endpoint, SecretKey};
 use iroh_docs::api::protocol::{AddrInfoOptions, ShareMode};
 use iroh_docs::store::Query;
+use iroh_docs::DocTicket;
 use tauri::Manager;
 
 use crate::docstore::DocEngine;
@@ -433,6 +436,30 @@ pub async fn docs_list_all(
         out.push(String::from_utf8_lossy(entry.key()).to_string());
     }
     Ok(out)
+}
+
+/// Actively sync the Curator's replica with the peer(s) in `ticket` — the desktop
+/// equivalent of pin-core's `start_sync` (which the in-webview wasm engine can't run
+/// on desktop). The ticket only supplies WHERE to dial; the namespace is already ours
+/// (same identity → same namespace). One import reconciles BOTH directions, so this is
+/// what lets a desktop actively pull from a peer (its own other device, a web tab)
+/// rather than only being synced-from — the piece that makes desktop and web fully
+/// symmetric. Sync runs in the Curator's engine; LiveEvents aren't surfaced over IPC
+/// (reconciliation doesn't need a subscriber), so the frontend's onEvent stays quiet
+/// on desktop.
+#[tauri::command]
+pub async fn curator_start_sync(
+    state: tauri::State<'_, CuratorState>,
+    ticket: String,
+) -> Result<(), String> {
+    let engine = current_engine(&state)?;
+    let ticket = DocTicket::from_str(&ticket).map_err(|e| format!("bad ticket: {e}"))?;
+    engine
+        .doc
+        .start_sync(ticket.nodes)
+        .await
+        .map_err(|e| format!("start_sync: {e}"))?;
+    Ok(())
 }
 
 /// Owns a dedicated tokio runtime for the Curator's lifetime and drives the

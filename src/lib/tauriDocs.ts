@@ -89,6 +89,13 @@ export async function shareDocNative(): Promise<string> {
   return ticket
 }
 
+/** The desktop analog of docs.ts `startSync`: actively sync the native Curator's
+ *  replica with the peer(s) in `ticket`. Sync runs in the Curator engine, so no live
+ *  events come back over IPC — the frontend's onEvent stays quiet on desktop. */
+export async function startSyncNative(ticket: string): Promise<void> {
+  return call<void>('curator_start_sync', { ticket })
+}
+
 /** Slice A proof: drive the native Curator doc through put / get / list / delete over
  *  IPC and report. Requires the Curator to be running (enable curation first). */
 export async function curatorDocsSelfTest(): Promise<string> {

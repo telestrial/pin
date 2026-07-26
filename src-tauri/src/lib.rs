@@ -23,6 +23,7 @@ pub fn run() {
       curator::docs_delete_record,
       curator::docs_list_records,
       curator::docs_list_all,
+      curator::curator_start_sync,
       sia::sia_connect,
       sia::sia_upload_item,
       sia::sia_upload_items_packed,
