@@ -218,6 +218,12 @@ pub async fn share() -> Result<String, JsValue> {
 /// alive. Subscribes BEFORE starting sync (mirroring iroh-docs' import_and_subscribe)
 /// so no events are missed; the event pump runs on the local executor for the life
 /// of the engine.
+///
+/// NOTE (2026-07-25): the peer coordinates MUST include an address — the ticket
+/// carries node id + relay URL + direct addrs. Dialing by a bare node id (letting
+/// iroh discovery resolve it) does NOT work in the relay-only wasm/browser build
+/// (no DNS resolver in the sandbox), so a rendezvous must publish the ticket/addr,
+/// not just the id.
 #[wasm_bindgen]
 pub async fn start_sync(ticket: String, on_event: js_sys::Function) -> Result<(), JsValue> {
     let eng = engine()?;
