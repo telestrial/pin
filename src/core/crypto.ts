@@ -216,6 +216,20 @@ export async function deriveSettingsLocatorSeed(
   return deriveAppSubkey(appKeyBytes, SETTINGS_LOCATOR_KEY_INFO)
 }
 
+// The 32-byte ed25519 seed for your instance-RENDEZVOUS pkarr key — where an instance
+// of this identity publishes its current iroh DocTicket (node id + relay addr; an
+// address is REQUIRED, a bare node id doesn't resolve in the browser — CLAUDE.md
+// 2026-07-25) so ANOTHER instance of the same identity resolves it and dials in, with
+// no manual ticket copy. AppKey-derived, so it's private to your instances (only you
+// can compute the key → only your instances publish/resolve it) and domain-separated
+// from the public did:dht identity. The auto-discovery substrate for instance sync.
+const RENDEZVOUS_KEY_INFO = 'pin:iroh-rendezvous:v1'
+export async function deriveRendezvousSeed(
+  appKeyBytes: Uint8Array,
+): Promise<Uint8Array> {
+  return deriveAppSubkey(appKeyBytes, RENDEZVOUS_KEY_INFO)
+}
+
 export async function encryptSettings(
   key: Uint8Array,
   plaintext: string,

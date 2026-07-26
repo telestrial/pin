@@ -19,6 +19,7 @@ import {
   shareDoc,
   startSync,
 } from '../../lib/docs'
+import { autoConnectRendezvous, publishRendezvous } from '../../lib/rendezvous'
 
 // Any 32 bytes; openDocs is pure HKDF. The same value on both devices => the same
 // namespace + author => two replicas of one identity.
@@ -71,6 +72,28 @@ export function SyncTestPanel() {
       say(`opened — namespace ${ns}`)
     } catch (e) {
       say(`open failed: ${e}`)
+    }
+  }
+  const [rzBusy, setRzBusy] = useState(false)
+  const doRzPublish = async () => {
+    try {
+      await publishRendezvous(hex)
+      say('published rendezvous — the other device can auto-connect now')
+    } catch (e) {
+      say(`rendezvous publish failed: ${e}`)
+    }
+  }
+  const doRzConnect = async () => {
+    setRzBusy(true)
+    try {
+      await autoConnectRendezvous(hex, (l) =>
+        setEvents((ev) => [l, ...ev].slice(0, 50)),
+      )
+      say('auto-connected via rendezvous — no ticket copied')
+    } catch (e) {
+      say(`auto-connect failed: ${e}`)
+    } finally {
+      setRzBusy(false)
     }
   }
   const doShare = async () => {
@@ -160,7 +183,36 @@ export function SyncTestPanel() {
 
         <section className={card}>
           <div className="text-sm font-semibold text-neutral-700">
-            2 · Connect — one device Shares, the other Syncs
+            2 · Auto-connect (rendezvous) — no ticket
+          </div>
+          <div className="text-xs text-neutral-500">
+            One device Publishes its coords to the shared rendezvous record; the
+            other Auto-connects — resolves it and syncs, no copy. Same key ⇒
+            same rendezvous record.
+          </div>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              className={btn}
+              onClick={doRzPublish}
+              disabled={!namespace}
+            >
+              Publish rendezvous
+            </button>
+            <button
+              type="button"
+              className={btn}
+              onClick={doRzConnect}
+              disabled={!namespace || rzBusy}
+            >
+              {rzBusy ? 'Connecting…' : 'Auto-connect'}
+            </button>
+          </div>
+        </section>
+
+        <section className={card}>
+          <div className="text-sm font-semibold text-neutral-700">
+            2b · Connect manually — Share / paste ticket
           </div>
           <button
             type="button"

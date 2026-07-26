@@ -40,6 +40,8 @@ if (import.meta.env.DEV || inTauri()) {
       openSession: () => Promise<string>
       share: () => Promise<string>
       sync: (ticket: string) => Promise<void>
+      rendezvousPublish: (hex: string) => Promise<string>
+      rendezvousConnect: (hex: string) => Promise<string>
       put: (collection: string, rkey: string, value: string) => Promise<void>
       get: (collection: string, rkey: string) => Promise<string | null>
       events: () => string[]
@@ -262,6 +264,14 @@ if (import.meta.env.DEV || inTauri()) {
       share: async () => (await docs()).shareDoc(),
       sync: async (ticket) =>
         (await docs()).startSync(ticket, (l) => {
+          syncEvents.push(l)
+        }),
+      // Rendezvous auto-discovery: one instance publishes its ticket under the
+      // AppKey-derived rendezvous key; another resolves + startSyncs it, no copy.
+      rendezvousPublish: async (hex) =>
+        (await import('./lib/rendezvous')).publishRendezvous(hex),
+      rendezvousConnect: async (hex) =>
+        (await import('./lib/rendezvous')).autoConnectRendezvous(hex, (l) => {
           syncEvents.push(l)
         }),
       put: async (collection, rkey, value) =>
