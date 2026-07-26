@@ -1,9 +1,20 @@
 import { useEffect } from 'react'
-import { deriveSettingsKey, encryptSettings } from '../../core/crypto'
+import {
+  decryptSettings,
+  deriveSettingsKey,
+  encryptSettings,
+} from '../../core/crypto'
+import type { ProfileRecord } from '../../core/profile'
 import { type DispatchSettings, SETTINGS_VERSION } from '../../core/settings'
+import type {
+  FollowEdge,
+  OwnedChannel,
+  SubscriptionRef,
+  ThemeMode,
+} from '../../core/types'
 import { useAuthStore } from '../../stores/auth'
 import { useStorageActivityStore } from '../../stores/storageActivity'
-import { openDocs, putRecord } from '../docs'
+import { getRecord, openDocs, putRecord } from '../docs'
 import { snapshotToSia } from '../docsMirror'
 
 // The user's settings mirrored into iroh-docs + Sia — the CANONICAL settings
@@ -21,7 +32,22 @@ import { snapshotToSia } from '../docsMirror'
 // lost. A matching fingerprint short-circuits BEFORE openDocs, so pin-core's wasm
 // + relay stay unloaded when there's nothing new.
 
+// Slice 2a — the READ side. This hook also reflects a peer's freshly-SYNCED settings
+// back into the store, so a change on one of your devices shows up on another. iroh-
+// docs keeps the LWW-newest `settings/self` (single author, single key), so a replica
+// value that DIFFERS from our last-mirrored content IS a newer peer write — no clock/
+// updatedAt comparison needed. Guards keep it out of the catastrophe class: apply only
+// when (a) boot is done, (b) our local state is fully mirrored — no unsynced edit to
+// clobber, (c) the replica value decrypts + version-matches (never apply garbage),
+// (d) it actually differs from what we hold. The Sia snapshot stays the untouched
+// availability failsafe/floor (the WRITE side below is unchanged); this is a live
+// overlay on top of it, never a replacement.
+
 const DEBOUNCE_MS = 2000
+// How often to check the replica for a peer's newer settings. Local read (wasm engine
+// on web, Curator IPC on desktop) — no network — so a few-second cadence is cheap; the
+// engine is already open (the sync hook opened it), so this adds no load cost.
+const OVERLAY_POLL_MS = 3000
 const FINGERPRINT_KEY = 'pin:docsnapshot:settingsFingerprint'
 
 // Module-scope flush so non-React callers (channel mutations, etc.) can await the
@@ -35,17 +61,61 @@ export async function flushSettingsMirror(): Promise<void> {
   if (activeMirrorFlush) await activeMirrorFlush()
 }
 
-function settingsFingerprint(): string {
-  const s = useAuthStore.getState()
+// The settings-relevant fields, in one shape so the WRITE fingerprint (store state)
+// and the READ overlay (a decrypted peer settings record) compare identically.
+export type SettingsFields = {
+  myChannels: OwnedChannel[]
+  subscriptions: SubscriptionRef[]
+  dismissedAutoWatch: string[]
+  theme: ThemeMode
+  follows: FollowEdge[]
+  handleFollows: string[]
+  profile: ProfileRecord | null
+}
+
+export function fingerprintOf(f: SettingsFields): string {
   return JSON.stringify({
-    myChannels: s.myChannels,
-    subscriptions: s.subscriptions,
-    dismissedAutoWatch: s.dismissedAutoWatch,
-    theme: s.theme,
-    follows: s.follows,
-    handleFollows: s.handleFollows,
-    profile: s.profile,
+    myChannels: f.myChannels,
+    subscriptions: f.subscriptions,
+    dismissedAutoWatch: f.dismissedAutoWatch,
+    theme: f.theme,
+    follows: f.follows,
+    handleFollows: f.handleFollows,
+    profile: f.profile,
   })
+}
+
+function settingsFingerprint(): string {
+  return fingerprintOf(useAuthStore.getState())
+}
+
+/** Decide whether a peer's decrypted settings (synced into the replica) should be
+ *  applied over what we hold — the catastrophe-relevant guards, extracted pure so
+ *  they're unit-tested. Returns the fields to apply, or null to skip. Skips when:
+ *  our local state isn't fully mirrored (an unsynced edit we must not clobber); the
+ *  record's version doesn't match (never apply what we can't trust); or the content
+ *  equals what we already hold (no-op). `defaultTheme` fills an omitted (back-compat)
+ *  theme, matching hydrateSettings. NOTE: garbage/undecryptable input never reaches
+ *  here — the caller bails on decrypt failure before calling this. */
+export function decidePeerSettings(
+  peer: DispatchSettings,
+  current: SettingsFields,
+  mirrorClean: boolean,
+  defaultTheme: ThemeMode,
+): SettingsFields | null {
+  if (!mirrorClean) return null
+  if (peer.version !== SETTINGS_VERSION) return null
+  const next: SettingsFields = {
+    myChannels: peer.myChannels,
+    subscriptions: peer.subscriptions,
+    dismissedAutoWatch: peer.dismissedAutoWatch ?? [],
+    theme: peer.theme ?? defaultTheme,
+    follows: peer.follows ?? [],
+    handleFollows: peer.handleFollows ?? [],
+    profile: peer.profile ?? null,
+  }
+  if (fingerprintOf(next) === fingerprintOf(current)) return null
+  return next
 }
 
 function readFingerprint(): string | null {
@@ -163,10 +233,74 @@ export function useSettingsDocsMirror() {
       if (settingsFingerprint() !== readFingerprint()) await mirror()
     }
 
+    // READ overlay: reflect a peer's freshly-synced settings into the store.
+    let overlayBusy = false
+    const applyPeerSettingsIfNewer = async () => {
+      if (overlayBusy) return
+      overlayBusy = true
+      try {
+        if (!useAuthStore.getState().settingsLoaded) return
+        // Only reflect peer state when OUR local state is fully mirrored — a
+        // mismatch means an unsynced local edit we must not clobber (the mirror
+        // will push it, then this resumes). This is also the wipe guard: we never
+        // overwrite pending local work.
+        if (settingsFingerprint() !== readFingerprint()) return
+
+        await ensureOpen()
+        if (cancelled) return
+        const raw = await getRecord('settings', 'self')
+        if (!raw) return
+
+        // Never apply garbage: bail on any decrypt / parse / version mismatch.
+        let peer: DispatchSettings
+        try {
+          const key = await deriveSettingsKey(appKeyBytes)
+          peer = JSON.parse(
+            await decryptSettings(key, new TextDecoder().decode(raw)),
+          ) as DispatchSettings
+        } catch {
+          return
+        }
+        // The guarded decision (mirror-clean / version / differs) lives in a pure,
+        // unit-tested function. A differing value ⟹ (by LWW-newest) a newer peer write.
+        const s = useAuthStore.getState()
+        const next = decidePeerSettings(
+          peer,
+          s,
+          settingsFingerprint() === readFingerprint(),
+          s.theme,
+        )
+        if (!next || cancelled) return
+        useAuthStore
+          .getState()
+          .hydrateSettings(
+            next.myChannels,
+            next.subscriptions,
+            next.dismissedAutoWatch,
+            next.theme,
+            next.follows,
+            next.handleFollows,
+            next.profile,
+          )
+        // Mark this content as mirrored so the WRITE side (which the hydrate's store
+        // change just triggered) short-circuits instead of bouncing it back out.
+        writeFingerprint(settingsFingerprint())
+      } catch {
+        // Transient (engine mid-open, IPC hiccup) — try again next tick.
+      } finally {
+        overlayBusy = false
+      }
+    }
+    const overlayTimer = setInterval(
+      () => void applyPeerSettingsIfNewer(),
+      OVERLAY_POLL_MS,
+    )
+
     return () => {
       cancelled = true
       activeMirrorFlush = null
       if (timer) clearTimeout(timer)
+      clearInterval(overlayTimer)
       unsub()
     }
   }, [client, storedKeyHex])
