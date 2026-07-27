@@ -23,12 +23,17 @@ vi.mock('../lib/docs', () => ({
   },
   getRecord: async (collection: string, rkey: string) =>
     docStore.get(`${collection}/${rkey}`),
+  deleteRecord: async (collection: string, rkey: string) => {
+    docStore.delete(`${collection}/${rkey}`)
+  },
 }))
 
 import { createChannel } from '../core/channels'
 import { channelKeyFromBase64, decryptForChannel } from '../core/crypto'
 import {
+  cacheSubscribedChannel,
   commitChannelManifest,
+  dropSubscribedChannel,
   makeCachingLocatorReader,
 } from '../lib/channelLocator'
 import { createFakeApp, resetAllStores } from './setupFakeApp'
@@ -101,5 +106,79 @@ describe('integration: caching locator reader seeds sub/<id>', () => {
     const reader = makeCachingLocatorReader(client, '')
     const manifest = await reader('', created.channelID, created.channelKey)
     expect(manifest.name).toBe('Resilient')
+  })
+
+  // Step 2 primitives: the eager pull loop resolves + caches (awaited), and drops
+  // the cache on unsubscribe.
+  it('cacheSubscribedChannel caches a resolvable channel and reports false for an unpublished one', async () => {
+    const app = createFakeApp()
+    const alice = app.createAccount({
+      did: 'did:plc:alice3',
+      handle: 'alice3.test',
+    })
+    const client = alice.client
+
+    const published = await createChannel(client, {
+      name: 'Published',
+      description: '',
+    })
+    await commitChannelManifest(
+      client,
+      published.channelID,
+      published.channelKey,
+      published.manifest,
+    )
+    const ok = await cacheSubscribedChannel(
+      client,
+      'deadbeef',
+      published.channelID,
+      published.channelKey,
+    )
+    expect(ok).toBe(true)
+    expect(docStore.has(`sub/${published.channelID}`)).toBe(true)
+
+    // A channel that was created but never committed has no published locator →
+    // unresolvable → false, nothing cached.
+    const uncommitted = await createChannel(client, {
+      name: 'Uncommitted',
+      description: '',
+    })
+    const miss = await cacheSubscribedChannel(
+      client,
+      'deadbeef',
+      uncommitted.channelID,
+      uncommitted.channelKey,
+    )
+    expect(miss).toBe(false)
+    expect(docStore.has(`sub/${uncommitted.channelID}`)).toBe(false)
+  })
+
+  it('dropSubscribedChannel removes the cached record', async () => {
+    const app = createFakeApp()
+    const alice = app.createAccount({
+      did: 'did:plc:alice4',
+      handle: 'alice4.test',
+    })
+    const client = alice.client
+    const ch = await createChannel(client, {
+      name: 'Droppable',
+      description: '',
+    })
+    await commitChannelManifest(
+      client,
+      ch.channelID,
+      ch.channelKey,
+      ch.manifest,
+    )
+    await cacheSubscribedChannel(
+      client,
+      'deadbeef',
+      ch.channelID,
+      ch.channelKey,
+    )
+    expect(docStore.has(`sub/${ch.channelID}`)).toBe(true)
+
+    await dropSubscribedChannel('deadbeef', ch.channelID)
+    expect(docStore.has(`sub/${ch.channelID}`)).toBe(false)
   })
 })

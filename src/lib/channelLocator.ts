@@ -19,7 +19,7 @@ import {
 import type { FetchChannel } from '../core/feed'
 import type { SiaClient } from '../core/siaClient'
 import { CHANNEL_MANIFEST_VERSION, type ChannelManifest } from '../core/types'
-import { openDocs, putRecord } from './docs'
+import { deleteRecord, openDocs, putRecord } from './docs'
 import { chunkForTxt, identityFromSeed, reassembleTxt } from './pkarr'
 import { pkarrTransport } from './pkarrTransport'
 
@@ -177,6 +177,41 @@ export function makeLocatorReader(client: SiaClient): FetchChannel {
       throw new Error(`Channel ${channelID} not resolvable (no locator)`)
     }
     return manifest
+  }
+}
+
+/** Resolve a subscribed channel and cache its ciphertext into the shared doc,
+ *  AWAITING the cache (unlike the feed reader's fire-and-forget). Used by the
+ *  eager pull loop (resolution-ladder step 2) to keep `sub/<channelID>` warm on a
+ *  cadence. Returns true if it resolved + cached, false if the locator isn't
+ *  resolvable yet. Never throws for the loop's sake. */
+export async function cacheSubscribedChannel(
+  client: SiaClient,
+  appKeyHex: string,
+  channelID: string,
+  channelKey: string,
+): Promise<boolean> {
+  try {
+    const resolved = await resolveChannelBytes(client, channelKey)
+    if (!resolved) return false
+    await cacheSubscribedManifest(appKeyHex, channelID, resolved.ciphertext)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** Remove a channel's cached manifest from the shared doc (on unsubscribe).
+ *  Best-effort — a stray cached record is harmless. */
+export async function dropSubscribedChannel(
+  appKeyHex: string,
+  channelID: string,
+): Promise<void> {
+  try {
+    await openDocs(appKeyHex)
+    await deleteRecord(SUB_COLLECTION, channelID)
+  } catch {
+    // Doc unavailable — leave the stray record; it's opaque and small.
   }
 }
 

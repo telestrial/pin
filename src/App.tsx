@@ -22,6 +22,7 @@ import { useRendezvousSync } from './lib/hooks/useRendezvousSync'
 import { useRepackRunner } from './lib/hooks/useRepackRunner'
 import { useSettingsDocsMirror } from './lib/hooks/useSettingsDocsMirror'
 import { useSettingsSync } from './lib/hooks/useSettingsSync'
+import { useSubscriptionPull } from './lib/hooks/useSubscriptionPull'
 import { useAuthStore } from './stores/auth'
 import { useComposeStore } from './stores/compose'
 import { usePinStore } from './stores/pin'
@@ -78,6 +79,7 @@ export default function App() {
   useSettingsDocsMirror()
   useChannelDocsMirror()
   useChannelReader()
+  useSubscriptionPull()
   useChannelLocatorPublish()
   useIdentityDocPublish()
   useHandleFollowReconciliation()
