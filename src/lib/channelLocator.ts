@@ -19,11 +19,19 @@ import {
 import type { FetchChannel } from '../core/feed'
 import type { SiaClient } from '../core/siaClient'
 import { CHANNEL_MANIFEST_VERSION, type ChannelManifest } from '../core/types'
+import { openDocs, putRecord } from './docs'
 import { chunkForTxt, identityFromSeed, reassembleTxt } from './pkarr'
 import { pkarrTransport } from './pkarrTransport'
 
 // TXT record name prefix for the chunked Sia pointer in a channel-locator document.
 const POINTER_PREFIX = '_c'
+
+// Collection in the shared iroh-docs doc where resolved subscribed-channel
+// manifests are cached (the resolution-ladder "keep" step). Value = the EXACT Sia
+// ciphertext (opaque bytes under the subscribed channel's K), so a reader decrypts
+// it identically to a fresh resolve — no second code path, and whatever writes it
+// stays content-blind. Keyed by channelID.
+const SUB_COLLECTION = 'sub'
 
 // localStorage key prefix for the manifest-object generations behind a channel's
 // locator, one entry per owned channel. `id` = the current object the pkarr
@@ -86,25 +94,16 @@ export async function publishChannelLocator(
   return { locatorKey: publicKey, id: uploaded.id, url: uploaded.itemURL }
 }
 
-/** Reader side: resolve a channel from its K alone (no atproto, no author handle).
- *  Derive the locator → resolve the Sia pointer off the DHT → download + decrypt
- *  with K. Returns null when the locator isn't published / resolvable. */
-export async function resolveChannelViaLocator(
-  client: SiaClient,
-  channelKeyB64: string,
-): Promise<ChannelManifest | null> {
-  const kBytes = channelKeyFromBase64(channelKeyB64)
-  const { publicKey } = await identityFromSeed(
-    await deriveChannelLocatorSeed(kBytes),
-  )
-  const records = await (await pkarrTransport()).resolve(publicKey)
-  const url = reassembleTxt(records, POINTER_PREFIX)
-  if (!url) return null
-
-  const bytes = await client.downloadItem(url)
+/** Decrypt + parse a channel-manifest ciphertext blob with K, checking the version.
+ *  The blob is exactly what the Sia object holds (and what `sub/<id>` caches), so
+ *  the fresh-resolve and cached-read paths decode identically. */
+async function decodeChannelManifest(
+  kBytes: Uint8Array,
+  ciphertext: Uint8Array,
+): Promise<ChannelManifest> {
   const plaintext = await decryptForChannel(
     kBytes,
-    new TextDecoder().decode(bytes),
+    new TextDecoder().decode(ciphertext),
   )
   const manifest = JSON.parse(plaintext)
   if (manifest?.version !== CHANNEL_MANIFEST_VERSION) {
@@ -113,6 +112,55 @@ export async function resolveChannelViaLocator(
     )
   }
   return manifest as ChannelManifest
+}
+
+/** Resolve a channel from its K, returning BOTH the parsed manifest and the raw
+ *  ciphertext bytes (so a caller can cache the exact blob). Null when the locator
+ *  isn't published / resolvable. */
+async function resolveChannelBytes(
+  client: SiaClient,
+  channelKeyB64: string,
+): Promise<{ manifest: ChannelManifest; ciphertext: Uint8Array } | null> {
+  const kBytes = channelKeyFromBase64(channelKeyB64)
+  const { publicKey } = await identityFromSeed(
+    await deriveChannelLocatorSeed(kBytes),
+  )
+  const records = await (await pkarrTransport()).resolve(publicKey)
+  const url = reassembleTxt(records, POINTER_PREFIX)
+  if (!url) return null
+
+  const ciphertext = await client.downloadItem(url)
+  const manifest = await decodeChannelManifest(kBytes, ciphertext)
+  return { manifest, ciphertext }
+}
+
+/** Reader side: resolve a channel from its K alone (no atproto, no author handle).
+ *  Derive the locator → resolve the Sia pointer off the DHT → download + decrypt
+ *  with K. Returns null when the locator isn't published / resolvable. */
+export async function resolveChannelViaLocator(
+  client: SiaClient,
+  channelKeyB64: string,
+): Promise<ChannelManifest | null> {
+  const resolved = await resolveChannelBytes(client, channelKeyB64)
+  return resolved ? resolved.manifest : null
+}
+
+/** Cache a resolved subscribed-channel manifest into the shared iroh-docs doc, so
+ *  other instances/tabs (and later reads) land higher on the resolution ladder.
+ *  Best-effort — the cache is an optimization, never load-bearing; a failed write
+ *  just gets re-seeded by the next resolve. `openDocs` is memoized, so calling it
+ *  per cache is cheap. */
+async function cacheSubscribedManifest(
+  appKeyHex: string,
+  channelID: string,
+  ciphertext: Uint8Array,
+): Promise<void> {
+  try {
+    await openDocs(appKeyHex)
+    await putRecord(SUB_COLLECTION, channelID, ciphertext)
+  } catch {
+    // Doc unavailable / write failed — a re-resolve re-caches next time.
+  }
 }
 
 /** A `FetchChannel` that reads a channel purely from its pkarr locator (no
@@ -129,6 +177,27 @@ export function makeLocatorReader(client: SiaClient): FetchChannel {
       throw new Error(`Channel ${channelID} not resolvable (no locator)`)
     }
     return manifest
+  }
+}
+
+/** The feed-path reader (resolution-ladder step 1): resolve a subscribed channel
+ *  via its locator AND cache the ciphertext into the shared doc as a side effect.
+ *  Read behavior is identical to `makeLocatorReader` today — it still resolves
+ *  every time, still fresh — but every resolve seeds `sub/<channelID>` so other
+ *  instances/tabs benefit and step 3 can later prefer the cached record. The
+ *  cache-back is fire-and-forget (never blocks or fails the read). Falls back to
+ *  the plain resolve when there's no appKeyHex to open the doc with. */
+export function makeCachingLocatorReader(
+  client: SiaClient,
+  appKeyHex: string,
+): FetchChannel {
+  return async (_authorHandleOrDID, channelID, channelKey) => {
+    const resolved = await resolveChannelBytes(client, channelKey)
+    if (!resolved) {
+      throw new Error(`Channel ${channelID} not resolvable (no locator)`)
+    }
+    void cacheSubscribedManifest(appKeyHex, channelID, resolved.ciphertext)
+    return resolved.manifest
   }
 }
 

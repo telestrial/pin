@@ -1,7 +1,7 @@
 import { useEffect } from 'react'
 import { useAuthStore } from '../../stores/auth'
 import { notReady, useFeedStore } from '../../stores/feed'
-import { makeLocatorReader } from '../channelLocator'
+import { makeCachingLocatorReader, makeLocatorReader } from '../channelLocator'
 
 // Channel reads are locator-only (Phase D step 6): when the sdk is present,
 // inject a reader that resolves each channel purely via its pkarr locator (→ Sia
@@ -18,6 +18,7 @@ import { makeLocatorReader } from '../channelLocator'
 
 export function useChannelReader() {
   const client = useAuthStore((s) => s.client)
+  const appKeyHex = useAuthStore((s) => s.storedKeyHex)
 
   useEffect(() => {
     const feed = useFeedStore.getState()
@@ -25,7 +26,14 @@ export function useChannelReader() {
       feed.setChannelReader(notReady)
       return
     }
-    feed.setChannelReader(makeLocatorReader(client))
+    // Resolution-ladder step 1: the feed reader resolves via locator AND caches
+    // the ciphertext into the shared doc (`sub/<channelID>`) so other tabs/devices
+    // benefit. Needs the AppKey to open the doc; without it, plain resolve.
+    feed.setChannelReader(
+      appKeyHex
+        ? makeCachingLocatorReader(client, appKeyHex)
+        : makeLocatorReader(client),
+    )
     // HomeFeed's first load fires as a child effect, which React runs BEFORE
     // this App-level parent effect — so on the connect commit it can read with
     // the not-ready placeholder and error out. Now that the reader is live,
@@ -35,5 +43,5 @@ export function useChannelReader() {
     const subs = useAuthStore.getState().subscriptions
     if (subs.length > 0) feed.refresh(subs)
     return () => useFeedStore.getState().setChannelReader(notReady)
-  }, [client])
+  }, [client, appKeyHex])
 }
