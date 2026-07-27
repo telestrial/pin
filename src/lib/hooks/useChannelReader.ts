@@ -19,6 +19,14 @@ import { makeCachingLocatorReader, makeLocatorReader } from '../channelLocator'
 export function useChannelReader() {
   const client = useAuthStore((s) => s.client)
   const appKeyHex = useAuthStore((s) => s.storedKeyHex)
+  // Owned channels resolve fresh (never from the sub/ cache); recompute the reader
+  // when the owned SET changes.
+  const ownedKey = useAuthStore((s) =>
+    s.myChannels
+      .map((c) => c.channelID)
+      .sort()
+      .join(','),
+  )
 
   useEffect(() => {
     const feed = useFeedStore.getState()
@@ -26,12 +34,14 @@ export function useChannelReader() {
       feed.setChannelReader(notReady)
       return
     }
-    // Resolution-ladder step 1: the feed reader resolves via locator AND caches
-    // the ciphertext into the shared doc (`sub/<channelID>`) so other tabs/devices
-    // benefit. Needs the AppKey to open the doc; without it, plain resolve.
+    // Resolution-ladder reader: for a subscribed channel, prefer the shared-doc
+    // cache (`sub/<channelID>`, kept fresh by useSubscriptionPull) → else resolve
+    // via locator + cache back. Owned channels always resolve fresh. Needs the
+    // AppKey to open the doc; without it, plain resolve.
+    const ownedIDs = new Set(ownedKey ? ownedKey.split(',') : [])
     feed.setChannelReader(
       appKeyHex
-        ? makeCachingLocatorReader(client, appKeyHex)
+        ? makeCachingLocatorReader(client, appKeyHex, ownedIDs)
         : makeLocatorReader(client),
     )
     // HomeFeed's first load fires as a child effect, which React runs BEFORE
@@ -43,5 +53,5 @@ export function useChannelReader() {
     const subs = useAuthStore.getState().subscriptions
     if (subs.length > 0) feed.refresh(subs)
     return () => useFeedStore.getState().setChannelReader(notReady)
-  }, [client, appKeyHex])
+  }, [client, appKeyHex, ownedKey])
 }

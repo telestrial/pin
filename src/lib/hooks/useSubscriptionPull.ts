@@ -45,9 +45,13 @@ export function useSubscriptionPull() {
     const k = appKeyHex
     let cancelled = false
 
-    // Drop cached records for channels no longer subscribed.
+    // The sub/ cache is for SUBSCRIBED (not-owned) channels — own channels resolve
+    // fresh (their freshest state is local). Drop cached records for channels no
+    // longer in that set (unsubscribed, or now owned).
+    const s0 = useAuthStore.getState()
+    const owned0 = new Set(s0.myChannels.map((c) => c.channelID))
     const current = new Set(
-      useAuthStore.getState().subscriptions.map((s) => s.channelID),
+      s0.subscriptions.map((s) => s.channelID).filter((id) => !owned0.has(id)),
     )
     for (const id of knownRef.current) {
       if (!current.has(id)) void dropSubscribedChannel(k, id)
@@ -55,10 +59,12 @@ export function useSubscriptionPull() {
     knownRef.current = current
 
     async function pullAll() {
-      // Read fresh each pass so K/cachedName changes are picked up.
-      const subs = useAuthStore.getState().subscriptions
-      for (const sub of subs) {
+      // Read fresh each pass so K/cachedName/ownership changes are picked up.
+      const state = useAuthStore.getState()
+      const owned = new Set(state.myChannels.map((c) => c.channelID))
+      for (const sub of state.subscriptions) {
         if (cancelled) return
+        if (owned.has(sub.channelID)) continue
         await cacheSubscribedChannel(c, k, sub.channelID, sub.channelKey)
       }
     }

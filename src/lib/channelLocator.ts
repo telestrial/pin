@@ -19,7 +19,7 @@ import {
 import type { FetchChannel } from '../core/feed'
 import type { SiaClient } from '../core/siaClient'
 import { CHANNEL_MANIFEST_VERSION, type ChannelManifest } from '../core/types'
-import { deleteRecord, openDocs, putRecord } from './docs'
+import { deleteRecord, getRecord, openDocs, putRecord } from './docs'
 import { chunkForTxt, identityFromSeed, reassembleTxt } from './pkarr'
 import { pkarrTransport } from './pkarrTransport'
 
@@ -215,23 +215,54 @@ export async function dropSubscribedChannel(
   }
 }
 
-/** The feed-path reader (resolution-ladder step 1): resolve a subscribed channel
- *  via its locator AND cache the ciphertext into the shared doc as a side effect.
- *  Read behavior is identical to `makeLocatorReader` today — it still resolves
- *  every time, still fresh — but every resolve seeds `sub/<channelID>` so other
- *  instances/tabs benefit and step 3 can later prefer the cached record. The
- *  cache-back is fire-and-forget (never blocks or fails the read). Falls back to
- *  the plain resolve when there's no appKeyHex to open the doc with. */
+/** Read a subscribed channel's manifest from the shared-doc cache (`sub/<id>`),
+ *  decrypting the cached ciphertext with K. Null when there's no cached record
+ *  (or it won't decode — fall through to a fresh resolve). */
+async function readCachedManifest(
+  appKeyHex: string,
+  channelID: string,
+  channelKey: string,
+): Promise<ChannelManifest | null> {
+  try {
+    await openDocs(appKeyHex)
+    const cached = await getRecord(SUB_COLLECTION, channelID)
+    if (!cached) return null
+    return await decodeChannelManifest(channelKeyFromBase64(channelKey), cached)
+  } catch {
+    return null
+  }
+}
+
+/** The feed-path reader (resolution-ladder, all three rungs). For a SUBSCRIBED
+ *  (not-owned) channel it prefers the shared-doc cache (`sub/<channelID>`) — fast,
+ *  no network — falling through to a fresh locator resolve (+ cache-back) on a
+ *  miss. The eager pull loop (useSubscriptionPull) keeps that cache fresh, so the
+ *  cached read isn't stuck-stale; a cold-open tab whose loop hasn't run yet just
+ *  takes the fresh-resolve path (today's behavior) and seeds the cache.
+ *
+ *  OWNED channels skip the cache and always resolve fresh: their freshest state is
+ *  local (reflected on publish), and buildHomeFeed uses a successful read verbatim,
+ *  so serving a stale cache for an own channel would clobber a just-published post.
+ *
+ *  Falls back to a plain resolve (via `makeLocatorReader`) when there's no
+ *  appKeyHex to open the doc with. */
 export function makeCachingLocatorReader(
   client: SiaClient,
   appKeyHex: string,
+  ownedChannelIDs: ReadonlySet<string>,
 ): FetchChannel {
   return async (_authorHandleOrDID, channelID, channelKey) => {
+    if (!ownedChannelIDs.has(channelID)) {
+      const cached = await readCachedManifest(appKeyHex, channelID, channelKey)
+      if (cached) return cached
+    }
     const resolved = await resolveChannelBytes(client, channelKey)
     if (!resolved) {
       throw new Error(`Channel ${channelID} not resolvable (no locator)`)
     }
-    void cacheSubscribedManifest(appKeyHex, channelID, resolved.ciphertext)
+    if (!ownedChannelIDs.has(channelID)) {
+      void cacheSubscribedManifest(appKeyHex, channelID, resolved.ciphertext)
+    }
     return resolved.manifest
   }
 }

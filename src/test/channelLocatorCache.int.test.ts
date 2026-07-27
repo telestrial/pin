@@ -29,7 +29,11 @@ vi.mock('../lib/docs', () => ({
 }))
 
 import { createChannel } from '../core/channels'
-import { channelKeyFromBase64, decryptForChannel } from '../core/crypto'
+import {
+  channelKeyFromBase64,
+  decryptForChannel,
+  encryptForChannel,
+} from '../core/crypto'
 import {
   cacheSubscribedChannel,
   commitChannelManifest,
@@ -65,7 +69,7 @@ describe('integration: caching locator reader seeds sub/<id>', () => {
       created.manifest,
     )
 
-    const reader = makeCachingLocatorReader(client, 'deadbeef')
+    const reader = makeCachingLocatorReader(client, 'deadbeef', new Set())
     const manifest = await reader('', created.channelID, created.channelKey)
     expect(manifest.name).toBe("Alice's voice")
 
@@ -103,9 +107,84 @@ describe('integration: caching locator reader seeds sub/<id>', () => {
     )
 
     // A doc write that throws must not break the read (cache is best-effort).
-    const reader = makeCachingLocatorReader(client, '')
+    const reader = makeCachingLocatorReader(client, '', new Set())
     const manifest = await reader('', created.channelID, created.channelKey)
     expect(manifest.name).toBe('Resilient')
+  })
+
+  // Step 3: the reader prefers the shared-doc cache for a SUBSCRIBED channel, and
+  // resolves fresh (ignoring the cache) for an OWNED one.
+  it('reads a subscribed channel from the shared-doc cache without resolving', async () => {
+    const app = createFakeApp()
+    const alice = app.createAccount({
+      did: 'did:plc:alice5',
+      handle: 'alice5.test',
+    })
+    const client = alice.client
+    const created = await createChannel(client, {
+      name: 'Fresh',
+      description: '',
+    })
+    await commitChannelManifest(
+      client,
+      created.channelID,
+      created.channelKey,
+      created.manifest,
+    )
+    // Seed the cache with a DIFFERENT manifest so we can tell cache-read from
+    // fresh-resolve.
+    const kBytes = channelKeyFromBase64(created.channelKey)
+    const cachedCiphertext = await encryptForChannel(
+      kBytes,
+      JSON.stringify({ ...created.manifest, name: 'Cached' }),
+    )
+    docStore.set(
+      `sub/${created.channelID}`,
+      new TextEncoder().encode(cachedCiphertext),
+    )
+
+    // Not owned → serves the cached manifest.
+    const reader = makeCachingLocatorReader(client, 'deadbeef', new Set())
+    const m = await reader('', created.channelID, created.channelKey)
+    expect(m.name).toBe('Cached')
+  })
+
+  it('resolves an OWNED channel fresh, ignoring the shared-doc cache', async () => {
+    const app = createFakeApp()
+    const alice = app.createAccount({
+      did: 'did:plc:alice6',
+      handle: 'alice6.test',
+    })
+    const client = alice.client
+    const created = await createChannel(client, {
+      name: 'Fresh',
+      description: '',
+    })
+    await commitChannelManifest(
+      client,
+      created.channelID,
+      created.channelKey,
+      created.manifest,
+    )
+    const kBytes = channelKeyFromBase64(created.channelKey)
+    docStore.set(
+      `sub/${created.channelID}`,
+      new TextEncoder().encode(
+        await encryptForChannel(
+          kBytes,
+          JSON.stringify({ ...created.manifest, name: 'Cached' }),
+        ),
+      ),
+    )
+
+    // Owned → ignores the cache, resolves the fresh locator manifest.
+    const reader = makeCachingLocatorReader(
+      client,
+      'deadbeef',
+      new Set([created.channelID]),
+    )
+    const m = await reader('', created.channelID, created.channelKey)
+    expect(m.name).toBe('Fresh')
   })
 
   // Step 2 primitives: the eager pull loop resolves + caches (awaited), and drops
