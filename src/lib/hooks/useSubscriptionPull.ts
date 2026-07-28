@@ -31,6 +31,10 @@ const CADENCE_MS = 90_000
 export function useSubscriptionPull() {
   const client = useAuthStore((s) => s.client)
   const appKeyHex = useAuthStore((s) => s.storedKeyHex)
+  // The curation kill switch (Curate page). Off = this instance stops working the
+  // network in the background; reads still resolve on demand, they just stop being
+  // kept ahead of you.
+  const curationEnabled = useAuthStore((s) => s.curationEnabled)
   // Re-run only when the SET of subscribed channels changes (add/remove) — not on
   // every cachedName/label rewrite of the subscriptions array. The cadence timer
   // handles ongoing refresh.
@@ -44,7 +48,7 @@ export function useSubscriptionPull() {
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: subKey is a re-run trigger — its change means the subscribed-channel SET changed; the effect reads the live subscriptions via getState()
   useEffect(() => {
-    if (!client || !appKeyHex) return
+    if (!curationEnabled || !client || !appKeyHex) return
     const c = client
     const k = appKeyHex
     let cancelled = false
@@ -79,5 +83,5 @@ export function useSubscriptionPull() {
       cancelled = true
       clearInterval(timer)
     }
-  }, [client, appKeyHex, subKey])
+  }, [client, appKeyHex, subKey, curationEnabled])
 }

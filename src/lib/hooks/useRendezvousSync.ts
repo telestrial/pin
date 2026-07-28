@@ -48,8 +48,15 @@ const INSTANCE_ID = Array.from(crypto.getRandomValues(new Uint8Array(8)))
 export function useRendezvousSync() {
   const client = useAuthStore((s) => s.client)
   const storedKeyHex = useAuthStore((s) => s.storedKeyHex)
+  // The curation kill switch (Curate page). Same control, same meaning on both
+  // platforms: off means this instance stops working the network in the background.
+  const curationEnabled = useAuthStore((s) => s.curationEnabled)
 
   useEffect(() => {
+    if (!curationEnabled) {
+      useSyncStore.getState().reset()
+      return
+    }
     if (!client || !storedKeyHex) return
     const hex = storedKeyHex
     const durable = inTauri() // always-on node → the directory prefers it
@@ -118,5 +125,5 @@ export function useRendezvousSync() {
       cancelled = true
       useSyncStore.getState().reset()
     }
-  }, [client, storedKeyHex])
+  }, [client, storedKeyHex, curationEnabled])
 }

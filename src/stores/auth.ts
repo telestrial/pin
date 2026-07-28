@@ -63,6 +63,16 @@ type AuthState = {
   // at connect so it's never stale.
   myDidDht: string | null
   feedSortOrder: FeedSortOrder
+  // Whether THIS instance runs its curation loop in the background (the pull loop
+  // that keeps subscribed channels fresh, and rendezvous sync with your other
+  // devices). Device-local on purpose — turning curation off on your laptop must
+  // not turn it off on your phone — so it rides the localStorage persist next to
+  // feedSortOrder, NOT the identity-wide settings doc.
+  //
+  // Same control, same meaning on web and desktop; desktop additionally starts /
+  // stops the native Curator process. Default on: curation is part of the app, not
+  // an opt-in feature (the toggle is a kill switch, not a gate).
+  curationEnabled: boolean
   theme: ThemeMode
   settingsObjectID: string | null
   settingsLoaded: boolean
@@ -104,6 +114,7 @@ type AuthState = {
   setProfile: (patch: ProfilePatch) => void
   setMyDidDht: (did: string) => void
   setFeedSortOrder: (order: FeedSortOrder) => void
+  setCurationEnabled: (enabled: boolean) => void
   setTheme: (theme: ThemeMode) => void
   hydrateSettings: (
     myChannels: OwnedChannel[],
@@ -139,6 +150,7 @@ export const useAuthStore = create<AuthState>()(
       profile: null,
       myDidDht: null,
       feedSortOrder: 'newest',
+      curationEnabled: true,
       theme: 'rounded',
       settingsObjectID: null,
       settingsLoaded: false,
@@ -235,6 +247,7 @@ export const useAuthStore = create<AuthState>()(
         set((s) => ({ profile: applyProfilePatch(s.profile, patch) })),
       setMyDidDht: (myDidDht) => set({ myDidDht }),
       setFeedSortOrder: (feedSortOrder) => set({ feedSortOrder }),
+      setCurationEnabled: (curationEnabled) => set({ curationEnabled }),
       setTheme: (theme) => set({ theme }),
       hydrateSettings: (
         myChannels,
@@ -299,6 +312,7 @@ export const useAuthStore = create<AuthState>()(
         profile: state.profile,
         myDidDht: state.myDidDht,
         feedSortOrder: state.feedSortOrder,
+        curationEnabled: state.curationEnabled,
         theme: state.theme,
         settingsObjectID: state.settingsObjectID,
         settingsDirty: state.settingsDirty,
