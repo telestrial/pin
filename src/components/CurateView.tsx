@@ -62,10 +62,10 @@ export function CurateView() {
       if (status.running) {
         next = await stopCurator()
       } else {
-        // Hand the Curator the already-unlocked Sia identity so it can mirror the
-        // repo under the user's own scope.
-        const { storedKeyHex, indexerURL } = useAuthStore.getState()
-        next = await startCurator(storedKeyHex, indexerURL)
+        // Hand over the already-unlocked Sia AppKey — the seed the Curator's docs
+        // namespace and did:dht identity derive from.
+        const { storedKeyHex } = useAuthStore.getState()
+        next = await startCurator(storedKeyHex)
       }
       setStatus(next)
     } finally {
@@ -434,27 +434,14 @@ function Diagnostics({
             {status.mirrorError}
           </code>
         ) : (
-          <>
-            {status.mirrorRoot && (
-              <div className="text-xs text-neutral-400 break-all">
-                root{' '}
-                <span className="font-mono text-neutral-500">
-                  {status.mirrorRoot}
-                </span>
-              </div>
-            )}
-            {status.mirrorUrl && (
-              <div className="flex items-start gap-2">
-                <code className="text-xs font-mono text-neutral-700 break-all flex-1">
-                  {status.mirrorUrl}
-                </code>
-                <CopyButton
-                  value={status.mirrorUrl}
-                  label="Mirror URL copied"
-                />
-              </div>
-            )}
-          </>
+          status.mirrorUrl && (
+            <div className="flex items-start gap-2">
+              <code className="text-xs font-mono text-neutral-700 break-all flex-1">
+                {status.mirrorUrl}
+              </code>
+              <CopyButton value={status.mirrorUrl} label="Mirror URL copied" />
+            </div>
+          )
         )}
       </div>
 

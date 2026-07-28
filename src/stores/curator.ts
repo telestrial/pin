@@ -17,8 +17,10 @@ type CuratorState = {
   namespace: string | null
   // Result of publishing the did:dht document ("ok …" / "failed: …").
   didDhtPublished: string | null
-  // Sia mirror lifecycle, mirroring the native Curator's vocabulary:
-  // off | up-to-date | pushed | error | no-session.
+  // The doc's durable Sia snapshot (lib/docsMirror.ts): off | pushed | error.
+  // Lives here on BOTH platforms — the snapshot is TS, running over whichever doc
+  // engine is present, so `curatorStatus()` overlays these onto the native status
+  // too rather than the Rust process reporting a mirror it doesn't run.
   mirrorState: string
   mirrorUrl: string | null
   mirrorError: string | null

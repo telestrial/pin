@@ -20,8 +20,7 @@ export function useCuratorAutostart() {
 
   useEffect(() => {
     if (!curationEnabled || !inTauri() || !client || !storedKeyHex) return
-    const { indexerURL } = useAuthStore.getState()
-    startCurator(storedKeyHex, indexerURL).catch((e) =>
+    startCurator(storedKeyHex).catch((e) =>
       console.warn('Curator autostart failed:', e),
     )
   }, [client, storedKeyHex, curationEnabled])

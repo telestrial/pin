@@ -59,13 +59,15 @@ export type CuratorReport = {
   rpcSelftest: string | null
   // Inbound `hey` knocks parked in the inbox awaiting reconcile.
   heyQueued: number
-  // Sia mirror lifecycle: off | up-to-date | pushed | error | no-session.
+  // The doc's durable copy on Sia — the encrypted snapshot in lib/docsMirror.ts,
+  // plus the pkarr locator that makes it recoverable from the recovery phrase
+  // alone. Reported from the TS layer on BOTH platforms, because that's where the
+  // snapshot runs: it reads the doc through the same `docs.ts` seam that routes to
+  // the native replica on desktop, so there's one mirror, not one per platform.
+  // (The Curator's own repo-CAR mirror was retired at the iroh-docs cutover; this
+  // snapshot took over the job and added the locator it never had.)
   mirrorState: string
-  // The repo root currently mirrored to Sia.
-  mirrorRoot: string | null
-  // The mirror object's share URL (a peer fallback-fetch address).
   mirrorUrl: string | null
-  // The mirror error, if the push failed (node keeps running).
   mirrorError: string | null
   // Last bind/runtime error.
   lastError: string | null
@@ -95,15 +97,23 @@ const OFFLINE: CuratorReport = {
   rpcSelftest: null,
   heyQueued: 0,
   mirrorState: 'off',
-  mirrorRoot: null,
   mirrorUrl: null,
   mirrorError: null,
   lastError: null,
 }
 
-async function invokeCommand(command: string): Promise<CuratorReport> {
+/** What the native process actually sends: every field except the Sia-snapshot
+ *  ones, which it doesn't run (see `mirrorState` above). Typed as its own shape so
+ *  the compiler makes every caller overlay them rather than silently shipping
+ *  `undefined` into the UI. */
+type NativeCuratorReport = Omit<
+  CuratorReport,
+  'mirrorState' | 'mirrorUrl' | 'mirrorError'
+>
+
+async function invokeCommand(command: string): Promise<NativeCuratorReport> {
   const { invoke } = await import('@tauri-apps/api/core')
-  return invoke<CuratorReport>(command)
+  return invoke<NativeCuratorReport>(command)
 }
 
 /** Assemble the web instance's report: the same fields, sourced from the in-page
@@ -144,16 +154,35 @@ async function webStatus(): Promise<CuratorStatus> {
     docsNamespace: c.namespace,
     // The wasm store is in-memory: always built fresh, rehydrated from Sia.
     docsReopened: false,
+    ...siaMirrorStatus(c),
+    lastError: c.lastError,
+  }
+}
+
+// The Sia-snapshot fields, which live in the TS curator store on both platforms
+// (the snapshot itself is TS, over whichever doc engine is present).
+function siaMirrorStatus(c: {
+  mirrorState: string
+  mirrorUrl: string | null
+  mirrorError: string | null
+}) {
+  return {
     mirrorState: c.mirrorState,
     mirrorUrl: c.mirrorUrl,
     mirrorError: c.mirrorError,
-    lastError: c.lastError,
   }
 }
 
 export async function curatorStatus(): Promise<CuratorStatus> {
   if (!inTauri()) return webStatus()
-  return { ...(await invokeCommand('curator_status')), native: true }
+  const { useCuratorStore } = await import('../stores/curator')
+  // Native status for the node itself; the Sia-snapshot fields are overlaid from
+  // the TS store, since the snapshot runs here rather than in the Rust process.
+  return {
+    ...(await invokeCommand('curator_status')),
+    ...siaMirrorStatus(useCuratorStore.getState()),
+    native: true,
+  }
 }
 
 // Turning curation on/off is ONE control with one meaning — "does this instance
@@ -163,28 +192,36 @@ export async function curatorStatus(): Promise<CuratorStatus> {
 // which is the part that survives with no page in front of it.
 //
 // The Curator runs inside an authenticated Pin instance, so the native side is
-// handed the already-unlocked Sia AppKey + indexer URL — that's how it mirrors the
-// repo under the user's own Sia scope. Absent them, it runs without a mirror.
+// handed the already-unlocked Sia AppKey — the one root secret its docs namespace
+// and did:dht identity derive from. Absent it, the node binds but has no repo.
 export async function startCurator(
   appKeyHex?: string | null,
-  indexerUrl?: string | null,
 ): Promise<CuratorStatus> {
   const { useAuthStore } = await import('../stores/auth')
   useAuthStore.getState().setCurationEnabled(true)
   if (!inTauri()) return webStatus()
   const { invoke } = await import('@tauri-apps/api/core')
-  const report = await invoke<CuratorReport>('start_curator', {
+  const { useCuratorStore } = await import('../stores/curator')
+  const report = await invoke<NativeCuratorReport>('start_curator', {
     appKeyHex: appKeyHex ?? null,
-    indexerUrl: indexerUrl ?? null,
   })
-  return { ...report, native: true }
+  return {
+    ...report,
+    ...siaMirrorStatus(useCuratorStore.getState()),
+    native: true,
+  }
 }
 
 export async function stopCurator(): Promise<CuratorStatus> {
   const { useAuthStore } = await import('../stores/auth')
+  const { useCuratorStore } = await import('../stores/curator')
   useAuthStore.getState().setCurationEnabled(false)
   if (!inTauri()) return webStatus()
-  return { ...(await invokeCommand('stop_curator')), native: true }
+  return {
+    ...(await invokeCommand('stop_curator')),
+    ...siaMirrorStatus(useCuratorStore.getState()),
+    native: true,
+  }
 }
 
 // This instance's shareable DocTicket (its iroh-docs replica's write capability +
