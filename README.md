@@ -190,15 +190,20 @@ The body stays clean plaintext (`@name`); the facet is parallel side-data. At re
 
 Reach is a parameter: the network walk carries a hop depth (R0 + R1 today), so widening discovery later doesn't change the picker or the stored facet. Notifying the mentioned person is future work; the facet authored now is the foundation it builds on.
 
-Three-tier pyramid. `bun run test` runs all three; each tier also has its own command.
+## Testing
+
+Three-tier pyramid, plus a sync tier that needs no credentials. `bun run test` runs the three; each tier also has its own command.
 
 | Tier | Command | Speed | Backed by |
 |---|---|---|---|
 | Unit | `bun run test:unit` | ~3s | No SDK at all. Pure-logic tests for `core/*` and `lib/*`: crypto (incl. the HKDF key derivations), content-hash, feed collation, pin-state transitions, network-reach walks, word-boundary + mention facets. Vitest + jsdom. |
 | Integration | `bun run test:int` | ~3s | In-memory fakes — `FakeSdk` plus a fake pkarr/DHT layer on the shared `FakeWorld`, so channel-locator publish/resolve round-trips without the network. Drives the real React components ([HomeFeed](src/components/HomeFeed.tsx), [PinButton](src/components/PinButton.tsx), etc.) through the upload / pin / drift / retract flows. Two simulated accounts in one Node process; cross-account custody is testable in milliseconds. |
-| E2E | `bun run test:e2e` | minutes | Real Sia hosts, driven by Playwright Chrome against the built `dist/` (preview server). Happy-path flows — publish / subscribe / pin cross-account, an interrupted publish resuming from its IndexedDB checkpoint on reload, granular file-pinning — serialized on one worker since they share test accounts. (Onboarding is Sia recovery-phrase only now; the specs are being updated off the old Bluesky flow.) |
+| E2E | `bun run test:e2e` | minutes | Real Sia hosts and the real Mainline DHT, driven by Playwright Chrome against the built `dist/` (preview server), on one worker since the specs share test accounts. Green today is the **author-side smoke**: onboarding, channel creation (a real manifest upload + locator publish), the composer and action journal, the author's own feed, and retract. |
+| Sync | `bun run test:sync` | ~30s | Real iroh relays, **no credentials** — so it runs anywhere. Drives the app's own sync verbs in a real browser: two tabs of one identity converging bidirectionally from a single ticket import, the `#synctest` panel end to end, and rendezvous auto-discovery (publish a ticket to a signed DHT record, resolve it from another instance, sync with no manual copy). Its own Playwright config on a dedicated port, so it never touches a running dev server. |
 
-The shape is **fake-vs-real by layer**, not by test. Unit has no SDK; integration runs against fakes for speed and determinism; e2e runs against the real network in a tiny tier (~3-5 tests). The e2e tier's job is to be **the reconciliation point for the fake contract** — if the fakes drift from real Sia behavior, that test fails and we fix the fakes. The integration tier can grow into the hundreds confidently; the e2e tier stays small.
+The shape is **fake-vs-real by layer**, not by test. Unit has no SDK; integration runs against fakes for speed and determinism; e2e runs against the real network in a tiny tier. The e2e tier's job is to be **the reconciliation point for the fake contract** — if the fakes drift from real Sia behavior, that test fails and we fix the fakes. The integration tier can grow into the hundreds confidently; the e2e tier stays small.
+
+**Three e2e specs are deliberately `test.fixme`'d**, and the reason is architectural rather than a bug. Cross-account custody, granular file-pinning, and checkpoint-resume each end on a *fresh cross-user read* — and in a browser that read resolves through public pkarr relays, whose read-after-write lag is minutes (measured: ~5 min for fresh cross-account content, versus ~0 ms resolving the DHT directly). That's the relays' own cache, not something a client can beat. They come back when an always-on instance is in the loop keeping the shared cache warm. Until then the custody logic each one targets stays covered against fakes in the integration tier, and the author-side smoke keeps the real-network path honest.
 
 E2E auth is real, with credentials in a gitignored `e2e/.env.test` — the Sia side uses a one-time-captured AppKey hex. Per-account setup is documented in [e2e/README.md](e2e/README.md).
 
