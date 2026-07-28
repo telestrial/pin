@@ -73,7 +73,9 @@ export function HomeFeed({
       <div className="flex items-center gap-2 text-xs text-neutral-500">
         <button
           type="button"
-          onClick={() => refresh(subscriptions)}
+          // Explicit user Refresh → force a network read. Anything less and this
+          // button can only ever show what the background pass already cached.
+          onClick={() => refresh(subscriptions, true)}
           disabled={loading}
           className="relative px-2.5 py-1 text-xs font-medium text-neutral-700 hover:text-neutral-900 hover:bg-neutral-100 rounded transition-colors disabled:opacity-50"
         >

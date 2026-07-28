@@ -284,7 +284,8 @@ export function ChannelView({
               <div className="flex items-center gap-2 text-xs text-neutral-500">
                 <button
                   type="button"
-                  onClick={() => sub && refreshChannel(sub)}
+                  // Explicit user Refresh → force a network read (see HomeFeed).
+                  onClick={() => sub && refreshChannel(sub, true)}
                   disabled={loading || !sub}
                   className="relative px-2.5 py-1 text-xs font-medium text-neutral-700 hover:text-neutral-900 hover:bg-neutral-100 rounded transition-colors disabled:opacity-50 cursor-pointer"
                 >

@@ -245,6 +245,11 @@ async function readCachedManifest(
  *  local (reflected on publish), and buildHomeFeed uses a successful read verbatim,
  *  so serving a stale cache for an own channel would clobber a just-published post.
  *
+ *  `fresh` (an explicit user Refresh) also skips the cache. Without that, Refresh —
+ *  the only control a reader has — could never be newer than the last background
+ *  pass, which is a worse deal than the always-resolve reads the cache replaced.
+ *  It still caches the result, so the fast path stays warm.
+ *
  *  Falls back to a plain resolve (via `makeLocatorReader`) when there's no
  *  appKeyHex to open the doc with. */
 export function makeCachingLocatorReader(
@@ -252,8 +257,8 @@ export function makeCachingLocatorReader(
   appKeyHex: string,
   ownedChannelIDs: ReadonlySet<string>,
 ): FetchChannel {
-  return async (_authorHandleOrDID, channelID, channelKey) => {
-    if (!ownedChannelIDs.has(channelID)) {
+  return async (_authorHandleOrDID, channelID, channelKey, fresh) => {
+    if (!fresh && !ownedChannelIDs.has(channelID)) {
       const cached = await readCachedManifest(appKeyHex, channelID, channelKey)
       if (cached) return cached
     }

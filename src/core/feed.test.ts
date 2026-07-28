@@ -203,6 +203,7 @@ describe('buildHomeFeed', () => {
       'did:plc:alice',
       'alicechannel0001',
       'AAAA',
+      false,
     )
   })
 
@@ -223,6 +224,20 @@ describe('buildHomeFeed', () => {
       'alice.test',
       'alicechannel0001',
       'AAAA',
+      false,
+    )
+  })
+
+  it('forwards a fresh read to the fetcher', async () => {
+    const fetcher: FetchChannel = vi
+      .fn()
+      .mockResolvedValue(manifest('Alice', []))
+    await buildHomeFeed([sub({})], fetcher, {}, true)
+    expect(fetcher).toHaveBeenCalledWith(
+      expect.any(String),
+      'alicechannel0001',
+      'AAAA',
+      true,
     )
   })
 })

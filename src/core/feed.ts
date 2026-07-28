@@ -37,6 +37,11 @@ export type FetchChannel = (
   authorHandleOrDID: string,
   channelID: string,
   channelKey: string,
+  // Skip any local cache and go to the network. Set when the READ IS THE POINT —
+  // an explicit user Refresh — so the one control a reader has can't be answered
+  // from a cache that a background pass hasn't caught up on yet. Ordinary reads
+  // leave it off and take the fast path.
+  fresh?: boolean,
 ) => Promise<ChannelManifest>
 
 export async function buildHomeFeed(
@@ -50,10 +55,17 @@ export async function buildHomeFeed(
   // fails to re-resolve but HAS a cached manifest keeps its last-known content
   // (no error); only channels with no cache at all surface as errors.
   prevManifests: Record<string, ChannelManifest> = {},
+  // Forwarded to the fetcher — see FetchChannel.fresh.
+  fresh = false,
 ): Promise<FeedFetchResult> {
   const settled = await Promise.allSettled(
     subscriptions.map((sub) =>
-      fetcher(sub.authorDID || sub.authorHandle, sub.channelID, sub.channelKey),
+      fetcher(
+        sub.authorDID || sub.authorHandle,
+        sub.channelID,
+        sub.channelKey,
+        fresh,
+      ),
     ),
   )
 

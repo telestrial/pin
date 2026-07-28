@@ -27,8 +27,10 @@ type FeedState = {
   // feed, so the reverse would be a circular import.
   channelReader: FetchChannel
   setChannelReader: (reader: FetchChannel) => void
-  refresh: (subscriptions: SubscriptionRef[]) => Promise<void>
-  refreshChannel: (sub: SubscriptionRef) => Promise<void>
+  // `fresh` bypasses the read cache — pass it for an explicit user Refresh, leave
+  // it off for background/boot loads that should take the fast path.
+  refresh: (subscriptions: SubscriptionRef[], fresh?: boolean) => Promise<void>
+  refreshChannel: (sub: SubscriptionRef, fresh?: boolean) => Promise<void>
   // Reflect a manifest already in hand (e.g. just committed to the locator by
   // the author) — rebuild the channel's entries + cache the manifest, no read.
   applyManifest: (sub: SubscriptionRef, manifest: ChannelManifest) => void
@@ -45,7 +47,7 @@ export const useFeedStore = create<FeedState>()((set, get) => ({
   lastRefreshedAt: null,
   channelReader: notReady,
   setChannelReader: (reader) => set({ channelReader: reader }),
-  refresh: async (subscriptions) => {
+  refresh: async (subscriptions, fresh = false) => {
     // Boot race: on the connect commit HomeFeed's load effect (a child effect)
     // fires before App's useChannelReader (a parent effect) injects the real
     // reader, so channelReader is still the not-ready placeholder here. Skip
@@ -60,6 +62,7 @@ export const useFeedStore = create<FeedState>()((set, get) => ({
       subscriptions,
       get().channelReader,
       get().manifests,
+      fresh,
     )
     set({
       entries: result.entries,
@@ -69,12 +72,13 @@ export const useFeedStore = create<FeedState>()((set, get) => ({
       loading: false,
     })
   },
-  refreshChannel: async (sub) => {
+  refreshChannel: async (sub, fresh = false) => {
     try {
       const manifest = await get().channelReader(
         sub.authorDID || sub.authorHandle,
         sub.channelID,
         sub.channelKey,
+        fresh,
       )
       get().applyManifest(sub, manifest)
     } catch (e) {

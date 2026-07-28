@@ -155,6 +155,57 @@ describe('integration: caching locator reader seeds sub/<id>', () => {
     expect(m.name).toBe('Cached')
   })
 
+  // An explicit user Refresh must beat the cache, or it's the one control a reader
+  // has and it can never show anything the background pass hasn't already cached.
+  it('bypasses the cache for a subscribed channel when asked for a fresh read', async () => {
+    const app = createFakeApp()
+    const alice = app.createAccount({
+      did: 'did:plc:alice8',
+      handle: 'alice8.test',
+    })
+    const client = alice.client
+    const created = await createChannel(client, {
+      name: 'Current',
+      description: '',
+    })
+    await commitChannelManifest(
+      client,
+      created.channelID,
+      created.channelKey,
+      created.manifest,
+    )
+    // A stale cache entry that a normal read would happily serve.
+    const kBytes = channelKeyFromBase64(created.channelKey)
+    docStore.set(
+      `sub/${created.channelID}`,
+      new TextEncoder().encode(
+        await encryptForChannel(
+          kBytes,
+          JSON.stringify({ ...created.manifest, name: 'Stale' }),
+        ),
+      ),
+    )
+
+    const reader = makeCachingLocatorReader(client, 'deadbeef', new Set())
+    // Normal read: cache wins (fast path).
+    expect((await reader('', created.channelID, created.channelKey)).name).toBe(
+      'Stale',
+    )
+    // Fresh read: goes to the network instead.
+    expect(
+      (await reader('', created.channelID, created.channelKey, true)).name,
+    ).toBe('Current')
+
+    // ...and the fresh read re-seeds the cache, so the fast path is correct after.
+    await vi.waitFor(async () => {
+      const cached = docStore.get(`sub/${created.channelID}`)!
+      const decoded = JSON.parse(
+        await decryptForChannel(kBytes, new TextDecoder().decode(cached)),
+      )
+      expect(decoded.name).toBe('Current')
+    })
+  })
+
   it('resolves an OWNED channel fresh, ignoring the shared-doc cache', async () => {
     const app = createFakeApp()
     const alice = app.createAccount({
