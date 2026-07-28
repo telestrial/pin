@@ -569,7 +569,7 @@ async fn curator_loop(
     // Serve the /hey inbox over iroh, plus the iroh-docs / blobs / gossip protocols
     // when the docs engine is up — one ALPN-multiplexed Router. The atrium repo and
     // its head/record/diff verbs are gone; iroh-docs' own sync subsumes them.
-    let inbox: crate::rpc::HeyInbox = Arc::new(Mutex::new(Vec::new()));
+    let inbox = crate::rpc::new_inbox();
     let mut rb = iroh::protocol::Router::builder(endpoint.clone())
         .accept(crate::rpc::ALPN, crate::rpc::HeyHandler::new(inbox.clone()));
     if let Some(engine) = doc_engine.as_ref() {
@@ -597,7 +597,7 @@ async fn curator_loop(
             diag.lock().unwrap().rpc_selftest = Some(format!("failed: {e}"));
         }
     }
-    inbox.lock().unwrap().clear();
+    crate::rpc::clear(&inbox);
     // Held past here for the poll loop (inbox depth) and shutdown (router).
     let hey_inbox = Some(inbox);
     let router = Some(r);
@@ -681,7 +681,7 @@ async fn curator_loop(
         let online = !relays.is_empty();
         let hey_queued = hey_inbox
             .as_ref()
-            .map(|i| i.lock().unwrap().len() as u64)
+            .map(|i| crate::rpc::queued(i) as u64)
             .unwrap_or(0);
         {
             let mut d = diag.lock().unwrap();

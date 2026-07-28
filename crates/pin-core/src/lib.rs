@@ -34,6 +34,9 @@ use iroh_gossip::{net::Gossip, ALPN as GOSSIP_ALPN};
 // desktop signed in with the same Sia recovery phrase land on the same namespace +
 // author (the one-root-secret move).
 use pin_derive::{collection_prefix, decode_app_key, hkdf32, record_key, AUTHOR_INFO, NS_INFO};
+// The /hey inbox knock, the same crate the native Curator serves — one protocol, so
+// a peer knocking gets the same answer from a tab as from a desktop.
+use pin_rpc::{HeyHandler, HeyInbox, ALPN as HEY_ALPN};
 use wasm_bindgen::prelude::*;
 
 // The live engine. Single-threaded on wasm, so a thread_local is the app singleton.
@@ -44,6 +47,9 @@ struct Engine {
     blobs: MemStore,
     author_id: AuthorId,
     endpoint: Endpoint,
+    /// Inbound /hey knocks, parked until a reconcile loop drains them. Held so
+    /// `status()` can report the depth — the same field the native Curator reports.
+    hey_inbox: HeyInbox,
     _gossip: Gossip,
     _docs: Docs,
     _router: Router,
@@ -84,10 +90,16 @@ pub async fn open(app_key_hex: String) -> Result<String, JsValue> {
         .spawn(endpoint.clone(), (*blobs).clone(), gossip.clone())
         .await
         .map_err(je)?;
+    // Serve the /hey inbox alongside docs/blobs/gossip on one ALPN-multiplexed
+    // Router — the same set the native Curator serves. A browser tab has no
+    // listening socket, so inbound arrives over its relay rather than a direct
+    // path, but it answers the identical protocol.
+    let hey_inbox = pin_rpc::new_inbox();
     let router = Router::builder(endpoint.clone())
         .accept(BLOBS_ALPN, BlobsProtocol::new(&blobs, None))
         .accept(GOSSIP_ALPN, gossip.clone())
         .accept(DOCS_ALPN, docs.clone())
+        .accept(HEY_ALPN, HeyHandler::new(hey_inbox.clone()))
         .spawn();
 
     let author = Author::from_bytes(&author_seed);
@@ -106,6 +118,7 @@ pub async fn open(app_key_hex: String) -> Result<String, JsValue> {
         blobs,
         author_id,
         endpoint,
+        hey_inbox,
         _gossip: gossip,
         _docs: docs,
         _router: router,
@@ -164,6 +177,8 @@ pub async fn delete_record(collection: String, rkey: String) -> Result<(), JsVal
 /// path runs through a relay. `online` (a relay is connected) is therefore what
 /// makes this tab dialable — by a peer that already holds its ADDRESS, since
 /// discovery-by-bare-id doesn't resolve in wasm (see the note on `start_sync`).
+/// `rpcServing` / `heyQueued` are real here too: the Router accepts the same
+/// pin-keeper/0 ALPN the native Curator does.
 #[wasm_bindgen]
 pub fn status() -> Result<JsValue, JsValue> {
     let eng = engine()?;
@@ -190,6 +205,12 @@ pub fn status() -> Result<JsValue, JsValue> {
     set("relays", &relays);
     set("directAddrs", &direct);
     set("otherAddrs", &other);
+    // The Router is spawned in `open`, so an engine that exists is serving.
+    set("rpcServing", &JsValue::from_bool(true));
+    set(
+        "heyQueued",
+        &JsValue::from_f64(pin_rpc::queued(&eng.hey_inbox) as f64),
+    );
     Ok(obj.into())
 }
 

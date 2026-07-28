@@ -117,6 +117,7 @@ dependencies = [
  "iroh-gossip",
  "log",
  "pin-derive",
+ "pin-rpc",
  "pkarr",
  "serde",
  "serde_json",
@@ -4575,6 +4576,7 @@ dependencies = [
  "iroh-gossip",
  "js-sys",
  "pin-derive",
+ "pin-rpc",
  "wasm-bindgen",
  "wasm-bindgen-futures",
 ]
@@ -4612,6 +4614,15 @@ name = "pin-project-lite"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
+
+[[package]]
+name = "pin-rpc"
+version = "0.1.0"
+dependencies = [
+ "iroh",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "piper"

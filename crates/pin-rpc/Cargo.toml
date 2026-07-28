@@ -1,0 +1,18 @@
+# The /hey wire protocol, shared by both Pin instances that serve it: the browser
+# (pin-core, wasm) and the desktop Curator (src-tauri, native). Both answer on ALPN
+# "pin-keeper/0", so a peer knocking must get the same behavior either way — a
+# divergence here is a protocol bug, not untidiness, which is why this is one crate
+# rather than two copies (same reasoning as pin-derive for the record-key shape).
+#
+# iroh + serde only: no doc engine, no store, no platform assumptions, so it builds
+# for wasm32 and native alike.
+[package]
+name = "pin-rpc"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+
+[dependencies]
+iroh = "1.0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

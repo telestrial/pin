@@ -389,12 +389,7 @@ function Diagnostics({
         <div className="text-xs font-medium text-neutral-500">
           RPC <span className="font-normal text-neutral-400">pin-keeper/0</span>
         </div>
-        <Field
-          label="Serving"
-          value={
-            status.rpcServing ? 'yes' : native ? 'no' : 'not built here yet'
-          }
-        />
+        <Field label="Serving" value={status.rpcServing ? 'yes' : 'no'} />
         <Field
           label="Inbox"
           value={
@@ -403,9 +398,9 @@ function Diagnostics({
         />
         {!native && (
           <p className="text-xs text-neutral-400 leading-relaxed">
-            The knock endpoint isn't registered in the browser engine yet.
-            That's unbuilt, not a browser limit — a tab can serve inbound
-            connections (it already serves doc sync).
+            This tab serves the same knock endpoint the desktop app does. The
+            difference is uptime, not capability — a knock can only arrive while
+            the tab is open, and it's parked in memory rather than on disk.
           </p>
         )}
         {status.rpcSelftest && (

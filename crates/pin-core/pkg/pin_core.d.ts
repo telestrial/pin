@@ -105,6 +105,8 @@ export function start_sync(ticket: string, on_event: Function): Promise<void>;
  * path runs through a relay. `online` (a relay is connected) is therefore what
  * makes this tab dialable — by a peer that already holds its ADDRESS, since
  * discovery-by-bare-id doesn't resolve in wasm (see the note on `start_sync`).
+ * `rpcServing` / `heyQueued` are real here too: the Router accepts the same
+ * pin-keeper/0 ALPN the native Curator does.
  */
 export function status(): any;
 

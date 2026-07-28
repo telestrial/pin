@@ -23,6 +23,10 @@ iroh-gossip = "0.101"
 # Shared AppKey->doc-seed derivation (NS/AUTHOR info + hkdf32 + decode_app_key),
 # identical to the native keeper's so both land on the same namespace.
 pin-derive = { path = "../pin-derive" }
+# The /hey wire protocol, shared with the native Curator so both instances answer
+# ALPN pin-keeper/0 identically. A tab that's open is a full peer: it serves the same
+# knock, just over the relay it already holds rather than a direct path.
+pin-rpc = { path = "../pin-rpc" }
 futures-lite = "2"
 # Browser glue (compiles harmlessly on native; the exports are just inert there).
 wasm-bindgen = "0.2"

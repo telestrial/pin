@@ -145,6 +145,10 @@ async function webStatus(): Promise<CuratorStatus> {
     relays: net?.relays ?? [],
     directAddrs: net?.directAddrs ?? [],
     otherAddrs: net?.otherAddrs ?? [],
+    // Real on web: the wasm Router accepts the same /hey ALPN the native Curator
+    // does, so a peer holding this tab's address can knock while it's open.
+    rpcServing: net?.rpcServing ?? false,
+    heyQueued: net?.heyQueued ?? 0,
     uptimeSecs:
       c.openedAt === null
         ? null

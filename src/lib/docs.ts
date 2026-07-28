@@ -176,6 +176,10 @@ export type DocsNetworkStatus = {
   relays: string[]
   directAddrs: string[]
   otherAddrs: string[]
+  // This instance serves the /hey ALPN too (pin-core registers the same shared
+  // handler the native Curator does), so these are real on web, not placeholders.
+  rpcServing: boolean
+  heyQueued: number
 }
 
 /** Dev-only roundtrip through the active transport (wasm on web, native Curator on
