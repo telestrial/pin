@@ -3,6 +3,7 @@ import {
   closeWindow,
   isFullscreen,
   minimizeWindow,
+  quitApp,
   toggleFullscreen,
 } from '../lib/desktop'
 import { inTauri } from '../lib/openExternal'
@@ -12,11 +13,12 @@ import { PinIcon } from './pin/PinIcon'
 //  - Web: there's no OS window to control, so the pin is a direct soft-lock
 //    (today's behavior).
 //  - Desktop (Tauri, frameless window): the pin opens a window menu —
-//    Minimize · Full screen · Lock · Close — since the native title bar is gone.
+//    Minimize · Full screen · Lock · Close · Quit — since the native title bar
+//    is gone.
 //
 // Lock is the existing SOFT lock (visual gate, session stays live, no
-// credential). Close quits today; once the Curator runs it should mean
-// hide-window-keep-backend (tray) — see CLAUDE.md.
+// credential). Close HIDES to the tray so the Curator keeps running with no
+// surface open; Quit is the only item that ends the process.
 export function PinMenu({ onLock }: { onLock: () => void }) {
   const desktop = inTauri()
   const [open, setOpen] = useState(false)
@@ -103,14 +105,24 @@ export function PinMenu({ onLock }: { onLock: () => void }) {
             Lock
           </MenuItem>
           <div className="my-1 border-t border-neutral-100" />
+          {/* Close hides to the tray (not destructive, so not danger-red);
+              Quit is the one that actually stops the Curator. */}
           <MenuItem
-            danger
             onClick={() => {
               setOpen(false)
               void closeWindow()
             }}
           >
             Close
+          </MenuItem>
+          <MenuItem
+            danger
+            onClick={() => {
+              setOpen(false)
+              void quitApp()
+            }}
+          >
+            Quit Pin
           </MenuItem>
         </div>
       )}

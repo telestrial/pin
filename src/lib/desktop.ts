@@ -19,9 +19,18 @@ export async function toggleMaximizeWindow(): Promise<void> {
   await (await currentWindow()).toggleMaximize()
 }
 
+// Closing HIDES the window to the tray — the Rust side intercepts the
+// close-request (src-tauri/src/tray.rs) so the Curator keeps running with no
+// surface open. `quitApp` is the one path that actually ends the process.
 export async function closeWindow(): Promise<void> {
   if (!inTauri()) return
   await (await currentWindow()).close()
+}
+
+export async function quitApp(): Promise<void> {
+  if (!inTauri()) return
+  const { invoke } = await import('@tauri-apps/api/core')
+  await invoke('quit_app')
 }
 
 export async function isFullscreen(): Promise<boolean> {

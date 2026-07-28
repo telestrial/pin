@@ -4,6 +4,7 @@ mod identity;
 mod pkarr;
 mod rpc;
 mod sia;
+mod tray;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -37,7 +38,10 @@ pub fn run() {
       sia::sia_get_object_slabs,
       pkarr::pkarr_publish,
       pkarr::pkarr_resolve,
+      tray::quit_app,
     ])
+    // Closing the window hides it to the tray; the Curator keeps running.
+    .on_window_event(tray::handle_window_event)
     .setup(|app| {
       if cfg!(debug_assertions) {
         app.handle().plugin(
@@ -46,6 +50,7 @@ pub fn run() {
             .build(),
         )?;
       }
+      tray::init(app.handle())?;
       Ok(())
     })
     .run(tauri::generate_context!())
