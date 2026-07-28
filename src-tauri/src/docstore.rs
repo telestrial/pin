@@ -110,9 +110,13 @@ pub async fn open_or_create(
         .map_err(|e| format!("get marker: {e}"))?;
     let reopened = existing.is_some();
     if !reopened {
-        doc.set_bytes(author_id, MARKER_KEY.to_vec(), b"curator doc online".to_vec())
-            .await
-            .map_err(|e| format!("set marker: {e}"))?;
+        doc.set_bytes(
+            author_id,
+            MARKER_KEY.to_vec(),
+            b"curator doc online".to_vec(),
+        )
+        .await
+        .map_err(|e| format!("set marker: {e}"))?;
     }
 
     Ok(DocEngine {

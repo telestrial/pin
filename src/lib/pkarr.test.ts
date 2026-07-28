@@ -44,6 +44,8 @@ describe('chunkForTxt / reassembleTxt', () => {
   })
 
   it('single short value is one chunk', () => {
-    expect(chunkForTxt('_c', 'short')).toEqual([{ name: '_c0', value: 'short' }])
+    expect(chunkForTxt('_c', 'short')).toEqual([
+      { name: '_c0', value: 'short' },
+    ])
   })
 })

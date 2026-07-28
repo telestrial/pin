@@ -50,7 +50,10 @@ pub fn did_dht(keypair: &Keypair) -> String {
 /// client then resolves it back, so a hit proves the doc is genuinely on the DHT,
 /// not local cache. Best-effort from the caller's side — a failure leaves the node
 /// serving over iroh (peers handed the NodeAddr can still reach it).
-pub async fn publish_doc(keypair: &Keypair, records: &[(String, String)]) -> Result<String, String> {
+pub async fn publish_doc(
+    keypair: &Keypair,
+    records: &[(String, String)],
+) -> Result<String, String> {
     let mut builder = SignedPacket::builder();
     for (name, value) in records {
         let n = name
@@ -63,7 +66,9 @@ pub async fn publish_doc(keypair: &Keypair, records: &[(String, String)]) -> Res
             .map_err(|_| format!("bad record value: {value}"))?;
         builder = builder.txt(n, v, 3600);
     }
-    let packet = builder.sign(keypair).map_err(|e| format!("sign doc: {e}"))?;
+    let packet = builder
+        .sign(keypair)
+        .map_err(|e| format!("sign doc: {e}"))?;
     // What we're about to publish, independent of any DHT round-trip — separates a
     // build problem (record dropped locally) from a read problem (stale DHT copy).
     log::info!(
@@ -112,7 +117,9 @@ pub async fn publish_doc(keypair: &Keypair, records: &[(String, String)]) -> Res
     for _ in 0..6 {
         if let Some(sp) = resolver.resolve_most_recent(&pubkey).await {
             let n = sp.all_resource_records().count();
-            return Ok(format!("ok (published + self-resolved {n} records via Mainline DHT)"));
+            return Ok(format!(
+                "ok (published + self-resolved {n} records via Mainline DHT)"
+            ));
         }
         tokio::time::sleep(Duration::from_secs(2)).await;
     }

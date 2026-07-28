@@ -9,8 +9,8 @@
 
 import { computeContentHash } from '../core/contentHash'
 import type { AccountSnapshot } from '../core/pin'
-import type { PinnedObjectInfo, SiaClient } from '../core/siaClient'
 import type { UploadedItem } from '../core/sia'
+import type { PinnedObjectInfo, SiaClient } from '../core/siaClient'
 
 // Frame N buffers into one raw payload — [u32 count][u32 len][bytes]...
 // little-endian — since a raw IPC body is a single blob. Rust's `unframe` splits
@@ -36,7 +36,10 @@ type UploadDto = { id: string; itemUrl: string }
 // Build an UploadedItem from the Rust upload result. The content hash (CIDv1) is
 // computed here in TS so the CID logic stays in one place (core/contentHash), and
 // byteSize is the plaintext length we already hold.
-function toUploadedItem(dto: UploadDto, bytes: Uint8Array): Promise<UploadedItem> {
+function toUploadedItem(
+  dto: UploadDto,
+  bytes: Uint8Array,
+): Promise<UploadedItem> {
   return computeContentHash(bytes).then((contentHash) => ({
     id: dto.id,
     itemURL: dto.itemUrl,
@@ -88,7 +91,9 @@ export async function makeTauriSiaClient(
     listPinnedObjects: () =>
       invoke<PinnedObjectInfo[]>('sia_list_pinned_objects'),
     getObjectSlabs: (objectID) =>
-      invoke<PinnedObjectInfo | null>('sia_get_object_slabs', { objectId: objectID }),
+      invoke<PinnedObjectInfo | null>('sia_get_object_slabs', {
+        objectId: objectID,
+      }),
 
     appKeyPublicKey: () => publicKey,
   }

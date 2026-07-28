@@ -132,7 +132,11 @@ impl HeyHandler {
         // the reconcile loop. Acceptance just means "received and queued."
         let queued = {
             let mut inbox = self.inbox.lock().unwrap();
-            inbox.push(Knock { from, sig, referent });
+            inbox.push(Knock {
+                from,
+                sig,
+                referent,
+            });
             inbox.len()
         };
         serde_json::to_vec(&HeyResponse {

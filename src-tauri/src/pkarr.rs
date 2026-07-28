@@ -124,10 +124,7 @@ pub async fn pkarr_resolve(
     state: tauri::State<'_, PkarrState>,
     key: String,
 ) -> Result<Vec<TxtRecord>, String> {
-    let z = key
-        .strip_prefix("did:dht:")
-        .unwrap_or(&key)
-        .to_string();
+    let z = key.strip_prefix("did:dht:").unwrap_or(&key).to_string();
     state
         .rt
         .spawn(async move {

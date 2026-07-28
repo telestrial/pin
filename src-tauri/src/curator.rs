@@ -394,9 +394,7 @@ pub async fn docs_list_records(
 }
 
 #[tauri::command]
-pub async fn docs_list_all(
-    state: tauri::State<'_, CuratorState>,
-) -> Result<Vec<String>, String> {
+pub async fn docs_list_all(state: tauri::State<'_, CuratorState>) -> Result<Vec<String>, String> {
     let engine = current_engine(&state)?;
     let mut stream = Box::pin(
         engine

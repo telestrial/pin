@@ -225,7 +225,8 @@ pub async fn sia_connect(
         .rt
         .spawn(async move {
             let app_key = AppKey::import(bytes);
-            let builder = Builder::new(&indexer_url, app_meta()).map_err(|e| format!("builder: {e}"))?;
+            let builder =
+                Builder::new(&indexer_url, app_meta()).map_err(|e| format!("builder: {e}"))?;
             builder
                 .connected(&app_key)
                 .await
@@ -252,10 +253,16 @@ pub async fn sia_upload_item(
         .rt
         .spawn(async move {
             let obj = sdk
-                .upload(Object::default(), Cursor::new(bytes), UploadOptions::default())
+                .upload(
+                    Object::default(),
+                    Cursor::new(bytes),
+                    UploadOptions::default(),
+                )
                 .await
                 .map_err(|e| format!("upload: {e}"))?;
-            sdk.pin_object(&obj).await.map_err(|e| format!("pin: {e}"))?;
+            sdk.pin_object(&obj)
+                .await
+                .map_err(|e| format!("pin: {e}"))?;
             let url = sdk
                 .share_object(&obj, far_future())
                 .map_err(|e| format!("share: {e}"))?
@@ -291,7 +298,10 @@ pub async fn sia_upload_items_packed(
                     .await
                     .map_err(|e| format!("packed add: {e}"))?;
             }
-            let objects = packed.finalize().await.map_err(|e| format!("packed finalize: {e}"))?;
+            let objects = packed
+                .finalize()
+                .await
+                .map_err(|e| format!("packed finalize: {e}"))?;
             let mut out = Vec::with_capacity(objects.len());
             for obj in &objects {
                 sdk.pin_object(obj).await.map_err(|e| format!("pin: {e}"))?;
@@ -352,7 +362,9 @@ pub async fn sia_pin_from_share_url(
                 .shared_object(&url)
                 .await
                 .map_err(|e| format!("shared_object: {e}"))?;
-            sdk.pin_object(&obj).await.map_err(|e| format!("pin: {e}"))?;
+            sdk.pin_object(&obj)
+                .await
+                .map_err(|e| format!("pin: {e}"))?;
             Ok::<String, String>(obj.id().to_string())
         })
         .await
@@ -387,7 +399,11 @@ pub async fn sia_delete_object(
     let sdk = current_sdk(&state).await?;
     state
         .rt
-        .spawn(async move { sdk.delete_object(&hash).await.map_err(|e| format!("delete: {e}")) })
+        .spawn(async move {
+            sdk.delete_object(&hash)
+                .await
+                .map_err(|e| format!("delete: {e}"))
+        })
         .await
         .map_err(|e| format!("task: {e}"))?
 }
@@ -458,7 +474,9 @@ pub async fn sia_get_object_slabs(
     state: tauri::State<'_, SiaState>,
     object_id: String,
 ) -> Result<Option<PinnedObjectDto>, String> {
-    let hash: Hash256 = object_id.parse().map_err(|e| format!("bad object id: {e:?}"))?;
+    let hash: Hash256 = object_id
+        .parse()
+        .map_err(|e| format!("bad object id: {e:?}"))?;
     let sdk = current_sdk(&state).await?;
     state
         .rt
