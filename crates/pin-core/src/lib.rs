@@ -43,7 +43,7 @@ struct Engine {
     doc: Doc,
     blobs: MemStore,
     author_id: AuthorId,
-    _endpoint: Endpoint,
+    endpoint: Endpoint,
     _gossip: Gossip,
     _docs: Docs,
     _router: Router,
@@ -109,7 +109,7 @@ pub async fn open(app_key_hex: String) -> Result<String, JsValue> {
         doc,
         blobs,
         author_id,
-        _endpoint: endpoint,
+        endpoint,
         _gossip: gossip,
         _docs: docs,
         _router: router,
@@ -156,6 +156,45 @@ pub async fn delete_record(collection: String, rkey: String) -> Result<(), JsVal
         .await
         .map_err(je)?;
     Ok(())
+}
+
+/// This instance's iroh network status, classified EXACTLY as the native Curator
+/// does (see src-tauri/src/curator.rs) so the Curate page can render one interface
+/// over both — a browser tab is a full peer, not a lesser tier, and its status
+/// should read the same way.
+///
+/// The honest browser differences show up as values, not missing fields:
+/// `directAddrs` is normally empty because a tab has no listening socket, so every
+/// path runs through a relay. `online` (a relay is connected) is therefore what
+/// makes this tab dialable — by a peer that already holds its ADDRESS, since
+/// discovery-by-bare-id doesn't resolve in wasm (see the note on `start_sync`).
+#[wasm_bindgen]
+pub fn status() -> Result<JsValue, JsValue> {
+    let eng = engine()?;
+    let addr = eng.endpoint.addr();
+    let relays = js_sys::Array::new();
+    let direct = js_sys::Array::new();
+    let other = js_sys::Array::new();
+    for a in &addr.addrs {
+        let s = JsValue::from_str(&format!("{a:?}"));
+        if a.is_relay() {
+            relays.push(&s);
+        } else if a.is_ip() {
+            direct.push(&s);
+        } else {
+            other.push(&s);
+        }
+    }
+    let obj = js_sys::Object::new();
+    let set = |k: &str, v: &JsValue| {
+        let _ = js_sys::Reflect::set(&obj, &JsValue::from_str(k), v);
+    };
+    set("nodeId", &JsValue::from_str(&eng.endpoint.id().to_string()));
+    set("online", &JsValue::from_bool(relays.length() > 0));
+    set("relays", &relays);
+    set("directAddrs", &direct);
+    set("otherAddrs", &other);
+    Ok(obj.into())
 }
 
 /// List the rkeys under a collection (entries whose key starts with `collection/`).

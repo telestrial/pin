@@ -9,6 +9,7 @@ export const open: (a: number, b: number) => any;
 export const put_record: (a: number, b: number, c: number, d: number, e: number, f: number) => any;
 export const share: () => any;
 export const start_sync: (a: number, b: number, c: any) => any;
+export const status: () => [number, number, number];
 export const start: () => void;
 export const __wbg_intounderlyingbytesource_free: (a: number, b: number) => void;
 export const intounderlyingbytesource_autoAllocateChunkSize: (a: number) => number;

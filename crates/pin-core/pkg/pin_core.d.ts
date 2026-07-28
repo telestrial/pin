@@ -85,8 +85,28 @@ export function start(): void;
  * alive. Subscribes BEFORE starting sync (mirroring iroh-docs' import_and_subscribe)
  * so no events are missed; the event pump runs on the local executor for the life
  * of the engine.
+ *
+ * NOTE (2026-07-25): the peer coordinates MUST include an address — the ticket
+ * carries node id + relay URL + direct addrs. Dialing by a bare node id (letting
+ * iroh discovery resolve it) does NOT work in the relay-only wasm/browser build
+ * (no DNS resolver in the sandbox), so a rendezvous must publish the ticket/addr,
+ * not just the id.
  */
 export function start_sync(ticket: string, on_event: Function): Promise<void>;
+
+/**
+ * This instance's iroh network status, classified EXACTLY as the native Curator
+ * does (see src-tauri/src/curator.rs) so the Curate page can render one interface
+ * over both — a browser tab is a full peer, not a lesser tier, and its status
+ * should read the same way.
+ *
+ * The honest browser differences show up as values, not missing fields:
+ * `directAddrs` is normally empty because a tab has no listening socket, so every
+ * path runs through a relay. `online` (a relay is connected) is therefore what
+ * makes this tab dialable — by a peer that already holds its ADDRESS, since
+ * discovery-by-bare-id doesn't resolve in wasm (see the note on `start_sync`).
+ */
+export function status(): any;
 
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
@@ -100,6 +120,7 @@ export interface InitOutput {
     readonly put_record: (a: number, b: number, c: number, d: number, e: number, f: number) => any;
     readonly share: () => any;
     readonly start_sync: (a: number, b: number, c: any) => any;
+    readonly status: () => [number, number, number];
     readonly start: () => void;
     readonly __wbg_intounderlyingbytesource_free: (a: number, b: number) => void;
     readonly intounderlyingbytesource_autoAllocateChunkSize: (a: number) => number;
