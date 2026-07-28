@@ -34,12 +34,18 @@ import {
   decryptForChannel,
   encryptForChannel,
 } from '../core/crypto'
+import type { ChannelManifest, ItemRef, SubscriptionRef } from '../core/types'
 import {
   cacheSubscribedChannel,
   commitChannelManifest,
   dropSubscribedChannel,
   makeCachingLocatorReader,
 } from '../lib/channelLocator'
+import {
+  applyIfChanged,
+  revalidateSubscribedChannel,
+} from '../lib/channelRevalidate'
+import { useFeedStore } from '../stores/feed'
 import { createFakeApp, resetAllStores } from './setupFakeApp'
 
 describe('integration: caching locator reader seeds sub/<id>', () => {
@@ -189,7 +195,7 @@ describe('integration: caching locator reader seeds sub/<id>', () => {
 
   // Step 2 primitives: the eager pull loop resolves + caches (awaited), and drops
   // the cache on unsubscribe.
-  it('cacheSubscribedChannel caches a resolvable channel and reports false for an unpublished one', async () => {
+  it('cacheSubscribedChannel caches a resolvable channel and returns null for an unpublished one', async () => {
     const app = createFakeApp()
     const alice = app.createAccount({
       did: 'did:plc:alice3',
@@ -213,7 +219,9 @@ describe('integration: caching locator reader seeds sub/<id>', () => {
       published.channelID,
       published.channelKey,
     )
-    expect(ok).toBe(true)
+    // Returns the resolved manifest (not just a boolean) so the caller can act on
+    // a content change — that's what revalidate builds on.
+    expect(ok?.name).toBe('Published')
     expect(docStore.has(`sub/${published.channelID}`)).toBe(true)
 
     // A channel that was created but never committed has no published locator →
@@ -228,7 +236,7 @@ describe('integration: caching locator reader seeds sub/<id>', () => {
       uncommitted.channelID,
       uncommitted.channelKey,
     )
-    expect(miss).toBe(false)
+    expect(miss).toBeNull()
     expect(docStore.has(`sub/${uncommitted.channelID}`)).toBe(false)
   })
 
@@ -259,5 +267,146 @@ describe('integration: caching locator reader seeds sub/<id>', () => {
 
     await dropSubscribedChannel('deadbeef', ch.channelID)
     expect(docStore.has(`sub/${ch.channelID}`)).toBe(false)
+  })
+})
+
+// The out-of-band update path. Reads serve the cache (step 3), so a read can't
+// notice the author published — the background check has to fill the feed in.
+// This is the path ladder rung 1 (live-sync) lands on too, so it's tested as its
+// own surface rather than only through the loop that currently drives it.
+describe('integration: revalidate fills the feed in out of band', () => {
+  beforeEach(() => {
+    resetAllStores()
+    docStore.clear()
+  })
+
+  const subFor = (channelID: string, channelKey: string): SubscriptionRef => ({
+    authorHandle: '',
+    authorDID: '',
+    didDht: 'did:dht:someauthor',
+    channelID,
+    channelKey,
+    addedAt: new Date().toISOString(),
+  })
+
+  const withPost = (
+    manifest: ChannelManifest,
+    title: string,
+  ): ChannelManifest => {
+    const item: ItemRef = {
+      id: `item-${title}`,
+      itemURL: `sia://fake/${title}`,
+      type: 'text',
+      title: '',
+      summary: title,
+      publishedAt: new Date().toISOString(),
+      mimeType: 'text/markdown',
+      byteSize: title.length,
+    }
+    return { ...manifest, items: [item, ...manifest.items] }
+  }
+
+  it('applyIfChanged lands a manifest the feed has never seen', () => {
+    const sub = subFor('chan1', 'key1')
+    const manifest = withPost(
+      {
+        version: 1,
+        name: 'Voice',
+        description: '',
+        authorPubkey: '',
+        authorDidDht: 'did:dht:someauthor',
+        publishedAt: new Date().toISOString(),
+        items: [],
+      } as unknown as ChannelManifest,
+      'hello',
+    )
+
+    expect(applyIfChanged(sub, manifest)).toBe(true)
+    const feed = useFeedStore.getState()
+    expect(feed.manifests.chan1?.name).toBe('Voice')
+    expect(feed.entries.map((e) => e.item.summary)).toEqual(['hello'])
+  })
+
+  it('applyIfChanged is a no-op on an unchanged manifest (no feed churn)', () => {
+    const sub = subFor('chan2', 'key2')
+    const manifest = withPost(
+      {
+        version: 1,
+        name: 'Quiet',
+        description: '',
+        authorPubkey: '',
+        authorDidDht: 'did:dht:someauthor',
+        publishedAt: new Date().toISOString(),
+        items: [],
+      } as unknown as ChannelManifest,
+      'only post',
+    )
+    expect(applyIfChanged(sub, manifest)).toBe(true)
+    const entriesAfterFirst = useFeedStore.getState().entries
+
+    // Same content, re-parsed the way a fresh resolve would deliver it.
+    const reResolved = JSON.parse(JSON.stringify(manifest)) as ChannelManifest
+    expect(applyIfChanged(sub, reResolved)).toBe(false)
+
+    // Entry array identity preserved — a quiet pass must not rebuild entries,
+    // or every cadence tick would re-render the feed.
+    expect(useFeedStore.getState().entries).toBe(entriesAfterFirst)
+  })
+
+  it('revalidateSubscribedChannel picks up a new post and updates the feed', async () => {
+    const app = createFakeApp()
+    const alice = app.createAccount({
+      did: 'did:plc:alice7',
+      handle: 'alice7.test',
+    })
+    const client = alice.client
+
+    const created = await createChannel(client, {
+      name: 'Live',
+      description: '',
+    })
+    await commitChannelManifest(
+      client,
+      created.channelID,
+      created.channelKey,
+      created.manifest,
+    )
+    const sub = subFor(created.channelID, created.channelKey)
+
+    // The reader's first pass put v1 in the feed.
+    applyIfChanged(sub, created.manifest)
+    expect(useFeedStore.getState().entries).toHaveLength(0)
+
+    // Author publishes. A cached read would still serve v1...
+    const v2 = withPost(created.manifest, 'fresh post')
+    await commitChannelManifest(
+      client,
+      created.channelID,
+      created.channelKey,
+      v2,
+    )
+
+    // ...so the background check is what surfaces it.
+    const changed = await revalidateSubscribedChannel(client, 'deadbeef', sub)
+    expect(changed).toBe(true)
+    expect(useFeedStore.getState().entries.map((e) => e.item.summary)).toEqual([
+      'fresh post',
+    ])
+
+    // And the same pass re-warmed the cache the reader serves, so a subsequent
+    // read is both fast and current.
+    const cached = docStore.get(`sub/${created.channelID}`)!
+    const decoded = JSON.parse(
+      await decryptForChannel(
+        channelKeyFromBase64(created.channelKey),
+        new TextDecoder().decode(cached),
+      ),
+    )
+    expect(decoded.items).toHaveLength(1)
+
+    // A second pass with nothing new must report no change.
+    expect(await revalidateSubscribedChannel(client, 'deadbeef', sub)).toBe(
+      false,
+    )
   })
 })

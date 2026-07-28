@@ -183,21 +183,22 @@ export function makeLocatorReader(client: SiaClient): FetchChannel {
 /** Resolve a subscribed channel and cache its ciphertext into the shared doc,
  *  AWAITING the cache (unlike the feed reader's fire-and-forget). Used by the
  *  eager pull loop (resolution-ladder step 2) to keep `sub/<channelID>` warm on a
- *  cadence. Returns true if it resolved + cached, false if the locator isn't
+ *  cadence. Returns the freshly-resolved manifest — so the caller can also act on
+ *  a content change (see channelRevalidate) — or null when the locator isn't
  *  resolvable yet. Never throws for the loop's sake. */
 export async function cacheSubscribedChannel(
   client: SiaClient,
   appKeyHex: string,
   channelID: string,
   channelKey: string,
-): Promise<boolean> {
+): Promise<ChannelManifest | null> {
   try {
     const resolved = await resolveChannelBytes(client, channelKey)
-    if (!resolved) return false
+    if (!resolved) return null
     await cacheSubscribedManifest(appKeyHex, channelID, resolved.ciphertext)
-    return true
+    return resolved.manifest
   } catch {
-    return false
+    return null
   }
 }
 

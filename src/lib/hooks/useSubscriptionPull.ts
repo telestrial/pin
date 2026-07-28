@@ -1,15 +1,19 @@
 import { useEffect, useRef } from 'react'
 import { useAuthStore } from '../../stores/auth'
-import {
-  cacheSubscribedChannel,
-  dropSubscribedChannel,
-} from '../channelLocator'
+import { dropSubscribedChannel } from '../channelLocator'
+import { revalidateSubscribedChannel } from '../channelRevalidate'
 
 // Resolution-ladder step 2: the eager cache loop. Every LIVE instance walks its
 // subscriptions, resolves each channel, and caches the ciphertext into the shared
 // iroh-docs doc (`sub/<channelID>`) — on mount, on subscription add/remove, and on
 // a cadence. This is what OWNS freshness: step 3 reads the doc, and this keeps the
 // doc current so those reads aren't stale.
+//
+// It also FILLS THE FEED IN when a pass finds the content moved (via
+// channelRevalidate) — otherwise a cached read would keep serving the old manifest
+// until the user hit Refresh, which is a worse deal than the fresh-but-slow reads
+// step 3 replaced. The loop checks; the feed updates itself when there's something
+// to update.
 //
 // It's the SAME code on web and desktop (shared TS). What varies is capability, not
 // role: the desktop resolves over the direct DHT (fast) and runs even with no UI
@@ -65,7 +69,7 @@ export function useSubscriptionPull() {
       for (const sub of state.subscriptions) {
         if (cancelled) return
         if (owned.has(sub.channelID)) continue
-        await cacheSubscribedChannel(c, k, sub.channelID, sub.channelKey)
+        await revalidateSubscribedChannel(c, k, sub)
       }
     }
 
