@@ -33,7 +33,7 @@ use iroh_gossip::{net::Gossip, ALPN as GOSSIP_ALPN};
 // Shared with the native Curator: same domain-separated derivation so a browser and a
 // desktop signed in with the same Sia recovery phrase land on the same namespace +
 // author (the one-root-secret move).
-use pin_derive::{decode_app_key, hkdf32, AUTHOR_INFO, NS_INFO};
+use pin_derive::{collection_prefix, decode_app_key, hkdf32, record_key, AUTHOR_INFO, NS_INFO};
 use wasm_bindgen::prelude::*;
 
 // The live engine. Single-threaded on wasm, so a thread_local is the app singleton.
@@ -66,10 +66,6 @@ fn engine() -> Result<Rc<Engine>, JsValue> {
     ENGINE
         .with(|e| e.borrow().clone())
         .ok_or_else(|| JsValue::from_str("pin-core not initialized (call open first)"))
-}
-
-fn record_key(collection: &str, rkey: &str) -> Vec<u8> {
-    format!("{collection}/{rkey}").into_bytes()
 }
 
 /// Open (create) the in-memory doc engine, with the namespace + author derived from
@@ -202,7 +198,7 @@ pub fn status() -> Result<JsValue, JsValue> {
 #[wasm_bindgen]
 pub async fn list_records(collection: String) -> Result<JsValue, JsValue> {
     let eng = engine()?;
-    let prefix = format!("{collection}/");
+    let prefix = collection_prefix(&collection);
     let mut stream = Box::pin(eng.doc.get_many(Query::all().build()).await.map_err(je)?);
     let arr = js_sys::Array::new();
     while let Some(res) = stream.next().await {

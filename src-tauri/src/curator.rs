@@ -30,6 +30,9 @@ use iroh::{Endpoint, SecretKey};
 use iroh_docs::api::protocol::{AddrInfoOptions, ShareMode};
 use iroh_docs::store::Query;
 use iroh_docs::DocTicket;
+// Shared with pin-core (the browser engine): both write into the SAME synced doc, so
+// the record-key spelling can't diverge — a divergence is a data bug, not untidiness.
+use pin_derive::{collection_prefix, record_key};
 use tauri::Manager;
 
 use crate::docstore::DocEngine;
@@ -317,11 +320,6 @@ pub fn curator_doc_ticket(state: tauri::State<CuratorState>) -> Option<String> {
 // channel manifests are KB, media bytes live on Sia) — not the raw-body path sia.rs
 // needs for multi-MB uploads.
 
-/// The `collection/rkey` key, byte-identical to pin-core's `record_key`.
-fn record_key(collection: &str, rkey: &str) -> Vec<u8> {
-    format!("{collection}/{rkey}").into_bytes()
-}
-
 /// Clone out the running engine handle without holding the state lock across an await.
 /// `Err` when curation is off / the engine hasn't come up.
 fn current_engine(state: &CuratorState) -> Result<Arc<DocEngine>, String> {
@@ -399,7 +397,7 @@ pub async fn docs_list_records(
     collection: String,
 ) -> Result<Vec<String>, String> {
     let engine = current_engine(&state)?;
-    let prefix = format!("{collection}/");
+    let prefix = collection_prefix(&collection);
     let mut stream = Box::pin(
         engine
             .doc
