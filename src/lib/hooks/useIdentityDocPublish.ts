@@ -5,6 +5,7 @@ import {
   type DirectoryDoc,
 } from '../../core/identityDoc'
 import { useAuthStore } from '../../stores/auth'
+import { useCuratorStore } from '../../stores/curator'
 import { useFeedStore } from '../../stores/feed'
 import { publishIdentityDoc } from '../identityDoc'
 
@@ -111,8 +112,14 @@ export function useIdentityDocPublish() {
             .catch(() => {})
         }
         lastFingerprint = fingerprint
+        // Report to the Curate page — the native Curator reports the same field
+        // off its own publish, so both instances read the same way.
+        useCuratorStore
+          .getState()
+          .set({ didDhtPublished: 'ok (published to Mainline DHT)' })
       } catch (e) {
         console.warn('identity doc publish failed:', e)
+        useCuratorStore.getState().set({ didDhtPublished: `failed: ${e}` })
       } finally {
         saving = false
         if (pending && !cancelled) {

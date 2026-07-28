@@ -13,6 +13,7 @@ import type {
   ThemeMode,
 } from '../../core/types'
 import { useAuthStore } from '../../stores/auth'
+import { useCuratorStore } from '../../stores/curator'
 import { useStorageActivityStore } from '../../stores/storageActivity'
 import { getRecord, openDocs, putRecord } from '../docs'
 import { snapshotToSia } from '../docsMirror'
@@ -184,8 +185,16 @@ export function useSettingsDocsMirror() {
         // Only advance the fingerprint on full success — a failure leaves it
         // stale so the next change/boot retries (no silent loss).
         writeFingerprint(fp)
+        // Report to the Curate page: this snapshot IS the web instance's Sia
+        // mirror, the same role the native Curator's repo CAR plays.
+        useCuratorStore
+          .getState()
+          .set({ mirrorState: 'pushed', mirrorError: null })
       } catch (e) {
         console.warn('settings mirror failed (will retry):', e)
+        useCuratorStore
+          .getState()
+          .set({ mirrorState: 'error', mirrorError: String(e) })
       } finally {
         saving = false
         useStorageActivityStore.getState().setSavingSettings(false)

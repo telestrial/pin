@@ -11,11 +11,16 @@ import { useAuthStore } from '../stores/auth'
 import { useSyncStore } from '../stores/sync'
 import { CopyButton } from './ui/CopyButton'
 
-// The Curate page (rendered inside a FormCard by Home). Reachable from the
-// sidebar on both web and desktop. The Curator — Pin's optional always-on
-// agent — can only run in the desktop shell, so on web this view explains what
-// curation is and that it lives on the desktop; on desktop it's the on/off
-// toggle, live status, and (for now, dev-facing) iroh network diagnostics.
+// The Curate page (rendered inside a FormCard by Home). ONE interface on both
+// platforms — there is one Curator, and a desktop instance and a browser tab are
+// co-equal instances of it, so this page renders the same sections, the same
+// toggle, and the same diagnostics wherever it runs. `curatorStatus` is the seam
+// that assembles that one shape from either source (native IPC / in-page wasm).
+//
+// Genuine differences between instances appear as VALUES in shared rows, never as
+// a hidden section: a browser tab has no listening socket (so no direct addresses,
+// relay only) and stops when you close it. Don't reintroduce a platform branch
+// here — if something reads empty on one side, say why in that row.
 //
 // "Curate" here is the museum sense, not the feed-algorithm sense: an agent
 // that, on your behalf, tends your collection — preserving your bytes, keeping
@@ -69,8 +74,8 @@ export function CurateView() {
     }
   }
 
-  const available = status?.available ?? false
   const running = status?.running ?? false
+  const native = status?.native ?? false
 
   return (
     <div className="space-y-6">
@@ -93,64 +98,56 @@ export function CurateView() {
 
       <SyncStatus />
 
-      {available ? (
-        <>
-          <section className="border border-neutral-200 rounded-lg p-4 space-y-3">
-            <div className="flex items-center justify-between gap-4">
-              <div>
-                <h2 className="text-sm font-semibold text-neutral-900">
-                  Curation
-                </h2>
-                <p className="text-xs text-neutral-500 mt-1 flex items-center gap-1.5">
-                  <span
-                    aria-hidden="true"
-                    className={`size-1.5 rounded-full ${
-                      running
-                        ? status?.online
-                          ? 'bg-green-500'
-                          : 'bg-amber-500'
-                        : 'bg-neutral-300'
-                    }`}
-                  />
-                  {status === null
-                    ? 'Checking…'
-                    : running
-                      ? `On — ${status.phase}`
-                      : 'Off.'}
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={toggle}
-                disabled={status === null || busy}
-                aria-pressed={running}
-                className={`shrink-0 px-3 py-2 text-sm font-medium rounded-md transition-colors cursor-pointer disabled:opacity-60 ${
+      <section className="border border-neutral-200 rounded-lg p-4 space-y-3">
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <h2 className="text-sm font-semibold text-neutral-900">Curation</h2>
+            <p className="text-xs text-neutral-500 mt-1 flex items-center gap-1.5">
+              <span
+                aria-hidden="true"
+                className={`size-1.5 rounded-full ${
                   running
-                    ? 'bg-neutral-100 text-neutral-700 hover:bg-neutral-200'
-                    : 'bg-green-600 text-white hover:bg-green-700'
+                    ? status?.online
+                      ? 'bg-green-500'
+                      : 'bg-amber-500'
+                    : 'bg-neutral-300'
                 }`}
-              >
-                {busy
-                  ? running
-                    ? 'Stopping…'
-                    : 'Starting…'
-                  : running
-                    ? 'Turn off'
-                    : 'Enable curation'}
-              </button>
-            </div>
-          </section>
+              />
+              {status === null
+                ? 'Checking…'
+                : running
+                  ? `On — ${status.phase}`
+                  : 'Off.'}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={toggle}
+            disabled={status === null || busy}
+            aria-pressed={running}
+            className={`shrink-0 px-3 py-2 text-sm font-medium rounded-md transition-colors cursor-pointer disabled:opacity-60 ${
+              running
+                ? 'bg-neutral-100 text-neutral-700 hover:bg-neutral-200'
+                : 'bg-green-600 text-white hover:bg-green-700'
+            }`}
+          >
+            {busy
+              ? running
+                ? 'Stopping…'
+                : 'Starting…'
+              : running
+                ? 'Turn off'
+                : 'Enable curation'}
+          </button>
+        </div>
+        <p className="text-xs text-neutral-400 leading-relaxed">
+          {native
+            ? 'This is your desktop instance: it keeps a durable copy on disk and keeps working with no window in front of it.'
+            : 'This is your browser instance: a full peer while the tab is open, holding its copy in memory and rebuilding it from your Sia snapshot each session.'}
+        </p>
+      </section>
 
-          {running && status && <Diagnostics status={status} ticket={ticket} />}
-        </>
-      ) : (
-        <section className="border border-neutral-200 rounded-lg p-4">
-          <p className="text-xs text-neutral-500 leading-relaxed">
-            Curation runs in the Pin desktop app, which can stay on and work the
-            network in the background. Open Pin on your desktop to turn it on.
-          </p>
-        </section>
-      )}
+      {running && status && <Diagnostics status={status} ticket={ticket} />}
     </div>
   )
 }
@@ -252,6 +249,7 @@ function Diagnostics({
   status: CuratorStatus
   ticket: string | null
 }) {
+  const native = status.native
   return (
     <section className="border border-neutral-200 rounded-lg p-4 space-y-4">
       <h2 className="text-xs font-semibold tracking-wide uppercase text-neutral-500">
@@ -285,17 +283,24 @@ function Diagnostics({
       <AddrList
         label="Direct addresses · preferred path"
         addrs={status.directAddrs}
+        empty={
+          native
+            ? undefined
+            : 'none — a browser tab has no listening socket, so every path runs through a relay'
+        }
       />
-      <AddrList label="Relay · fallback only" addrs={status.relays} />
+      <AddrList
+        label={native ? 'Relay · fallback only' : 'Relay · the path here'}
+        addrs={status.relays}
+      />
       {status.otherAddrs.length > 0 && (
         <AddrList label="Other addresses" addrs={status.otherAddrs} />
       )}
 
       <p className="text-xs text-neutral-400 leading-relaxed">
-        iroh connects directly (holepunched, peer-to-peer) whenever it can and
-        falls back to the relay only when a direct path can't be established —
-        the relay is never the default data path. The actual per-connection path
-        (direct vs relayed) will appear here once peers connect.
+        {native
+          ? 'iroh connects directly (holepunched, peer-to-peer) whenever it can and falls back to the relay only when a direct path can’t be established — the relay is never the default data path.'
+          : 'This instance is still dialable — a peer that holds its address (a doc ticket, or the rendezvous entry) reaches it over the relay. What a browser can’t do is be found from a bare node id: there’s no resolver in the sandbox, so the address has to be handed over.'}
       </p>
 
       <div className="space-y-1 pt-1 border-t border-neutral-100">
@@ -338,7 +343,11 @@ function Diagnostics({
           <span>Local repo</span>
           {status.docsNamespace && (
             <span className="font-normal text-neutral-400">
-              {status.docsReopened ? 'reopened from disk' : 'created fresh'}
+              {!native
+                ? 'in memory · rebuilt each session'
+                : status.docsReopened
+                  ? 'reopened from disk'
+                  : 'created fresh'}
             </span>
           )}
         </div>
@@ -369,9 +378,10 @@ function Diagnostics({
           <div className="text-xs text-neutral-400">—</div>
         )}
         <p className="text-xs text-neutral-400 leading-relaxed">
-          A capability to live-sync this Curator's repo. A browser tab signed in
-          to the same account imports it (dev: __pinSync.sync) to reconcile with
-          the Curator — one import syncs both ways.
+          A capability to live-sync this instance's repo. Another instance
+          signed in to the same account imports it to reconcile — one import
+          syncs both ways, so the serving side never has to import. Your
+          instances exchange these automatically through the rendezvous.
         </p>
       </div>
 
@@ -379,13 +389,25 @@ function Diagnostics({
         <div className="text-xs font-medium text-neutral-500">
           RPC <span className="font-normal text-neutral-400">pin-keeper/0</span>
         </div>
-        <Field label="Serving" value={status.rpcServing ? 'yes' : 'no'} />
+        <Field
+          label="Serving"
+          value={
+            status.rpcServing ? 'yes' : native ? 'no' : 'not built here yet'
+          }
+        />
         <Field
           label="Inbox"
           value={
             status.heyQueued === 1 ? '1 knock' : `${status.heyQueued} knocks`
           }
         />
+        {!native && (
+          <p className="text-xs text-neutral-400 leading-relaxed">
+            The knock endpoint isn't registered in the browser engine yet.
+            That's unbuilt, not a browser limit — a tab can serve inbound
+            connections (it already serves doc sync).
+          </p>
+        )}
         {status.rpcSelftest && (
           <div className="text-xs text-neutral-400 break-all">
             self-test:{' '}
@@ -457,14 +479,23 @@ function Field({ label, value }: { label: string; value: string }) {
   )
 }
 
-function AddrList({ label, addrs }: { label: string; addrs: string[] }) {
+function AddrList({
+  label,
+  addrs,
+  empty,
+}: {
+  label: string
+  addrs: string[]
+  // Why this list is empty, when emptiness is expected rather than a gap.
+  empty?: string
+}) {
   return (
     <div className="space-y-1">
       <div className="text-xs font-medium text-neutral-500">
         {label} ({addrs.length})
       </div>
       {addrs.length === 0 ? (
-        <div className="text-xs text-neutral-400">—</div>
+        <div className="text-xs text-neutral-400">{empty ?? '—'}</div>
       ) : (
         <ul className="space-y-0.5">
           {addrs.map((a) => (

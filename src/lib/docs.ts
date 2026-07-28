@@ -16,12 +16,14 @@ import initWasm, {
   open as coreOpen,
   share as coreShare,
   start_sync as coreStartSync,
+  status as coreStatus,
   delete_record,
   get_record,
   list_all,
   list_records,
   put_record,
 } from '../../crates/pin-core/pkg/pin_core.js'
+import { useCuratorStore } from '../stores/curator'
 import { inTauri } from './openExternal'
 import {
   deleteRecordNative,
@@ -61,6 +63,14 @@ export async function openDocs(appKeyHex: string): Promise<string> {
     return coreOpen(appKeyHex)
   })()
   openState = { key: appKeyHex, promise }
+  // Record the open here rather than in a caller: openDocs is memoized, so this is
+  // the one place that runs exactly once per identity no matter which hook got
+  // there first. Feeds the web instance's uptime + namespace on the Curate page.
+  promise.then(
+    (namespace) =>
+      useCuratorStore.getState().set({ namespace, openedAt: Date.now() }),
+    (e: unknown) => useCuratorStore.getState().set({ lastError: String(e) }),
+  )
   // On failure, drop the cache so the next call can re-attempt the open.
   promise.catch(() => {
     if (openState?.promise === promise) openState = null
@@ -142,6 +152,30 @@ export async function startSync(
   if (inTauri()) return startSyncNative(ticket)
   await ensureReady()
   await coreStartSync(ticket, onEvent)
+}
+
+/** This instance's iroh network status (node id, relay/direct addresses), from the
+ *  in-page wasm engine. Web-only by design: on desktop the doc engine IS the native
+ *  Curator's, so its network status arrives on the Curator's own IPC status instead
+ *  of here — see `curatorStatus`, which is the seam that unifies the two into one
+ *  shape. Null when the engine isn't open yet (or on desktop). */
+export async function docsStatus(): Promise<DocsNetworkStatus | null> {
+  if (inTauri()) return null
+  await ensureReady()
+  try {
+    return coreStatus() as DocsNetworkStatus
+  } catch {
+    // Engine not open yet — no status to report.
+    return null
+  }
+}
+
+export type DocsNetworkStatus = {
+  nodeId: string
+  online: boolean
+  relays: string[]
+  directAddrs: string[]
+  otherAddrs: string[]
 }
 
 /** Dev-only roundtrip through the active transport (wasm on web, native Curator on
