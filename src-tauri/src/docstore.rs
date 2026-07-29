@@ -19,8 +19,10 @@
 
 use std::collections::HashMap;
 use std::path::Path;
+use std::str::FromStr as _;
 use std::sync::Mutex;
 
+use futures_lite::StreamExt as _;
 use iroh::Endpoint;
 use iroh_blobs::store::fs::FsStore;
 use iroh_docs::{
@@ -28,16 +30,21 @@ use iroh_docs::{
         protocol::{AddrInfoOptions, ShareMode},
         Doc,
     },
+    engine::LiveEvent,
     protocol::Docs,
     store::Query,
-    Author, AuthorId, Capability, NamespaceSecret,
+    Author, AuthorId, Capability, DocTicket, NamespaceSecret,
 };
 use iroh_gossip::net::Gossip;
 // Shared with pin-core (the browser engine): the doc namespace/author `info`s +
 // hkdf32 + decode_app_key. Domain-separated from the did:dht identity
 // (`pin:did-dht:v1`), the atproto signing key (`pin:atproto-signing:v1`), and
 // settings (`pin:settings:v1`), all off the same AppKey root.
-use pin_derive::{decode_app_key, decode_hex32, hkdf32, record_key, AUTHOR_INFO, NS_INFO};
+use pin_derive::{
+    decode_app_key, decode_hex32, hkdf32, record_key, AUTHOR_INFO, EV_CONTENT_READY, EV_ERROR,
+    EV_INSERT_LOCAL, EV_INSERT_REMOTE, EV_NEIGHBOR_DOWN, EV_NEIGHBOR_UP, EV_PENDING_CONTENT_READY,
+    EV_SYNC_FINISHED, NS_INFO,
+};
 
 /// The Curator's marker entry, mirroring the atrium repo's marker record — written
 /// once, then expected to survive every reopen (the persistence self-check).
@@ -280,8 +287,69 @@ impl DocEngine {
         Ok(())
     }
 
+    /// Subscriber side: import a channel's read ticket and live-sync it, returning the
+    /// namespace id. `on_event(ns_id, kind, key)` fires per `LiveEvent` — the caller
+    /// forwards it to the frontend (a Tauri event), matching what pin-core hands its
+    /// JS callback. Kinds come from `pin_derive`'s `EV_*` so both engines speak one
+    /// vocabulary.
+    ///
+    /// Uses `import_and_subscribe`, which subscribes BEFORE starting sync, so the
+    /// first reconciliation's events can't be missed — that initial catch-up is
+    /// exactly the one worth seeing.
+    pub async fn import_channel<F>(&self, ticket: &str, on_event: F) -> Result<String, String>
+    where
+        F: Fn(&str, &str, &str) + Send + 'static,
+    {
+        let ticket = DocTicket::from_str(ticket).map_err(|e| format!("bad ticket: {e}"))?;
+        let (doc, events) = self
+            .docs
+            .import_and_subscribe(ticket)
+            .await
+            .map_err(|e| format!("import channel doc: {e}"))?;
+        let ns_id = doc.id().to_string();
+        self.channels.lock().unwrap().insert(ns_id.clone(), doc);
+
+        // The pump outlives this call and ends when the doc's stream closes (engine
+        // shutdown). Spawned on whatever runtime the caller is on — the Doc handle's
+        // ops are channel sends, so crossing runtimes is fine.
+        let ns_for_events = ns_id.clone();
+        tokio::spawn(async move {
+            let mut events = Box::pin(events);
+            while let Some(res) = events.next().await {
+                let (kind, key) = match &res {
+                    Ok(ev) => live_event_parts(ev),
+                    Err(e) => (EV_ERROR, e.to_string()),
+                };
+                on_event(&ns_for_events, kind, &key);
+            }
+        });
+        Ok(ns_id)
+    }
+
     /// The namespace ids of every channel doc currently open.
     pub fn channel_namespaces(&self) -> Vec<String> {
         self.channels.lock().unwrap().keys().cloned().collect()
+    }
+}
+
+/// Split a `LiveEvent` into its shared `kind` (`pin_derive`'s `EV_*`) and the entry key
+/// it concerns, empty when the event isn't about one entry. The mirror of pin-core's
+/// `live_event_parts` — the constants are shared so the two can't spell a kind
+/// differently, which would silently break live updates on one platform.
+fn live_event_parts(ev: &LiveEvent) -> (&'static str, String) {
+    match ev {
+        LiveEvent::InsertLocal { entry } => (
+            EV_INSERT_LOCAL,
+            String::from_utf8_lossy(entry.key()).to_string(),
+        ),
+        LiveEvent::InsertRemote { entry, .. } => (
+            EV_INSERT_REMOTE,
+            String::from_utf8_lossy(entry.key()).to_string(),
+        ),
+        LiveEvent::ContentReady { .. } => (EV_CONTENT_READY, String::new()),
+        LiveEvent::PendingContentReady => (EV_PENDING_CONTENT_READY, String::new()),
+        LiveEvent::NeighborUp(_) => (EV_NEIGHBOR_UP, String::new()),
+        LiveEvent::NeighborDown(_) => (EV_NEIGHBOR_DOWN, String::new()),
+        LiveEvent::SyncFinished(_) => (EV_SYNC_FINISHED, String::new()),
     }
 }

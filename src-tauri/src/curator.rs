@@ -33,7 +33,7 @@ use iroh_docs::DocTicket;
 // Shared with pin-core (the browser engine): both write into the SAME synced doc, so
 // the record-key spelling can't diverge — a divergence is a data bug, not untidiness.
 use pin_derive::{collection_prefix, record_key};
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 use crate::docstore::DocEngine;
 
@@ -469,6 +469,54 @@ pub async fn docs_delete_channel_record(
 ) -> Result<(), String> {
     current_engine(&state)?
         .delete_channel_record(&ns_id, &collection, &rkey)
+        .await
+}
+
+/// The Tauri event a channel doc's `LiveEvent`s are forwarded on. The desktop
+/// counterpart of the JS callback pin-core invokes in the browser — IPC can't take a
+/// callback, so the frontend listens for this instead. Same three fields either way,
+/// so one handler serves both transports.
+pub const CHANNEL_DOC_EVENT: &str = "pin:channel-doc";
+
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct ChannelDocEvent {
+    ns_id: String,
+    /// One of `pin_derive`'s `EV_*` kinds — the shared vocabulary, so the frontend's
+    /// switch behaves identically whichever engine produced the event.
+    kind: String,
+    /// The entry key the event concerns, empty when it isn't about one entry.
+    key: String,
+}
+
+/// Subscriber side: import a channel's read ticket into the Curator's engine and
+/// live-sync it. `LiveEvent`s are forwarded to the frontend as `CHANNEL_DOC_EVENT`.
+///
+/// Unlike `curator_start_sync` (which deliberately doesn't surface events, since
+/// reconciling the identity doc needs no subscriber), a channel doc's whole point is
+/// that the frontend reacts to a remote write — so the events have to get out. Doing
+/// this by polling on desktop instead would leave web on push and desktop on poll.
+#[tauri::command]
+pub async fn docs_import_channel(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, CuratorState>,
+    ticket: String,
+) -> Result<String, String> {
+    let engine = current_engine(&state)?;
+    engine
+        .import_channel(&ticket, move |ns_id, kind, key| {
+            // A failed emit (no window yet, window torn down) is not worth killing the
+            // pump for — the next event tries again, and the frontend re-reads on its
+            // own cadence regardless.
+            let _ = app.emit(
+                CHANNEL_DOC_EVENT,
+                ChannelDocEvent {
+                    ns_id: ns_id.to_string(),
+                    kind: kind.to_string(),
+                    key: key.to_string(),
+                },
+            );
+        })
         .await
 }
 

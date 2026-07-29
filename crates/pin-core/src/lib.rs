@@ -35,7 +35,9 @@ use iroh_gossip::{net::Gossip, ALPN as GOSSIP_ALPN};
 // desktop signed in with the same Sia recovery phrase land on the same namespace +
 // author (the one-root-secret move).
 use pin_derive::{
-    collection_prefix, decode_app_key, decode_hex32, hkdf32, record_key, AUTHOR_INFO, NS_INFO,
+    collection_prefix, decode_app_key, decode_hex32, hkdf32, record_key, AUTHOR_INFO,
+    EV_CONTENT_READY, EV_ERROR, EV_INSERT_LOCAL, EV_INSERT_REMOTE, EV_NEIGHBOR_DOWN,
+    EV_NEIGHBOR_UP, EV_PENDING_CONTENT_READY, EV_SYNC_FINISHED, NS_INFO,
 };
 // The /hey inbox knock, the same crate the native Curator serves — one protocol, so
 // a peer knocking gets the same answer from a tab as from a desktop.
@@ -384,8 +386,9 @@ pub async fn share_channel_doc(ns_id: String) -> Result<String, JsValue> {
 }
 
 /// Subscriber side: import a channel's read ticket and live-sync it. Returns the
-/// namespace id. `on_event(nsID, label)` fires per `LiveEvent`, so the app can react
-/// to an `insert-remote` by re-reading the record and filling the feed in.
+/// namespace id. `on_event(nsID, kind, key)` fires per `LiveEvent` — structured
+/// rather than one string so the frontend never parses a label, and the desktop's
+/// Tauri-event payload carries the same three fields.
 ///
 /// Uses `import_and_subscribe`, which subscribes BEFORE starting sync — so the first
 /// reconciliation's events can't be missed (the initial catch-up is exactly the one
@@ -410,15 +413,16 @@ pub async fn import_channel_doc(
     wasm_bindgen_futures::spawn_local(async move {
         let mut events = Box::pin(events);
         while let Some(res) = events.next().await {
-            let label = match res {
-                Ok(ev) => live_event_label(&ev),
-                Err(e) => format!("error: {e}"),
+            let (kind, key) = match &res {
+                Ok(ev) => live_event_parts(ev),
+                Err(e) => (EV_ERROR, e.to_string()),
             };
             // Ignore a JS callback throw; keep pumping.
-            let _ = on_event.call2(
+            let _ = on_event.call3(
                 &JsValue::NULL,
                 &JsValue::from_str(&ns_for_events),
-                &JsValue::from_str(&label),
+                &JsValue::from_str(kind),
+                &JsValue::from_str(&key),
             );
         }
     });
@@ -501,18 +505,35 @@ pub fn channel_doc_namespaces() -> Result<JsValue, JsValue> {
     Ok(arr.into())
 }
 
-fn live_event_label(ev: &LiveEvent) -> String {
+/// Split a `LiveEvent` into its shared `kind` (see `pin_derive`'s `EV_*`) and the
+/// entry key it concerns, empty when the event isn't about one entry. The native
+/// Curator maps its own `LiveEvent` to the same pair, so the frontend gets one
+/// vocabulary from both engines.
+fn live_event_parts(ev: &LiveEvent) -> (&'static str, String) {
     match ev {
-        LiveEvent::InsertLocal { entry } => {
-            format!("insert-local {}", String::from_utf8_lossy(entry.key()))
-        }
-        LiveEvent::InsertRemote { entry, .. } => {
-            format!("insert-remote {}", String::from_utf8_lossy(entry.key()))
-        }
-        LiveEvent::ContentReady { .. } => "content-ready".to_string(),
-        LiveEvent::PendingContentReady => "pending-content-ready".to_string(),
-        LiveEvent::NeighborUp(_) => "neighbor-up".to_string(),
-        LiveEvent::NeighborDown(_) => "neighbor-down".to_string(),
-        LiveEvent::SyncFinished(_) => "sync-finished".to_string(),
+        LiveEvent::InsertLocal { entry } => (
+            EV_INSERT_LOCAL,
+            String::from_utf8_lossy(entry.key()).to_string(),
+        ),
+        LiveEvent::InsertRemote { entry, .. } => (
+            EV_INSERT_REMOTE,
+            String::from_utf8_lossy(entry.key()).to_string(),
+        ),
+        LiveEvent::ContentReady { .. } => (EV_CONTENT_READY, String::new()),
+        LiveEvent::PendingContentReady => (EV_PENDING_CONTENT_READY, String::new()),
+        LiveEvent::NeighborUp(_) => (EV_NEIGHBOR_UP, String::new()),
+        LiveEvent::NeighborDown(_) => (EV_NEIGHBOR_DOWN, String::new()),
+        LiveEvent::SyncFinished(_) => (EV_SYNC_FINISHED, String::new()),
+    }
+}
+
+/// The one-line form, for `start_sync`'s status callback (the sync panel displays it).
+/// Built from the same parts so there's only ever one spelling.
+fn live_event_label(ev: &LiveEvent) -> String {
+    let (kind, key) = live_event_parts(ev);
+    if key.is_empty() {
+        kind.to_string()
+    } else {
+        format!("{kind} {key}")
     }
 }

@@ -11,7 +11,12 @@
 //! `record_key` / `collection_prefix` are here for the same reason, one step further
 //! in: because the two engines sync the SAME doc, a divergence in how they spell a
 //! record's key isn't untidy — it's a data bug (each side writes records the other
-//! can't find). Anything whose divergence would corrupt shared data belongs here.
+//! can't find). The live-event kinds at the bottom are the same story one layer out:
+//! the frontend receives them from either engine and switches on them, so a
+//! divergence silently breaks live updates on one platform.
+//!
+//! The rule: anything whose divergence would corrupt shared data — or silently break
+//! behaviour across the seam — belongs here.
 
 use hkdf::Hkdf;
 use sha2::Sha256;
@@ -62,6 +67,36 @@ pub fn record_key(collection: &str, rkey: &str) -> Vec<u8> {
 pub fn collection_prefix(collection: &str) -> String {
     format!("{collection}/")
 }
+
+// --- Live-event kinds --------------------------------------------------------
+//
+// The `kind` an engine reports for an iroh-docs `LiveEvent`. Here for the same reason
+// as `record_key`: the frontend switches on these to decide whether to re-read a
+// record, and it receives them from EITHER engine (a wasm callback in the browser, a
+// Tauri event on desktop). If the two spelled a kind differently, live updates would
+// silently stop working on one platform — a behaviour bug across the seam, and a
+// quiet one. Each engine still matches its own `LiveEvent`; only the spelling is
+// shared, so this crate needs no iroh dependency.
+
+/// A local write landed (this instance wrote it).
+pub const EV_INSERT_LOCAL: &str = "insert-local";
+/// A remote write landed — a peer wrote an entry. The signal to re-read.
+pub const EV_INSERT_REMOTE: &str = "insert-remote";
+/// A synced entry's content finished downloading. Distinct from `insert-remote`
+/// because iroh-blobs content LAGS the entry metadata: a key can be present while
+/// its value isn't readable yet, so a reader that only reacts to `insert-remote` can
+/// see a "not found" for content that arrives moments later.
+pub const EV_CONTENT_READY: &str = "content-ready";
+/// All pending content has been downloaded.
+pub const EV_PENDING_CONTENT_READY: &str = "pending-content-ready";
+/// A sync peer joined the gossip swarm for this doc.
+pub const EV_NEIGHBOR_UP: &str = "neighbor-up";
+/// A sync peer left.
+pub const EV_NEIGHBOR_DOWN: &str = "neighbor-down";
+/// A reconciliation round finished.
+pub const EV_SYNC_FINISHED: &str = "sync-finished";
+/// The event stream itself errored.
+pub const EV_ERROR: &str = "error";
 
 #[cfg(test)]
 mod tests {

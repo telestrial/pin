@@ -70,8 +70,9 @@ export function get_record(collection: string, rkey: string): Promise<Uint8Array
 
 /**
  * Subscriber side: import a channel's read ticket and live-sync it. Returns the
- * namespace id. `on_event(nsID, label)` fires per `LiveEvent`, so the app can react
- * to an `insert-remote` by re-reading the record and filling the feed in.
+ * namespace id. `on_event(nsID, kind, key)` fires per `LiveEvent` — structured
+ * rather than one string so the frontend never parses a label, and the desktop's
+ * Tauri-event payload carries the same three fields.
  *
  * Uses `import_and_subscribe`, which subscribes BEFORE starting sync — so the first
  * reconciliation's events can't be missed (the initial catch-up is exactly the one

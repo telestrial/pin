@@ -29,6 +29,7 @@ pub fn run() {
             curator::docs_put_channel_record,
             curator::docs_get_channel_record,
             curator::docs_delete_channel_record,
+            curator::docs_import_channel,
             curator::docs_channel_namespaces,
             curator::curator_start_sync,
             sia::sia_connect,
