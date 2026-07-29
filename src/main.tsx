@@ -35,6 +35,10 @@ if (import.meta.env.DEV || inTauri()) {
     __pinIdentityDocRoundTrip?: () => Promise<string>
     __pinCuratorDocsRoundTrip?: () => Promise<string>
     __pinCuratorDocsList?: () => Promise<string>
+    __pinChannelDocs?: {
+      author: (hexOverride?: string) => Promise<string>
+      subscriber: (ticket: string, hexOverride?: string) => Promise<string>
+    }
     __pinSync?: {
       open: (hex: string) => Promise<string>
       openSession: () => Promise<string>
@@ -46,6 +50,26 @@ if (import.meta.env.DEV || inTauri()) {
       get: (collection: string, rkey: string) => Promise<string | null>
       events: () => string[]
     }
+  }
+  // Channel docs (the ladder's top rung), driven through whichever engine is active:
+  // the wasm engine on web, the native Curator over IPC on desktop. `author` writes a
+  // channel record and prints a read ticket; run `subscriber(ticket)` on a SECOND
+  // instance (another tab, or desktop↔tab) to prove import + live-sync + read-only.
+  // `hexOverride` lets the sync-tier spec drive these with a fixed key and no
+  // sign-in — openDocs is pure HKDF + an iroh bind, never touching Sia.
+  g.__pinChannelDocs = {
+    author: async (hexOverride?: string) => {
+      const hex = hexOverride ?? (await session()).hex
+      if (!hex) return 'not signed in'
+      const { channelDocsSelfTest } = await import('./lib/docs')
+      return channelDocsSelfTest(hex)
+    },
+    subscriber: async (ticket: string, hexOverride?: string) => {
+      const hex = hexOverride ?? (await session()).hex
+      if (!hex) return 'not signed in'
+      const { channelDocsImportTest } = await import('./lib/docs')
+      return channelDocsImportTest(hex, ticket)
+    },
   }
   g.__pinMirrorWrite = async (text: string) => {
     const { client, hex } = await session()

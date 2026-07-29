@@ -13,25 +13,39 @@
 // enters the web bundle; and the 7 MB wasm only instantiates when the web path runs.
 
 import initWasm, {
+  channel_doc_namespaces,
   open as coreOpen,
   share as coreShare,
   start_sync as coreStartSync,
   status as coreStatus,
+  delete_channel_record,
   delete_record,
+  get_channel_record,
   get_record,
+  import_channel_doc,
   list_all,
   list_records,
+  open_channel_doc,
+  put_channel_record,
   put_record,
+  share_channel_doc,
 } from '../../crates/pin-core/pkg/pin_core.js'
 import { useCuratorStore } from '../stores/curator'
 import { inTauri } from './openExternal'
 import {
+  channelNamespacesNative,
+  deleteChannelRecordNative,
   deleteRecordNative,
+  getChannelRecordNative,
   getRecordNative,
+  importChannelNative,
   listAllNative,
   listRecordsNative,
+  openChannelNative,
   openDocsNative,
+  putChannelRecordNative,
   putRecordNative,
+  shareChannelNative,
   shareDocNative,
   startSyncNative,
 } from './tauriDocs'
@@ -182,6 +196,125 @@ export type DocsNetworkStatus = {
   heyQueued: number
 }
 
+// --- Channel docs (the ladder's top rung) ------------------------------------
+//
+// Reading a channel today walks the ladder bottom-up: cached manifest, else resolve
+// its pkarr locator and fetch from Sia. A channel doc is the rung above — the
+// subscriber holds a live replica and is PUSHED the author's writes instead of
+// polling for them.
+//
+// The author opens a write replica from a seed only they can derive and hands out a
+// READ-mode ticket (published to a K-derived pkarr record). Deriving the namespace
+// from K would be simpler, but a namespace secret IS the write capability, so every
+// subscriber could then write to the author's doc. The ticket also carries the
+// author's node id + relay address, so it answers "where do I dial" in one field.
+//
+// One doc per channel, rather than entries in the identity doc, because iroh-docs'
+// read capability is whole-namespace: a subscriber given the identity doc would see
+// every other channel's keys (leaking obscure channels' existence) and the settings
+// ciphertext.
+//
+// All of these need an open engine ({@link openDocs}) first — on desktop that's what
+// waits for the Curator.
+
+/** The event kinds an engine reports for a channel doc. Mirrors `pin_derive`'s `EV_*`,
+ *  the one vocabulary both engines emit (a wasm callback on web, a Tauri event on
+ *  desktop). Prefer {@link isRemoteChange} over comparing these by hand. */
+export type ChannelDocEventKind =
+  | 'insert-local'
+  | 'insert-remote'
+  | 'content-ready'
+  | 'pending-content-ready'
+  | 'neighbor-up'
+  | 'neighbor-down'
+  | 'sync-finished'
+  | 'error'
+
+/** Whether an event means "a peer's write may now be readable" — i.e. re-read.
+ *
+ *  Both kinds count, and that matters: iroh-blobs content LAGS the entry metadata, so
+ *  a reader that reacts only to `insert-remote` will intermittently find the value
+ *  isn't downloaded yet, while `content-ready` doesn't say which key arrived. Treating
+ *  either as "go re-read" is what makes the reader robust to that ordering. */
+export function isRemoteChange(kind: string): boolean {
+  return kind === 'insert-remote' || kind === 'content-ready'
+}
+
+/** Author side: open (or reopen) the write replica of a channel's doc from its 32-byte
+ *  namespace seed (hex). Returns the namespace id. Idempotent per channel. */
+export async function openChannelDoc(nsSeedHex: string): Promise<string> {
+  if (inTauri()) return openChannelNative(nsSeedHex)
+  await ensureReady()
+  return open_channel_doc(nsSeedHex)
+}
+
+/** Author side: mint a READ-mode ticket for a channel doc — what a subscriber imports,
+ *  and what gets published to the channel's pkarr record.
+ *
+ *  Mint this while the instance is ONLINE, and refresh it as addresses change: the
+ *  ticket freezes whatever addresses are known at the moment it's made, and one with
+ *  no relay URL is undialable from a browser (which has no discovery). */
+export async function shareChannelDoc(nsId: string): Promise<string> {
+  if (inTauri()) return shareChannelNative(nsId)
+  await ensureReady()
+  return share_channel_doc(nsId)
+}
+
+/** Subscriber side: import a channel's read ticket and live-sync it, returning the
+ *  namespace id. `onEvent` fires per sync event with the same (nsId, kind, key) shape
+ *  on both platforms — a wasm callback on web, a fanned-out Tauri event on desktop. */
+export async function importChannelDoc(
+  ticket: string,
+  onEvent: (nsId: string, kind: string, key: string) => void,
+): Promise<string> {
+  if (inTauri()) return importChannelNative(ticket, onEvent)
+  await ensureReady()
+  return import_channel_doc(ticket, onEvent)
+}
+
+/** Write a record into a channel doc. Author side only — a read replica rejects it. */
+export async function putChannelRecord(
+  nsId: string,
+  collection: string,
+  rkey: string,
+  value: Uint8Array,
+): Promise<void> {
+  if (inTauri()) return putChannelRecordNative(nsId, collection, rkey, value)
+  await ensureReady()
+  await put_channel_record(nsId, collection, rkey, value)
+}
+
+/** Read a record from a channel doc, or undefined if absent (or its content hasn't
+ *  finished downloading yet — see {@link isRemoteChange}). */
+export async function getChannelRecord(
+  nsId: string,
+  collection: string,
+  rkey: string,
+): Promise<Uint8Array | undefined> {
+  if (inTauri()) return getChannelRecordNative(nsId, collection, rkey)
+  await ensureReady()
+  return (await get_channel_record(nsId, collection, rkey)) ?? undefined
+}
+
+/** Delete a record from a channel doc (author side). */
+export async function deleteChannelRecord(
+  nsId: string,
+  collection: string,
+  rkey: string,
+): Promise<void> {
+  if (inTauri()) return deleteChannelRecordNative(nsId, collection, rkey)
+  await ensureReady()
+  await delete_channel_record(nsId, collection, rkey)
+}
+
+/** The namespace ids of every channel doc this instance currently holds — so a caller
+ *  can skip re-opening or re-importing one it already has. */
+export async function channelDocNamespaces(): Promise<string[]> {
+  if (inTauri()) return channelNamespacesNative()
+  await ensureReady()
+  return (await channel_doc_namespaces()) as string[]
+}
+
 /** Dev-only roundtrip through the active transport (wasm on web, native Curator on
  *  desktop): open + put + get + list + delete. Exposed on window in main.tsx (dev). */
 export async function docsSelfTest(appKeyHex: string): Promise<string> {
@@ -199,5 +332,83 @@ export async function docsSelfTest(appKeyHex: string): Promise<string> {
     `get a     = ${a ? dec.decode(a) : 'undefined'}`,
     `list probe = [${list.join(', ')}]`,
     `after delete a = ${aAfter ? dec.decode(aAfter) : 'undefined (ok)'}`,
+  ].join('\n')
+}
+
+/** A fixed seed for the dev channel-doc round-trip — a real channel's seed comes from
+ *  the AppKey + channelID, but the point here is exercising the surface, not deriving. */
+const PROBE_CHANNEL_SEED = 'c0de'.repeat(16)
+
+/** Dev-only: drive the AUTHOR half of the channel-doc surface through whichever engine
+ *  is active (wasm on web, native Curator on desktop) and report. Ends by printing the
+ *  read ticket, which {@link channelDocsImportTest} consumes on a second instance to
+ *  prove the subscriber half. Exposed on window in main.tsx. */
+export async function channelDocsSelfTest(appKeyHex: string): Promise<string> {
+  const enc = new TextEncoder()
+  const dec = new TextDecoder()
+  await openDocs(appKeyHex)
+  const nsId = await openChannelDoc(PROBE_CHANNEL_SEED)
+  // Reopening must be idempotent — two hooks (or a re-render) shouldn't rebuild it.
+  const nsAgain = await openChannelDoc(PROBE_CHANNEL_SEED)
+  await putChannelRecord(nsId, 'manifest', 'self', enc.encode('ciphertext-v1'))
+  const got = await getChannelRecord(nsId, 'manifest', 'self')
+  const namespaces = await channelDocNamespaces()
+  const ticket = await shareChannelDoc(nsId)
+  await deleteChannelRecord(nsId, 'manifest', 'self')
+  const after = await getChannelRecord(nsId, 'manifest', 'self')
+  // Leave a record behind so an importing instance has something to sync.
+  await putChannelRecord(nsId, 'manifest', 'self', enc.encode('ciphertext-v2'))
+  return [
+    `channel ns    = ${nsId}`,
+    `reopen stable = ${nsAgain === nsId ? 'yes' : `NO (${nsAgain})`}`,
+    `get manifest  = ${got ? dec.decode(got) : 'undefined'}`,
+    `namespaces    = [${namespaces.join(', ')}]`,
+    `after delete  = ${after ? dec.decode(after) : 'undefined (ok)'}`,
+    `left behind   = ciphertext-v2`,
+    '',
+    'read ticket (import this on the other instance):',
+    ticket,
+  ].join('\n')
+}
+
+/** Dev-only: the SUBSCRIBER half. Import a read ticket produced by
+ *  {@link channelDocsSelfTest} on another instance, wait for the record to sync, and
+ *  confirm the replica is genuinely read-only.
+ *
+ *  Polls rather than trusting the first event, because content lags metadata — the
+ *  same reason {@link isRemoteChange} treats content-ready as a re-read signal. */
+export async function channelDocsImportTest(
+  appKeyHex: string,
+  ticket: string,
+): Promise<string> {
+  const enc = new TextEncoder()
+  const dec = new TextDecoder()
+  await openDocs(appKeyHex)
+  const events: string[] = []
+  const nsId = await importChannelDoc(ticket, (_ns, kind, key) => {
+    events.push(key ? `${kind} ${key}` : kind)
+  })
+
+  let value: Uint8Array | undefined
+  for (let i = 0; i < 40; i++) {
+    value = await getChannelRecord(nsId, 'manifest', 'self')
+    if (value) break
+    await new Promise((r) => setTimeout(r, 500))
+  }
+
+  // A read replica must reject a write — the property the whole capability choice
+  // rests on. Reaching this via the seam proves it end to end, not just in Rust.
+  let writeRejected = 'NOT REJECTED (!!)'
+  try {
+    await putChannelRecord(nsId, 'manifest', 'self', enc.encode('forged'))
+  } catch (e) {
+    writeRejected = `rejected: ${String(e)}`
+  }
+
+  return [
+    `imported ns  = ${nsId}`,
+    `synced value = ${value ? dec.decode(value) : 'TIMED OUT (nothing after 20s)'}`,
+    `write        = ${writeRejected}`,
+    `events       = [${events.join(' | ')}]`,
   ].join('\n')
 }

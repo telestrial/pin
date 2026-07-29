@@ -96,6 +96,104 @@ export async function startSyncNative(ticket: string): Promise<void> {
   return call<void>('curator_start_sync', { ticket })
 }
 
+// --- Channel docs (the ladder's top rung) ------------------------------------
+//
+// One replica per channel, held by the native Curator. The author opens a write
+// replica from a seed only they can derive and hands out a read-mode ticket; a
+// subscriber imports that ticket and is pushed updates.
+//
+// Live events can't ride a callback over IPC, so the Curator emits them as a Tauri
+// event and this module fans them out per namespace — the frontend sees the same
+// (nsId, kind, key) shape the wasm engine passes its callback.
+
+/** The Tauri event the Curator forwards channel-doc `LiveEvent`s on. Must match
+ *  `CHANNEL_DOC_EVENT` in src-tauri/src/curator.rs. */
+const CHANNEL_DOC_EVENT = 'pin:channel-doc'
+
+type ChannelDocEventPayload = { nsId: string; kind: string; key: string }
+
+/** Per-namespace handlers, so one Tauri listener serves every imported channel. */
+const channelHandlers = new Map<string, (kind: string, key: string) => void>()
+let channelListener: Promise<void> | null = null
+
+/** Attach the single Tauri listener, once. Started BEFORE the first import so the
+ *  listener is live by the time the Curator can emit. */
+function ensureChannelListener(): Promise<void> {
+  if (!channelListener) {
+    channelListener = (async () => {
+      const { listen } = await import('@tauri-apps/api/event')
+      await listen<ChannelDocEventPayload>(CHANNEL_DOC_EVENT, (e) => {
+        const { nsId, kind, key } = e.payload
+        channelHandlers.get(nsId)?.(kind, key)
+      })
+    })()
+  }
+  return channelListener
+}
+
+export function openChannelNative(nsSeedHex: string): Promise<string> {
+  return call<string>('docs_open_channel', { nsSeedHex })
+}
+
+export function shareChannelNative(nsId: string): Promise<string> {
+  return call<string>('docs_share_channel', { nsId })
+}
+
+/** Import a channel's read ticket into the Curator's engine and live-sync it.
+ *
+ *  Events arriving between the import resolving and the handler being registered are
+ *  dropped — a microtask-scale window, and harmless: a caller reads the record right
+ *  after importing, so the initial state comes from that read rather than from an
+ *  event. `import_and_subscribe` guarantees the Rust side misses nothing. */
+export async function importChannelNative(
+  ticket: string,
+  onEvent: (nsId: string, kind: string, key: string) => void,
+): Promise<string> {
+  await ensureChannelListener()
+  const nsId = await call<string>('docs_import_channel', { ticket })
+  channelHandlers.set(nsId, (kind, key) => onEvent(nsId, kind, key))
+  return nsId
+}
+
+export function putChannelRecordNative(
+  nsId: string,
+  collection: string,
+  rkey: string,
+  value: Uint8Array,
+): Promise<void> {
+  return call<void>('docs_put_channel_record', {
+    nsId,
+    collection,
+    rkey,
+    value: Array.from(value),
+  })
+}
+
+export async function getChannelRecordNative(
+  nsId: string,
+  collection: string,
+  rkey: string,
+): Promise<Uint8Array | undefined> {
+  const v = await call<number[] | null>('docs_get_channel_record', {
+    nsId,
+    collection,
+    rkey,
+  })
+  return v ? new Uint8Array(v) : undefined
+}
+
+export function deleteChannelRecordNative(
+  nsId: string,
+  collection: string,
+  rkey: string,
+): Promise<void> {
+  return call<void>('docs_delete_channel_record', { nsId, collection, rkey })
+}
+
+export function channelNamespacesNative(): Promise<string[]> {
+  return call<string[]>('docs_channel_namespaces')
+}
+
 /** Slice A proof: drive the native Curator doc through put / get / list / delete over
  *  IPC and report. Requires the Curator to be running (enable curation first). */
 export async function curatorDocsSelfTest(): Promise<string> {
