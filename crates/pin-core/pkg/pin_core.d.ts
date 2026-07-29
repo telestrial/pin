@@ -37,14 +37,47 @@ export class IntoUnderlyingSource {
 }
 
 /**
+ * The namespace ids of every channel doc currently open. Lets the app avoid
+ * re-importing one it already holds, and gives the Curate page something to show.
+ */
+export function channel_doc_namespaces(): any;
+
+/**
+ * Delete a record from a channel doc (author side).
+ */
+export function delete_channel_record(ns_id: string, collection: string, rkey: string): Promise<void>;
+
+/**
  * Delete a record (tombstone).
  */
 export function delete_record(collection: string, rkey: string): Promise<void>;
 
 /**
+ * Read a record from a channel doc, or `undefined` if absent.
+ *
+ * Author-AGNOSTIC (`single_latest_per_key`, no author filter) — deliberately. On the
+ * subscriber side the entry was written by the channel owner, whose `AuthorId` we
+ * don't hold and would otherwise have to publish. Safe because the capability is
+ * read-only for everyone but the owner: any entry at this key IS theirs. This is the
+ * simplification the read-ticket choice buys.
+ */
+export function get_channel_record(ns_id: string, collection: string, rkey: string): Promise<Uint8Array | undefined>;
+
+/**
  * Read a record's bytes, or `undefined` if absent.
  */
 export function get_record(collection: string, rkey: string): Promise<Uint8Array | undefined>;
+
+/**
+ * Subscriber side: import a channel's read ticket and live-sync it. Returns the
+ * namespace id. `on_event(nsID, label)` fires per `LiveEvent`, so the app can react
+ * to an `insert-remote` by re-reading the record and filling the feed in.
+ *
+ * Uses `import_and_subscribe`, which subscribes BEFORE starting sync — so the first
+ * reconciliation's events can't be missed (the initial catch-up is exactly the one
+ * we most want to see).
+ */
+export function import_channel_doc(ticket: string, on_event: Function): Promise<string>;
 
 /**
  * List every record's full key (`collection/rkey`) across all collections.
@@ -65,6 +98,23 @@ export function list_records(collection: string): Promise<any>;
 export function open(app_key_hex: string): Promise<string>;
 
 /**
+ * Author side: open (or reopen) the write replica of a channel's doc from its
+ * 32-byte namespace seed. Returns the namespace id. Idempotent — opening the same
+ * channel twice reuses the replica rather than rebuilding it.
+ *
+ * The seed is derived by the app (from the AppKey + channelID) and handed in as
+ * hex, rather than derived here from an `info` in `pin-derive`: since one
+ * implementation computes it for both engines, there are no two copies to drift.
+ */
+export function open_channel_doc(ns_seed_hex: string): Promise<string>;
+
+/**
+ * Write a record into a channel doc (author side only — a read replica rejects it
+ * with "Attempted to insert to read only replica").
+ */
+export function put_channel_record(ns_id: string, collection: string, rkey: string, value: Uint8Array): Promise<void>;
+
+/**
  * Write a record. `value` is opaque bytes (the app's encrypted blob).
  */
 export function put_record(collection: string, rkey: string, value: Uint8Array): Promise<void>;
@@ -75,6 +125,13 @@ export function put_record(collection: string, rkey: string, value: Uint8Array):
  * as a sync counterpart during dev.
  */
 export function share(): Promise<string>;
+
+/**
+ * Author side: mint a READ-mode ticket for a channel doc — the capability a
+ * subscriber imports. Read-mode, so holding it can never write to the doc.
+ * Call this while online; the ticket freezes the addresses known at this moment.
+ */
+export function share_channel_doc(ns_id: string): Promise<string>;
 
 export function start(): void;
 
@@ -114,13 +171,20 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
+    readonly channel_doc_namespaces: () => [number, number, number];
+    readonly delete_channel_record: (a: number, b: number, c: number, d: number, e: number, f: number) => any;
     readonly delete_record: (a: number, b: number, c: number, d: number) => any;
+    readonly get_channel_record: (a: number, b: number, c: number, d: number, e: number, f: number) => any;
     readonly get_record: (a: number, b: number, c: number, d: number) => any;
+    readonly import_channel_doc: (a: number, b: number, c: any) => any;
     readonly list_all: () => any;
     readonly list_records: (a: number, b: number) => any;
     readonly open: (a: number, b: number) => any;
+    readonly open_channel_doc: (a: number, b: number) => any;
+    readonly put_channel_record: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => any;
     readonly put_record: (a: number, b: number, c: number, d: number, e: number, f: number) => any;
     readonly share: () => any;
+    readonly share_channel_doc: (a: number, b: number) => any;
     readonly start_sync: (a: number, b: number, c: any) => any;
     readonly status: () => [number, number, number];
     readonly start: () => void;

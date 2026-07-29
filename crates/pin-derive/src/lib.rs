@@ -31,9 +31,10 @@ pub fn hkdf32(ikm: &[u8], info: &[u8]) -> [u8; 32] {
     okm
 }
 
-/// Decode the 32-byte Sia AppKey from its 64-char hex form (the HKDF IKM).
-/// `None` if the hex is the wrong length or contains a non-hex char.
-pub fn decode_app_key(hex: &str) -> Option<[u8; 32]> {
+/// Decode 32 bytes from a 64-char hex string. `None` if the hex is the wrong length
+/// or contains a non-hex char. Every secret that crosses into an engine does so as
+/// 32 bytes of hex, so this is the one decoder for all of them.
+pub fn decode_hex32(hex: &str) -> Option<[u8; 32]> {
     if hex.len() != 64 {
         return None;
     }
@@ -42,6 +43,12 @@ pub fn decode_app_key(hex: &str) -> Option<[u8; 32]> {
         *b = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).ok()?;
     }
     Some(out)
+}
+
+/// Decode the 32-byte Sia AppKey from its 64-char hex form (the HKDF IKM). Named
+/// separately from [`decode_hex32`] so the call site says which secret it is.
+pub fn decode_app_key(hex: &str) -> Option<[u8; 32]> {
+    decode_hex32(hex)
 }
 
 /// A record's key in the doc: `collection/rkey`, as bytes. The one spelling both

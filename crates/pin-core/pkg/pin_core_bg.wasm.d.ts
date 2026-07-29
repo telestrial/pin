@@ -1,13 +1,20 @@
 /* tslint:disable */
 /* eslint-disable */
 export const memory: WebAssembly.Memory;
+export const channel_doc_namespaces: () => [number, number, number];
+export const delete_channel_record: (a: number, b: number, c: number, d: number, e: number, f: number) => any;
 export const delete_record: (a: number, b: number, c: number, d: number) => any;
+export const get_channel_record: (a: number, b: number, c: number, d: number, e: number, f: number) => any;
 export const get_record: (a: number, b: number, c: number, d: number) => any;
+export const import_channel_doc: (a: number, b: number, c: any) => any;
 export const list_all: () => any;
 export const list_records: (a: number, b: number) => any;
 export const open: (a: number, b: number) => any;
+export const open_channel_doc: (a: number, b: number) => any;
+export const put_channel_record: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => any;
 export const put_record: (a: number, b: number, c: number, d: number, e: number, f: number) => any;
 export const share: () => any;
+export const share_channel_doc: (a: number, b: number) => any;
 export const start_sync: (a: number, b: number, c: any) => any;
 export const status: () => [number, number, number];
 export const start: () => void;

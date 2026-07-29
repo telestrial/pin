@@ -13,6 +13,7 @@
 #![allow(dead_code)]
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::str::FromStr;
 
@@ -33,7 +34,9 @@ use iroh_gossip::{net::Gossip, ALPN as GOSSIP_ALPN};
 // Shared with the native Curator: same domain-separated derivation so a browser and a
 // desktop signed in with the same Sia recovery phrase land on the same namespace +
 // author (the one-root-secret move).
-use pin_derive::{collection_prefix, decode_app_key, hkdf32, record_key, AUTHOR_INFO, NS_INFO};
+use pin_derive::{
+    collection_prefix, decode_app_key, decode_hex32, hkdf32, record_key, AUTHOR_INFO, NS_INFO,
+};
 // The /hey inbox knock, the same crate the native Curator serves — one protocol, so
 // a peer knocking gets the same answer from a tab as from a desktop.
 use pin_rpc::{HeyHandler, HeyInbox, ALPN as HEY_ALPN};
@@ -44,6 +47,13 @@ use wasm_bindgen::prelude::*;
 // an await.
 struct Engine {
     doc: Doc,
+    /// Channel docs, keyed by namespace id — one replica per channel this instance
+    /// serves (as author) or follows (as subscriber). Separate docs rather than
+    /// entries in `doc` because iroh-docs' read capability is whole-namespace: a
+    /// subscriber given access to the identity doc would see every other channel's
+    /// keys (leaking obscure channels' existence) and the settings ciphertext.
+    /// One doc per channel is the only grain that matches Pin's per-channel `K`.
+    channels: RefCell<HashMap<String, Doc>>,
     blobs: MemStore,
     author_id: AuthorId,
     endpoint: Endpoint,
@@ -51,7 +61,7 @@ struct Engine {
     /// `status()` can report the depth — the same field the native Curator reports.
     hey_inbox: HeyInbox,
     _gossip: Gossip,
-    _docs: Docs,
+    docs: Docs,
     _router: Router,
 }
 
@@ -115,12 +125,13 @@ pub async fn open(app_key_hex: String) -> Result<String, JsValue> {
 
     let eng = Rc::new(Engine {
         doc,
+        channels: RefCell::new(HashMap::new()),
         blobs,
         author_id,
         endpoint,
         hey_inbox,
         _gossip: gossip,
-        _docs: docs,
+        docs,
         _router: router,
     });
     ENGINE.with(|e| *e.borrow_mut() = Some(eng));
@@ -297,6 +308,197 @@ pub async fn start_sync(ticket: String, on_event: js_sys::Function) -> Result<()
         }
     });
     Ok(())
+}
+
+// ── Channel docs ───────────────────────────────────────────────────────────
+// The top rung of the content-resolution ladder: instead of polling a channel's
+// pkarr locator and re-fetching its manifest from Sia, a subscriber holds a live
+// replica of the channel's own doc and is PUSHED updates as the author writes.
+//
+// Capability shape (settled 2026-07-28, probe-verified): the author holds the WRITE
+// capability, derived from a seed only they can compute (AppKey + channelID). They
+// hand subscribers a `ShareMode::Read` DocTicket, published to a `K`-derived pkarr
+// record. Deriving the namespace from `K` instead would have been simpler, but a
+// namespace secret IS the write capability — every subscriber could then write to
+// (and spam) the author's channel doc. A read ticket also carries the author's node
+// id + relay address, so it answers "where do I dial" in the same field.
+//
+// Two consequences worth holding:
+//   - Reads here are author-AGNOSTIC (see `get_channel_record`), which is only safe
+//     BECAUSE the capability is read-only for everyone but the author.
+//   - A ticket must be minted while the endpoint is ONLINE and refreshed as
+//     addresses change: `share` snapshots whatever addresses are known right now,
+//     and a ticket with no relay URL is undialable from a browser (which has no
+//     discovery — see the NOTE on `start_sync`).
+
+/// Look up an open channel replica. Clones the `Doc` out (cheap) so no `RefCell`
+/// borrow is ever held across an await.
+fn channel_doc(eng: &Engine, ns_id: &str) -> Result<Doc, JsValue> {
+    eng.channels
+        .borrow()
+        .get(ns_id)
+        .cloned()
+        .ok_or_else(|| JsValue::from_str(&format!("channel doc {ns_id} is not open")))
+}
+
+/// Author side: open (or reopen) the write replica of a channel's doc from its
+/// 32-byte namespace seed. Returns the namespace id. Idempotent — opening the same
+/// channel twice reuses the replica rather than rebuilding it.
+///
+/// The seed is derived by the app (from the AppKey + channelID) and handed in as
+/// hex, rather than derived here from an `info` in `pin-derive`: since one
+/// implementation computes it for both engines, there are no two copies to drift.
+#[wasm_bindgen]
+pub async fn open_channel_doc(ns_seed_hex: String) -> Result<String, JsValue> {
+    let eng = engine()?;
+    let seed = decode_hex32(&ns_seed_hex).ok_or_else(|| {
+        JsValue::from_str("channel namespace seed must be 32 bytes (64 hex chars)")
+    })?;
+    let ns = NamespaceSecret::from_bytes(&seed);
+    let ns_id = ns.id().to_string();
+    if eng.channels.borrow().contains_key(&ns_id) {
+        return Ok(ns_id);
+    }
+    let doc = eng
+        .docs
+        .api()
+        .import_namespace(Capability::Write(ns))
+        .await
+        .map_err(je)?;
+    eng.channels.borrow_mut().insert(ns_id.clone(), doc);
+    Ok(ns_id)
+}
+
+/// Author side: mint a READ-mode ticket for a channel doc — the capability a
+/// subscriber imports. Read-mode, so holding it can never write to the doc.
+/// Call this while online; the ticket freezes the addresses known at this moment.
+#[wasm_bindgen]
+pub async fn share_channel_doc(ns_id: String) -> Result<String, JsValue> {
+    let eng = engine()?;
+    let doc = channel_doc(&eng, &ns_id)?;
+    let ticket = doc
+        .share(ShareMode::Read, AddrInfoOptions::RelayAndAddresses)
+        .await
+        .map_err(je)?;
+    Ok(ticket.to_string())
+}
+
+/// Subscriber side: import a channel's read ticket and live-sync it. Returns the
+/// namespace id. `on_event(nsID, label)` fires per `LiveEvent`, so the app can react
+/// to an `insert-remote` by re-reading the record and filling the feed in.
+///
+/// Uses `import_and_subscribe`, which subscribes BEFORE starting sync — so the first
+/// reconciliation's events can't be missed (the initial catch-up is exactly the one
+/// we most want to see).
+#[wasm_bindgen]
+pub async fn import_channel_doc(
+    ticket: String,
+    on_event: js_sys::Function,
+) -> Result<String, JsValue> {
+    let eng = engine()?;
+    let ticket = DocTicket::from_str(&ticket).map_err(je)?;
+    let (doc, events) = eng
+        .docs
+        .api()
+        .import_and_subscribe(ticket)
+        .await
+        .map_err(je)?;
+    let ns_id = doc.id().to_string();
+    eng.channels.borrow_mut().insert(ns_id.clone(), doc);
+
+    let ns_for_events = ns_id.clone();
+    wasm_bindgen_futures::spawn_local(async move {
+        let mut events = Box::pin(events);
+        while let Some(res) = events.next().await {
+            let label = match res {
+                Ok(ev) => live_event_label(&ev),
+                Err(e) => format!("error: {e}"),
+            };
+            // Ignore a JS callback throw; keep pumping.
+            let _ = on_event.call2(
+                &JsValue::NULL,
+                &JsValue::from_str(&ns_for_events),
+                &JsValue::from_str(&label),
+            );
+        }
+    });
+    Ok(ns_id)
+}
+
+/// Write a record into a channel doc (author side only — a read replica rejects it
+/// with "Attempted to insert to read only replica").
+#[wasm_bindgen]
+pub async fn put_channel_record(
+    ns_id: String,
+    collection: String,
+    rkey: String,
+    value: Vec<u8>,
+) -> Result<(), JsValue> {
+    let eng = engine()?;
+    let doc = channel_doc(&eng, &ns_id)?;
+    doc.set_bytes(eng.author_id, record_key(&collection, &rkey), value)
+        .await
+        .map_err(je)?;
+    Ok(())
+}
+
+/// Read a record from a channel doc, or `undefined` if absent.
+///
+/// Author-AGNOSTIC (`single_latest_per_key`, no author filter) — deliberately. On the
+/// subscriber side the entry was written by the channel owner, whose `AuthorId` we
+/// don't hold and would otherwise have to publish. Safe because the capability is
+/// read-only for everyone but the owner: any entry at this key IS theirs. This is the
+/// simplification the read-ticket choice buys.
+#[wasm_bindgen]
+pub async fn get_channel_record(
+    ns_id: String,
+    collection: String,
+    rkey: String,
+) -> Result<Option<Vec<u8>>, JsValue> {
+    let eng = engine()?;
+    let doc = channel_doc(&eng, &ns_id)?;
+    let entry = doc
+        .get_one(
+            Query::single_latest_per_key()
+                .key_exact(record_key(&collection, &rkey))
+                .build(),
+        )
+        .await
+        .map_err(je)?;
+    match entry {
+        None => Ok(None),
+        Some(e) => {
+            let bytes = eng.blobs.get_bytes(e.content_hash()).await.map_err(je)?;
+            Ok(Some(bytes.to_vec()))
+        }
+    }
+}
+
+/// Delete a record from a channel doc (author side).
+#[wasm_bindgen]
+pub async fn delete_channel_record(
+    ns_id: String,
+    collection: String,
+    rkey: String,
+) -> Result<(), JsValue> {
+    let eng = engine()?;
+    let doc = channel_doc(&eng, &ns_id)?;
+    doc.del(eng.author_id, record_key(&collection, &rkey))
+        .await
+        .map_err(je)?;
+    Ok(())
+}
+
+/// The namespace ids of every channel doc currently open. Lets the app avoid
+/// re-importing one it already holds, and gives the Curate page something to show.
+#[wasm_bindgen]
+pub fn channel_doc_namespaces() -> Result<JsValue, JsValue> {
+    let eng = engine()?;
+    let arr = js_sys::Array::new();
+    for ns in eng.channels.borrow().keys() {
+        arr.push(&JsValue::from_str(ns));
+    }
+    Ok(arr.into())
 }
 
 fn live_event_label(ev: &LiveEvent) -> String {
