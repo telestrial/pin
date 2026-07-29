@@ -17,17 +17,27 @@
 // Curator's doc is recoverable from the recovery phrase — the same one-root-secret
 // move as the did:dht key and settings encryption.
 
+use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Mutex;
 
 use iroh::Endpoint;
 use iroh_blobs::store::fs::FsStore;
-use iroh_docs::{api::Doc, protocol::Docs, Author, AuthorId, Capability, NamespaceSecret};
+use iroh_docs::{
+    api::{
+        protocol::{AddrInfoOptions, ShareMode},
+        Doc,
+    },
+    protocol::Docs,
+    store::Query,
+    Author, AuthorId, Capability, NamespaceSecret,
+};
 use iroh_gossip::net::Gossip;
 // Shared with pin-core (the browser engine): the doc namespace/author `info`s +
 // hkdf32 + decode_app_key. Domain-separated from the did:dht identity
 // (`pin:did-dht:v1`), the atproto signing key (`pin:atproto-signing:v1`), and
 // settings (`pin:settings:v1`), all off the same AppKey root.
-use pin_derive::{decode_app_key, hkdf32, AUTHOR_INFO, NS_INFO};
+use pin_derive::{decode_app_key, decode_hex32, hkdf32, record_key, AUTHOR_INFO, NS_INFO};
 
 /// The Curator's marker entry, mirroring the atrium repo's marker record — written
 /// once, then expected to survive every reopen (the persistence self-check).
@@ -57,6 +67,16 @@ pub struct DocEngine {
     /// True if the marker was already present on load — i.e. the doc persisted from
     /// a prior run. False on first-ever creation. This is the persistence proof.
     pub reopened: bool,
+    /// Channel doc replicas, keyed by namespace id — one per channel this instance
+    /// serves (as author) or follows (as subscriber). The native counterpart of
+    /// pin-core's `Engine.channels`, and it exists for the same reason: iroh-docs'
+    /// read capability is whole-namespace, so a channel can't be an entry in the
+    /// identity doc without exposing every other channel key and the settings
+    /// ciphertext to whoever holds it. One doc per channel matches per-channel `K`.
+    ///
+    /// A `Doc` is cloned out under the lock and the lock released before any await —
+    /// never held across one.
+    channels: Mutex<HashMap<String, Doc>>,
 }
 
 /// Bring up (or reopen) the Curator's persistent iroh-docs engine on `endpoint`,
@@ -127,5 +147,141 @@ pub async fn open_or_create(
         author_id,
         namespace_id,
         reopened,
+        channels: Mutex::new(HashMap::new()),
     })
+}
+
+// --- Channel docs (native half of pin-core's channel-doc surface) -------------
+//
+// The ladder's top rung: a subscriber holds a live replica of a channel's own doc and
+// is pushed updates, instead of polling the channel's pkarr locator and re-fetching
+// its manifest from Sia.
+//
+// Capability shape (settled + probe-verified 2026-07-28): the author holds the WRITE
+// capability, from a seed only they can compute; subscribers get a `ShareMode::Read`
+// ticket published to a `K`-derived pkarr record. A namespace secret IS the write
+// capability, so deriving the namespace from `K` — simpler — would let every
+// subscriber write to the author's doc. The read ticket also carries node id + relay
+// address, so it answers "where do I dial" in the same field.
+//
+// These MUST behave identically to pin-core's `*_channel_*` exports: same record key
+// shape (`pin_derive::record_key`), same opaque byte values, same read semantics.
+// Desktop and web sync the SAME channel docs, so a divergence here is a data bug.
+impl DocEngine {
+    /// Look up an open channel replica. Clones the `Doc` out so the lock is never held
+    /// across an await.
+    fn channel(&self, ns_id: &str) -> Result<Doc, String> {
+        self.channels
+            .lock()
+            .unwrap()
+            .get(ns_id)
+            .cloned()
+            .ok_or_else(|| format!("channel doc {ns_id} is not open"))
+    }
+
+    /// Author side: open (or reopen) the write replica of a channel's doc from its
+    /// 32-byte namespace seed, returning the namespace id. Idempotent — opening the
+    /// same channel twice reuses the replica.
+    ///
+    /// The seed arrives already derived (by the app, from the AppKey + channelID)
+    /// rather than being computed here from a `pin-derive` `info`: one implementation
+    /// computes it for both engines, so there are no two copies to drift.
+    pub async fn open_channel(&self, ns_seed_hex: &str) -> Result<String, String> {
+        let seed =
+            decode_hex32(ns_seed_hex).ok_or("channel namespace seed must be 32 bytes hex")?;
+        let ns = NamespaceSecret::from_bytes(&seed);
+        let ns_id = ns.id().to_string();
+        if self.channels.lock().unwrap().contains_key(&ns_id) {
+            return Ok(ns_id);
+        }
+        let doc = self
+            .docs
+            .import_namespace(Capability::Write(ns))
+            .await
+            .map_err(|e| format!("import channel namespace: {e}"))?;
+        self.channels.lock().unwrap().insert(ns_id.clone(), doc);
+        Ok(ns_id)
+    }
+
+    /// Author side: mint a READ-mode ticket for a channel doc — the capability a
+    /// subscriber imports, which can never write. Call this while the endpoint is
+    /// ONLINE: `share` freezes whatever addresses are known right now, and a ticket
+    /// with no relay URL is undialable from a browser (which has no discovery).
+    pub async fn share_channel(&self, ns_id: &str) -> Result<String, String> {
+        let doc = self.channel(ns_id)?;
+        let ticket = doc
+            .share(ShareMode::Read, AddrInfoOptions::RelayAndAddresses)
+            .await
+            .map_err(|e| format!("share channel doc: {e}"))?;
+        Ok(ticket.to_string())
+    }
+
+    /// Write a record into a channel doc (author side; a read replica rejects it).
+    pub async fn put_channel_record(
+        &self,
+        ns_id: &str,
+        collection: &str,
+        rkey: &str,
+        value: Vec<u8>,
+    ) -> Result<(), String> {
+        let doc = self.channel(ns_id)?;
+        doc.set_bytes(self.author_id, record_key(collection, rkey), value)
+            .await
+            .map_err(|e| format!("set_bytes: {e}"))?;
+        Ok(())
+    }
+
+    /// Read a record from a channel doc, or `None` if absent.
+    ///
+    /// Author-AGNOSTIC (`single_latest_per_key`, no author filter), deliberately: on
+    /// the subscriber side the entry was written by the channel owner, whose
+    /// `AuthorId` we don't hold and would otherwise have to publish. Safe because the
+    /// capability is read-only for everyone but the owner, so any entry at this key is
+    /// theirs. Matches pin-core's `get_channel_record` exactly.
+    pub async fn get_channel_record(
+        &self,
+        ns_id: &str,
+        collection: &str,
+        rkey: &str,
+    ) -> Result<Option<Vec<u8>>, String> {
+        let doc = self.channel(ns_id)?;
+        let entry = doc
+            .get_one(
+                Query::single_latest_per_key()
+                    .key_exact(record_key(collection, rkey))
+                    .build(),
+            )
+            .await
+            .map_err(|e| format!("get_one: {e}"))?;
+        match entry {
+            None => Ok(None),
+            Some(e) => {
+                let bytes = self
+                    .blobs
+                    .get_bytes(e.content_hash())
+                    .await
+                    .map_err(|e| format!("get_bytes: {e}"))?;
+                Ok(Some(bytes.to_vec()))
+            }
+        }
+    }
+
+    /// Delete a record from a channel doc (author side).
+    pub async fn delete_channel_record(
+        &self,
+        ns_id: &str,
+        collection: &str,
+        rkey: &str,
+    ) -> Result<(), String> {
+        let doc = self.channel(ns_id)?;
+        doc.del(self.author_id, record_key(collection, rkey))
+            .await
+            .map_err(|e| format!("del: {e}"))?;
+        Ok(())
+    }
+
+    /// The namespace ids of every channel doc currently open.
+    pub fn channel_namespaces(&self) -> Vec<String> {
+        self.channels.lock().unwrap().keys().cloned().collect()
+    }
 }

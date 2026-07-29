@@ -411,6 +411,76 @@ pub async fn docs_list_all(state: tauri::State<'_, CuratorState>) -> Result<Vec<
     Ok(out)
 }
 
+// --- Channel-doc CRUD over IPC (author half) ---------------------------------
+//
+// The desktop transport for the channel-doc surface pin-core exports to the browser.
+// Same record keys, same opaque values, same read semantics — desktop and web sync the
+// SAME channel docs, so these can't drift from pin-core (the logic lives in
+// docstore.rs; these are thin wrappers). The subscriber half (importing a read ticket
+// and surfacing live events) needs an event channel out to the frontend and lands next.
+
+#[tauri::command]
+pub async fn docs_open_channel(
+    state: tauri::State<'_, CuratorState>,
+    ns_seed_hex: String,
+) -> Result<String, String> {
+    current_engine(&state)?.open_channel(&ns_seed_hex).await
+}
+
+#[tauri::command]
+pub async fn docs_share_channel(
+    state: tauri::State<'_, CuratorState>,
+    ns_id: String,
+) -> Result<String, String> {
+    current_engine(&state)?.share_channel(&ns_id).await
+}
+
+#[tauri::command]
+pub async fn docs_put_channel_record(
+    state: tauri::State<'_, CuratorState>,
+    ns_id: String,
+    collection: String,
+    rkey: String,
+    value: Vec<u8>,
+) -> Result<(), String> {
+    current_engine(&state)?
+        .put_channel_record(&ns_id, &collection, &rkey, value)
+        .await
+}
+
+#[tauri::command]
+pub async fn docs_get_channel_record(
+    state: tauri::State<'_, CuratorState>,
+    ns_id: String,
+    collection: String,
+    rkey: String,
+) -> Result<Option<Vec<u8>>, String> {
+    current_engine(&state)?
+        .get_channel_record(&ns_id, &collection, &rkey)
+        .await
+}
+
+#[tauri::command]
+pub async fn docs_delete_channel_record(
+    state: tauri::State<'_, CuratorState>,
+    ns_id: String,
+    collection: String,
+    rkey: String,
+) -> Result<(), String> {
+    current_engine(&state)?
+        .delete_channel_record(&ns_id, &collection, &rkey)
+        .await
+}
+
+/// The namespace ids of every channel doc the Curator currently holds. Empty when the
+/// engine is down, rather than an error — callers treat it as "none open yet".
+#[tauri::command]
+pub fn docs_channel_namespaces(state: tauri::State<CuratorState>) -> Vec<String> {
+    current_engine(&state)
+        .map(|e| e.channel_namespaces())
+        .unwrap_or_default()
+}
+
 /// Actively sync the Curator's replica with the peer(s) in `ticket` — the desktop
 /// equivalent of pin-core's `start_sync` (which the in-webview wasm engine can't run
 /// on desktop). The ticket only supplies WHERE to dial; the namespace is already ours
