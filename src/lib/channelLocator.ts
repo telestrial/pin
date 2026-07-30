@@ -97,7 +97,7 @@ export async function publishChannelLocator(
 /** Decrypt + parse a channel-manifest ciphertext blob with K, checking the version.
  *  The blob is exactly what the Sia object holds (and what `sub/<id>` caches), so
  *  the fresh-resolve and cached-read paths decode identically. */
-async function decodeChannelManifest(
+export async function decodeChannelManifest(
   kBytes: Uint8Array,
   ciphertext: Uint8Array,
 ): Promise<ChannelManifest> {

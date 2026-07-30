@@ -202,6 +202,41 @@ export async function deriveChannelLocatorSeed(
   return deriveAppSubkey(channelKeyBytes, CHANNEL_LOCATOR_KEY_INFO)
 }
 
+// The 32-byte seed for a channel's iroh-docs DOC NAMESPACE — the live replica a
+// subscriber syncs (the resolution ladder's top rung), as distinct from the Sia object
+// + locator that are its durable floor.
+//
+// AppKey-derived (plus the channelID), NOT K-derived, and that asymmetry is the whole
+// design: an iroh-docs namespace secret IS the write capability, so deriving it from K
+// would hand every subscriber the ability to write to the author's channel doc.
+// Deriving it from the AppKey keeps writing to the author, who shares a READ-mode
+// DocTicket instead. Two devices of one author derive the SAME seed (same AppKey), so
+// both can serve the channel — which is what makes this compose with multi-instance
+// parity rather than fight it.
+const CHANNEL_DOC_NS_KEY_INFO = 'pin:channel-doc-ns:v1:'
+export async function deriveChannelDocSeed(
+  appKeyBytes: Uint8Array,
+  channelID: string,
+): Promise<Uint8Array> {
+  return deriveAppSubkey(appKeyBytes, CHANNEL_DOC_NS_KEY_INFO + channelID)
+}
+
+// The 32-byte ed25519 seed for the pkarr key where a channel's read DocTicket is
+// published — K-derived, so a subscriber holding K (from the subscribe URL) can find
+// it, exactly like the channel locator.
+//
+// A SEPARATE record from the locator on purpose. The two rungs have independent
+// lifetimes: the locator names a durable Sia object and changes only when the author
+// publishes, while the ticket freezes network addresses and has to be refreshed as
+// those change. Keeping them apart means a stale ticket can never disturb the durable
+// pointer, and a reader that finds no ticket simply falls to the locator rung.
+const CHANNEL_DOC_TICKET_KEY_INFO = 'pin:channel-doc:v1'
+export async function deriveChannelDocTicketSeed(
+  channelKeyBytes: Uint8Array,
+): Promise<Uint8Array> {
+  return deriveAppSubkey(channelKeyBytes, CHANNEL_DOC_TICKET_KEY_INFO)
+}
+
 // The 32-byte ed25519 seed for your SETTINGS pkarr LOCATOR key — the mutable
 // pointer to the current encrypted settings snapshot on Sia lives on the DHT under
 // this key. AppKey-derived, so it's unlisted (only you can compute it → only you can

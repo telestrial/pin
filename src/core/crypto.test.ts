@@ -4,6 +4,8 @@ import {
   channelKeyToBase64,
   decryptForChannel,
   decryptSettings,
+  deriveChannelDocSeed,
+  deriveChannelDocTicketSeed,
   deriveChannelID,
   deriveChannelLocatorSeed,
   deriveDidDhtSeed,
@@ -351,3 +353,82 @@ function bytesToBase64(bytes: Uint8Array): string {
   for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i])
   return btoa(s)
 }
+
+describe('deriveChannelDocSeed', () => {
+  it('produces a 32-byte namespace seed', async () => {
+    const seed = await deriveChannelDocSeed(new Uint8Array(32), 'chan1')
+    expect(seed.length).toBe(32)
+  })
+
+  it('is deterministic for the same AppKey + channelID', async () => {
+    const appKey = new Uint8Array(32).fill(9)
+    expect(await deriveChannelDocSeed(appKey, 'chan1')).toEqual(
+      await deriveChannelDocSeed(appKey, 'chan1'),
+    )
+  })
+
+  it('differs per channelID, so an authors channels are separate docs', async () => {
+    const appKey = new Uint8Array(32).fill(9)
+    expect(await deriveChannelDocSeed(appKey, 'chan1')).not.toEqual(
+      await deriveChannelDocSeed(appKey, 'chan2'),
+    )
+  })
+
+  it('differs per AppKey, so two authors never collide on a namespace', async () => {
+    expect(
+      await deriveChannelDocSeed(new Uint8Array(32).fill(1), 'chan1'),
+    ).not.toEqual(
+      await deriveChannelDocSeed(new Uint8Array(32).fill(2), 'chan1'),
+    )
+  })
+
+  it('is NOT derivable from the channel key (write capability stays with the author)', async () => {
+    // The load-bearing asymmetry: an iroh-docs namespace secret IS the write
+    // capability. If this seed came from K, every subscriber could write to the
+    // author's channel doc. Deriving from the AppKey is what prevents that, so a
+    // K-derived seed must never equal it.
+    const k = await generateChannelKey()
+    expect(await deriveChannelDocSeed(k, 'chan1')).not.toEqual(
+      await deriveChannelLocatorSeed(k),
+    )
+  })
+
+  it('matches a fixed value for the all-zeros AppKey (regression lock)', async () => {
+    // Locks salt='' + info='pin:channel-doc-ns:v1:' + channelID + SHA-256. Both
+    // engines open the same channel doc from this seed, so it can't drift.
+    const seed = await deriveChannelDocSeed(new Uint8Array(32), 'chan1')
+    expect(toHex(seed)).toBe(
+      '8b7ef12a1bfb3e697bf2f4a7fb60226b788a61dc1a9b6f9c2685b546a0230875',
+    )
+  })
+})
+
+describe('deriveChannelDocTicketSeed', () => {
+  it('produces a 32-byte ed25519 seed', async () => {
+    const seed = await deriveChannelDocTicketSeed(new Uint8Array(32))
+    expect(seed.length).toBe(32)
+  })
+
+  it('is deterministic, so a subscriber finds the ticket the author published', async () => {
+    const k = await generateChannelKey()
+    expect(await deriveChannelDocTicketSeed(k)).toEqual(
+      await deriveChannelDocTicketSeed(k),
+    )
+  })
+
+  it('differs from the channel locator seed (independent records)', async () => {
+    // The ticket and the locator are two rungs with independent lifetimes — a stale
+    // ticket must not be able to disturb the durable Sia pointer.
+    const k = await generateChannelKey()
+    expect(await deriveChannelDocTicketSeed(k)).not.toEqual(
+      await deriveChannelLocatorSeed(k),
+    )
+  })
+
+  it('matches a fixed value for the all-zeros key (regression lock)', async () => {
+    const seed = await deriveChannelDocTicketSeed(new Uint8Array(32))
+    expect(toHex(seed)).toBe(
+      'c8086ddb2912104f75754ad8a02736187c74d6a08c8705bb883370f7f32beea9',
+    )
+  })
+})

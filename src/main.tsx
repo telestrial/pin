@@ -39,6 +39,14 @@ if (import.meta.env.DEV || inTauri()) {
       author: (hexOverride?: string) => Promise<string>
       subscriber: (ticket: string, hexOverride?: string) => Promise<string>
     }
+    __pinChannelDocLive?: {
+      publish: (name: string, hexOverride?: string) => Promise<string>
+      subscribe: (
+        channelID: string,
+        channelKey: string,
+        hexOverride?: string,
+      ) => Promise<string>
+    }
     __pinSync?: {
       open: (hex: string) => Promise<string>
       openSession: () => Promise<string>
@@ -69,6 +77,62 @@ if (import.meta.env.DEV || inTauri()) {
       if (!hex) return 'not signed in'
       const { channelDocsImportTest } = await import('./lib/docs')
       return channelDocsImportTest(hex, ticket)
+    },
+  }
+  // Ladder rung 1 end to end: an author publishes a channel doc + a read ticket to
+  // the DHT, and a subscriber resolves that ticket from K alone (nothing handed over
+  // out of band) and live-syncs the manifest into its feed. `channelKey` is fresh per
+  // run so the pkarr read is a first read, not an overwrite — public relays lag on
+  // overwrites (see CLAUDE.md 2026-07-23).
+  g.__pinChannelDocLive = {
+    publish: async (name: string, hexOverride?: string) => {
+      const hex = hexOverride ?? (await session()).hex
+      if (!hex) return 'not signed in'
+      const { generateChannelKey, channelKeyToBase64, deriveChannelID } =
+        await import('./core/crypto')
+      const { CHANNEL_MANIFEST_VERSION } = await import('./core/types')
+      type Manifest = import('./core/types').ChannelManifest
+      const { publishChannelDoc } = await import('./lib/channelDoc')
+      const k = await generateChannelKey()
+      const channelKey = channelKeyToBase64(k)
+      const channelID = await deriveChannelID(k)
+      const manifest: Manifest = {
+        version: CHANNEL_MANIFEST_VERSION,
+        name,
+        description: 'rung-1 probe',
+        authorPubkey: 'probe',
+        publishedAt: new Date().toISOString(),
+        items: [],
+      }
+      const { nsId } = await publishChannelDoc(
+        hex,
+        channelID,
+        channelKey,
+        manifest,
+      )
+      return JSON.stringify({ channelID, channelKey, nsId })
+    },
+    subscribe: async (
+      channelID: string,
+      channelKey: string,
+      hexOverride?: string,
+    ) => {
+      const hex = hexOverride ?? (await session()).hex
+      if (!hex) return 'not signed in'
+      const { syncSubscribedChannelDoc } = await import('./lib/channelDoc')
+      const { useFeedStore } = await import('./stores/feed')
+      const sub = {
+        authorHandle: '',
+        authorDID: '',
+        channelID,
+        channelKey,
+        addedAt: new Date().toISOString(),
+      }
+      const nsId = await syncSubscribedChannelDoc(hex, sub)
+      // applyIfChanged lands the synced manifest in the feed store — read it back to
+      // prove the whole path, not just that a sync started.
+      const name = useFeedStore.getState().manifests[channelID]?.name ?? null
+      return JSON.stringify({ nsId, name })
     },
   }
   g.__pinMirrorWrite = async (text: string) => {
