@@ -42,11 +42,10 @@ tokio = { version = "1", features = ["rt-multi-thread", "time", "fs", "sync", "i
 # sia_storage: the desktop's native Sia I/O backend (src-tauri/src/sia.rs),
 # replacing the in-webview WASM SDK so downloads work in WebView2.
 sia_storage = "0.9.1"
-hkdf = "0.12"
-sha2 = "0.10"
 pkarr = "3"
-# Shared AppKey->doc-seed derivation, identical to pin-core's so the keeper and the
-# browser land on the same iroh-docs namespace (hkdf/sha2 above stay for identity.rs).
+# Every AppKey-derived secret, identical to what the browser derives — the doc
+# namespace/author seeds, the did:dht identity seed, and the rest. Owning the hkdf/sha2
+# dependency here too would just be a second place for a derivation to drift.
 pin-derive = { path = "../crates/pin-derive" }
 # The /hey wire protocol, shared with the browser instance (pin-core serves the same
 # ALPN) so the two can't drift apart.

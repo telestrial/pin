@@ -36,6 +36,106 @@ pub fn hkdf32(ikm: &[u8], info: &[u8]) -> [u8; 32] {
     okm
 }
 
+// --- App-level derivations ---------------------------------------------------
+//
+// Every secret Pin holds below the root is HKDF-SHA256 off one of two IKMs, with a
+// domain-separated `info`:
+//
+//   * the Sia AppKey — recoverable from the recovery phrase, so anything derived from
+//     it is recoverable too. That's the whole recovery story: one phrase reconstructs
+//     the identity, the settings key, and every locator.
+//   * a channel key K — used where a READER must derive the same value holding only K
+//     from a subscribe URL (the channel locator and the channel-doc ticket key). K both
+//     locates and decrypts.
+//
+// They live here rather than beside their callers because they're the definition of a
+// value two engines must agree on, which is this crate's rule. `pin:did-dht:v1` is the
+// sharpest case: it was written out twice — once in TypeScript, once in the Curator's
+// identity.rs — under a comment saying the two MUST match byte-for-byte. A comment is
+// not an enforcement mechanism, and a drift there would split a user's browser identity
+// from their Curator's.
+//
+// Changing an `info` re-keys every user out of whatever it protects, so the tests below
+// lock the three that have published values.
+
+/// HKDF `info` for the settings-record encryption key (AppKey-derived, never shared).
+pub const SETTINGS_KEY_INFO: &[u8] = b"pin:settings:v1";
+/// HKDF `info` for the whole-doc Sia snapshot encryption key (AppKey-derived).
+pub const SNAPSHOT_KEY_INFO: &[u8] = b"pin:docsnapshot:v1";
+/// HKDF `info` for the identity's did:dht ed25519 seed (AppKey-derived).
+pub const DID_DHT_INFO: &[u8] = b"pin:did-dht:v1";
+/// HKDF `info` for a channel's pkarr locator key — derived from K, not the AppKey,
+/// because a subscriber holding only K must reach the same key.
+pub const CHANNEL_LOCATOR_INFO: &[u8] = b"pin:channel-locator:v1";
+/// HKDF `info` PREFIX for a channel's iroh-docs namespace seed; the channelID is
+/// appended. AppKey-derived on purpose — a namespace secret IS the write capability,
+/// so deriving it from K would hand every subscriber the ability to write.
+pub const CHANNEL_DOC_NS_INFO_PREFIX: &str = "pin:channel-doc-ns:v1:";
+/// HKDF `info` for the pkarr key carrying a channel's read DocTicket (K-derived, so a
+/// subscriber can find it — kept separate from the locator so a stale ticket can never
+/// disturb the durable pointer).
+pub const CHANNEL_DOC_TICKET_INFO: &[u8] = b"pin:channel-doc:v1";
+/// HKDF `info` for the pkarr key holding the pointer to your settings snapshot.
+pub const SETTINGS_LOCATOR_INFO: &[u8] = b"pin:settings-locator:v1";
+/// HKDF `info` for the instance-rendezvous pkarr key (where your instances advertise
+/// their DocTickets to find each other).
+pub const RENDEZVOUS_INFO: &[u8] = b"pin:iroh-rendezvous:v1";
+/// HKDF `info` PREFIX for a single instance's rendezvous key; the instance id is
+/// appended. Derived from the RENDEZVOUS seed rather than the AppKey, so the directory
+/// stays private to your own instances.
+pub const RENDEZVOUS_INSTANCE_INFO_PREFIX: &str = "pin:iroh-rendezvous-instance:v1:";
+
+/// The settings-record encryption key.
+pub fn settings_key(app_key: &[u8]) -> [u8; 32] {
+    hkdf32(app_key, SETTINGS_KEY_INFO)
+}
+
+/// The Sia snapshot encryption key.
+pub fn snapshot_key(app_key: &[u8]) -> [u8; 32] {
+    hkdf32(app_key, SNAPSHOT_KEY_INFO)
+}
+
+/// The identity's did:dht ed25519 seed.
+pub fn did_dht_seed(app_key: &[u8]) -> [u8; 32] {
+    hkdf32(app_key, DID_DHT_INFO)
+}
+
+/// A channel's pkarr locator seed, from its channel key K.
+pub fn channel_locator_seed(channel_key: &[u8]) -> [u8; 32] {
+    hkdf32(channel_key, CHANNEL_LOCATOR_INFO)
+}
+
+/// A channel's iroh-docs namespace seed, from the AppKey plus the channelID.
+pub fn channel_doc_seed(app_key: &[u8], channel_id: &str) -> [u8; 32] {
+    hkdf32(
+        app_key,
+        format!("{CHANNEL_DOC_NS_INFO_PREFIX}{channel_id}").as_bytes(),
+    )
+}
+
+/// The pkarr seed for a channel's read-DocTicket record, from its channel key K.
+pub fn channel_doc_ticket_seed(channel_key: &[u8]) -> [u8; 32] {
+    hkdf32(channel_key, CHANNEL_DOC_TICKET_INFO)
+}
+
+/// The pkarr seed for your settings-snapshot pointer.
+pub fn settings_locator_seed(app_key: &[u8]) -> [u8; 32] {
+    hkdf32(app_key, SETTINGS_LOCATOR_INFO)
+}
+
+/// The pkarr seed for your instance-rendezvous directory.
+pub fn rendezvous_seed(app_key: &[u8]) -> [u8; 32] {
+    hkdf32(app_key, RENDEZVOUS_INFO)
+}
+
+/// The pkarr seed for one instance's entry, from the rendezvous seed plus its id.
+pub fn rendezvous_instance_seed(rendezvous_seed: &[u8], instance_id: &str) -> [u8; 32] {
+    hkdf32(
+        rendezvous_seed,
+        format!("{RENDEZVOUS_INSTANCE_INFO_PREFIX}{instance_id}").as_bytes(),
+    )
+}
+
 /// Decode 32 bytes from a 64-char hex string. `None` if the hex is the wrong length
 /// or contains a non-hex char. Every secret that crosses into an engine does so as
 /// 32 bytes of hex, so this is the one decoder for all of them.
@@ -117,6 +217,73 @@ mod tests {
         let key = String::from_utf8(key).unwrap();
         let prefix = collection_prefix("sub");
         assert_eq!(key.strip_prefix(&prefix), Some("xyz"));
+    }
+
+    fn hex(bytes: &[u8; 32]) -> String {
+        bytes.iter().map(|b| format!("{b:02x}")).collect()
+    }
+
+    // The three derivations with published vectors, locked against the SAME expected
+    // values the TypeScript suite asserts (src/core/crypto.test.ts). That's the point
+    // of the exercise: two implementations, one set of vectors, so a divergence is a
+    // test failure rather than a user locked out of their own data.
+    #[test]
+    fn settings_key_matches_the_locked_vector() {
+        assert_eq!(
+            hex(&settings_key(&[0u8; 32])),
+            "4f2fe2ca11018b920f3f99673cae4afab82044351d3de01a784a598d1b199aa2"
+        );
+    }
+
+    #[test]
+    fn did_dht_seed_matches_the_locked_vector() {
+        // Also what identity.rs derives — the duplication this crate exists to remove.
+        assert_eq!(
+            hex(&did_dht_seed(&[0u8; 32])),
+            "30ff7f7764196617f118404f0b5b1c98298adf7aafcd54a86c92173d06682256"
+        );
+    }
+
+    #[test]
+    fn channel_locator_seed_matches_the_locked_vector() {
+        // IKM here is a channel key K, not the AppKey — the reader-side derivation.
+        assert_eq!(
+            hex(&channel_locator_seed(&[0u8; 32])),
+            "78aa2d69cfe77badc0d0d7cd976e0c1b6c3fe4964958145793d153b03a3442eb"
+        );
+    }
+
+    #[test]
+    fn every_derivation_is_domain_separated() {
+        // Same IKM through each derivation must give a different key; a collision
+        // would mean one secret's compromise leaked another's.
+        let ikm = [7u8; 32];
+        let all = [
+            settings_key(&ikm),
+            snapshot_key(&ikm),
+            did_dht_seed(&ikm),
+            channel_locator_seed(&ikm),
+            channel_doc_seed(&ikm, "chan"),
+            channel_doc_ticket_seed(&ikm),
+            settings_locator_seed(&ikm),
+            rendezvous_seed(&ikm),
+            rendezvous_instance_seed(&ikm, "inst"),
+        ];
+        for i in 0..all.len() {
+            for j in (i + 1)..all.len() {
+                assert_ne!(all[i], all[j], "derivations {i} and {j} collide");
+            }
+        }
+    }
+
+    #[test]
+    fn per_id_derivations_vary_by_id() {
+        let ikm = [3u8; 32];
+        assert_ne!(channel_doc_seed(&ikm, "a"), channel_doc_seed(&ikm, "b"));
+        assert_ne!(
+            rendezvous_instance_seed(&ikm, "a"),
+            rendezvous_instance_seed(&ikm, "b")
+        );
     }
 
     #[test]

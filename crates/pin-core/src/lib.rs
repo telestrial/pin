@@ -537,3 +537,69 @@ fn live_event_label(ev: &LiveEvent) -> String {
         format!("{kind} {key}")
     }
 }
+
+// --- Key derivations ---------------------------------------------------------
+//
+// Thin wasm-bindgen wrappers over `pin_derive`, so the browser reaches the SAME
+// derivations the native Curator calls directly rather than reimplementing them in
+// TypeScript. Pure functions — no engine, no network — but they still need the wasm
+// module instantiated, which `core/wasm.ts` handles for every caller at once.
+//
+// Each returns 32 bytes (a `Uint8Array` in JS). The two IKM families are visible in
+// the parameter names: `app_key` derivations are recoverable from the recovery
+// phrase, `channel_key` ones are what a subscriber holding only K can reach.
+
+/// Settings-record encryption key.
+#[wasm_bindgen]
+pub fn derive_settings_key(app_key: &[u8]) -> Vec<u8> {
+    pin_derive::settings_key(app_key).to_vec()
+}
+
+/// Sia whole-doc snapshot encryption key.
+#[wasm_bindgen]
+pub fn derive_snapshot_key(app_key: &[u8]) -> Vec<u8> {
+    pin_derive::snapshot_key(app_key).to_vec()
+}
+
+/// The identity's did:dht ed25519 seed — the same value `identity.rs` derives.
+#[wasm_bindgen]
+pub fn derive_did_dht_seed(app_key: &[u8]) -> Vec<u8> {
+    pin_derive::did_dht_seed(app_key).to_vec()
+}
+
+/// A channel's pkarr locator seed, from its channel key K.
+#[wasm_bindgen]
+pub fn derive_channel_locator_seed(channel_key: &[u8]) -> Vec<u8> {
+    pin_derive::channel_locator_seed(channel_key).to_vec()
+}
+
+/// A channel's iroh-docs namespace seed (AppKey-derived — the write capability stays
+/// with the author).
+#[wasm_bindgen]
+pub fn derive_channel_doc_seed(app_key: &[u8], channel_id: &str) -> Vec<u8> {
+    pin_derive::channel_doc_seed(app_key, channel_id).to_vec()
+}
+
+/// The pkarr seed for a channel's read-DocTicket record, from its channel key K.
+#[wasm_bindgen]
+pub fn derive_channel_doc_ticket_seed(channel_key: &[u8]) -> Vec<u8> {
+    pin_derive::channel_doc_ticket_seed(channel_key).to_vec()
+}
+
+/// The pkarr seed for your settings-snapshot pointer.
+#[wasm_bindgen]
+pub fn derive_settings_locator_seed(app_key: &[u8]) -> Vec<u8> {
+    pin_derive::settings_locator_seed(app_key).to_vec()
+}
+
+/// The pkarr seed for your instance-rendezvous directory.
+#[wasm_bindgen]
+pub fn derive_rendezvous_seed(app_key: &[u8]) -> Vec<u8> {
+    pin_derive::rendezvous_seed(app_key).to_vec()
+}
+
+/// The pkarr seed for one instance's rendezvous entry.
+#[wasm_bindgen]
+pub fn derive_rendezvous_instance_seed(rendezvous_seed: &[u8], instance_id: &str) -> Vec<u8> {
+    pin_derive::rendezvous_instance_seed(rendezvous_seed, instance_id).to_vec()
+}

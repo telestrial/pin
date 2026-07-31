@@ -110,7 +110,6 @@ name = "app"
 version = "0.1.0"
 dependencies = [
  "futures-lite",
- "hkdf",
  "iroh",
  "iroh-blobs",
  "iroh-docs",
@@ -121,7 +120,6 @@ dependencies = [
  "pkarr",
  "serde",
  "serde_json",
- "sha2 0.10.9",
  "sia_storage",
  "tauri",
  "tauri-build",

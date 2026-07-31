@@ -53,6 +53,52 @@ export function delete_channel_record(ns_id: string, collection: string, rkey: s
 export function delete_record(collection: string, rkey: string): Promise<void>;
 
 /**
+ * A channel's iroh-docs namespace seed (AppKey-derived — the write capability stays
+ * with the author).
+ */
+export function derive_channel_doc_seed(app_key: Uint8Array, channel_id: string): Uint8Array;
+
+/**
+ * The pkarr seed for a channel's read-DocTicket record, from its channel key K.
+ */
+export function derive_channel_doc_ticket_seed(channel_key: Uint8Array): Uint8Array;
+
+/**
+ * A channel's pkarr locator seed, from its channel key K.
+ */
+export function derive_channel_locator_seed(channel_key: Uint8Array): Uint8Array;
+
+/**
+ * The identity's did:dht ed25519 seed — the same value `identity.rs` derives.
+ */
+export function derive_did_dht_seed(app_key: Uint8Array): Uint8Array;
+
+/**
+ * The pkarr seed for one instance's rendezvous entry.
+ */
+export function derive_rendezvous_instance_seed(rendezvous_seed: Uint8Array, instance_id: string): Uint8Array;
+
+/**
+ * The pkarr seed for your instance-rendezvous directory.
+ */
+export function derive_rendezvous_seed(app_key: Uint8Array): Uint8Array;
+
+/**
+ * Settings-record encryption key.
+ */
+export function derive_settings_key(app_key: Uint8Array): Uint8Array;
+
+/**
+ * The pkarr seed for your settings-snapshot pointer.
+ */
+export function derive_settings_locator_seed(app_key: Uint8Array): Uint8Array;
+
+/**
+ * Sia whole-doc snapshot encryption key.
+ */
+export function derive_snapshot_key(app_key: Uint8Array): Uint8Array;
+
+/**
  * Read a record from a channel doc, or `undefined` if absent.
  *
  * Author-AGNOSTIC (`single_latest_per_key`, no author filter) — deliberately. On the
@@ -175,6 +221,15 @@ export interface InitOutput {
     readonly channel_doc_namespaces: () => [number, number, number];
     readonly delete_channel_record: (a: number, b: number, c: number, d: number, e: number, f: number) => any;
     readonly delete_record: (a: number, b: number, c: number, d: number) => any;
+    readonly derive_channel_doc_seed: (a: number, b: number, c: number, d: number) => [number, number];
+    readonly derive_channel_doc_ticket_seed: (a: number, b: number) => [number, number];
+    readonly derive_channel_locator_seed: (a: number, b: number) => [number, number];
+    readonly derive_did_dht_seed: (a: number, b: number) => [number, number];
+    readonly derive_rendezvous_instance_seed: (a: number, b: number, c: number, d: number) => [number, number];
+    readonly derive_rendezvous_seed: (a: number, b: number) => [number, number];
+    readonly derive_settings_key: (a: number, b: number) => [number, number];
+    readonly derive_settings_locator_seed: (a: number, b: number) => [number, number];
+    readonly derive_snapshot_key: (a: number, b: number) => [number, number];
     readonly get_channel_record: (a: number, b: number, c: number, d: number, e: number, f: number) => any;
     readonly get_record: (a: number, b: number, c: number, d: number) => any;
     readonly import_channel_doc: (a: number, b: number, c: any) => any;

@@ -158,6 +158,139 @@ export function delete_record(collection, rkey) {
 }
 
 /**
+ * A channel's iroh-docs namespace seed (AppKey-derived — the write capability stays
+ * with the author).
+ * @param {Uint8Array} app_key
+ * @param {string} channel_id
+ * @returns {Uint8Array}
+ */
+export function derive_channel_doc_seed(app_key, channel_id) {
+    const ptr0 = passArray8ToWasm0(app_key, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passStringToWasm0(channel_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ret = wasm.derive_channel_doc_seed(ptr0, len0, ptr1, len1);
+    var v3 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v3;
+}
+
+/**
+ * The pkarr seed for a channel's read-DocTicket record, from its channel key K.
+ * @param {Uint8Array} channel_key
+ * @returns {Uint8Array}
+ */
+export function derive_channel_doc_ticket_seed(channel_key) {
+    const ptr0 = passArray8ToWasm0(channel_key, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.derive_channel_doc_ticket_seed(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * A channel's pkarr locator seed, from its channel key K.
+ * @param {Uint8Array} channel_key
+ * @returns {Uint8Array}
+ */
+export function derive_channel_locator_seed(channel_key) {
+    const ptr0 = passArray8ToWasm0(channel_key, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.derive_channel_locator_seed(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * The identity's did:dht ed25519 seed — the same value `identity.rs` derives.
+ * @param {Uint8Array} app_key
+ * @returns {Uint8Array}
+ */
+export function derive_did_dht_seed(app_key) {
+    const ptr0 = passArray8ToWasm0(app_key, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.derive_did_dht_seed(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * The pkarr seed for one instance's rendezvous entry.
+ * @param {Uint8Array} rendezvous_seed
+ * @param {string} instance_id
+ * @returns {Uint8Array}
+ */
+export function derive_rendezvous_instance_seed(rendezvous_seed, instance_id) {
+    const ptr0 = passArray8ToWasm0(rendezvous_seed, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passStringToWasm0(instance_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ret = wasm.derive_rendezvous_instance_seed(ptr0, len0, ptr1, len1);
+    var v3 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v3;
+}
+
+/**
+ * The pkarr seed for your instance-rendezvous directory.
+ * @param {Uint8Array} app_key
+ * @returns {Uint8Array}
+ */
+export function derive_rendezvous_seed(app_key) {
+    const ptr0 = passArray8ToWasm0(app_key, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.derive_rendezvous_seed(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * Settings-record encryption key.
+ * @param {Uint8Array} app_key
+ * @returns {Uint8Array}
+ */
+export function derive_settings_key(app_key) {
+    const ptr0 = passArray8ToWasm0(app_key, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.derive_settings_key(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * The pkarr seed for your settings-snapshot pointer.
+ * @param {Uint8Array} app_key
+ * @returns {Uint8Array}
+ */
+export function derive_settings_locator_seed(app_key) {
+    const ptr0 = passArray8ToWasm0(app_key, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.derive_settings_locator_seed(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * Sia whole-doc snapshot encryption key.
+ * @param {Uint8Array} app_key
+ * @returns {Uint8Array}
+ */
+export function derive_snapshot_key(app_key) {
+    const ptr0 = passArray8ToWasm0(app_key, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.derive_snapshot_key(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
  * Read a record from a channel doc, or `undefined` if absent.
  *
  * Author-AGNOSTIC (`single_latest_per_key`, no author filter) — deliberately. On the

@@ -13,25 +13,20 @@
 
 use std::time::Duration;
 
-use hkdf::Hkdf;
 use pkarr::dns::rdata::RData;
 use pkarr::{Client, Keypair, PublicKey, SignedPacket};
-use sha2::Sha256;
-
-/// HKDF `info` for the did:dht identity key — domain-separated from the repo
-/// signing key (`pin:atproto-signing:v1`) and settings (`pin:settings:v1`).
-const DID_DHT_INFO: &[u8] = b"pin:did-dht:v1";
 
 /// Derive the ed25519 did:dht identity keypair from the Sia AppKey via HKDF — the
 /// same one-root-secret move as the repo signing key, different `info`. ed25519
 /// accepts any 32 bytes as a seed (no scalar-range rejection, unlike P-256), so
 /// this never needs a retry.
+///
+/// The derivation itself lives in `pin_derive` because the browser performs the
+/// identical one: a user's did:dht must be the same whether their instance is this
+/// Curator or a tab. It used to be written out here AND in TypeScript, kept in step
+/// by a comment — which is not an enforcement mechanism.
 pub fn derive_identity(app_key: &[u8]) -> Result<Keypair, String> {
-    let hk = Hkdf::<Sha256>::new(None, app_key);
-    let mut seed = [0u8; 32];
-    hk.expand(DID_DHT_INFO, &mut seed)
-        .map_err(|e| format!("hkdf expand: {e}"))?;
-    Ok(Keypair::from_secret_key(&seed))
+    Ok(Keypair::from_secret_key(&pin_derive::did_dht_seed(app_key)))
 }
 
 /// The `did:dht:<zbase32(pubkey)>` identifier for this keypair.
