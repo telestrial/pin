@@ -12,4 +12,5 @@ members = [
   "crates/pin-derive",
   "crates/pin-pkarr",
   "crates/pin-rpc",
+  "crates/pin-sia",
 ]

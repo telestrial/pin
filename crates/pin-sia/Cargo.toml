@@ -1,0 +1,40 @@
+# Pin's Sia layer — the byte I/O, the pinned-objects walk, and the connect state
+# machine, written once for both the browser and the desktop.
+#
+# Unlike pin-pkarr, there is no capability split here: `sia_storage` ships its own
+# per-target transport (native QUIC; WebTransport in the browser, behind web-sys's
+# unstable-API gate — see scripts/build-wasm.sh), so the SAME code compiles for both
+# and this crate never has to branch on target for behaviour. What it removes is a
+# straight duplication: the events walk, the DTO shapes and the far-future share
+# horizon were written once in TypeScript (src/core/siaClient.ts) and once in Rust
+# (src-tauri/src/sia.rs), with a comment as the only thing keeping the two in step.
+# A divergence there is a data bug — the storage meter, the repack scope and the
+# full-reset enumeration all read that walk.
+#
+# It also holds the CONNECT STATE MACHINE, which is the part that could not stay in
+# the frontend at all: `Builder` is a Rust typestate (`request_connection`,
+# `wait_for_approval` and `register` each consume `self` and return the next state),
+# so it cannot be handed to React and held in a ref across three screens the way the
+# JS SDK's builder was.
+[package]
+name = "pin-sia"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+
+[dependencies]
+# Same version src-tauri pins, so one Sia implementation serves both targets. The JS
+# package (@siafoundation/sia-storage) is compiled from this very crate.
+sia_storage = "0.9.1"
+# Shared hex decoding, so an AppKey is parsed the same way everywhere.
+pin-derive = { path = "../pin-derive" }
+serde = { version = "1", features = ["derive"] }
+# `sync` only — for the Mutex guarding the session slots. It is held across awaits
+# (a pending approval can take minutes), which is exactly what rules out std's Mutex.
+# This is the one tokio feature that is pure Rust and builds for wasm32.
+tokio = { version = "1", default-features = false, features = ["sync"] }
+
+[dev-dependencies]
+# A bare executor to drive the async surface in tests. None of them reach the network,
+# so a full tokio runtime would be weight for nothing. Already in the tree via pin-core.
+futures-lite = "2"

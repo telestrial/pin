@@ -150,6 +150,18 @@ pub fn decode_hex32(hex: &str) -> Option<[u8; 32]> {
     Some(out)
 }
 
+/// Encode 32 bytes as a 64-char lowercase hex string — the inverse of
+/// [`decode_hex32`], and kept beside it so the two cannot drift into disagreeing
+/// about case or padding. Used when a secret leaves an engine for the app to
+/// persist, the direction the decoder's callers eventually read back.
+pub fn encode_hex32(bytes: &[u8; 32]) -> String {
+    let mut out = String::with_capacity(64);
+    for b in bytes {
+        out.push_str(&format!("{b:02x}"));
+    }
+    out
+}
+
 /// Decode the 32-byte Sia AppKey from its 64-char hex form (the HKDF IKM). Named
 /// separately from [`decode_hex32`] so the call site says which secret it is.
 pub fn decode_app_key(hex: &str) -> Option<[u8; 32]> {
@@ -201,6 +213,24 @@ pub const EV_ERROR: &str = "error";
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hex32_round_trips() {
+        let bytes: [u8; 32] = core::array::from_fn(|i| (i as u8).wrapping_mul(7).wrapping_add(3));
+        let hex = encode_hex32(&bytes);
+        assert_eq!(hex.len(), 64);
+        assert_eq!(hex, hex.to_lowercase());
+        assert_eq!(decode_hex32(&hex), Some(bytes));
+    }
+
+    #[test]
+    fn hex32_pads_low_bytes() {
+        // A byte under 0x10 must still occupy two chars, or every later offset shifts.
+        assert_eq!(encode_hex32(&[0u8; 32]), "0".repeat(64));
+        let mut bytes = [0u8; 32];
+        bytes[31] = 0x0f;
+        assert_eq!(decode_hex32(&encode_hex32(&bytes)), Some(bytes));
+    }
 
     #[test]
     fn record_key_is_collection_slash_rkey() {
