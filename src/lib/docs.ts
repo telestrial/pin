@@ -12,7 +12,7 @@
 // The Tauri path's IPC module is dynamically imported (inside tauriDocs), so it never
 // enters the web bundle; and the 7 MB wasm only instantiates when the web path runs.
 
-import initWasm, {
+import {
   channel_doc_namespaces,
   open as coreOpen,
   share as coreShare,
@@ -30,6 +30,7 @@ import initWasm, {
   put_record,
   share_channel_doc,
 } from '../../crates/pin-core/pkg/pin_core.js'
+import { ensureWasm } from '../core/wasm'
 import { useCuratorStore } from '../stores/curator'
 import { inTauri } from './openExternal'
 import {
@@ -50,12 +51,6 @@ import {
   startSyncNative,
 } from './tauriDocs'
 
-let wasmReady: Promise<void> | null = null
-function ensureReady(): Promise<void> {
-  if (!wasmReady) wasmReady = initWasm().then(() => undefined)
-  return wasmReady
-}
-
 // Open the engine exactly ONCE per identity and share it across every caller.
 // pin-core's `open` REBUILDS the engine from scratch on each call (fresh endpoint,
 // fresh MemStore) — so a second open would drop an active start_sync subscription
@@ -73,7 +68,7 @@ export async function openDocs(appKeyHex: string): Promise<string> {
   if (openState && openState.key === appKeyHex) return openState.promise
   const promise = (async () => {
     if (inTauri()) return openDocsNative()
-    await ensureReady()
+    await ensureWasm()
     return coreOpen(appKeyHex)
   })()
   openState = { key: appKeyHex, promise }
@@ -98,7 +93,7 @@ export async function putRecord(
   value: Uint8Array,
 ): Promise<void> {
   if (inTauri()) return putRecordNative(collection, rkey, value)
-  await ensureReady()
+  await ensureWasm()
   await put_record(collection, rkey, value)
 }
 
@@ -107,7 +102,7 @@ export async function getRecord(
   rkey: string,
 ): Promise<Uint8Array | undefined> {
   if (inTauri()) return getRecordNative(collection, rkey)
-  await ensureReady()
+  await ensureWasm()
   return get_record(collection, rkey) ?? undefined
 }
 
@@ -116,13 +111,13 @@ export async function deleteRecord(
   rkey: string,
 ): Promise<void> {
   if (inTauri()) return deleteRecordNative(collection, rkey)
-  await ensureReady()
+  await ensureWasm()
   await delete_record(collection, rkey)
 }
 
 export async function listRecords(collection: string): Promise<string[]> {
   if (inTauri()) return listRecordsNative(collection)
-  await ensureReady()
+  await ensureWasm()
   return (await list_records(collection)) as string[]
 }
 
@@ -132,7 +127,7 @@ export async function listAll(): Promise<
   Array<{ collection: string; rkey: string }>
 > {
   if (inTauri()) return listAllNative()
-  await ensureReady()
+  await ensureWasm()
   const keys = (await list_all()) as string[]
   return keys.map((key) => {
     const i = key.indexOf('/')
@@ -146,7 +141,7 @@ export async function listAll(): Promise<
  *  ({@link openDocs}). */
 export async function shareDoc(): Promise<string> {
   if (inTauri()) return shareDocNative()
-  await ensureReady()
+  await ensureWasm()
   return coreShare()
 }
 
@@ -164,7 +159,7 @@ export async function startSync(
   onEvent: (label: string) => void,
 ): Promise<void> {
   if (inTauri()) return startSyncNative(ticket)
-  await ensureReady()
+  await ensureWasm()
   await coreStartSync(ticket, onEvent)
 }
 
@@ -175,7 +170,7 @@ export async function startSync(
  *  shape. Null when the engine isn't open yet (or on desktop). */
 export async function docsStatus(): Promise<DocsNetworkStatus | null> {
   if (inTauri()) return null
-  await ensureReady()
+  await ensureWasm()
   try {
     return coreStatus() as DocsNetworkStatus
   } catch {
@@ -244,7 +239,7 @@ export function isRemoteChange(kind: string): boolean {
  *  namespace seed (hex). Returns the namespace id. Idempotent per channel. */
 export async function openChannelDoc(nsSeedHex: string): Promise<string> {
   if (inTauri()) return openChannelNative(nsSeedHex)
-  await ensureReady()
+  await ensureWasm()
   return open_channel_doc(nsSeedHex)
 }
 
@@ -256,7 +251,7 @@ export async function openChannelDoc(nsSeedHex: string): Promise<string> {
  *  no relay URL is undialable from a browser (which has no discovery). */
 export async function shareChannelDoc(nsId: string): Promise<string> {
   if (inTauri()) return shareChannelNative(nsId)
-  await ensureReady()
+  await ensureWasm()
   return share_channel_doc(nsId)
 }
 
@@ -268,7 +263,7 @@ export async function importChannelDoc(
   onEvent: (nsId: string, kind: string, key: string) => void,
 ): Promise<string> {
   if (inTauri()) return importChannelNative(ticket, onEvent)
-  await ensureReady()
+  await ensureWasm()
   return import_channel_doc(ticket, onEvent)
 }
 
@@ -280,7 +275,7 @@ export async function putChannelRecord(
   value: Uint8Array,
 ): Promise<void> {
   if (inTauri()) return putChannelRecordNative(nsId, collection, rkey, value)
-  await ensureReady()
+  await ensureWasm()
   await put_channel_record(nsId, collection, rkey, value)
 }
 
@@ -292,7 +287,7 @@ export async function getChannelRecord(
   rkey: string,
 ): Promise<Uint8Array | undefined> {
   if (inTauri()) return getChannelRecordNative(nsId, collection, rkey)
-  await ensureReady()
+  await ensureWasm()
   return (await get_channel_record(nsId, collection, rkey)) ?? undefined
 }
 
@@ -303,7 +298,7 @@ export async function deleteChannelRecord(
   rkey: string,
 ): Promise<void> {
   if (inTauri()) return deleteChannelRecordNative(nsId, collection, rkey)
-  await ensureReady()
+  await ensureWasm()
   await delete_channel_record(nsId, collection, rkey)
 }
 
@@ -311,7 +306,7 @@ export async function deleteChannelRecord(
  *  can skip re-opening or re-importing one it already has. */
 export async function channelDocNamespaces(): Promise<string[]> {
   if (inTauri()) return channelNamespacesNative()
-  await ensureReady()
+  await ensureWasm()
   return (await channel_doc_namespaces()) as string[]
 }
 
