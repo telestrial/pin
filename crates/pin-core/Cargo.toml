@@ -31,6 +31,10 @@ pin-rpc = { path = "../pin-rpc" }
 # so the packet shape, TTL and retry posture can't drift between a tab and a desktop;
 # only the transport underneath differs (relays here, Mainline DHT there).
 pin-pkarr = { path = "../pin-pkarr" }
+# Pin's Sia layer — bytes, custody and the connect flow. Shared with the desktop
+# backend so the connect typestate and the pinned-objects walk are one definition;
+# `sia_storage` brings its own per-target transport, so nothing here branches.
+pin-sia = { path = "../pin-sia" }
 serde_json = "1"
 futures-lite = "2"
 # Browser glue (compiles harmlessly on native; the exports are just inert there).

@@ -198,6 +198,74 @@ export function share(): Promise<string>;
  */
 export function share_channel_doc(ns_id: string): Promise<string>;
 
+export function sia_account_snapshot(): Promise<string>;
+
+export function sia_app_key_hex(): Promise<string | undefined>;
+
+/**
+ * Restore a session from a stored AppKey. `false` means the indexer does not
+ * recognise it — approval revoked, or never registered — which sends the user back
+ * to the welcome screen rather than being an error worth reporting.
+ */
+export function sia_connect(app_key_hex: string, indexer_url: string): Promise<boolean>;
+
+export function sia_delete_object(id: string): Promise<void>;
+
+export function sia_download_item(url: string): Promise<Uint8Array>;
+
+export function sia_generate_recovery_phrase(): string;
+
+/**
+ * One object's slabs by id, as JSON. `None` when it is not in scope — a normal
+ * answer (repack asks about references that may already be gone), not an error.
+ */
+export function sia_get_object_slabs(id: string): Promise<string | undefined>;
+
+export function sia_is_connected(): Promise<boolean>;
+
+export function sia_list_pinned_objects(): Promise<string>;
+
+export function sia_pin_from_share_url(url: string): Promise<string>;
+
+export function sia_prune_slabs(): Promise<void>;
+
+/**
+ * Finish registration with the recovery phrase; returns the AppKey hex to persist.
+ */
+export function sia_register(mnemonic: string): Promise<string>;
+
+/**
+ * Begin a connection and return the URL the user approves at.
+ */
+export function sia_request_connection(indexer_url: string): Promise<string>;
+
+export function sia_resolve_object_id(url: string): Promise<string>;
+
+export function sia_upload_item(bytes: Uint8Array, on_shard?: Function | null): Promise<string>;
+
+/**
+ * Bin-pack several objects into shared slabs, preserving input order.
+ *
+ * Takes a JS array of `Uint8Array` rather than a framed blob: framing exists on the
+ * desktop only because a raw IPC body is a single blob, which is not a constraint
+ * here.
+ */
+export function sia_upload_items_packed(items: Array<any>, on_shard?: Function | null): Promise<string>;
+
+/**
+ * `Ok` for a well-formed phrase; the error carries why, for inline validation.
+ */
+export function sia_validate_recovery_phrase(phrase: string): void;
+
+/**
+ * Block until the user approves at the indexer.
+ *
+ * One long call that polls internally until approval or expiry, rather than
+ * something to re-drive from a timer. Safe to invoke twice (React strict mode mounts
+ * effects twice); the second call sees an already-approved request and returns.
+ */
+export function sia_wait_for_approval(): Promise<void>;
+
 export function start(): void;
 
 /**
@@ -262,6 +330,24 @@ export interface InitOutput {
     readonly put_record: (a: number, b: number, c: number, d: number, e: number, f: number) => any;
     readonly share: () => any;
     readonly share_channel_doc: (a: number, b: number) => any;
+    readonly sia_account_snapshot: () => any;
+    readonly sia_app_key_hex: () => any;
+    readonly sia_connect: (a: number, b: number, c: number, d: number) => any;
+    readonly sia_delete_object: (a: number, b: number) => any;
+    readonly sia_download_item: (a: number, b: number) => any;
+    readonly sia_generate_recovery_phrase: () => [number, number];
+    readonly sia_get_object_slabs: (a: number, b: number) => any;
+    readonly sia_is_connected: () => any;
+    readonly sia_list_pinned_objects: () => any;
+    readonly sia_pin_from_share_url: (a: number, b: number) => any;
+    readonly sia_prune_slabs: () => any;
+    readonly sia_register: (a: number, b: number) => any;
+    readonly sia_request_connection: (a: number, b: number) => any;
+    readonly sia_resolve_object_id: (a: number, b: number) => any;
+    readonly sia_upload_item: (a: number, b: number, c: number) => any;
+    readonly sia_upload_items_packed: (a: any, b: number) => any;
+    readonly sia_validate_recovery_phrase: (a: number, b: number) => [number, number];
+    readonly sia_wait_for_approval: () => any;
     readonly start_sync: (a: number, b: number, c: any) => any;
     readonly status: () => [number, number, number];
     readonly start: () => void;
@@ -279,15 +365,18 @@ export interface InitOutput {
     readonly intounderlyingsource_cancel: (a: number) => void;
     readonly intounderlyingsource_pull: (a: number, b: any) => any;
     readonly ring_core_0_17_14__bn_mul_mont: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
+    readonly wasm_bindgen__convert__closures_____invoke__h095b0027783d48e7: (a: number, b: number, c: any) => [number, number];
     readonly wasm_bindgen__convert__closures_____invoke__hc5f3e21d0efe8974: (a: number, b: number, c: any) => [number, number];
+    readonly wasm_bindgen__convert__closures_____invoke__h095b0027783d48e7_5: (a: number, b: number, c: any) => [number, number];
+    readonly wasm_bindgen__convert__closures_____invoke__h095b0027783d48e7_6: (a: number, b: number, c: any) => [number, number];
     readonly wasm_bindgen__convert__closures_____invoke__h08f43aa7048968fb: (a: number, b: number, c: any, d: any) => void;
-    readonly wasm_bindgen__convert__closures_____invoke__h88edf5d76da6fe27: (a: number, b: number, c: any) => void;
-    readonly wasm_bindgen__convert__closures_____invoke__h948c8e55c6117f5c: (a: number, b: number, c: any) => void;
-    readonly wasm_bindgen__convert__closures_____invoke__h106cbabba281c03b: (a: number, b: number, c: any) => void;
-    readonly wasm_bindgen__convert__closures_____invoke__hd7fa2e88bff1dc50: (a: number, b: number) => void;
-    readonly wasm_bindgen__convert__closures_____invoke__h437640b16a508fd7: (a: number, b: number) => void;
+    readonly wasm_bindgen__convert__closures_____invoke__h9c38374c5ff5ba70: (a: number, b: number, c: any) => void;
+    readonly wasm_bindgen__convert__closures_____invoke__h16773cfb6814ef94: (a: number, b: number, c: any) => void;
+    readonly wasm_bindgen__convert__closures_____invoke__hd745e8189b95fcf4: (a: number, b: number, c: any) => void;
+    readonly wasm_bindgen__convert__closures_____invoke__h43ae6dd74759854d: (a: number, b: number) => void;
+    readonly wasm_bindgen__convert__closures_____invoke__h5a55095f3e22c2db: (a: number, b: number) => void;
     readonly wasm_bindgen__convert__closures_____invoke__h786b4ed5039223cd: (a: number, b: number) => void;
-    readonly wasm_bindgen__convert__closures_____invoke__h8daa9f8fce1ac3eb: (a: number, b: number) => void;
+    readonly wasm_bindgen__convert__closures_____invoke__hfd95e48486b082ea: (a: number, b: number) => void;
     readonly wasm_bindgen__convert__closures_____invoke__ha3a167bd92644a00: (a: number, b: number) => void;
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;

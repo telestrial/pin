@@ -4577,6 +4577,7 @@ dependencies = [
  "pin-derive",
  "pin-pkarr",
  "pin-rpc",
+ "pin-sia",
  "serde_json",
  "wasm-bindgen",
  "wasm-bindgen-futures",

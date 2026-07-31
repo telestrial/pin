@@ -641,3 +641,224 @@ pub async fn pkarr_resolve(key: String) -> Result<String, JsValue> {
         .map_err(|e| JsValue::from_str(&e))?;
     serde_json::to_string(&records).map_err(|e| JsValue::from_str(&format!("encode: {e}")))
 }
+
+// --- Sia: bytes, custody and the connect flow ---------------------------------
+//
+// Wrappers over `pin_sia`, which the desktop backend also uses — so the connect
+// typestate, the pinned-objects walk and the descriptor shapes are one definition
+// rather than a TypeScript copy and a Rust copy kept in step by comment.
+//
+// Structured results cross as JSON, matching the pkarr seam above: the descriptors
+// already derive `Serialize`, and their `slabs` field reuses the SDK's own type,
+// whose serde emits byte-for-byte the shape the frontend's `Slab` interface expects.
+// Raw bytes cross as `Vec<u8>` (an ArrayBuffer in JS), never base64.
+
+thread_local! {
+    static SIA: RefCell<Option<Rc<pin_sia::Session>>> = const { RefCell::new(None) };
+}
+
+/// The session, created on first use.
+///
+/// Unlike the doc engine there is no "call open first" precondition: a `Session` is
+/// inert until connected, and every operation below already reports the
+/// not-connected case, so lazily minting one keeps the auth screens free of an
+/// initialization step whose only job would be to fail later anyway.
+fn sia() -> Rc<pin_sia::Session> {
+    SIA.with(|s| {
+        let mut slot = s.borrow_mut();
+        if slot.is_none() {
+            *slot = Some(Rc::new(pin_sia::Session::new()));
+        }
+        slot.clone().expect("session just created")
+    })
+}
+
+/// Bridge a JS callback into the shard-progress hook, so upload progress bars keep
+/// working across this boundary. A throwing callback is swallowed: it drives a
+/// progress bar, and letting it abort an upload in flight would be a poor trade.
+fn shard_callback(f: Option<js_sys::Function>) -> Option<pin_sia::ShardCallback> {
+    f.map(|f| -> pin_sia::ShardCallback {
+        std::sync::Arc::new(move || {
+            let _ = f.call0(&JsValue::NULL);
+        })
+    })
+}
+
+// -- connect flow --------------------------------------------------------------
+
+/// Restore a session from a stored AppKey. `false` means the indexer does not
+/// recognise it — approval revoked, or never registered — which sends the user back
+/// to the welcome screen rather than being an error worth reporting.
+#[wasm_bindgen]
+pub async fn sia_connect(app_key_hex: String, indexer_url: String) -> Result<bool, JsValue> {
+    sia()
+        .connect(&app_key_hex, &indexer_url)
+        .await
+        .map_err(|e| JsValue::from_str(&e))
+}
+
+/// Begin a connection and return the URL the user approves at.
+#[wasm_bindgen]
+pub async fn sia_request_connection(indexer_url: String) -> Result<String, JsValue> {
+    sia()
+        .request_connection(&indexer_url)
+        .await
+        .map_err(|e| JsValue::from_str(&e))
+}
+
+/// Block until the user approves at the indexer.
+///
+/// One long call that polls internally until approval or expiry, rather than
+/// something to re-drive from a timer. Safe to invoke twice (React strict mode mounts
+/// effects twice); the second call sees an already-approved request and returns.
+#[wasm_bindgen]
+pub async fn sia_wait_for_approval() -> Result<(), JsValue> {
+    sia()
+        .wait_for_approval()
+        .await
+        .map_err(|e| JsValue::from_str(&e))
+}
+
+/// Finish registration with the recovery phrase; returns the AppKey hex to persist.
+#[wasm_bindgen]
+pub async fn sia_register(mnemonic: String) -> Result<String, JsValue> {
+    sia()
+        .register(&mnemonic)
+        .await
+        .map_err(|e| JsValue::from_str(&e))
+}
+
+#[wasm_bindgen]
+pub async fn sia_is_connected() -> bool {
+    sia().is_connected().await
+}
+
+#[wasm_bindgen]
+pub async fn sia_app_key_hex() -> Option<String> {
+    sia().app_key_hex().await
+}
+
+#[wasm_bindgen]
+pub fn sia_generate_recovery_phrase() -> String {
+    pin_sia::generate_recovery_phrase()
+}
+
+/// `Ok` for a well-formed phrase; the error carries why, for inline validation.
+#[wasm_bindgen]
+pub fn sia_validate_recovery_phrase(phrase: &str) -> Result<(), JsValue> {
+    pin_sia::validate_recovery_phrase(phrase)
+        .map_err(|e| JsValue::from_str(&format!("recovery phrase: {e}")))
+}
+
+// -- byte I/O ------------------------------------------------------------------
+
+#[wasm_bindgen]
+pub async fn sia_upload_item(
+    bytes: Vec<u8>,
+    on_shard: Option<js_sys::Function>,
+) -> Result<String, JsValue> {
+    let uploaded = sia()
+        .upload_item(bytes, shard_callback(on_shard))
+        .await
+        .map_err(|e| JsValue::from_str(&e))?;
+    serde_json::to_string(&uploaded).map_err(|e| JsValue::from_str(&format!("encode: {e}")))
+}
+
+/// Bin-pack several objects into shared slabs, preserving input order.
+///
+/// Takes a JS array of `Uint8Array` rather than a framed blob: framing exists on the
+/// desktop only because a raw IPC body is a single blob, which is not a constraint
+/// here.
+#[wasm_bindgen]
+pub async fn sia_upload_items_packed(
+    items: js_sys::Array,
+    on_shard: Option<js_sys::Function>,
+) -> Result<String, JsValue> {
+    let mut buffers = Vec::with_capacity(items.length() as usize);
+    for value in items.iter() {
+        let bytes = value
+            .dyn_into::<js_sys::Uint8Array>()
+            .map_err(|_| JsValue::from_str("packed upload expects an array of Uint8Array"))?;
+        buffers.push(bytes.to_vec());
+    }
+    let uploaded = sia()
+        .upload_items_packed(buffers, shard_callback(on_shard))
+        .await
+        .map_err(|e| JsValue::from_str(&e))?;
+    serde_json::to_string(&uploaded).map_err(|e| JsValue::from_str(&format!("encode: {e}")))
+}
+
+#[wasm_bindgen]
+pub async fn sia_download_item(url: String) -> Result<Vec<u8>, JsValue> {
+    sia()
+        .download_item(&url)
+        .await
+        .map_err(|e| JsValue::from_str(&e))
+}
+
+// -- custody -------------------------------------------------------------------
+
+#[wasm_bindgen]
+pub async fn sia_pin_from_share_url(url: String) -> Result<String, JsValue> {
+    sia()
+        .pin_from_share_url(&url)
+        .await
+        .map_err(|e| JsValue::from_str(&e))
+}
+
+#[wasm_bindgen]
+pub async fn sia_resolve_object_id(url: String) -> Result<String, JsValue> {
+    sia()
+        .resolve_object_id(&url)
+        .await
+        .map_err(|e| JsValue::from_str(&e))
+}
+
+#[wasm_bindgen]
+pub async fn sia_delete_object(id: String) -> Result<(), JsValue> {
+    sia()
+        .delete_object(&id)
+        .await
+        .map_err(|e| JsValue::from_str(&e))
+}
+
+#[wasm_bindgen]
+pub async fn sia_prune_slabs() -> Result<(), JsValue> {
+    sia().prune_slabs().await.map_err(|e| JsValue::from_str(&e))
+}
+
+// -- accounting ----------------------------------------------------------------
+
+#[wasm_bindgen]
+pub async fn sia_account_snapshot() -> Result<String, JsValue> {
+    let snapshot = sia()
+        .account_snapshot()
+        .await
+        .map_err(|e| JsValue::from_str(&e))?;
+    serde_json::to_string(&snapshot).map_err(|e| JsValue::from_str(&format!("encode: {e}")))
+}
+
+#[wasm_bindgen]
+pub async fn sia_list_pinned_objects() -> Result<String, JsValue> {
+    let objects = sia()
+        .list_pinned_objects()
+        .await
+        .map_err(|e| JsValue::from_str(&e))?;
+    serde_json::to_string(&objects).map_err(|e| JsValue::from_str(&format!("encode: {e}")))
+}
+
+/// One object's slabs by id, as JSON. `None` when it is not in scope — a normal
+/// answer (repack asks about references that may already be gone), not an error.
+#[wasm_bindgen]
+pub async fn sia_get_object_slabs(id: String) -> Result<Option<String>, JsValue> {
+    let found = sia()
+        .get_object_slabs(&id)
+        .await
+        .map_err(|e| JsValue::from_str(&e))?;
+    match found {
+        Some(info) => serde_json::to_string(&info)
+            .map(Some)
+            .map_err(|e| JsValue::from_str(&format!("encode: {e}"))),
+        None => Ok(None),
+    }
+}

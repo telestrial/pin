@@ -19,6 +19,10 @@ export CC_wasm32_unknown_unknown="${CC_wasm32_unknown_unknown:-clang}"
 export AR_wasm32_unknown_unknown="${AR_wasm32_unknown_unknown:-llvm-ar}"
 # getrandom 0.2 needs the js backend selected via cfg for the wasm build.
 export RUSTFLAGS="${RUSTFLAGS:-} --cfg getrandom_backend=\"wasm_js\""
+# sia_storage's browser transport is WebTransport, which web-sys still gates behind
+# its unstable-API cfg. Without this the Sia layer fails to resolve
+# web_sys::WebTransport and the build stops there.
+export RUSTFLAGS="${RUSTFLAGS} --cfg=web_sys_unstable_apis"
 
 wasm-pack build crates/pin-core --release --target web
 
