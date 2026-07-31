@@ -1,40 +1,12 @@
-import type { Sdk } from '@siafoundation/sia-storage'
 import { beforeEach, describe, expect, it } from 'vitest'
-import { fetchAccountSnapshot, pinItemBytes } from '../core/pin'
 import type { SiaClient } from '../core/siaClient'
 import type { AttachmentRef, ItemRef } from '../core/types'
 import { runDeleteObjects } from '../lib/actions/deleteObjects'
 import { itemRefFromAttachment } from '../lib/filePin'
 import { LIBRARY_CHANNEL } from '../lib/pinUpload'
-import { createFakeWorld, FakeSdk } from '../test/fakeSdk'
+import { createFakeWorld, FakeSiaClient } from '../test/fakeSia'
 import { type DeleteObjectsAction, useActionStore } from './actionQueue'
 import { objectIDsReferencedBy, type PinnedItemRef, usePinStore } from './pin'
-
-// A SiaClient over a FakeSdk, built here (NOT via makeWasmSiaClient) so this
-// unit test — which doesn't mock @siafoundation/sia-storage — never pulls the
-// real WASM module in through core/sia. Delegates to the WASM-free core/pin
-// helpers + direct fake calls; only the methods this test exercises are real
-// (pin / unpin / refreshAccount → pinFromShareURL, deleteObject, pruneSlabs,
-// accountSnapshot), the rest throw if ever reached.
-function asClient(fake: FakeSdk): SiaClient {
-  const sdk = fake as unknown as Sdk
-  const unused = async (): Promise<never> => {
-    throw new Error('SiaClient method not used in this test')
-  }
-  return {
-    uploadItem: unused,
-    uploadItemsPacked: unused,
-    downloadItem: unused,
-    pinFromShareURL: (url) => pinItemBytes(sdk, url),
-    resolveObjectID: async (url) => (await fake.sharedObject(url)).id(),
-    deleteObject: (id) => fake.deleteObject(id),
-    pruneSlabs: () => fake.pruneSlabs(),
-    accountSnapshot: () => fetchAccountSnapshot(sdk),
-    listPinnedObjects: unused,
-    getObjectSlabs: async () => null,
-    appKeyPublicKey: () => fake.appKey().publicKey(),
-  }
-}
 
 // Unpin now removes the local pin synchronously and JOURNALS the byte reclaim
 // as a delete-objects action. Drain those pending cleanups through the real
@@ -53,17 +25,11 @@ async function drainCleanups(client: SiaClient): Promise<void> {
 }
 
 async function uploadAndShare(
-  fake: FakeSdk,
+  author: FakeSiaClient,
   bytes: Uint8Array,
 ): Promise<string> {
-  const stream = new ReadableStream<Uint8Array>({
-    start(c) {
-      c.enqueue(bytes)
-      c.close()
-    },
-  })
-  const obj = await fake.upload(null, stream)
-  return fake.shareObject(obj, new Date())
+  const { itemURL } = await author.uploadItem(bytes)
+  return itemURL
 }
 
 function pinEntry(
@@ -119,8 +85,8 @@ describe('reference-aware unpin (granular pinning)', () => {
 
   async function setup() {
     const world = createFakeWorld()
-    const alice = new FakeSdk('alice', world)
-    const bob = new FakeSdk('bob', world)
+    const alice = new FakeSiaClient('alice', world)
+    const bob = new FakeSiaClient('bob', world)
     const bodyURL = await uploadAndShare(alice, new Uint8Array(100))
     const fileURL = await uploadAndShare(alice, new Uint8Array(500))
     const att: AttachmentRef = {
@@ -148,7 +114,7 @@ describe('reference-aware unpin (granular pinning)', () => {
     const store = usePinStore.getState()
 
     // Bob pins the whole post (body + file) → 2 objects in his scope.
-    await store.pin(asClient(bob), {
+    await store.pin(bob, {
       item: post,
       channel: { authorHandle: 'alice', channelID: 'chan', name: 'Alice' },
     })
@@ -156,7 +122,7 @@ describe('reference-aware unpin (granular pinning)', () => {
 
     // Bob also pins the file standalone into his library. pinObject is
     // idempotent at Sia (same bytes), but a second pinStore entry is created.
-    await store.pin(asClient(bob), {
+    await store.pin(bob, {
       item: itemRefFromAttachment(att),
       channel: LIBRARY_CHANNEL,
     })
@@ -165,8 +131,8 @@ describe('reference-aware unpin (granular pinning)', () => {
 
     // Unpin the whole post. Body is released; the file survives because the
     // library pin still references it.
-    await store.unpin(asClient(bob), bodyURL)
-    await drainCleanups(asClient(bob))
+    await store.unpin(bob, bodyURL)
+    await drainCleanups(bob)
     const remaining = usePinStore.getState().pinned
     expect(remaining).toHaveLength(1)
     expect(remaining[0].item.itemURL).toBe(fileURL)
@@ -174,8 +140,8 @@ describe('reference-aware unpin (granular pinning)', () => {
     expect(world.scopeOf('bob').has(remaining[0].objectID)).toBe(true)
 
     // Unpin the file too → its bytes are now released.
-    await store.unpin(asClient(bob), fileURL)
-    await drainCleanups(asClient(bob))
+    await store.unpin(bob, fileURL)
+    await drainCleanups(bob)
     expect(usePinStore.getState().pinned).toHaveLength(0)
     expect(world.scopeOf('bob').size).toBe(0)
   })
@@ -184,7 +150,7 @@ describe('reference-aware unpin (granular pinning)', () => {
     const { world, bob, bodyURL, post } = await setup()
     const store = usePinStore.getState()
 
-    await store.pin(asClient(bob), {
+    await store.pin(bob, {
       item: post,
       channel: { authorHandle: 'alice', channelID: 'chan', name: 'Alice' },
     })
@@ -193,9 +159,9 @@ describe('reference-aware unpin (granular pinning)', () => {
     // No standalone file pin holds the attachment → whole-post unpin releases
     // both body and attachment (today's behavior, preserved — now via the
     // journaled cleanup).
-    await store.unpin(asClient(bob), bodyURL)
+    await store.unpin(bob, bodyURL)
     expect(usePinStore.getState().pinned).toHaveLength(0)
-    await drainCleanups(asClient(bob))
+    await drainCleanups(bob)
     expect(world.scopeOf('bob').size).toBe(0)
   })
 })

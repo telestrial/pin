@@ -4,15 +4,20 @@
 //
 // Test files use these as factories:
 //
-//   vi.mock('@siafoundation/sia-storage', async () =>
-//     (await import('./fakeModules')).fakeSiaStorageModule(),
+//   vi.mock('../lib/pkarr', async () =>
+//     (await import('./fakeModules')).fakePkarrModule(),
 //   )
 //
 // State (the current FakeWorld) lives here too, so the factories don't have
 // to reach into a heavier module. setupFakeApp.ts pulls in production stores
 // and is loaded lazily inside test bodies — never at mock-resolution time.
+//
+// Sia is NOT mocked here. It used to be, back when the client was a thin wrapper
+// over a JS SDK that a factory could swap out. The implementation is Rust now, so
+// there is no module to intercept — tests inject a `FakeSiaClient` at the
+// `SiaClient` seam instead, which is where the app's dependency always was.
 
-import type { FakeWorld } from './fakeSdk'
+import type { FakeWorld } from './fakeSia'
 
 let currentWorld: FakeWorld | null = null
 
@@ -84,51 +89,5 @@ export function fakePkarrModule() {
       const { publicKey } = await identityFromSeed(appKeyBytes)
       return { did: `did:dht:${publicKey}`, publicKey }
     },
-  }
-}
-
-// ---------------------------------------------------------------------------
-// @siafoundation/sia-storage replacement
-// ---------------------------------------------------------------------------
-
-class FakePinnedObjectStub {
-  // No-op constructor. core/sia.ts uses `new PinnedObject()` as the first
-  // arg to sdk.upload(); FakeSdk.upload ignores that argument and mints
-  // its own object handle. The stub just has to construct without WASM.
-  constructor() {}
-  id(): string {
-    return ''
-  }
-  size(): number {
-    return 0
-  }
-  free(): void {}
-  slabs(): unknown[] {
-    return []
-  }
-  metadata(): Uint8Array {
-    return new Uint8Array()
-  }
-}
-
-class FakeSdkStub {
-  private constructor() {}
-}
-
-class FakeBuilderStub {
-  static new(): never {
-    throw new Error('Builder not implemented in test mode')
-  }
-}
-
-export function fakeSiaStorageModule() {
-  return {
-    Sdk: FakeSdkStub,
-    PinnedObject: FakePinnedObjectStub,
-    Builder: FakeBuilderStub,
-    AppKey: class {},
-    initSia: async () => {},
-    generateRecoveryPhrase: () => 'fake recovery phrase',
-    validateRecoveryPhrase: () => {},
   }
 }

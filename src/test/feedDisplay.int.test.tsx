@@ -1,24 +1,20 @@
 // Integration test: author publishes a post → subscriber sees it in the feed.
 //
 // First integration test in the suite — sets the harness pattern for the rest.
-// Drives production components (HomeFeed) against the Phase 3 fakes via the
-// vi.mock'd @siafoundation/sia-storage module.
+// Drives production components (HomeFeed) against a FakeSiaClient injected at the
+// SiaClient seam, which is where the app's Sia dependency actually lives.
 //
-// Alice (author) publishes a text post through the real core/channels +
-// core/sia code paths (backed by FakeSdk). Bob (subscriber)
-// renders HomeFeed with alice's subscription seeded into his auth store;
-// the feed populates from the channel locator and the post body
-// renders inline.
+// Alice (author) publishes a text post through the real core/channels code path.
+// Bob (subscriber) renders HomeFeed with alice's subscription seeded into his auth
+// store; the feed populates from the channel locator and the post body renders
+// inline.
 
 import { render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 // vi.mock must come before the imports below — Vitest hoists these calls.
-// The factories use dynamic import() so the helper module is loaded lazily
+// The factory uses dynamic import() so the helper module is loaded lazily
 // at runtime (after hoist), when getCurrentWorld() can return a live world.
-vi.mock('@siafoundation/sia-storage', async () =>
-  (await import('./fakeModules')).fakeSiaStorageModule(),
-)
 vi.mock('../lib/pkarr', async () =>
   (await import('./fakeModules')).fakePkarrModule(),
 )

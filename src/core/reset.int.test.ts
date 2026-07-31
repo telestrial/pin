@@ -1,12 +1,8 @@
-// The full-account Sia wipe, exercised through the Phase 3 fakes (sia-storage
-// module mock, hence the int tier). did:dht/pkarr records aren't wiped (they
-// TTL out), so there's nothing atproto to exercise here anymore.
+// The full-account Sia wipe, exercised against a FakeSiaClient (hence the int
+// tier). did:dht/pkarr records aren't wiped — they TTL out — so there's nothing
+// atproto to exercise here anymore.
 
-import { beforeEach, describe, expect, it, vi } from 'vitest'
-
-vi.mock('@siafoundation/sia-storage', async () =>
-  (await import('../test/fakeModules')).fakeSiaStorageModule(),
-)
+import { beforeEach, describe, expect, it } from 'vitest'
 
 import { createFakeApp, resetAllStores } from '../test/setupFakeApp'
 import { wipeAllSiaObjects } from './reset'

@@ -3,7 +3,6 @@
 // NOT from a vi.mock factory (the factory would race the production
 // modules it's replacing). See fakeModules.ts for the lean mock side.
 
-import type { Sdk } from '@siafoundation/sia-storage'
 import {
   appendItemToChannel,
   buildItemRef,
@@ -11,7 +10,7 @@ import {
   createChannel,
   editItem,
 } from '../core/channels'
-import { makeWasmSiaClient, type SiaClient } from '../core/siaClient'
+import type { SiaClient } from '../core/siaClient'
 import type { ChannelManifest, ItemRef, SubscriptionRef } from '../core/types'
 import {
   commitChannelManifest,
@@ -25,14 +24,13 @@ import { useFeedStore } from '../stores/feed'
 import { usePinStore } from '../stores/pin'
 import { useToastStore } from '../stores/toast'
 import { setCurrentWorld } from './fakeModules'
-import { createFakeWorld, FakeSdk, type FakeWorld } from './fakeSdk'
+import { createFakeWorld, FakeSiaClient, type FakeWorld } from './fakeSia'
 
 export type FakeAccount = {
-  sdk: FakeSdk
-  // The SiaClient the app talks to, wrapping this account's fake sdk once. Pass
-  // this where a SiaClient is expected (migrated core/lib fns, store actions);
-  // `.sdk` stays for tests that read the raw fake directly (e.g. account()).
-  client: SiaClient
+  // The Sia surface the app talks to. Tests that need to assert on storage
+  // directly (scope contents, byte totals) go through this too — there is no
+  // lower layer to reach for, because the real one is Rust.
+  client: FakeSiaClient
   // did/handle are test bookkeeping for building SubscriptionRefs; identity is
   // did:dht (derived from the AppKey) in the app itself.
   did: string
@@ -56,9 +54,7 @@ export function createFakeApp(): FakeApp {
     createAccount: ({ did, handle, maxPinned }) => {
       if (maxPinned !== undefined) world.accountMax.set(did, maxPinned)
       world.handles.set(did, handle)
-      const sdk = new FakeSdk(did, world)
-      const client = makeWasmSiaClient(sdk as unknown as Sdk)
-      return { sdk, client, did, handle }
+      return { client: new FakeSiaClient(did, world), did, handle }
     },
   }
 }

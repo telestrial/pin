@@ -11,9 +11,6 @@ import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-vi.mock('@siafoundation/sia-storage', async () =>
-  (await import('./fakeModules')).fakeSiaStorageModule(),
-)
 vi.mock('../lib/pkarr', async () =>
   (await import('./fakeModules')).fakePkarrModule(),
 )
@@ -104,10 +101,10 @@ describe('integration: custody', () => {
 
     // Pre-pin: bob's account has no pinned bytes. (Alice's pinned object
     // is in alice's scope on the world; bob hasn't mirrored it yet.)
-    const bobBefore = await bob.sdk.account()
+    const bobBefore = await bob.client.accountSnapshot()
     expect(bobBefore.pinnedData).toBe(0)
     // Sanity: alice's bytes ARE in the world, in alice's scope.
-    const aliceSnap = await alice.sdk.account()
+    const aliceSnap = await alice.client.accountSnapshot()
     expect(aliceSnap.pinnedData).toBeGreaterThan(0)
 
     // Bob's mirror will hold exactly the post body's bytes (alice's scope also
@@ -128,7 +125,7 @@ describe('integration: custody', () => {
 
     // The pinned bytes mirror into bob's scope on the world — he now hosts the
     // post body object (shared by capability addressing with alice's copy).
-    const bobAfter = await bob.sdk.account()
+    const bobAfter = await bob.client.accountSnapshot()
     expect(bobAfter.pinnedData).toBe(bodyBytes)
 
     // UI updated to pinned state.

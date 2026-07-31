@@ -9,9 +9,6 @@ import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-vi.mock('@siafoundation/sia-storage', async () =>
-  (await import('./fakeModules')).fakeSiaStorageModule(),
-)
 vi.mock('../lib/pkarr', async () =>
   (await import('./fakeModules')).fakePkarrModule(),
 )
@@ -116,7 +113,7 @@ describe('integration: channel pin', () => {
     await waitFor(() =>
       expect(screen.getByText('post one')).toBeInTheDocument(),
     )
-    expect(await bob.sdk.account()).toMatchObject({ pinnedData: 0 })
+    expect(await bob.client.accountSnapshot()).toMatchObject({ pinnedData: 0 })
 
     const pinBtn = await screen.findByTitle(/Pin this channel to your storage/)
     expect(pinBtn).toHaveAttribute('aria-pressed', 'false')
@@ -129,7 +126,7 @@ describe('integration: channel pin', () => {
       .pinned.map((p) => p.item.summary)
       .sort()
     expect(pinnedBodies).toEqual(['post one', 'post two'])
-    expect((await bob.sdk.account()).pinnedData).toBeGreaterThan(0)
+    expect((await bob.client.accountSnapshot()).pinnedData).toBeGreaterThan(0)
 
     // Icon flips to the pinned state.
     await waitFor(() =>
@@ -180,7 +177,7 @@ describe('integration: channel pin', () => {
       await screen.findByTitle(/Pin this channel to your storage/),
     )
     await waitFor(() => expect(usePinStore.getState().pinned).toHaveLength(2))
-    expect((await bob.sdk.account()).pinnedData).toBeGreaterThan(0)
+    expect((await bob.client.accountSnapshot()).pinnedData).toBeGreaterThan(0)
 
     // Clicking the pinned icon opens the confirm modal, not an instant unpin.
     await userEvent.click(await screen.findByTitle(/Unpin this channel/))
@@ -191,7 +188,7 @@ describe('integration: channel pin', () => {
     await act(async () => {
       await drainCleanups(bob.client)
     })
-    expect((await bob.sdk.account()).pinnedData).toBe(0)
+    expect((await bob.client.accountSnapshot()).pinnedData).toBe(0)
     // Icon returns to the pinnable state.
     await waitFor(() =>
       expect(
