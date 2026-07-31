@@ -16,7 +16,4 @@ const lan = process.env.PIN_LAN === '1'
 export default defineConfig({
   plugins: [react(), tailwindcss(), ...(lan ? [basicSsl()] : [])],
   server: lan ? { host: true } : { host: '127.0.0.1' },
-  // sia-storage loads its WASM via `new URL(..., import.meta.url)`; excluding
-  // it from the deps pre-bundler keeps that URL pointing at the real file.
-  optimizeDeps: { exclude: ['@siafoundation/sia-storage'] },
 })

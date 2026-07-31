@@ -5,7 +5,6 @@
     "": {
       "name": "dispatch",
       "dependencies": {
-        "@siafoundation/sia-storage": "^0.0.13",
         "@tauri-apps/api": "^2.11.1",
         "@tauri-apps/plugin-opener": "^2.5.4",
         "dompurify": "^3.4.1",
@@ -240,18 +239,6 @@
     "@rollup/rollup-win32-x64-gnu": ["@rollup/rollup-win32-x64-gnu@4.60.2", "", { "os": "win32", "cpu": "x64" }, "sha512-qdAzEULD+/hzObedtmV6iBpdL5TIbKVztGiK7O3/KYSf+HIzU257+MX1EXJcyIiDbMAqmbwaufcYPvyRryeZtA=="],
 
     "@rollup/rollup-win32-x64-msvc": ["@rollup/rollup-win32-x64-msvc@4.60.2", "", { "os": "win32", "cpu": "x64" }, "sha512-Nd/SgG27WoA9e+/TdK74KnHz852TLa94ovOYySo/yMPuTmpckK/jIF2jSwS3g7ELSKXK13/cVdmg1Z/DaCWKxA=="],
-
-    "@siafoundation/sia-storage": ["@siafoundation/sia-storage@0.0.13", "", { "optionalDependencies": { "@siafoundation/sia-storage-darwin-arm64": "0.0.13", "@siafoundation/sia-storage-darwin-x64": "0.0.13", "@siafoundation/sia-storage-linux-arm64-gnu": "0.0.13", "@siafoundation/sia-storage-linux-x64-gnu": "0.0.13", "@siafoundation/sia-storage-win32-x64-msvc": "0.0.13" } }, "sha512-pu1l8oBpnlUe5Pz/KnZTDisKOUoSmYWPiIycg5Fc5TlEvMFoAvEDdhqOmlrJbWP5H5QhOM0YVH3s49qW+Uv7QA=="],
-
-    "@siafoundation/sia-storage-darwin-arm64": ["@siafoundation/sia-storage-darwin-arm64@0.0.13", "", { "os": "darwin", "cpu": "arm64" }, "sha512-Dt0OKVFDx829JULNJ8CcNUmDbi7nI1hBMEkOpRMqpHJ+jJLeg9hcqcdgp1GLWvsDrWZ4wUO9zI1Z+F57kv0Pcw=="],
-
-    "@siafoundation/sia-storage-darwin-x64": ["@siafoundation/sia-storage-darwin-x64@0.0.13", "", { "os": "darwin", "cpu": "x64" }, "sha512-gkgTzBYWYEiqPmAlgrgmXSq2xctbhWX89QmHNENyiRRRgwjwP7Fxbx1fUkZ4bIB7op+cc6L0jwTTXwo0/xcd4g=="],
-
-    "@siafoundation/sia-storage-linux-arm64-gnu": ["@siafoundation/sia-storage-linux-arm64-gnu@0.0.13", "", { "os": "linux", "cpu": "arm64" }, "sha512-OGbtV4gJuE3Ns7WfEW4OTpO9IkGjEGMra14j+86E61g2H67JqmLfV9uh5PkpGPdpHo1o3sgqmfhJeP7gqvDQHg=="],
-
-    "@siafoundation/sia-storage-linux-x64-gnu": ["@siafoundation/sia-storage-linux-x64-gnu@0.0.13", "", { "os": "linux", "cpu": "x64" }, "sha512-xP9oRO3Z8ka/mjj/xcKesELkDGA8ZqEX4wTwoj4k5NrtqyeIhUg8uaxQu12RKHJsbtcY2x2Bj4DeT3jKdJcifQ=="],
-
-    "@siafoundation/sia-storage-win32-x64-msvc": ["@siafoundation/sia-storage-win32-x64-msvc@0.0.13", "", { "os": "win32", "cpu": "x64" }, "sha512-3Bp4RKYqYuMiU7L8WibnORRcWdz4RnVTKqVK9jXqDEA56rkDSfv8p7zDnJ2cgmiF0OpPAJA10iitt41bSTPpUg=="],
 
     "@standard-schema/spec": ["@standard-schema/spec@1.1.0", "", {}, "sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w=="],
 

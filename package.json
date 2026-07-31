@@ -20,7 +20,6 @@
     "test:ui": "vitest --ui"
   },
   "dependencies": {
-    "@siafoundation/sia-storage": "^0.0.13",
     "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/plugin-opener": "^2.5.4",
     "dompurify": "^3.4.1",

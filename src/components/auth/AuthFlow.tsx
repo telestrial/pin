@@ -1,7 +1,5 @@
-import { AppKey, Builder, initSia } from '@siafoundation/sia-storage'
-import { useEffect, useRef } from 'react'
+import { useEffect } from 'react'
 import { connectSiaClient } from '../../lib/connectSiaClient'
-import { APP_META } from '../../lib/constants'
 import { useAuthStore } from '../../stores/auth'
 import { ApproveScreen } from './ApproveScreen'
 import { AuthShell } from './AuthShell'
@@ -13,7 +11,6 @@ export function AuthFlow() {
   const error = useAuthStore((s) => s.error)
   const setError = useAuthStore((s) => s.setError)
   const storedKeyHex = useAuthStore((s) => s.storedKeyHex)
-  const builderRef = useRef<Builder | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -21,38 +18,23 @@ export function AuthFlow() {
     async function init() {
       const { storedKeyHex, indexerURL, setClient, setStep } =
         useAuthStore.getState()
-      try {
-        await initSia()
-        if (cancelled) return
 
-        // Try to restore Sia using the persisted AppKey, if any.
-        if (storedKeyHex && indexerURL) {
-          try {
-            const appKey = new AppKey(Uint8Array.fromHex(storedKeyHex))
-            const builder = new Builder(indexerURL, APP_META)
-            builderRef.current = builder
-            const sdk = await builder.connected(appKey)
-            if (cancelled) return
-            if (sdk) {
-              // The JS SDK still runs the connect flow; Sia I/O is Rust now, so the
-              // key is what carries over and this handle is discarded.
-              setClient(await connectSiaClient(storedKeyHex, indexerURL))
-              return
-            }
-          } catch {
-            // Connect failed — fall through to welcome.
-          }
+      // Restore from the persisted AppKey, if there is one. Anything that goes
+      // wrong here — a key the indexer no longer recognises, an unreachable
+      // indexer — lands on the same place: the welcome screen, which reads
+      // storedKeyHex itself to tell a returning user from a new one.
+      if (storedKeyHex && indexerURL) {
+        try {
+          const client = await connectSiaClient(storedKeyHex, indexerURL)
+          if (cancelled) return
+          setClient(client)
+          return
+        } catch {
+          if (cancelled) return
         }
-
-        // Sia is not connected: brand-new user, or a returning user whose
-        // session needs a refresh. WelcomeScreen handles both by reading
-        // storedKeyHex from the store directly.
-        setStep('welcome')
-      } catch (e) {
-        if (cancelled) return
-        console.error('Init error:', e)
-        setStep('welcome')
       }
+
+      setStep('welcome')
     }
 
     init()
@@ -79,11 +61,9 @@ export function AuthFlow() {
       )}
 
       <AuthShell ready={isReady}>
-        {step === 'welcome' && (
-          <WelcomeScreen builder={builderRef} isReturning={!!storedKeyHex} />
-        )}
-        {step === 'approve' && <ApproveScreen builder={builderRef} />}
-        {step === 'recovery' && <RecoveryScreen builder={builderRef} />}
+        {step === 'welcome' && <WelcomeScreen isReturning={!!storedKeyHex} />}
+        {step === 'approve' && <ApproveScreen />}
+        {step === 'recovery' && <RecoveryScreen />}
       </AuthShell>
     </>
   )

@@ -1,18 +1,14 @@
-import {
-  type Builder,
-  generateRecoveryPhrase,
-  validateRecoveryPhrase,
-} from '@siafoundation/sia-storage'
 import { useState } from 'react'
 import { connectSiaClient } from '../../lib/connectSiaClient'
+import {
+  generateRecoveryPhrase,
+  registerSiaAccount,
+  validateRecoveryPhrase,
+} from '../../lib/siaAuth'
 import { useAuthStore } from '../../stores/auth'
 import { CopyButton } from '../ui/CopyButton'
 
-export function RecoveryScreen({
-  builder,
-}: {
-  builder: React.RefObject<Builder | null>
-}) {
+export function RecoveryScreen() {
   const { setClient, setStoredKeyHex, setError, setJustCreatedAccount } =
     useAuthStore()
   const [mode, setMode] = useState<'choose' | 'generate' | 'import'>('choose')
@@ -21,8 +17,8 @@ export function RecoveryScreen({
   const [loading, setLoading] = useState(false)
   const [phraseError, setPhraseError] = useState<string | null>(null)
 
-  function handleGenerate() {
-    const mnemonic = generateRecoveryPhrase()
+  async function handleGenerate() {
+    const mnemonic = await generateRecoveryPhrase()
     setGeneratedPhrase(mnemonic)
     setPhrase(mnemonic)
     setMode('generate')
@@ -31,25 +27,24 @@ export function RecoveryScreen({
   function handleValidatePhrase(value: string) {
     setPhrase(value)
     setPhraseError(null)
-    if (value.trim()) {
-      try {
-        validateRecoveryPhrase(value.trim())
-      } catch {
-        setPhraseError("That doesn't look like a valid recovery phrase.")
-      }
-    }
+    const trimmed = value.trim()
+    if (!trimmed) return
+    validateRecoveryPhrase(trimmed).catch(() => {
+      // Only complain if this is still the phrase on screen — validation is async
+      // now, so a slower keystroke's result must not overwrite a newer one.
+      setPhrase((current) => {
+        if (current.trim() === trimmed) {
+          setPhraseError("That doesn't look like a valid recovery phrase.")
+        }
+        return current
+      })
+    })
   }
 
   async function handleRegister() {
-    const b = builder.current
-    if (!b) {
-      setError('No builder instance')
-      return
-    }
-
     const mnemonic = phrase.trim()
     try {
-      validateRecoveryPhrase(mnemonic)
+      await validateRecoveryPhrase(mnemonic)
     } catch {
       setPhraseError("That doesn't look like a valid recovery phrase.")
       return
@@ -57,8 +52,7 @@ export function RecoveryScreen({
 
     setLoading(true)
     try {
-      const sdk = await b.register(mnemonic)
-      const appKeyHex = sdk.appKey().export().toHex()
+      const appKeyHex = await registerSiaAccount(mnemonic)
       setStoredKeyHex(appKeyHex)
       // Generate = a brand-new account (nothing to recover); import = restoring an
       // existing one (recover settings from the DHT locator). Set BEFORE setClient

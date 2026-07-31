@@ -1,15 +1,9 @@
-import { Builder } from '@siafoundation/sia-storage'
 import { useState } from 'react'
-import { APP_META, DEFAULT_INDEXER_URL } from '../../lib/constants'
+import { DEFAULT_INDEXER_URL } from '../../lib/constants'
+import { requestSiaConnection } from '../../lib/siaAuth'
 import { useAuthStore } from '../../stores/auth'
 
-export function WelcomeScreen({
-  builder,
-  isReturning,
-}: {
-  builder: React.RefObject<Builder | null>
-  isReturning: boolean
-}) {
+export function WelcomeScreen({ isReturning }: { isReturning: boolean }) {
   const indexerURL = useAuthStore((s) => s.indexerURL)
   const setIndexerURL = useAuthStore((s) => s.setIndexerURL)
   const setStep = useAuthStore((s) => s.setStep)
@@ -24,11 +18,8 @@ export function WelcomeScreen({
     setLoading(true)
     setError(null)
     try {
-      const b = new Builder(url, APP_META)
-      builder.current = b
       setIndexerURL(url)
-      await b.requestConnection()
-      setApprovalURL(b.responseUrl())
+      setApprovalURL(await requestSiaConnection(url))
       setStep('approve')
     } catch (e) {
       setError(

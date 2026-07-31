@@ -5,8 +5,7 @@
 // back; the journal's delete-objects handler does the actual byte reclaim. A
 // file shared with another of your posts or held by a standalone library pin
 // must be excluded from the list. These tests exercise the core functions (and
-// the core→handler hand-off) through the Phase 3 fakes (sia-storage module
-// mock, hence the int tier).
+// the core→handler hand-off) against a FakeSiaClient, hence the int tier.
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 

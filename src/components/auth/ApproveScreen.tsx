@@ -1,62 +1,32 @@
-import type { Builder } from '@siafoundation/sia-storage'
 import { useEffect, useRef, useState } from 'react'
 import { inTauri, openExternal } from '../../lib/openExternal'
+import { waitForSiaApproval } from '../../lib/siaAuth'
 import { useAuthStore } from '../../stores/auth'
 
-export function ApproveScreen({
-  builder,
-}: {
-  builder: React.RefObject<Builder | null>
-}) {
-  const { approvalURL, setStep, setError } = useAuthStore()
+export function ApproveScreen() {
+  const { approvalURL, setStep } = useAuthStore()
   const [polling, setPolling] = useState(true)
-  const [pollError, setPollError] = useState(false)
-  const [manualChecking, setManualChecking] = useState(false)
+  const [expired, setExpired] = useState(false)
   const pollStarted = useRef(false)
 
   useEffect(() => {
-    // Guard against React strict mode double-mount — waitForApproval()
-    // consumes the builder's state and cannot be called twice.
+    // Load-bearing, not belt-and-braces: React mounts effects twice in strict
+    // mode, and the second call would find the pending request already taken by
+    // the first and report that as a failure while the first is still
+    // legitimately waiting.
     if (pollStarted.current) return
     pollStarted.current = true
 
-    async function poll() {
-      const b = builder.current
-      if (!b) return
-
-      try {
-        await b.waitForApproval()
-        setStep('recovery')
-      } catch {
+    // One call that polls until approval or expiry, so there is nothing to
+    // re-drive on a timer. A failure can't be retried in place — the attempt
+    // consumes the pending request — so starting over is the only way back.
+    waitForSiaApproval()
+      .then(() => setStep('recovery'))
+      .catch(() => {
         setPolling(false)
-        setPollError(true)
-      }
-    }
-
-    poll()
-  }, [builder, setStep])
-
-  async function handleManualCheck() {
-    const b = builder.current
-    if (!b) {
-      setError('No builder instance')
-      return
-    }
-
-    setManualChecking(true)
-    setPollError(false)
-    setPolling(true)
-    try {
-      await b.waitForApproval()
-      setStep('recovery')
-    } catch (e) {
-      setPolling(false)
-      setPollError(true)
-      setError(e instanceof Error ? e.message : 'Approval check failed')
-    } finally {
-      setManualChecking(false)
-    }
-  }
+        setExpired(true)
+      })
+  }, [setStep])
 
   return (
     <div className="space-y-6">
@@ -70,48 +40,50 @@ export function ApproveScreen({
         </p>
       </div>
 
-      {approvalURL && (
+      {approvalURL && !expired && (
+        <a
+          href={approvalURL}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={(e) => {
+            // In the desktop shell the webview won't pop a new window;
+            // route to the system browser instead. Web path is unchanged.
+            if (inTauri()) {
+              e.preventDefault()
+              void openExternal(approvalURL)
+            }
+          }}
+          className="block w-full text-center py-3 bg-green-600 hover:bg-green-700 text-white font-medium rounded-lg transition-colors"
+        >
+          Open approval page →
+        </a>
+      )}
+
+      {expired && (
         <div className="space-y-2">
-          <a
-            href={approvalURL}
-            target="_blank"
-            rel="noopener noreferrer"
-            onClick={(e) => {
-              // In the desktop shell the webview won't pop a new window;
-              // route to the system browser instead. Web path is unchanged.
-              if (inTauri()) {
-                e.preventDefault()
-                void openExternal(approvalURL)
-              }
-            }}
-            className="block w-full text-center py-3 bg-green-600 hover:bg-green-700 text-white font-medium rounded-lg transition-colors"
-          >
-            Open approval page →
-          </a>
+          <p className="text-center text-sm text-neutral-600">
+            This approval request is no longer valid. Start over to get a fresh
+            link.
+          </p>
           <button
             type="button"
-            onClick={handleManualCheck}
-            disabled={manualChecking}
-            className="w-full py-2 text-sm text-neutral-500 hover:text-neutral-900 transition-colors"
+            onClick={() => setStep('welcome')}
+            className="w-full py-3 bg-green-600 hover:bg-green-700 text-white font-medium rounded-lg transition-colors"
           >
-            {manualChecking ? 'Checking…' : "I've approved — continue"}
+            Start over
           </button>
         </div>
       )}
 
-      <div className="flex items-center justify-center gap-2 text-xs text-neutral-500">
-        {polling ? (
-          <>
-            <span className="relative flex h-1.5 w-1.5">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-500 opacity-75" />
-              <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-green-600" />
-            </span>
-            Waiting for approval…
-          </>
-        ) : pollError ? (
-          <span>Auto-check stopped — use the button above</span>
-        ) : null}
-      </div>
+      {polling && (
+        <div className="flex items-center justify-center gap-2 text-xs text-neutral-500">
+          <span className="relative flex h-1.5 w-1.5">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-500 opacity-75" />
+            <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-green-600" />
+          </span>
+          Waiting for approval…
+        </div>
+      )}
     </div>
   )
 }

@@ -1,17 +1,13 @@
-import type { AppMetadata } from '@siafoundation/sia-storage'
-
+// The app metadata Sia identifies us by — the AppID, the name, the service URL —
+// now has one definition, in crates/pin-sia, because that is where the connect flow
+// runs. What remains here is the AppID's value used as a LOCAL STORAGE NAMESPACE
+// (`sia-auth-<first16>`, `sia-pins-<first16>`). It is the same hex, but its job here
+// is naming a browser key, so changing it would orphan a user's persisted state
+// rather than break Sia.
 // biome-ignore format: long hex literal
 export const APP_KEY = 'f6b7539e181e45ee750a491a58aa8392830a17c402115cf47c6e7dfe9f7ffcb0'
 export const APP_NAME = 'Pin'
 export const DEFAULT_INDEXER_URL = 'https://sia.storage'
-export const APP_META: AppMetadata = {
-  appId: APP_KEY,
-  name: APP_NAME,
-  description: 'A Sia storage app',
-  serviceUrl: 'https://sia.storage',
-  logoUrl: undefined,
-  callbackUrl: undefined,
-}
 
 // Erasure coding parameters — passed to sdk.upload() and encodedSize().
 export const DATA_SHARDS = 10
