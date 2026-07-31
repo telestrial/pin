@@ -35,16 +35,19 @@ const RETRY_DELAY_MS: u32 = 2000;
 
 /// Public relays to fan out to in the browser.
 ///
-/// A superset of the crate's `DEFAULT_RELAYS` and the set the vendored JS client used,
-/// deliberately: read-after-write consistency depends on a resolve reaching a relay
-/// that saw the write, so publishing and resolving across the SAME wider set maximizes
-/// the overlap — and it keeps resolving records published before this crate existed.
+/// Exactly the set the vendored JS client used, which is what keeps every record
+/// published before this crate existed resolvable.
+///
+/// Adding more is a false economy, and measured as one: including a third
+/// (`relay.pkarr.org`, from the crate's `DEFAULT_RELAYS`) took a sync spec from ~10s to
+/// 1.2–1.7m. The fan-out below awaits EVERY relay, so a slow one adds its latency to
+/// every publish and every resolve — and it answered health checks in 0.6s, so this is
+/// about how long it takes to make a store resolvable, not reachability. More relays
+/// subtract resilience under this design rather than adding it; a dead one would cost the
+/// full timeout. The wider-overlap argument for read-after-write doesn't pay for that,
+/// since the two below are the relays our own records actually live on.
 #[cfg(target_arch = "wasm32")]
-const RELAYS: [&str; 3] = [
-    "https://relay.pkarr.org",
-    "https://pkarr.pubky.org",
-    "https://pkarr.pubky.app",
-];
+const RELAYS: [&str; 2] = ["https://pkarr.pubky.org", "https://pkarr.pubky.app"];
 
 /// How many times to re-attempt a DHT lookup. Cold-client Mainline lookups are
 /// timing-sensitive — a single attempt can miss a record that is genuinely there — so
