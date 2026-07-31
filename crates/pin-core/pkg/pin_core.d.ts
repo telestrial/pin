@@ -156,6 +156,24 @@ export function open(app_key_hex: string): Promise<string>;
 export function open_channel_doc(ns_seed_hex: string): Promise<string>;
 
 /**
+ * The z-base32 public key for a 32-byte seed — the key a resolver looks up.
+ */
+export function pkarr_public_key(seed: Uint8Array): string;
+
+/**
+ * Publish TXT records signed by the key derived from `seed`, replacing whatever that
+ * key previously pointed at. Takes seconds (DHT store latency); call in the background.
+ */
+export function pkarr_publish(seed: Uint8Array, records_json: string): Promise<void>;
+
+/**
+ * Resolve a `did:dht:<key>` (or bare key) to its current TXT records, as JSON. An
+ * empty array means nothing is published or resolvable — an ordinary outcome, not an
+ * error.
+ */
+export function pkarr_resolve(key: string): Promise<string>;
+
+/**
  * Write a record into a channel doc (author side only — a read replica rejects it
  * with "Attempted to insert to read only replica").
  */
@@ -237,6 +255,9 @@ export interface InitOutput {
     readonly list_records: (a: number, b: number) => any;
     readonly open: (a: number, b: number) => any;
     readonly open_channel_doc: (a: number, b: number) => any;
+    readonly pkarr_public_key: (a: number, b: number) => [number, number, number, number];
+    readonly pkarr_publish: (a: number, b: number, c: number, d: number) => any;
+    readonly pkarr_resolve: (a: number, b: number) => any;
     readonly put_channel_record: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => any;
     readonly put_record: (a: number, b: number, c: number, d: number, e: number, f: number) => any;
     readonly share: () => any;
@@ -261,9 +282,11 @@ export interface InitOutput {
     readonly wasm_bindgen__convert__closures_____invoke__hc5f3e21d0efe8974: (a: number, b: number, c: any) => [number, number];
     readonly wasm_bindgen__convert__closures_____invoke__h08f43aa7048968fb: (a: number, b: number, c: any, d: any) => void;
     readonly wasm_bindgen__convert__closures_____invoke__h88edf5d76da6fe27: (a: number, b: number, c: any) => void;
-    readonly wasm_bindgen__convert__closures_____invoke__hab35a47f448791db: (a: number, b: number, c: any) => void;
+    readonly wasm_bindgen__convert__closures_____invoke__h948c8e55c6117f5c: (a: number, b: number, c: any) => void;
     readonly wasm_bindgen__convert__closures_____invoke__h106cbabba281c03b: (a: number, b: number, c: any) => void;
-    readonly wasm_bindgen__convert__closures_____invoke__h9ac60b4f9395e24b: (a: number, b: number) => void;
+    readonly wasm_bindgen__convert__closures_____invoke__hd7fa2e88bff1dc50: (a: number, b: number) => void;
+    readonly wasm_bindgen__convert__closures_____invoke__h437640b16a508fd7: (a: number, b: number) => void;
+    readonly wasm_bindgen__convert__closures_____invoke__h786b4ed5039223cd: (a: number, b: number) => void;
     readonly wasm_bindgen__convert__closures_____invoke__h8daa9f8fce1ac3eb: (a: number, b: number) => void;
     readonly wasm_bindgen__convert__closures_____invoke__ha3a167bd92644a00: (a: number, b: number) => void;
     readonly __wbindgen_malloc: (a: number, b: number) => number;

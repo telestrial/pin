@@ -230,11 +230,14 @@ if (import.meta.env.DEV || inTauri()) {
     )
     // A throwaway identity from random bytes — never the real one, so publishing
     // can't overwrite the Curator's DID document.
-    const throwaway = await deriveDidDht(
-      crypto.getRandomValues(new Uint8Array(32)),
-    )
+    const fakeAppKey = crypto.getRandomValues(new Uint8Array(32))
+    const throwaway = await deriveDidDht(fakeAppKey)
+    // Publishing takes the SIGNING seed (the key itself stays in Rust), and that's the
+    // HKDF output — not the AppKey bytes deriveDidDht was handed.
+    const { deriveDidDhtSeed } = await import('./core/crypto')
+    const signingSeed = await deriveDidDhtSeed(fakeAppKey)
     const value = `roundtrip-${Date.now()}`
-    await publishRecords(throwaway.keypair, [{ name: '_pin', value }])
+    await publishRecords(signingSeed, [{ name: '_pin', value }])
     const records = await resolveDidDht(throwaway.did)
     const got = records.find((r) => r.name.startsWith('_pin'))?.value
     return got === value

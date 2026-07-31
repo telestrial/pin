@@ -603,3 +603,41 @@ pub fn derive_rendezvous_seed(app_key: &[u8]) -> Vec<u8> {
 pub fn derive_rendezvous_instance_seed(rendezvous_seed: &[u8], instance_id: &str) -> Vec<u8> {
     pin_derive::rendezvous_instance_seed(rendezvous_seed, instance_id).to_vec()
 }
+
+// --- pkarr: the signed, identity-keyed pointers -------------------------------
+//
+// Wrappers over `pin_pkarr`, which the native Curator also uses — so the packet shape,
+// TTL and retry posture are one definition, and only the transport differs by target
+// (public relays here, since a browser can't send UDP; the Mainline DHT natively).
+//
+// Records cross as a JSON array of {name, value} rather than through a typed binding:
+// it's a handful of small strings on an infrequent call, and it keeps this seam free of
+// an extra serde-to-JS dependency.
+
+/// The z-base32 public key for a 32-byte seed — the key a resolver looks up.
+#[wasm_bindgen]
+pub fn pkarr_public_key(seed: &[u8]) -> Result<String, JsValue> {
+    pin_pkarr::public_key_from_seed(seed).map_err(|e| JsValue::from_str(&e))
+}
+
+/// Publish TXT records signed by the key derived from `seed`, replacing whatever that
+/// key previously pointed at. Takes seconds (DHT store latency); call in the background.
+#[wasm_bindgen]
+pub async fn pkarr_publish(seed: Vec<u8>, records_json: String) -> Result<(), JsValue> {
+    let records: Vec<pin_pkarr::TxtRecord> = serde_json::from_str(&records_json)
+        .map_err(|e| JsValue::from_str(&format!("records: {e}")))?;
+    pin_pkarr::publish(&seed, &records)
+        .await
+        .map_err(|e| JsValue::from_str(&e))
+}
+
+/// Resolve a `did:dht:<key>` (or bare key) to its current TXT records, as JSON. An
+/// empty array means nothing is published or resolvable — an ordinary outcome, not an
+/// error.
+#[wasm_bindgen]
+pub async fn pkarr_resolve(key: String) -> Result<String, JsValue> {
+    let records = pin_pkarr::resolve(&key)
+        .await
+        .map_err(|e| JsValue::from_str(&e))?;
+    serde_json::to_string(&records).map_err(|e| JsValue::from_str(&format!("encode: {e}")))
+}

@@ -17,12 +17,7 @@
 // (Keypair::from_secret_key) — the same derivation the Curator does.
 
 import { inTauri } from './openExternal'
-import {
-  identityFromSeed,
-  type PkarrTxt,
-  publishRecords,
-  resolveDidDht,
-} from './pkarr'
+import { type PkarrTxt, publishRecords, resolveDidDht } from './pkarr'
 
 export interface PkarrTransport {
   /** Publish TXT records signed by the ed25519 key derived from `seed`. Overwrites
@@ -49,14 +44,12 @@ async function build(): Promise<PkarrTransport> {
     const { makeTauriPkarrTransport } = await import('./tauriPkarr')
     return makeTauriPkarrTransport()
   }
-  // Web: the existing relay-backed publish/resolve. Delegating to lib/pkarr.ts's
-  // functions keeps the integration tests (which mock `../pkarr`) transparent —
-  // tests run non-Tauri, so this path calls the mocked functions unchanged.
+  // Web: relay-backed publish/resolve, now implemented in Rust behind lib/pkarr.ts.
+  // Delegating to that module's functions keeps the integration tests (which mock
+  // `../pkarr`) transparent — tests run non-Tauri, so this path calls the mocked
+  // functions unchanged.
   return {
-    publish: async (seed, records) => {
-      const { keypair } = await identityFromSeed(seed)
-      await publishRecords(keypair, records)
-    },
+    publish: (seed, records) => publishRecords(seed, records),
     resolve: (didOrKey) => resolveDidDht(didOrKey),
   }
 }

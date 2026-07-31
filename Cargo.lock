@@ -116,6 +116,7 @@ dependencies = [
  "iroh-gossip",
  "log",
  "pin-derive",
+ "pin-pkarr",
  "pin-rpc",
  "pkarr",
  "serde",
@@ -4574,7 +4575,9 @@ dependencies = [
  "iroh-gossip",
  "js-sys",
  "pin-derive",
+ "pin-pkarr",
  "pin-rpc",
+ "serde_json",
  "wasm-bindgen",
  "wasm-bindgen-futures",
 ]
@@ -4585,6 +4588,17 @@ version = "0.1.0"
 dependencies = [
  "hkdf",
  "sha2 0.10.9",
+]
+
+[[package]]
+name = "pin-pkarr"
+version = "0.1.0"
+dependencies = [
+ "futures-buffered",
+ "gloo-timers",
+ "pkarr",
+ "serde",
+ "tokio",
 ]
 
 [[package]]

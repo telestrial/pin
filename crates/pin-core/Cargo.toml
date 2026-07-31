@@ -27,6 +27,11 @@ pin-derive = { path = "../pin-derive" }
 # ALPN pin-keeper/0 identically. A tab that's open is a full peer: it serves the same
 # knock, just over the relay it already holds rather than a direct path.
 pin-rpc = { path = "../pin-rpc" }
+# Pin's pkarr layer — the signed DID/channel pointers. Shared with the native Curator
+# so the packet shape, TTL and retry posture can't drift between a tab and a desktop;
+# only the transport underneath differs (relays here, Mainline DHT there).
+pin-pkarr = { path = "../pin-pkarr" }
+serde_json = "1"
 futures-lite = "2"
 # Browser glue (compiles harmlessly on native; the exports are just inert there).
 wasm-bindgen = "0.2"

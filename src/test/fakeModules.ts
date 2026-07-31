@@ -62,19 +62,17 @@ export function fakePkarrModule() {
       .map((x) => x.value)
       .join('')
   }
-  const identityFromSeed = async (seed: Uint8Array) => {
-    const publicKey = fakePublicKey(seed)
-    return { publicKey, keypair: { publicKey } }
-  }
+  const identityFromSeed = async (seed: Uint8Array) => ({
+    publicKey: fakePublicKey(seed),
+  })
   return {
     chunkForTxt,
     reassembleTxt,
     identityFromSeed,
-    publishRecords: async (
-      keypair: { publicKey: string },
-      records: FakeTxt[],
-    ) => {
-      getCurrentWorld().pkarr.set(keypair.publicKey, records)
+    // Publish is keyed by SEED now, not by a keypair object — the signing key never
+    // leaves Rust, so the seed is what crosses every boundary.
+    publishRecords: async (seed: Uint8Array, records: FakeTxt[]) => {
+      getCurrentWorld().pkarr.set(fakePublicKey(seed), records)
     },
     resolveDidDht: async (didOrKey: string) => {
       const key = didOrKey.startsWith('did:dht:')
@@ -83,8 +81,8 @@ export function fakePkarrModule() {
       return getCurrentWorld().pkarr.get(key) ?? []
     },
     deriveDidDht: async (appKeyBytes: Uint8Array) => {
-      const { publicKey, keypair } = await identityFromSeed(appKeyBytes)
-      return { did: `did:dht:${publicKey}`, publicKey, keypair }
+      const { publicKey } = await identityFromSeed(appKeyBytes)
+      return { did: `did:dht:${publicKey}`, publicKey }
     },
   }
 }

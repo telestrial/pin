@@ -1,0 +1,42 @@
+# Pin's pkarr layer — publishing and resolving the signed, identity-keyed pointers
+# that make a channel or an identity findable without any company in the path.
+#
+# One implementation, two transports, chosen by target rather than by tier:
+#   * wasm32 -> public pkarr RELAYS over HTTP, because a browser sandbox cannot send
+#     UDP. This is a real capability boundary, not a lesser tier.
+#   * native -> the Mainline DHT directly (`no_relays`), which is why a fresh publish
+#     is resolvable in seconds there instead of the minutes a relay's own cache costs.
+#
+# Everything ABOVE the transport is shared: building and signing the packet, the TTL,
+# the retry posture, pulling TXT records back out, stripping a `did:dht:` prefix. That
+# half was previously written twice — once in TypeScript for the browser, once in
+# src-tauri for the desktop — so this crate exists for the same reason pin-derive and
+# pin-rpc do: a divergence there would be a data bug, not untidiness.
+[package]
+name = "pin-pkarr"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+
+[dependencies]
+# `relays` (reqwest, which has a browser fetch backend) and `dht` (mainline, UDP) are
+# both enabled; the code picks one per target. `signed_packet` carries the packet type
+# both paths build. v3 tracks what the app tree already resolves — iroh depends on
+# pkarr too, so this dedupes rather than adding a second version.
+pkarr = { version = "3", default-features = false, features = [
+  "relays",
+  "dht",
+  "signed_packet",
+] }
+serde = { version = "1", features = ["derive"] }
+
+# Retries need to wait, and the timer is the other thing that differs by target.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+gloo-timers = { version = "0.3", features = ["futures"] }
+# The relay fan-out has to be concurrent, not a loop: asking three relays in sequence
+# multiplies the timeout by three on every publish AND every resolve (measured — it
+# tripled a sync test's wall clock). Already in the tree via pkarr's `relays` feature.
+futures-buffered = "0.2"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tokio = { version = "1", features = ["time"] }
