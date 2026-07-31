@@ -1,41 +1,59 @@
-// SiaClient — the coarse Sia operation surface the app talks to, so the
-// underlying implementation can be swapped without touching call sites.
+// SiaClient — the coarse Sia operation surface the app talks to.
 //
-// WHY THIS EXISTS: today Sia runs as the WASM SDK inside the page. On desktop
-// (Tauri/WebView2) that WASM `download` path fails ("readable byte streams not
-// supported"), and the documented direction is to run Sia natively in the Rust
-// backend. This interface is the seam: web keeps the WASM SDK
-// (`makeWasmSiaClient`), desktop gets a Tauri-IPC implementation later — both
-// satisfy `SiaClient`, so nothing downstream changes.
+// Two implementations satisfy it, and both now run the SAME Rust code underneath
+// (crates/pin-sia): the browser reaches it compiled to wasm through pin-core, the
+// desktop reaches it natively over Tauri IPC. What differs is the hop, not the
+// behaviour — so the walk, the descriptors and the connect flow can't drift between
+// them the way a TypeScript client and a Rust backend could.
 //
-// DESIGN RULE — coarse ops, no live handles cross the boundary. A live
-// `PinnedObject` can't marshal over IPC, so every method takes/returns PLAIN
-// serializable data (URLs, ids, byte arrays, descriptors). Object handles stay
-// inside a single method on one side. The metering/repack/reset walks used to
-// hold a handle only to read `.slabs()`/`.createdAt()`/`.id()` — all plain data —
-// so they collapse to `listPinnedObjects()` / `getObjectSlabs()` returning
-// descriptors. That's what lets the whole surface be handle-free.
+// DESIGN RULE — coarse ops, no live handles cross the boundary. An object handle
+// can't marshal over IPC, so every method takes and returns PLAIN serializable data
+// (URLs, ids, byte arrays, descriptors). That constraint is why the metering, repack
+// and reset walks read descriptors instead of holding handles, and it's what lets one
+// interface serve both hops.
 //
-// (Progress callbacks — `onShard` — are the one thing that can't marshal
-// directly; the WASM client calls them inline, a future Tauri client will drive
-// them via Tauri events. Kept in the signature; the seam absorbs it.)
+// (Progress callbacks are the exception that has to be bridged rather than passed:
+// the wasm client hands JS functions across wasm-bindgen; a Tauri client would drive
+// them via events.)
 
-import type { Sdk, Slab } from '@siafoundation/sia-storage'
-import { type AccountSnapshot, fetchAccountSnapshot, pinItemBytes } from './pin'
 import {
-  downloadItem,
-  type UploadedItem,
-  uploadItem,
-  uploadItemsPacked,
-} from './sia'
+  sia_account_snapshot,
+  sia_delete_object,
+  sia_download_item,
+  sia_get_object_slabs,
+  sia_list_pinned_objects,
+  sia_pin_from_share_url,
+  sia_prune_slabs,
+  sia_public_key,
+  sia_resolve_object_id,
+  sia_upload_item,
+  sia_upload_items_packed,
+} from '../../crates/pin-core/pkg/pin_core.js'
+import type { AccountSnapshot } from './pin'
+import type { UploadedItem } from './sia'
+import { ensureWasm } from './wasm'
 
-// A pinned object reduced to the plain data its consumers actually read —
-// serializable, so it survives an IPC round-trip. `slabs` is the SDK's own slab
-// shape (a data type; the type-only import is erased at build, no WASM at runtime
-// for a non-WASM implementation).
+/** One slab's contribution to an object.
+ *
+ *  `length` is the byte slice this object occupies in the slab; summing it across an
+ *  object gives that object's content size, and across a scope gives what the storage
+ *  meter shows. `minShards` is how many sectors are needed to recover the data, which
+ *  is what repack multiplies by the shard size to get a slab's usable capacity.
+ *
+ *  Mirrors `sia_storage::Slab`'s serde output, which is what arrives over either hop. */
+export type Slab = {
+  encryptionKey: string
+  minShards: number
+  sectors: unknown[]
+  offset: number
+  length: number
+}
+
+/** A pinned object reduced to the plain data its consumers actually read —
+ *  serializable, so it survives the hop to whichever implementation is in use. */
 export type PinnedObjectInfo = {
   id: string
-  // ISO 8601 — the handle's Date, serialized.
+  // ISO 8601.
   createdAt: string
   slabs: Slab[]
 }
@@ -50,104 +68,89 @@ export interface SiaClient {
   downloadItem(url: string): Promise<Uint8Array>
 
   // --- pin / custody ------------------------------------------------------
-  // sharedObject(url) + pinObject — mirror a share URL's bytes into this scope.
+  // Mirror a share URL's bytes into this scope.
   pinFromShareURL(url: string): Promise<{ objectID: string }>
-  // sharedObject(url).id() — resolve a share URL to its object id (no pin).
+  // Resolve a share URL to its object id, without taking custody.
   resolveObjectID(url: string): Promise<string>
   deleteObject(id: string): Promise<void>
   pruneSlabs(): Promise<void>
 
   // --- accounting / enumeration (plain descriptors, no live handles) ------
   accountSnapshot(): Promise<AccountSnapshot>
-  // The objectEvents walk, deduped to the current (non-deleted) set. Powers the
-  // storage meter, the repack scope, full-reset enumeration, the slab inspector.
+  // Everything currently held in this scope. Powers the storage meter, the repack
+  // scope, full-reset enumeration and the slab inspector.
   listPinnedObjects(): Promise<PinnedObjectInfo[]>
-  // One object's slabs by id (repack's per-ref lookup). null if not found.
+  // One object's slabs by id (repack's per-ref lookup). null if not held.
   getObjectSlabs(objectID: string): Promise<PinnedObjectInfo | null>
 
   // --- identity -----------------------------------------------------------
   appKeyPublicKey(): string
 }
 
-const EVENTS_PAGE_LIMIT = 200
-// Defensive cap — 200 × 50 = 10000 events covers any plausible scope.
-const EVENTS_MAX_PAGES = 50
-
-// Walk objectEvents, keep the latest event per id, drop deleted ones, return
-// plain descriptors. This is the single home for the walk the metering / repack /
-// reset / slab-inspector sites all need.
-async function walkPinnedObjects(sdk: Sdk): Promise<PinnedObjectInfo[]> {
-  // biome-ignore lint/suspicious/noExplicitAny: SDK ObjectEvent / cursor types aren't exported
-  const latestByID = new Map<string, any>()
-  // biome-ignore lint/suspicious/noExplicitAny: SDK cursor type isn't exported
-  let cursor: any = null
-  for (let page = 0; page < EVENTS_MAX_PAGES; page++) {
-    const events = await sdk.objectEvents(cursor, EVENTS_PAGE_LIMIT)
-    if (events.length === 0) break
-    for (const ev of events) {
-      const prev = latestByID.get(ev.id)
-      if (!prev || ev.updatedAt > prev.updatedAt) latestByID.set(ev.id, ev)
-    }
-    if (events.length < EVENTS_PAGE_LIMIT) break
-    const last = events[events.length - 1]
-    cursor = { id: last.id, after: last.updatedAt }
-  }
-  const out: PinnedObjectInfo[] = []
-  for (const ev of latestByID.values()) {
-    if (ev.deleted) continue
-    const obj = ev.object
-    if (!obj) continue
-    try {
-      out.push({
-        id: ev.id,
-        createdAt: toISO(obj.createdAt()),
-        slabs: obj.slabs(),
-      })
-    } catch {
-      // Best-effort: one object's slabs()/createdAt() failure shouldn't sink the
-      // whole walk. The next refresh gets another chance.
-    }
-  }
-  return out
+/** Read the public key for an AppKey without connecting.
+ *
+ *  Separate from the client because `appKeyPublicKey` is synchronous while wasm init
+ *  is not, so the value has to be in hand before the client is built. */
+export async function readAppKeyPublicKey(appKeyHex: string): Promise<string> {
+  await ensureWasm()
+  return sia_public_key(appKeyHex)
 }
 
-function toISO(d: unknown): string {
-  if (d instanceof Date) return d.toISOString()
-  if (typeof d === 'string') return d
-  return new Date(d as number).toISOString()
-}
-
-// The web implementation: wrap the WASM `Sdk`. Delegates byte + pin ops to the
-// existing core/sia + core/pin helpers, inlines the rest. This is what the app
-// uses in the browser and in the desktop WebView until the Tauri-native client
-// lands.
-export function makeWasmSiaClient(sdk: Sdk): SiaClient {
+/** The browser implementation: pin-sia compiled to wasm.
+ *
+ *  The session lives in Rust and is connected separately (see lib/connectSiaClient),
+ *  so this holds no handle — only the public key, which the synchronous accessor
+ *  needs and which cannot be fetched on demand.
+ *
+ *  Every method awaits `ensureWasm()` first. That's a resolved promise after the
+ *  first call, and making each entry point self-sufficient means no caller has to
+ *  remember an initialization step. */
+export function makeWasmSiaClient(publicKey: string): SiaClient {
   return {
-    uploadItem: (bytes, onShard) => uploadItem(sdk, bytes, onShard),
-    uploadItemsPacked: (items, onShard) =>
-      uploadItemsPacked(sdk, items, onShard),
-    downloadItem: (url) => downloadItem(sdk, url),
-
-    pinFromShareURL: (url) => pinItemBytes(sdk, url),
-    resolveObjectID: async (url) => (await sdk.sharedObject(url)).id(),
-    deleteObject: (id) => sdk.deleteObject(id),
-    pruneSlabs: () => sdk.pruneSlabs(),
-
-    accountSnapshot: () => fetchAccountSnapshot(sdk),
-    listPinnedObjects: () => walkPinnedObjects(sdk),
-    getObjectSlabs: async (objectID) => {
-      try {
-        const obj = await sdk.object(objectID)
-        return {
-          id: objectID,
-          createdAt: toISO(obj.createdAt()),
-          slabs: obj.slabs(),
-        }
-      } catch {
-        return null
-      }
+    uploadItem: async (bytes, onShard) => {
+      await ensureWasm()
+      return JSON.parse(await sia_upload_item(bytes, onShard))
+    },
+    uploadItemsPacked: async (items, onShard) => {
+      await ensureWasm()
+      return JSON.parse(await sia_upload_items_packed(items, onShard))
+    },
+    downloadItem: async (url) => {
+      await ensureWasm()
+      return sia_download_item(url)
     },
 
-    appKeyPublicKey: () => sdk.appKey().publicKey(),
+    pinFromShareURL: async (url) => {
+      await ensureWasm()
+      return { objectID: await sia_pin_from_share_url(url) }
+    },
+    resolveObjectID: async (url) => {
+      await ensureWasm()
+      return sia_resolve_object_id(url)
+    },
+    deleteObject: async (id) => {
+      await ensureWasm()
+      return sia_delete_object(id)
+    },
+    pruneSlabs: async () => {
+      await ensureWasm()
+      return sia_prune_slabs()
+    },
+
+    accountSnapshot: async () => {
+      await ensureWasm()
+      return JSON.parse(await sia_account_snapshot())
+    },
+    listPinnedObjects: async () => {
+      await ensureWasm()
+      return JSON.parse(await sia_list_pinned_objects())
+    },
+    getObjectSlabs: async (objectID) => {
+      await ensureWasm()
+      const found = await sia_get_object_slabs(objectID)
+      return found === undefined ? null : JSON.parse(found)
+    },
+
+    appKeyPublicKey: () => publicKey,
   }
 }

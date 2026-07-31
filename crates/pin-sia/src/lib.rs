@@ -24,6 +24,15 @@ use tokio::sync::Mutex;
 /// directly. These are pure — no session, no network.
 pub use sia_storage::{generate_recovery_phrase, validate_recovery_phrase};
 
+/// The public key for an AppKey, rendered the way Sia renders it (`ed25519:<hex>`).
+///
+/// Pure, so a caller can have it before connecting — which matters because the app
+/// stamps it into every channel manifest it publishes as `authorPubkey`, and the
+/// accessor that reads it is synchronous.
+pub fn public_key(app_key: &[u8; 32]) -> String {
+    AppKey::import(*app_key).public_key().to_string()
+}
+
 /// Must match the frontend's `APP_META` (src/lib.rs constants) exactly. The AppID
 /// derives the object-encryption scope, so a mismatch silently reads and writes a
 /// DIFFERENT scope rather than failing — which is why it is pinned here as the one

@@ -17,6 +17,7 @@ import {
   sia_download_item,
   sia_generate_recovery_phrase,
   sia_is_connected,
+  sia_public_key,
   sia_register,
   sia_validate_recovery_phrase,
   sia_wait_for_approval,
@@ -40,6 +41,28 @@ describe('recovery phrases', () => {
     expect(() =>
       sia_validate_recovery_phrase('clearly not a recovery phrase'),
     ).toThrow(/recovery phrase:/)
+  })
+})
+
+// This value is stamped into every published channel manifest as `authorPubkey`, so
+// its rendering is a data format rather than a detail. When the byte layer moved off
+// the JS SDK, the two implementations were compared directly and produced identical
+// strings for the same key; the JS side is on its way out, so what's pinned here is
+// the shape and the determinism that comparison confirmed.
+describe('app key public key', () => {
+  it('renders as Sia renders it', () => {
+    expect(sia_public_key('a'.repeat(64))).toMatch(/^ed25519:[0-9a-f]{64}$/)
+  })
+
+  it('is deterministic, and distinct per key', () => {
+    const one = sia_public_key('a'.repeat(64))
+    const two = sia_public_key('b'.repeat(64))
+    expect(sia_public_key('a'.repeat(64))).toBe(one)
+    expect(two).not.toBe(one)
+  })
+
+  it('rejects a malformed key rather than deriving from garbage', () => {
+    expect(() => sia_public_key('not-hex')).toThrow(/32 bytes/)
   })
 })
 

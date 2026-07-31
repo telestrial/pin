@@ -230,6 +230,14 @@ export function sia_pin_from_share_url(url: string): Promise<string>;
 export function sia_prune_slabs(): Promise<void>;
 
 /**
+ * The public key for an AppKey, as `ed25519:<hex>`.
+ *
+ * Pure, so the client can capture it at construction — the accessor that reads it
+ * is synchronous, and the value is stamped into every published channel manifest.
+ */
+export function sia_public_key(app_key_hex: string): string;
+
+/**
  * Finish registration with the recovery phrase; returns the AppKey hex to persist.
  */
 export function sia_register(mnemonic: string): Promise<string>;
@@ -341,6 +349,7 @@ export interface InitOutput {
     readonly sia_list_pinned_objects: () => any;
     readonly sia_pin_from_share_url: (a: number, b: number) => any;
     readonly sia_prune_slabs: () => any;
+    readonly sia_public_key: (a: number, b: number) => [number, number, number, number];
     readonly sia_register: (a: number, b: number) => any;
     readonly sia_request_connection: (a: number, b: number) => any;
     readonly sia_resolve_object_id: (a: number, b: number) => any;

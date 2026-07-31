@@ -38,6 +38,7 @@ export const sia_is_connected: () => any;
 export const sia_list_pinned_objects: () => any;
 export const sia_pin_from_share_url: (a: number, b: number) => any;
 export const sia_prune_slabs: () => any;
+export const sia_public_key: (a: number, b: number) => [number, number, number, number];
 export const sia_register: (a: number, b: number) => any;
 export const sia_request_connection: (a: number, b: number) => any;
 export const sia_resolve_object_id: (a: number, b: number) => any;

@@ -58,14 +58,15 @@ export function RecoveryScreen({
     setLoading(true)
     try {
       const sdk = await b.register(mnemonic)
-      setStoredKeyHex(sdk.appKey().export().toHex())
+      const appKeyHex = sdk.appKey().export().toHex()
+      setStoredKeyHex(appKeyHex)
       // Generate = a brand-new account (nothing to recover); import = restoring an
       // existing one (recover settings from the DHT locator). Set BEFORE setClient
       // (which transitions to connected + runs the settings load) so the load knows
       // whether to attempt recovery.
       setJustCreatedAccount(mode === 'generate')
       const { indexerURL } = useAuthStore.getState()
-      setClient(await connectSiaClient(sdk, indexerURL))
+      setClient(await connectSiaClient(appKeyHex, indexerURL))
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Registration failed')
     } finally {

@@ -743,6 +743,17 @@ pub fn sia_generate_recovery_phrase() -> String {
     pin_sia::generate_recovery_phrase()
 }
 
+/// The public key for an AppKey, as `ed25519:<hex>`.
+///
+/// Pure, so the client can capture it at construction — the accessor that reads it
+/// is synchronous, and the value is stamped into every published channel manifest.
+#[wasm_bindgen]
+pub fn sia_public_key(app_key_hex: &str) -> Result<String, JsValue> {
+    let app_key = pin_derive::decode_app_key(app_key_hex)
+        .ok_or_else(|| JsValue::from_str("app key hex must be 32 bytes (64 hex chars)"))?;
+    Ok(pin_sia::public_key(&app_key))
+}
+
 /// `Ok` for a well-formed phrase; the error carries why, for inline validation.
 #[wasm_bindgen]
 pub fn sia_validate_recovery_phrase(phrase: &str) -> Result<(), JsValue> {

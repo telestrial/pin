@@ -34,7 +34,9 @@ export function AuthFlow() {
             const sdk = await builder.connected(appKey)
             if (cancelled) return
             if (sdk) {
-              setClient(await connectSiaClient(sdk, indexerURL))
+              // The JS SDK still runs the connect flow; Sia I/O is Rust now, so the
+              // key is what carries over and this handle is discarded.
+              setClient(await connectSiaClient(storedKeyHex, indexerURL))
               return
             }
           } catch {
