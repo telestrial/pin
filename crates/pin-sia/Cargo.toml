@@ -29,10 +29,12 @@ sia_storage = "0.9.1"
 # Shared hex decoding, so an AppKey is parsed the same way everywhere.
 pin-derive = { path = "../pin-derive" }
 serde = { version = "1", features = ["derive"] }
-# `sync` only — for the Mutex guarding the session slots. It is held across awaits
-# (a pending approval can take minutes), which is exactly what rules out std's Mutex.
-# This is the one tokio feature that is pure Rust and builds for wasm32.
-tokio = { version = "1", default-features = false, features = ["sync"] }
+# `sync` for the Mutex guarding the session slots — it is held across awaits (a
+# pending approval can take minutes), which is what rules out std's Mutex. `rt` for
+# the LocalSet that SDK futures run inside on wasm (see `drive`); it arrives
+# transitively via sia_storage anyway, but we use it directly so we ask for it
+# directly. Both are pure Rust and build for wasm32.
+tokio = { version = "1", default-features = false, features = ["sync", "rt"] }
 
 [dev-dependencies]
 # A bare executor to drive the async surface in tests. None of them reach the network,

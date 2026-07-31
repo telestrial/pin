@@ -73,6 +73,31 @@ fn upload_options(on_shard: Option<ShardCallback>) -> UploadOptions {
     }
 }
 
+/// Run an SDK future somewhere it is allowed to spawn.
+///
+/// `sia_storage` spawns background work — the periodic host refresh, connection
+/// pre-warming — and on wasm it does so with `tokio::task::spawn_local`, which
+/// PANICS outside a `LocalSet`. A panic inside a future driven by
+/// `wasm_bindgen_futures` doesn't reject the JS promise, it leaves it pending
+/// forever, so the symptom is a hang rather than an error. Every call that can reach
+/// `Sdk::new` or an upload has to go through here.
+///
+/// Natively there is a real runtime with a real `spawn`, so this is just the future.
+#[cfg(target_arch = "wasm32")]
+async fn drive<F: std::future::Future>(fut: F) -> F::Output {
+    // Scoped to the call: work spawned inside stops when it returns. That costs the
+    // 10-minute host-refresh loop its continuity — hosts are still fetched up front
+    // by `Sdk::new`, so a session starts correct and only goes stale — and it costs
+    // connection pre-warming, which is an optimization. Both are worth more than a
+    // hang, and a longer-lived home for them wants a driver this layer doesn't have.
+    tokio::task::LocalSet::new().run_until(fut).await
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+async fn drive<F: std::future::Future>(fut: F) -> F::Output {
+    fut.await
+}
+
 // --- plain descriptors --------------------------------------------------------
 //
 // serde `camelCase` so these deserialize straight into the shapes the frontend
@@ -266,8 +291,7 @@ impl Session {
             .ok_or("app key must be 32-byte hex (64 chars)")?;
         let app_key = AppKey::import(bytes);
         let builder = Builder::new(indexer_url, app_meta()).map_err(|e| format!("builder: {e}"))?;
-        match builder
-            .connected(&app_key)
+        match drive(builder.connected(&app_key))
             .await
             .map_err(|e| format!("connect: {e}"))?
         {
@@ -285,8 +309,7 @@ impl Session {
     /// screen starts cleanly rather than inheriting a stale, possibly expired request.
     pub async fn request_connection(&self, indexer_url: &str) -> Result<String, String> {
         let builder = Builder::new(indexer_url, app_meta()).map_err(|e| format!("builder: {e}"))?;
-        let builder = builder
-            .request_connection()
+        let builder = drive(builder.request_connection())
             .await
             .map_err(|e| format!("request connection: {e}"))?;
         let url = builder.response_url().to_string();
@@ -303,8 +326,7 @@ impl Session {
         let pending = self.pending.lock().await.take();
         match pending {
             Some(Pending::AwaitingApproval(builder)) => {
-                let approved = builder
-                    .wait_for_approval()
+                let approved = drive(builder.wait_for_approval())
                     .await
                     .map_err(|e| format!("approval: {e}"))?;
                 *self.pending.lock().await = Some(Pending::Approved(approved));
@@ -337,8 +359,7 @@ impl Session {
             None => return Err("no approved connection to register".to_string()),
         };
 
-        let sdk = builder
-            .register(mnemonic)
+        let sdk = drive(builder.register(mnemonic))
             .await
             .map_err(|e| format!("register: {e}"))?;
         let key_hex = pin_derive::encode_hex32(&sdk.app_key().export());
@@ -354,26 +375,29 @@ impl Session {
         on_shard: Option<ShardCallback>,
     ) -> Result<Uploaded, String> {
         let sdk = self.sdk().await?;
-        let byte_size = bytes.len() as u64;
-        let obj = sdk
-            .upload(
-                Object::default(),
-                Cursor::new(bytes),
-                upload_options(on_shard),
-            )
-            .await
-            .map_err(|e| format!("upload: {e}"))?;
-        sdk.pin_object(&obj)
-            .await
-            .map_err(|e| format!("pin: {e}"))?;
-        Ok(Uploaded {
-            id: obj.id().to_string(),
-            item_url: sdk
-                .share_object(&obj, far_future())
-                .map_err(|e| format!("share: {e}"))?
-                .to_string(),
-            byte_size,
+        drive(async move {
+            let byte_size = bytes.len() as u64;
+            let obj = sdk
+                .upload(
+                    Object::default(),
+                    Cursor::new(bytes),
+                    upload_options(on_shard),
+                )
+                .await
+                .map_err(|e| format!("upload: {e}"))?;
+            sdk.pin_object(&obj)
+                .await
+                .map_err(|e| format!("pin: {e}"))?;
+            Ok(Uploaded {
+                id: obj.id().to_string(),
+                item_url: sdk
+                    .share_object(&obj, far_future())
+                    .map_err(|e| format!("share: {e}"))?
+                    .to_string(),
+                byte_size,
+            })
         })
+        .await
     }
 
     /// Bin-pack several objects into shared slabs.
@@ -388,35 +412,38 @@ impl Session {
         on_shard: Option<ShardCallback>,
     ) -> Result<Vec<Uploaded>, String> {
         let sdk = self.sdk().await?;
-        let sizes: Vec<u64> = items.iter().map(|b| b.len() as u64).collect();
+        drive(async move {
+            let sizes: Vec<u64> = items.iter().map(|b| b.len() as u64).collect();
 
-        let mut packed = sdk
-            .upload_packed(upload_options(on_shard))
-            .map_err(|e| format!("packed upload: {e}"))?;
-        for bytes in items {
-            packed
-                .add(Cursor::new(bytes))
+            let mut packed = sdk
+                .upload_packed(upload_options(on_shard))
+                .map_err(|e| format!("packed upload: {e}"))?;
+            for bytes in items {
+                packed
+                    .add(Cursor::new(bytes))
+                    .await
+                    .map_err(|e| format!("packed add: {e}"))?;
+            }
+            let objects = packed
+                .finalize()
                 .await
-                .map_err(|e| format!("packed add: {e}"))?;
-        }
-        let objects = packed
-            .finalize()
-            .await
-            .map_err(|e| format!("packed finalize: {e}"))?;
+                .map_err(|e| format!("packed finalize: {e}"))?;
 
-        let mut out = Vec::with_capacity(objects.len());
-        for (i, obj) in objects.iter().enumerate() {
-            sdk.pin_object(obj).await.map_err(|e| format!("pin: {e}"))?;
-            out.push(Uploaded {
-                id: obj.id().to_string(),
-                item_url: sdk
-                    .share_object(obj, far_future())
-                    .map_err(|e| format!("share: {e}"))?
-                    .to_string(),
-                byte_size: sizes.get(i).copied().unwrap_or(0),
-            });
-        }
-        Ok(out)
+            let mut out = Vec::with_capacity(objects.len());
+            for (i, obj) in objects.iter().enumerate() {
+                sdk.pin_object(obj).await.map_err(|e| format!("pin: {e}"))?;
+                out.push(Uploaded {
+                    id: obj.id().to_string(),
+                    item_url: sdk
+                        .share_object(obj, far_future())
+                        .map_err(|e| format!("share: {e}"))?
+                        .to_string(),
+                    byte_size: sizes.get(i).copied().unwrap_or(0),
+                });
+            }
+            Ok(out)
+        })
+        .await
     }
 
     /// Read a share URL's bytes in full.
@@ -427,25 +454,28 @@ impl Session {
     /// byte streams not supported") — running it here is what fixes that.
     pub async fn download_item(&self, url: &str) -> Result<Vec<u8>, String> {
         let sdk = self.sdk().await?;
-        let obj = sdk
-            .shared_object(url)
-            .await
-            .map_err(|e| format!("shared_object: {e}"))?;
-        let mut download = sdk
-            .download(&obj, DownloadOptions::default())
-            .map_err(|e| format!("download start: {e}"))?;
-        let mut out = Vec::new();
-        loop {
-            let chunk = download
-                .read_chunk()
+        drive(async move {
+            let obj = sdk
+                .shared_object(url)
                 .await
-                .map_err(|e| format!("download read: {e}"))?;
-            if chunk.is_empty() {
-                break;
+                .map_err(|e| format!("shared_object: {e}"))?;
+            let mut download = sdk
+                .download(&obj, DownloadOptions::default())
+                .map_err(|e| format!("download start: {e}"))?;
+            let mut out = Vec::new();
+            loop {
+                let chunk = download
+                    .read_chunk()
+                    .await
+                    .map_err(|e| format!("download read: {e}"))?;
+                if chunk.is_empty() {
+                    break;
+                }
+                out.extend_from_slice(&chunk);
             }
-            out.extend_from_slice(&chunk);
-        }
-        Ok(out)
+            Ok(out)
+        })
+        .await
     }
 
     // -- custody ---------------------------------------------------------------
@@ -453,73 +483,88 @@ impl Session {
     /// Mirror a share URL's bytes into this scope, returning the object id.
     pub async fn pin_from_share_url(&self, url: &str) -> Result<String, String> {
         let sdk = self.sdk().await?;
-        let obj = sdk
-            .shared_object(url)
-            .await
-            .map_err(|e| format!("shared_object: {e}"))?;
-        sdk.pin_object(&obj)
-            .await
-            .map_err(|e| format!("pin: {e}"))?;
-        Ok(obj.id().to_string())
+        drive(async move {
+            let obj = sdk
+                .shared_object(url)
+                .await
+                .map_err(|e| format!("shared_object: {e}"))?;
+            sdk.pin_object(&obj)
+                .await
+                .map_err(|e| format!("pin: {e}"))?;
+            Ok(obj.id().to_string())
+        })
+        .await
     }
 
     /// Resolve a share URL to its object id without taking custody.
     pub async fn resolve_object_id(&self, url: &str) -> Result<String, String> {
         let sdk = self.sdk().await?;
-        let obj = sdk
-            .shared_object(url)
-            .await
-            .map_err(|e| format!("shared_object: {e}"))?;
-        Ok(obj.id().to_string())
+        drive(async move {
+            let obj = sdk
+                .shared_object(url)
+                .await
+                .map_err(|e| format!("shared_object: {e}"))?;
+            Ok(obj.id().to_string())
+        })
+        .await
     }
 
     pub async fn delete_object(&self, id: &str) -> Result<(), String> {
         let hash: Hash256 = id.parse().map_err(|e| format!("bad object id: {e:?}"))?;
         let sdk = self.sdk().await?;
-        sdk.delete_object(&hash)
-            .await
-            .map_err(|e| format!("delete: {e}"))
+        drive(async move {
+            sdk.delete_object(&hash)
+                .await
+                .map_err(|e| format!("delete: {e}"))
+        })
+        .await
     }
 
     /// Release slabs left empty by deletes. The indexer does not drop them on its
     /// own, so without this a delete frees nothing the user can see.
     pub async fn prune_slabs(&self) -> Result<(), String> {
         let sdk = self.sdk().await?;
-        sdk.prune_slabs().await.map_err(|e| format!("prune: {e}"))
+        drive(async move { sdk.prune_slabs().await.map_err(|e| format!("prune: {e}")) }).await
     }
 
     // -- accounting ------------------------------------------------------------
 
     pub async fn account_snapshot(&self) -> Result<AccountSnapshot, String> {
         let sdk = self.sdk().await?;
-        let account = sdk.account().await.map_err(|e| format!("account: {e}"))?;
-        let objects = walk_current(&sdk).await?;
-        let raw_content_bytes = objects
-            .iter()
-            .flat_map(|o| o.slabs.iter())
-            .map(|s| s.length as u64)
-            .sum();
-        Ok(AccountSnapshot {
-            pinned_data: account.pinned_data,
-            pinned_size: account.pinned_size,
-            raw_content_bytes,
-            max_pinned_data: account.max_pinned_data,
-            remaining_storage: account.remaining_storage,
-            fetched_at: Utc::now().to_rfc3339(),
+        drive(async move {
+            let account = sdk.account().await.map_err(|e| format!("account: {e}"))?;
+            let objects = walk_current(&sdk).await?;
+            let raw_content_bytes = objects
+                .iter()
+                .flat_map(|o| o.slabs.iter())
+                .map(|s| s.length as u64)
+                .sum();
+            Ok(AccountSnapshot {
+                pinned_data: account.pinned_data,
+                pinned_size: account.pinned_size,
+                raw_content_bytes,
+                max_pinned_data: account.max_pinned_data,
+                remaining_storage: account.remaining_storage,
+                fetched_at: Utc::now().to_rfc3339(),
+            })
         })
+        .await
     }
 
     pub async fn list_pinned_objects(&self) -> Result<Vec<PinnedObjectInfo>, String> {
         let sdk = self.sdk().await?;
-        Ok(walk_current(&sdk)
-            .await?
-            .into_iter()
-            .map(|o| PinnedObjectInfo {
-                id: o.id,
-                created_at: o.created_at.to_rfc3339(),
-                slabs: o.slabs,
-            })
-            .collect())
+        drive(async move {
+            Ok(walk_current(&sdk)
+                .await?
+                .into_iter()
+                .map(|o| PinnedObjectInfo {
+                    id: o.id,
+                    created_at: o.created_at.to_rfc3339(),
+                    slabs: o.slabs,
+                })
+                .collect())
+        })
+        .await
     }
 
     /// One object's slabs by id. `None` when it is not in scope — a normal answer
@@ -527,11 +572,14 @@ impl Session {
     pub async fn get_object_slabs(&self, id: &str) -> Result<Option<PinnedObjectInfo>, String> {
         let hash: Hash256 = id.parse().map_err(|e| format!("bad object id: {e:?}"))?;
         let sdk = self.sdk().await?;
-        Ok(sdk.object(&hash).await.ok().map(|obj| PinnedObjectInfo {
-            id: hash.to_string(),
-            created_at: obj.created_at().to_rfc3339(),
-            slabs: obj.slabs().to_vec(),
-        }))
+        drive(async move {
+            Ok(sdk.object(&hash).await.ok().map(|obj| PinnedObjectInfo {
+                id: hash.to_string(),
+                created_at: obj.created_at().to_rfc3339(),
+                slabs: obj.slabs().to_vec(),
+            }))
+        })
+        .await
     }
 }
 
