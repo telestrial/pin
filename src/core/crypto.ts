@@ -1,5 +1,24 @@
 // Channel-key cryptography. AES-GCM-256 via Web Crypto API; no external dep.
 // Encrypted blob format: 1-byte version || 12-byte IV || ciphertext-with-16-byte-tag.
+//
+// The KEY DERIVATIONS below are no longer implemented here — they're thin calls into
+// pin-core (Rust), where `pin_derive` owns every `info` string and the HKDF itself.
+// The Curator calls the same functions natively, so a user's did:dht (and every other
+// derived secret) is one value with one definition rather than two that a comment
+// asks to stay in step. This module keeps the AES-GCM half and the encodings.
+
+import {
+  derive_channel_doc_seed,
+  derive_channel_doc_ticket_seed,
+  derive_channel_locator_seed,
+  derive_did_dht_seed,
+  derive_rendezvous_instance_seed,
+  derive_rendezvous_seed,
+  derive_settings_key,
+  derive_settings_locator_seed,
+  derive_snapshot_key,
+} from '../../crates/pin-core/pkg/pin_core.js'
+import { ensureWasm } from './wasm'
 
 const KEY_BYTES = 32
 const IV_BYTES = 12
@@ -129,77 +148,44 @@ export async function decryptForChannel(
 // atproto's "keep records to a few dozen KB" guidance (1 MiB hard ceiling).
 export const SETTINGS_PAD_SIZE = 128 * 1024
 const SETTINGS_LENGTH_HEADER_BYTES = 4
-const SETTINGS_KEY_INFO = 'pin:settings:v1'
-
-// HKDF-SHA256 over the raw AppKey bytes, domain-separated by `info`. Deterministic,
-// so every derived subkey is re-derivable from the Sia recovery phrase alone after
-// a localStorage wipe — the recovery path. (Domain-separated from the ed25519
-// signing use, which lives in the Curator.)
-async function deriveAppSubkey(
-  appKeyBytes: Uint8Array,
-  info: string,
-): Promise<Uint8Array> {
-  const hkdfKey = await crypto.subtle.importKey(
-    'raw',
-    appKeyBytes as BufferSource,
-    'HKDF',
-    false,
-    ['deriveBits'],
-  )
-  const bits = await crypto.subtle.deriveBits(
-    {
-      name: 'HKDF',
-      hash: 'SHA-256',
-      salt: new Uint8Array(0),
-      info: new TextEncoder().encode(info),
-    },
-    hkdfKey,
-    KEY_BYTES * 8,
-  )
-  return new Uint8Array(bits)
-}
 
 export async function deriveSettingsKey(
   appKeyBytes: Uint8Array,
 ): Promise<Uint8Array> {
-  return deriveAppSubkey(appKeyBytes, SETTINGS_KEY_INFO)
+  await ensureWasm()
+  return derive_settings_key(appKeyBytes)
 }
 
 // docsMirror snapshot key — the whole-doc Sia snapshot is encrypted under this
 // (its record keys would otherwise leak channel/collection structure). Same
 // derivation family as settings, different domain. Never shared.
-const SNAPSHOT_KEY_INFO = 'pin:docsnapshot:v1'
 export async function deriveSnapshotKey(
   appKeyBytes: Uint8Array,
 ): Promise<Uint8Array> {
-  return deriveAppSubkey(appKeyBytes, SNAPSHOT_KEY_INFO)
+  await ensureWasm()
+  return derive_snapshot_key(appKeyBytes)
 }
 
-// The 32-byte ed25519 seed for this identity's did:dht key. MUST match the Rust
-// Curator's derivation byte-for-byte (identity.rs: HKDF-SHA256, empty salt, info
-// `pin:did-dht:v1`) so the browser's pkarr identity IS the Curator's did:dht — one
-// identity across both. Web Crypto's empty-salt HKDF equals Rust's `Hkdf::new(None,
-// …)` (HMAC pads any sub-block-size key with zeros, so empty == HashLen-zeros salt).
-// The seed feeds pkarr's `Keypair.from_secret_key` (in lib/pkarr.ts, needs the wasm);
-// kept here as the pure, testable derivation half.
-const DID_DHT_KEY_INFO = 'pin:did-dht:v1'
+// The 32-byte ed25519 seed for this identity's did:dht key — the browser's pkarr
+// identity IS the Curator's did:dht, because both now call the same Rust function
+// (identity.rs derives it the same way, from pin_derive). The seed feeds pkarr's
+// `Keypair.from_secret_key` in lib/pkarr.ts.
 export async function deriveDidDhtSeed(
   appKeyBytes: Uint8Array,
 ): Promise<Uint8Array> {
-  return deriveAppSubkey(appKeyBytes, DID_DHT_KEY_INFO)
+  await ensureWasm()
+  return derive_did_dht_seed(appKeyBytes)
 }
 
 // The 32-byte ed25519 seed for a channel's pkarr LOCATOR key — derived from the
 // channel key K (NOT the AppKey), because a reader only holds K (from the subscribe
 // URL) and must derive the same locator to resolve the channel's Sia pointer. So K
-// both locates (this key → pkarr record → Sia URL) and decrypts (the manifest). This
-// is the canonical definition; a future Curator that publishes channel locators must
-// match it. Same HKDF family, different `info` + a different IKM (K, not AppKey).
-const CHANNEL_LOCATOR_KEY_INFO = 'pin:channel-locator:v1'
+// both locates (this key → pkarr record → Sia URL) and decrypts (the manifest).
 export async function deriveChannelLocatorSeed(
   channelKeyBytes: Uint8Array,
 ): Promise<Uint8Array> {
-  return deriveAppSubkey(channelKeyBytes, CHANNEL_LOCATOR_KEY_INFO)
+  await ensureWasm()
+  return derive_channel_locator_seed(channelKeyBytes)
 }
 
 // The 32-byte seed for a channel's iroh-docs DOC NAMESPACE — the live replica a
@@ -213,12 +199,12 @@ export async function deriveChannelLocatorSeed(
 // DocTicket instead. Two devices of one author derive the SAME seed (same AppKey), so
 // both can serve the channel — which is what makes this compose with multi-instance
 // parity rather than fight it.
-const CHANNEL_DOC_NS_KEY_INFO = 'pin:channel-doc-ns:v1:'
 export async function deriveChannelDocSeed(
   appKeyBytes: Uint8Array,
   channelID: string,
 ): Promise<Uint8Array> {
-  return deriveAppSubkey(appKeyBytes, CHANNEL_DOC_NS_KEY_INFO + channelID)
+  await ensureWasm()
+  return derive_channel_doc_seed(appKeyBytes, channelID)
 }
 
 // The 32-byte ed25519 seed for the pkarr key where a channel's read DocTicket is
@@ -230,11 +216,11 @@ export async function deriveChannelDocSeed(
 // publishes, while the ticket freezes network addresses and has to be refreshed as
 // those change. Keeping them apart means a stale ticket can never disturb the durable
 // pointer, and a reader that finds no ticket simply falls to the locator rung.
-const CHANNEL_DOC_TICKET_KEY_INFO = 'pin:channel-doc:v1'
 export async function deriveChannelDocTicketSeed(
   channelKeyBytes: Uint8Array,
 ): Promise<Uint8Array> {
-  return deriveAppSubkey(channelKeyBytes, CHANNEL_DOC_TICKET_KEY_INFO)
+  await ensureWasm()
+  return derive_channel_doc_ticket_seed(channelKeyBytes)
 }
 
 // The 32-byte ed25519 seed for your SETTINGS pkarr LOCATOR key — the mutable
@@ -244,11 +230,11 @@ export async function deriveChannelDocTicketSeed(
 // from the PUBLIC did:dht identity, so resolving someone's did:dht never surfaces
 // their settings pointer. Recoverable from the recovery phrase alone — the durable
 // replacement for the device-local localStorage pointer.
-const SETTINGS_LOCATOR_KEY_INFO = 'pin:settings-locator:v1'
 export async function deriveSettingsLocatorSeed(
   appKeyBytes: Uint8Array,
 ): Promise<Uint8Array> {
-  return deriveAppSubkey(appKeyBytes, SETTINGS_LOCATOR_KEY_INFO)
+  await ensureWasm()
+  return derive_settings_locator_seed(appKeyBytes)
 }
 
 // The 32-byte ed25519 seed for your instance-RENDEZVOUS pkarr key — where an instance
@@ -258,11 +244,11 @@ export async function deriveSettingsLocatorSeed(
 // no manual ticket copy. AppKey-derived, so it's private to your instances (only you
 // can compute the key → only your instances publish/resolve it) and domain-separated
 // from the public did:dht identity. The auto-discovery substrate for instance sync.
-const RENDEZVOUS_KEY_INFO = 'pin:iroh-rendezvous:v1'
 export async function deriveRendezvousSeed(
   appKeyBytes: Uint8Array,
 ): Promise<Uint8Array> {
-  return deriveAppSubkey(appKeyBytes, RENDEZVOUS_KEY_INFO)
+  await ensureWasm()
+  return derive_rendezvous_seed(appKeyBytes)
 }
 
 // Per-instance rendezvous key. The multi-instance rendezvous is a small DIRECTORY
@@ -272,15 +258,12 @@ export async function deriveRendezvousSeed(
 // (not the AppKey) so it stays private to your instances; the instanceId is a public
 // per-session salt, so both the advertiser and any resolver holding the rendezvous
 // seed can derive the same per-instance key from a directory entry's id.
-const RENDEZVOUS_INSTANCE_KEY_INFO = 'pin:iroh-rendezvous-instance:v1:'
 export async function deriveRendezvousInstanceSeed(
   rendezvousSeed: Uint8Array,
   instanceId: string,
 ): Promise<Uint8Array> {
-  return deriveAppSubkey(
-    rendezvousSeed,
-    RENDEZVOUS_INSTANCE_KEY_INFO + instanceId,
-  )
+  await ensureWasm()
+  return derive_rendezvous_instance_seed(rendezvousSeed, instanceId)
 }
 
 export async function encryptSettings(
