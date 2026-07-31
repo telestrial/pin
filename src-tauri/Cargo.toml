@@ -42,7 +42,12 @@ tokio = { version = "1", features = ["rt-multi-thread", "time", "fs", "sync", "i
 # sia_storage: the desktop's native Sia I/O backend (src-tauri/src/sia.rs),
 # replacing the in-webview WASM SDK so downloads work in WebView2.
 sia_storage = "0.9.1"
+# pkarr itself only via pin-pkarr now (identity.rs still uses the crate directly for
+# the Curator's own DID document; the generic TXT publish/resolve is shared).
 pkarr = "3"
+# Pin's pkarr layer, shared with the browser: one definition of the packet shape, TTL
+# and retry posture, with only the transport differing by target (DHT here, relays there).
+pin-pkarr = { path = "../crates/pin-pkarr" }
 # Every AppKey-derived secret, identical to what the browser derives — the doc
 # namespace/author seeds, the did:dht identity seed, and the rest. Owning the hkdf/sha2
 # dependency here too would just be a second place for a derivation to drift.
