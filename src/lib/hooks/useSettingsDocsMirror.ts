@@ -15,7 +15,13 @@ import type {
 import { useAuthStore } from '../../stores/auth'
 import { useCuratorStore } from '../../stores/curator'
 import { useStorageActivityStore } from '../../stores/storageActivity'
-import { getRecord, openDocs, putRecord } from '../docs'
+import {
+  getRecord,
+  isRemoteChange,
+  openDocs,
+  putRecord,
+  subscribeDocChanges,
+} from '../docs'
 import { snapshotToSia } from '../docsMirror'
 
 // The user's settings mirrored into iroh-docs + Sia — the CANONICAL settings
@@ -45,10 +51,6 @@ import { snapshotToSia } from '../docsMirror'
 // overlay on top of it, never a replacement.
 
 const DEBOUNCE_MS = 2000
-// How often to check the replica for a peer's newer settings. Local read (wasm engine
-// on web, Curator IPC on desktop) — no network — so a few-second cadence is cheap; the
-// engine is already open (the sync hook opened it), so this adds no load cost.
-const OVERLAY_POLL_MS = 3000
 const FINGERPRINT_KEY = 'pin:docsnapshot:settingsFingerprint'
 
 // Module-scope flush so non-React callers (channel mutations, etc.) can await the
@@ -303,16 +305,27 @@ export function useSettingsDocsMirror() {
         overlayBusy = false
       }
     }
-    const overlayTimer = setInterval(
-      () => void applyPeerSettingsIfNewer(),
-      OVERLAY_POLL_MS,
-    )
+    // Driven by the doc's change feed rather than a timer: the engine says when
+    // `settings/self` moved, and we re-read it. `isRemoteChange` filters out our own
+    // writes (which would bounce straight back out); an empty collection is a
+    // stream-level event (notably content-ready, whose value may be the settings blob
+    // finishing its download) so it counts too.
+    const unsubChanges = subscribeDocChanges(({ collection, kind }) => {
+      if (!isRemoteChange(kind)) return
+      if (collection && collection !== 'settings') return
+      void applyPeerSettingsIfNewer()
+    })
+    // Push for speed, pull for truth: read once on mount. A change that landed while
+    // this instance was closed (or, on desktop, while the window was hidden to tray
+    // and the event went to nobody) has no event left to catch — the read is what
+    // makes the overlay correct rather than merely live.
+    void applyPeerSettingsIfNewer()
 
     return () => {
       cancelled = true
       activeMirrorFlush = null
       if (timer) clearTimeout(timer)
-      clearInterval(overlayTimer)
+      unsubChanges()
       unsub()
     }
   }, [client, storedKeyHex])
