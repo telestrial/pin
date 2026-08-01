@@ -11,6 +11,7 @@ members = [
   "crates/pin-channel",
   "crates/pin-core",
   "crates/pin-crypto",
+  "crates/pin-curator",
   "crates/pin-derive",
   "crates/pin-pkarr",
   "crates/pin-rpc",

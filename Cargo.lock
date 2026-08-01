@@ -116,6 +116,7 @@ dependencies = [
  "iroh-gossip",
  "log",
  "pin-channel",
+ "pin-curator",
  "pin-derive",
  "pin-pkarr",
  "pin-rpc",
@@ -4589,6 +4590,7 @@ dependencies = [
  "js-sys",
  "pin-channel",
  "pin-crypto",
+ "pin-curator",
  "pin-derive",
  "pin-pkarr",
  "pin-rpc",
@@ -4606,6 +4608,23 @@ dependencies = [
  "base64 0.21.7",
  "getrandom 0.4.3",
  "sha2 0.10.9",
+]
+
+[[package]]
+name = "pin-curator"
+version = "0.1.0"
+dependencies = [
+ "base64 0.21.7",
+ "iroh-blobs",
+ "iroh-docs",
+ "n0-future",
+ "pin-channel",
+ "pin-crypto",
+ "pin-derive",
+ "pin-sia",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]

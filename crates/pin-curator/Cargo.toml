@@ -1,0 +1,41 @@
+# The Curator's loops — the background work that keeps running whether or not anyone
+# is looking at a screen.
+#
+# It lives in a crate, and compiles for BOTH targets, because a loop is not a
+# capability. The desktop runs it always-on and the browser runs it while its tab is
+# open; that difference is uptime, not tier, so writing it twice would fork web into a
+# lesser instance for no reason a machine can point at. What genuinely differs — UDP vs
+# relays, a file store vs memory — is already forked underneath, in the crates this one
+# composes.
+#
+# It owns no primitive. Reading the subscription list, resolving a channel, writing a
+# record: each already has a home. What lives here is WHEN, and the order.
+[package]
+name = "pin-curator"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+
+[dependencies]
+# The doc: where the subscription list is read from and the cache is written to.
+iroh-docs = { version = "0.101", default-features = false }
+iroh-blobs = { version = "0.103", default-features = false }
+# Sleeping and spawning, on both targets. Already in the tree via iroh; it cfg-splits
+# tokio against a browser timer so the cadence doesn't have to be written twice.
+n0-future = "0.3"
+# A channel's round-trip, which is what a pull pass performs.
+pin-channel = { path = "../pin-channel" }
+# The settings key + the record-key spelling both engines share.
+pin-derive = { path = "../pin-derive" }
+# Opening the settings blob to read the subscription list.
+pin-crypto = { path = "../pin-crypto" }
+# Decoding a stored channel key. Not a sealing concern, so it doesn't belong behind
+# pin-crypto; same version + alphabet as everywhere else in the tree.
+base64 = "0.21"
+# The session a resolve needs; passed in already connected.
+pin-sia = { path = "../pin-sia" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "macros"] }

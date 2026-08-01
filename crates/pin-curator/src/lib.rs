@@ -1,0 +1,447 @@
+// The Curator's pull loop: keep the subscribed channels' manifests current in the
+// doc, so a reader lands on a cached copy instead of waiting on the DHT.
+//
+// This is the resolution ladder's "keep" step, moved off the frontend. It ran as a
+// React effect until now, which meant the intake half of the Curator only worked while
+// a webview was alive — on desktop the loop stopped when the window did, and the work
+// was described in one language while every leg it called had already moved to another.
+//
+// What a pass does: read the subscription list out of the doc's own settings record,
+// resolve each channel that isn't the user's own, and write the sealed manifest to
+// `sub/<channelID>`. The bytes are stored exactly as they came off Sia, so whoever
+// reads them later decrypts by the same path a fresh resolve would — the loop is a
+// courier, not an interpreter. The one thing it does look at is a manifest's
+// `publishedAt`, to avoid caching a resolve that's older than what it already holds
+// (see `is_older_than_cached`); it holds `K` for these channels anyway, and moving a
+// channel backwards is the failure this exists to prevent.
+//
+// It does NOT touch the feed. A pass announces itself by writing a record, and the
+// doc's change feed carries that to whatever is rendering; the loop has no opinion
+// about whether anything is.
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use iroh_blobs::api::Store;
+use iroh_docs::{api::Doc, AuthorId};
+use pin_derive::{record_key, settings_key};
+
+/// The collection holding cached manifests of channels the user subscribes to. Keyed
+/// by channelID; the value is the sealed blob, byte-identical to Sia's copy.
+pub const SUB_COLLECTION: &str = "sub";
+
+/// Where the settings record lives — the loop's source for who's subscribed.
+const SETTINGS_COLLECTION: &str = "settings";
+const SETTINGS_RKEY: &str = "self";
+
+/// Everything a pass needs, gathered by whichever engine is running it.
+///
+/// Concrete types rather than a trait: both engines hold the same `Doc` and the same
+/// blobs `Store` (a `MemStore` and an `FsStore` each deref to it), so there is nothing
+/// here for an abstraction to abstract over.
+pub struct PullContext {
+    pub doc: Doc,
+    pub blobs: Store,
+    pub author_id: AuthorId,
+    /// A connected Sia session. Resolving a channel downloads its manifest object, so
+    /// a pass over a disconnected session simply fails and the next one retries.
+    pub sia: Arc<pin_sia::Session>,
+    /// The Sia AppKey, for the settings key. The loop reads its own user's settings and
+    /// nothing else.
+    pub app_key: [u8; 32],
+}
+
+/// What one pass did. Reported rather than logged so a caller can surface it (or, in a
+/// test, assert on it).
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct PullOutcome {
+    /// Channels whose manifest was resolved and cached.
+    pub cached: usize,
+    /// Channels that resolved to nothing — never published, or the record has aged off
+    /// the DHT. Ordinary, not an error.
+    pub unresolved: usize,
+    /// Channels that failed to resolve (network, decrypt). The next pass retries.
+    pub failed: usize,
+    /// Cached records dropped because the user no longer subscribes to them.
+    pub dropped: usize,
+    /// Channels whose resolve came back OLDER than what's already cached, so the
+    /// write was skipped. Expected on a browser, whose relay transport lags the DHT.
+    pub stale: usize,
+}
+
+/// The subscription list, as much of it as a pass needs.
+///
+/// Deserialized permissively: this reads a record the frontend writes, and a settings
+/// record that grows a field must not stop the loop. Only the fields below are
+/// required to mean anything.
+#[derive(serde::Deserialize)]
+struct SettingsView {
+    #[serde(default)]
+    subscriptions: Vec<SubscriptionView>,
+    #[serde(default, rename = "myChannels")]
+    my_channels: Vec<OwnedChannelView>,
+}
+
+#[derive(serde::Deserialize)]
+struct SubscriptionView {
+    #[serde(rename = "channelID")]
+    channel_id: String,
+    #[serde(rename = "channelKey")]
+    channel_key: String,
+}
+
+#[derive(serde::Deserialize)]
+struct OwnedChannelView {
+    #[serde(rename = "channelID")]
+    channel_id: String,
+}
+
+/// Read a record's bytes out of the doc, or `None` when it isn't there.
+async fn read_record(
+    ctx: &PullContext,
+    collection: &str,
+    rkey: &str,
+) -> Result<Option<Vec<u8>>, String> {
+    let entry = ctx
+        .doc
+        .get_exact(ctx.author_id, record_key(collection, rkey), false)
+        .await
+        .map_err(|e| format!("get {collection}/{rkey}: {e}"))?;
+    match entry {
+        None => Ok(None),
+        Some(e) => {
+            let bytes = ctx
+                .blobs
+                .get_bytes(e.content_hash())
+                .await
+                .map_err(|e| format!("get_bytes {collection}/{rkey}: {e}"))?;
+            Ok(Some(bytes.to_vec()))
+        }
+    }
+}
+
+/// Which channels a pass should keep cached: subscribed and not the user's own.
+///
+/// Own channels are excluded because their freshest state is local — the app reflects a
+/// publish immediately — so a cached copy could only ever be the same or staler, and
+/// serving a staler one would make a just-published post disappear.
+fn wanted_channels(settings: &SettingsView) -> Vec<(&str, &str)> {
+    let owned: std::collections::HashSet<&str> = settings
+        .my_channels
+        .iter()
+        .map(|c| c.channel_id.as_str())
+        .collect();
+    settings
+        .subscriptions
+        .iter()
+        .filter(|s| !owned.contains(s.channel_id.as_str()))
+        .map(|s| (s.channel_id.as_str(), s.channel_key.as_str()))
+        .collect()
+}
+
+/// Decode a base64 channel key (K) as settings stores it. Standard alphabet with
+/// padding — the same encoding the frontend's `channelKeyFromBase64` reads.
+fn decode_channel_key(b64: &str) -> Option<[u8; 32]> {
+    use base64::Engine as _;
+    let bytes = base64::engine::general_purpose::STANDARD.decode(b64).ok()?;
+    bytes.try_into().ok()
+}
+
+/// A manifest's version marker. Every mutation stamps a fresh `publishedAt`, and all
+/// of one channel's manifests come from one author's clock, so comparing two of them
+/// compares versions rather than guessing.
+#[derive(serde::Deserialize)]
+struct ManifestVersion {
+    #[serde(rename = "publishedAt")]
+    published_at: String,
+}
+
+fn published_at(manifest_json: &str) -> Option<String> {
+    serde_json::from_str::<ManifestVersion>(manifest_json)
+        .ok()
+        .map(|m| m.published_at)
+}
+
+/// Whether a freshly-resolved manifest is OLDER than the one already cached — in which
+/// case caching it would move the channel backwards.
+///
+/// Reads the cached blob to compare, which means opening it: the loop holds `K` for
+/// every channel it pulls (it can't resolve without one), so this reads nothing it
+/// isn't already entitled to. It looks at one field and keeps none of it.
+///
+/// Anything unreadable — no cache, a blob that won't open, a manifest without the
+/// field — answers "not older", so the write proceeds. A guard that can't compare
+/// should get out of the way rather than block a channel forever.
+fn is_older_than_cached(
+    channel_key: &[u8; 32],
+    resolved_json: &str,
+    cached_blob: Option<&[u8]>,
+) -> bool {
+    let Some(cached) = cached_blob else {
+        return false;
+    };
+    let Ok(cached_str) = std::str::from_utf8(cached) else {
+        return false;
+    };
+    let Ok(cached_json) = pin_channel::open_blob(channel_key, cached_str) else {
+        return false;
+    };
+    match (published_at(resolved_json), published_at(&cached_json)) {
+        // Strictly older only. Equal timestamps mean the same instant with different
+        // content, and refusing that would be the worse error.
+        (Some(fresh), Some(held)) => fresh < held,
+        _ => false,
+    }
+}
+
+/// One pass: refresh every subscribed channel's cached manifest, and drop the cache for
+/// channels no longer subscribed.
+///
+/// Never gives up the whole pass for one channel. A channel that fails is counted and
+/// left for the next pass — one unreachable author must not stop the rest from being
+/// kept current.
+pub async fn pull_once(ctx: &PullContext) -> Result<PullOutcome, String> {
+    let raw = read_record(ctx, SETTINGS_COLLECTION, SETTINGS_RKEY)
+        .await?
+        .ok_or("no settings record yet")?;
+    let blob = String::from_utf8(raw).map_err(|_| "settings blob is not UTF-8")?;
+    let key = settings_key(&ctx.app_key);
+    let json = pin_crypto::decrypt_settings(&key, &blob)?;
+    let settings: SettingsView =
+        serde_json::from_slice(&json).map_err(|e| format!("settings decode: {e}"))?;
+
+    let wanted = wanted_channels(&settings);
+    let mut outcome = PullOutcome::default();
+
+    for (channel_id, channel_key_b64) in &wanted {
+        let Some(k) = decode_channel_key(channel_key_b64) else {
+            // A key we can't decode can never resolve; counting it as failed would
+            // make the next pass retry something that cannot succeed.
+            continue;
+        };
+        match pin_channel::resolve(&ctx.sia, &k).await {
+            Ok(Some(resolved)) => {
+                // What's already cached may be NEWER than what we just resolved. A
+                // browser resolves through pkarr relays that lag minutes behind the
+                // DHT a desktop reads directly, so a tab syncing with a desktop
+                // routinely holds a fresher manifest than its own pass can find.
+                // Writing anyway would un-publish a post: the record is what the
+                // reader serves and what syncs back to the peer that had it right.
+                let cached = read_record(ctx, SUB_COLLECTION, channel_id)
+                    .await
+                    .ok()
+                    .flatten();
+                if is_older_than_cached(&k, &resolved.manifest_json, cached.as_deref()) {
+                    outcome.stale += 1;
+                    continue;
+                }
+                match ctx
+                    .doc
+                    .set_bytes(
+                        ctx.author_id,
+                        record_key(SUB_COLLECTION, channel_id),
+                        resolved.blob.into_bytes(),
+                    )
+                    .await
+                {
+                    Ok(_) => outcome.cached += 1,
+                    Err(_) => outcome.failed += 1,
+                }
+            }
+            Ok(None) => outcome.unresolved += 1,
+            Err(_) => outcome.failed += 1,
+        }
+    }
+
+    outcome.dropped = drop_unsubscribed(ctx, &wanted).await;
+    Ok(outcome)
+}
+
+/// Delete cached manifests for channels the user no longer subscribes to (or that are
+/// now their own). Best-effort: a stray cached record is opaque and small, so a failed
+/// delete is not worth failing a pass over.
+async fn drop_unsubscribed(ctx: &PullContext, wanted: &[(&str, &str)]) -> usize {
+    use n0_future::StreamExt as _;
+
+    let keep: std::collections::HashSet<&str> = wanted.iter().map(|(id, _)| *id).collect();
+    let prefix = pin_derive::collection_prefix(SUB_COLLECTION);
+
+    let Ok(stream) = ctx
+        .doc
+        .get_many(iroh_docs::store::Query::all().build())
+        .await
+    else {
+        return 0;
+    };
+    let mut stream = Box::pin(stream);
+    let mut stale = Vec::new();
+    while let Some(Ok(entry)) = stream.next().await {
+        let key = String::from_utf8_lossy(entry.key()).to_string();
+        let Some(rkey) = key.strip_prefix(&prefix) else {
+            continue;
+        };
+        if !keep.contains(rkey) {
+            stale.push(rkey.to_string());
+        }
+    }
+
+    let mut dropped = 0;
+    for rkey in stale {
+        if ctx
+            .doc
+            .del(ctx.author_id, record_key(SUB_COLLECTION, &rkey))
+            .await
+            .is_ok()
+        {
+            dropped += 1;
+        }
+    }
+    dropped
+}
+
+/// Pass, wait, repeat — forever. The loop itself, cadence included.
+///
+/// Returned rather than spawned, so the caller places it on whichever executor it
+/// already has: the Sia runtime natively, the browser's task queue on wasm. That
+/// placement is a genuine difference (there is one executor to choose from in a
+/// browser and several natively); the loop it runs is the same either way.
+///
+/// Leaving the spawn to the caller also puts the `Send` bound where it's real. Tokio
+/// requires it and imposes it at the call site; a browser task doesn't and can't, since
+/// the report callback there is a JS closure. Neither has to be stated here.
+///
+/// A failed pass is not fatal: the causes — Sia not connected yet, a settings record
+/// that hasn't synced, the network — are all things the next pass may find resolved.
+pub async fn run_pull_loop(
+    ctx: PullContext,
+    cadence: Duration,
+    on_pass: impl Fn(Result<PullOutcome, String>),
+) -> ! {
+    loop {
+        let outcome = pull_once(&ctx).await;
+        on_pass(outcome);
+        n0_future::time::sleep(cadence).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn settings(json: &str) -> SettingsView {
+        serde_json::from_str(json).unwrap()
+    }
+
+    fn published(iso: &str) -> String {
+        format!(r#"{{"version":1,"publishedAt":"{iso}","items":[]}}"#)
+    }
+
+    fn sealed(k: &[u8; 32], iso: &str) -> Vec<u8> {
+        pin_crypto::encrypt(k, published(iso).as_bytes())
+            .unwrap()
+            .into_bytes()
+    }
+
+    #[test]
+    fn a_resolve_older_than_the_cache_is_refused() {
+        // The bug this exists for: a browser resolves through relays that lag the DHT,
+        // so its own pass can find an OLDER manifest than the one a desktop already
+        // synced into the cache. Writing it would un-publish a post that's on screen.
+        let k = [7u8; 32];
+        let cached = sealed(&k, "2026-08-01T12:00:00.000Z");
+        assert!(is_older_than_cached(
+            &k,
+            &published("2026-08-01T11:00:00.000Z"),
+            Some(&cached)
+        ));
+    }
+
+    #[test]
+    fn a_newer_or_equal_resolve_is_written() {
+        let k = [7u8; 32];
+        let cached = sealed(&k, "2026-08-01T12:00:00.000Z");
+        // Newer — the ordinary case.
+        assert!(!is_older_than_cached(
+            &k,
+            &published("2026-08-01T13:00:00.000Z"),
+            Some(&cached)
+        ));
+        // Same instant, and by construction different content, since an identical
+        // manifest would be a harmless rewrite either way. Refusing would be worse
+        // than allowing.
+        assert!(!is_older_than_cached(
+            &k,
+            &published("2026-08-01T12:00:00.000Z"),
+            Some(&cached)
+        ));
+    }
+
+    #[test]
+    fn a_guard_that_cannot_compare_gets_out_of_the_way() {
+        // Nothing cached yet — the first pass must always write.
+        let k = [7u8; 32];
+        assert!(!is_older_than_cached(
+            &k,
+            &published("2026-01-01T00:00:00Z"),
+            None
+        ));
+        // A blob sealed under a DIFFERENT key won't open. Blocking the channel forever
+        // would be a worse answer than writing a manifest we can read.
+        let other = sealed(&[9u8; 32], "2099-01-01T00:00:00Z");
+        assert!(!is_older_than_cached(
+            &k,
+            &published("2026-01-01T00:00:00Z"),
+            Some(&other)
+        ));
+        // A manifest with no version marker can't be ranked, so it doesn't block.
+        let cached = sealed(&k, "2099-01-01T00:00:00Z");
+        assert!(!is_older_than_cached(&k, r#"{"items":[]}"#, Some(&cached)));
+    }
+
+    #[test]
+    fn wanted_channels_excludes_the_users_own() {
+        // Owners auto-subscribe to their own channels, so the subscription list
+        // contains them — and caching one could serve a staler copy than the local
+        // state a publish just wrote.
+        let s = settings(
+            r#"{
+              "subscriptions": [
+                {"channelID": "aaa", "channelKey": "k1"},
+                {"channelID": "bbb", "channelKey": "k2"}
+              ],
+              "myChannels": [{"channelID": "aaa"}]
+            }"#,
+        );
+        assert_eq!(wanted_channels(&s), vec![("bbb", "k2")]);
+    }
+
+    #[test]
+    fn settings_decode_tolerates_unknown_and_missing_fields() {
+        // The frontend owns this record's shape and will add to it. A settings record
+        // carrying a field this crate has never heard of must not stop the loop.
+        let s = settings(
+            r#"{
+              "version": 3,
+              "theme": "rounded",
+              "somethingAddedLater": {"nested": true},
+              "subscriptions": [{"channelID": "aaa", "channelKey": "k1", "label": "x"}]
+            }"#,
+        );
+        assert_eq!(wanted_channels(&s), vec![("aaa", "k1")]);
+
+        // And an absent list is an empty one, not a decode failure.
+        let empty = settings(r#"{"version": 3}"#);
+        assert!(wanted_channels(&empty).is_empty());
+    }
+
+    #[test]
+    fn a_channel_key_round_trips_from_its_stored_form() {
+        use base64::Engine as _;
+        let b64 = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
+        let k: [u8; 32] = core::array::from_fn(|i| i as u8);
+        assert_eq!(decode_channel_key(&b64(&k)), Some(k));
+        assert_eq!(decode_channel_key("not base64!!"), None);
+        // Right encoding, wrong length — a key that isn't 32 bytes can't be one.
+        assert_eq!(decode_channel_key(&b64(&[0u8; 16])), None);
+    }
+}
