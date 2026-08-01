@@ -31,7 +31,7 @@ function frameBuffers(items: Uint8Array[]): Uint8Array {
   return out
 }
 
-type UploadDto = { id: string; itemUrl: string }
+type UploadDto = { id: string; itemURL: string }
 
 // Build an UploadedItem from the Rust upload result. The content hash (CIDv1) is
 // computed here in TS so the CID logic stays in one place (core/contentHash), and
@@ -42,7 +42,7 @@ function toUploadedItem(
 ): Promise<UploadedItem> {
   return computeContentHash(bytes).then((contentHash) => ({
     id: dto.id,
-    itemURL: dto.itemUrl,
+    itemURL: dto.itemURL,
     byteSize: bytes.length,
     contentHash,
   }))

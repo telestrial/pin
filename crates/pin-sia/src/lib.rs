@@ -110,6 +110,12 @@ async fn drive<F: std::future::Future>(fut: F) -> F::Output {
 #[serde(rename_all = "camelCase")]
 pub struct Uploaded {
     pub id: String,
+    /// Named explicitly because `camelCase` would emit `itemUrl`, and the frontend
+    /// spells acronyms in full (`itemURL`). Serde's rename_all only knows word
+    /// boundaries, not which words are acronyms, so any field ending in one has to say
+    /// so — the alternative is each caller re-mapping the name, which is how the
+    /// browser came to read `itemURL` off a payload that carried `itemUrl`.
+    #[serde(rename = "itemURL")]
     pub item_url: String,
     pub byte_size: u64,
 }
@@ -604,6 +610,62 @@ mod tests {
     #[test]
     fn share_horizon_is_effectively_permanent() {
         assert_eq!(far_future().to_rfc3339(), "9999-12-31T00:00:00+00:00");
+    }
+
+    // These descriptors ARE the wire format on both hops, and the frontend consumes
+    // them by deserializing straight into its own types — so a field name is as
+    // load-bearing as a field value, and getting one wrong is invisible to both
+    // compilers. It is how the browser came to read an undefined `itemURL` off a
+    // payload that spelled it `itemUrl`: TypeScript cannot see through `JSON.parse`,
+    // and Rust has no idea what the other side expects to find.
+    //
+    // So: assert the exact key set. If a field is renamed or added, this fails here
+    // rather than surfacing as a manifest full of undefined URLs.
+    #[test]
+    fn descriptor_field_names_match_what_the_frontend_reads() {
+        let keys = |v: serde_json::Value| {
+            let mut k: Vec<String> = v.as_object().unwrap().keys().cloned().collect();
+            k.sort();
+            k
+        };
+
+        let uploaded = serde_json::to_value(Uploaded {
+            id: "id".into(),
+            item_url: "url".into(),
+            byte_size: 1,
+        })
+        .unwrap();
+        // itemURL, not itemUrl — see the field's own note.
+        assert_eq!(keys(uploaded), ["byteSize", "id", "itemURL"]);
+
+        let snapshot = serde_json::to_value(AccountSnapshot {
+            pinned_data: 1,
+            pinned_size: 2,
+            raw_content_bytes: 3,
+            max_pinned_data: 4,
+            remaining_storage: 5,
+            fetched_at: "t".into(),
+        })
+        .unwrap();
+        assert_eq!(
+            keys(snapshot),
+            [
+                "fetchedAt",
+                "maxPinnedData",
+                "pinnedData",
+                "pinnedSize",
+                "rawContentBytes",
+                "remainingStorage",
+            ]
+        );
+
+        let object = serde_json::to_value(PinnedObjectInfo {
+            id: "id".into(),
+            created_at: "t".into(),
+            slabs: vec![],
+        })
+        .unwrap();
+        assert_eq!(keys(object), ["createdAt", "id", "slabs"]);
     }
 
     #[test]

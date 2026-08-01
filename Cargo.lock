@@ -4644,6 +4644,7 @@ dependencies = [
  "futures-lite",
  "pin-derive",
  "serde",
+ "serde_json",
  "sia_storage",
  "tokio",
 ]

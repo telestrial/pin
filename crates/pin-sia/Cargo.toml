@@ -40,3 +40,6 @@ tokio = { version = "1", default-features = false, features = ["sync", "rt"] }
 # A bare executor to drive the async surface in tests. None of them reach the network,
 # so a full tokio runtime would be weight for nothing. Already in the tree via pin-core.
 futures-lite = "2"
+# To assert the descriptors' serialized key names, which are the wire format the
+# frontend deserializes into its own types. Already in the tree via pin-core.
+serde_json = "1"

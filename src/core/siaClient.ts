@@ -15,6 +15,12 @@
 // (Progress callbacks are the exception that has to be bridged rather than passed:
 // the wasm client hands JS functions across wasm-bindgen; a Tauri client would drive
 // them via events.)
+//
+// HAZARD worth knowing about, because it has already bitten: the descriptors arrive as
+// JSON, and `JSON.parse` is typed `any`, so a field the Rust side spells differently
+// deserializes to `undefined` with neither compiler objecting. The annotations below
+// state the expected shape but cannot verify it; the actual guard is a test over in
+// pin-sia that asserts the serialized key names.
 
 import {
   sia_account_snapshot,
@@ -109,11 +115,13 @@ export function makeWasmSiaClient(publicKey: string): SiaClient {
   return {
     uploadItem: async (bytes, onShard) => {
       await ensureWasm()
-      return JSON.parse(await sia_upload_item(bytes, onShard))
+      return JSON.parse(await sia_upload_item(bytes, onShard)) as UploadedItem
     },
     uploadItemsPacked: async (items, onShard) => {
       await ensureWasm()
-      return JSON.parse(await sia_upload_items_packed(items, onShard))
+      return JSON.parse(
+        await sia_upload_items_packed(items, onShard),
+      ) as UploadedItem[]
     },
     downloadItem: async (url) => {
       await ensureWasm()
@@ -139,16 +147,18 @@ export function makeWasmSiaClient(publicKey: string): SiaClient {
 
     accountSnapshot: async () => {
       await ensureWasm()
-      return JSON.parse(await sia_account_snapshot())
+      return JSON.parse(await sia_account_snapshot()) as AccountSnapshot
     },
     listPinnedObjects: async () => {
       await ensureWasm()
-      return JSON.parse(await sia_list_pinned_objects())
+      return JSON.parse(await sia_list_pinned_objects()) as PinnedObjectInfo[]
     },
     getObjectSlabs: async (objectID) => {
       await ensureWasm()
       const found = await sia_get_object_slabs(objectID)
-      return found === undefined ? null : JSON.parse(found)
+      return found === undefined
+        ? null
+        : (JSON.parse(found) as PinnedObjectInfo)
     },
 
     appKeyPublicKey: () => publicKey,
