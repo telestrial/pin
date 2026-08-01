@@ -4574,6 +4574,7 @@ dependencies = [
  "iroh-docs",
  "iroh-gossip",
  "js-sys",
+ "pin-crypto",
  "pin-derive",
  "pin-pkarr",
  "pin-rpc",
@@ -4581,6 +4582,13 @@ dependencies = [
  "serde_json",
  "wasm-bindgen",
  "wasm-bindgen-futures",
+]
+
+[[package]]
+name = "pin-crypto"
+version = "0.1.0"
+dependencies = [
+ "sha2 0.10.9",
 ]
 
 [[package]]
@@ -4642,6 +4650,7 @@ name = "pin-sia"
 version = "0.1.0"
 dependencies = [
  "futures-lite",
+ "pin-crypto",
  "pin-derive",
  "serde",
  "serde_json",

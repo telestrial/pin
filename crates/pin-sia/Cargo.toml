@@ -28,6 +28,10 @@ rust-version = "1.82"
 sia_storage = "0.9.1"
 # Shared hex decoding, so an AppKey is parsed the same way everywhere.
 pin-derive = { path = "../pin-derive" }
+# The plaintext content fingerprint stamped onto every upload. Not a Sia concept, but
+# this is where the plaintext is in hand, so hashing it here is what keeps one
+# implementation serving both hops.
+pin-crypto = { path = "../pin-crypto" }
 serde = { version = "1", features = ["derive"] }
 # `sync` for the Mutex guarding the session slots — it is held across awaits (a
 # pending approval can take minutes), which is what rules out std's Mutex. `rt` for

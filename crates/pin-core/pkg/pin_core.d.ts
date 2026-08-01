@@ -43,6 +43,15 @@ export class IntoUnderlyingSource {
 export function channel_doc_namespaces(): any;
 
 /**
+ * A plaintext content fingerprint (CIDv1, raw codec, SHA-256).
+ *
+ * Uploads already carry their own hash back from `pin-sia`, so nothing in the
+ * production path calls this — it exists for bytes the app holds without having just
+ * uploaded them, which today means the integration tier's fake client.
+ */
+export function content_hash(bytes: Uint8Array): string;
+
+/**
  * Delete a record from a channel doc (author side).
  */
 export function delete_channel_record(ns_id: string, collection: string, rkey: string): Promise<void>;
@@ -313,6 +322,7 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly channel_doc_namespaces: () => [number, number, number];
+    readonly content_hash: (a: number, b: number) => [number, number];
     readonly delete_channel_record: (a: number, b: number, c: number, d: number, e: number, f: number) => any;
     readonly delete_record: (a: number, b: number, c: number, d: number) => any;
     readonly derive_channel_doc_seed: (a: number, b: number, c: number, d: number) => [number, number];

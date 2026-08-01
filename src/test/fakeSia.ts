@@ -11,7 +11,7 @@
 // identity-agnostic, so B can read A's URL, and pinning it mirrors the bytes into B's
 // own scope. That property is what the custody tests are actually about.
 
-import { computeContentHash } from '../core/contentHash'
+import { content_hash } from '../../crates/pin-core/pkg/pin_core.js'
 import type { AccountSnapshot } from '../core/pin'
 import type { UploadedItem } from '../core/sia'
 import type { PinnedObjectInfo, SiaClient } from '../core/siaClient'
@@ -217,8 +217,10 @@ export class FakeSiaClient implements SiaClient {
       id,
       itemURL: shareURLFor(id),
       byteSize: bytes.length,
-      // The real hash, so cache keys and drift detection behave as they do live.
-      contentHash: await computeContentHash(bytes),
+      // The real hash — the same Rust function the real client's upload stamps — so
+      // cache keys and drift detection behave as they do live. Reachable synchronously
+      // because the test setup instantiates the wasm module up front.
+      contentHash: content_hash(bytes),
     }
   }
 }

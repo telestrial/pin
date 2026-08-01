@@ -9,6 +9,7 @@ resolver = "3"
 members = [
   "src-tauri",
   "crates/pin-core",
+  "crates/pin-crypto",
   "crates/pin-derive",
   "crates/pin-pkarr",
   "crates/pin-rpc",

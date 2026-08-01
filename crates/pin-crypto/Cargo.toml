@@ -1,0 +1,20 @@
+# Pin's content-and-envelope cryptography, written once for both targets.
+#
+# Separate from pin-derive on purpose: that crate answers "what secret does this
+# AppKey imply", this one answers "how are bytes fingerprinted and sealed". They
+# share no dependency and neither needs the other, so folding them together would
+# only make the names lie.
+#
+# Everything here is format-defining, which is the bar for living in a shared crate:
+# a divergence between the browser's implementation and the Curator's would not be
+# untidy, it would make one of them unable to read what the other wrote — of live
+# manifests already on Sia, and of a cache key the whole item cache is built on.
+[package]
+name = "pin-crypto"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+
+[dependencies]
+# Already in the tree via pin-derive's HKDF.
+sha2 = "0.10"

@@ -7,7 +7,6 @@
 // This is what fixes the WebView2 `download` wart — the byte-stream read happens
 // natively in Rust, not in the webview's WASM SDK.
 
-import { computeContentHash } from '../core/contentHash'
 import type { AccountSnapshot } from '../core/pin'
 import type { UploadedItem } from '../core/sia'
 import type { PinnedObjectInfo, SiaClient } from '../core/siaClient'
@@ -31,23 +30,6 @@ function frameBuffers(items: Uint8Array[]): Uint8Array {
   return out
 }
 
-type UploadDto = { id: string; itemURL: string }
-
-// Build an UploadedItem from the Rust upload result. The content hash (CIDv1) is
-// computed here in TS so the CID logic stays in one place (core/contentHash), and
-// byteSize is the plaintext length we already hold.
-function toUploadedItem(
-  dto: UploadDto,
-  bytes: Uint8Array,
-): Promise<UploadedItem> {
-  return computeContentHash(bytes).then((contentHash) => ({
-    id: dto.id,
-    itemURL: dto.itemURL,
-    byteSize: bytes.length,
-    contentHash,
-  }))
-}
-
 export async function makeTauriSiaClient(
   appKeyHex: string,
   indexerURL: string,
@@ -65,15 +47,15 @@ export async function makeTauriSiaClient(
     uploadItem: async (bytes) => {
       // Pass the Uint8Array as the payload → Tauri sends it as a raw request body
       // (no JSON number-array / base64 blow-up), read on the Rust side as InvokeBody::Raw.
-      const dto = await invoke<UploadDto>('sia_upload_item', bytes)
-      return toUploadedItem(dto, bytes)
+      // The result already IS an UploadedItem — pin-sia stamps the content hash while
+      // it holds the plaintext, so there is nothing left to add on this side.
+      return invoke<UploadedItem>('sia_upload_item', bytes)
     },
     uploadItemsPacked: async (items) => {
-      const dtos = await invoke<UploadDto[]>(
+      return invoke<UploadedItem[]>(
         'sia_upload_items_packed',
         frameBuffers(items),
       )
-      return Promise.all(dtos.map((dto, i) => toUploadedItem(dto, items[i])))
     },
     downloadItem: async (url) => {
       const buf = await invoke<ArrayBuffer>('sia_download_item', { url })

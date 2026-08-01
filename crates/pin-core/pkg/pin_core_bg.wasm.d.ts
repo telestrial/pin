@@ -2,6 +2,7 @@
 /* eslint-disable */
 export const memory: WebAssembly.Memory;
 export const channel_doc_namespaces: () => [number, number, number];
+export const content_hash: (a: number, b: number) => [number, number];
 export const delete_channel_record: (a: number, b: number, c: number, d: number, e: number, f: number) => any;
 export const delete_record: (a: number, b: number, c: number, d: number) => any;
 export const derive_channel_doc_seed: (a: number, b: number, c: number, d: number) => [number, number];

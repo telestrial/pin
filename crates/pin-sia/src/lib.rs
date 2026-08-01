@@ -103,9 +103,14 @@ async fn drive<F: std::future::Future>(fut: F) -> F::Output {
 // serde `camelCase` so these deserialize straight into the shapes the frontend
 // already reads, whether they arrive over wasm-bindgen or over Tauri IPC.
 
-/// One uploaded object. `contentHash` is deliberately absent: it is a CIDv1 of the
-/// PLAINTEXT, computed alongside the upload so that caches survive re-encryption, and
-/// it belongs to the channel layer rather than to Sia. The caller adds it.
+/// One uploaded object.
+///
+/// `content_hash` is a CIDv1 of the PLAINTEXT (see `pin_crypto::content_hash`), which
+/// is not really a Sia concept — but this is the one place that holds the plaintext,
+/// and stamping it here is what lets both hops report it from a single implementation.
+/// It used to be added by each caller instead, and the two callers promptly diverged:
+/// the desktop client hashed the bytes in TypeScript while the browser client did not,
+/// so the same bytes carried a cache key on one platform and none on the other.
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Uploaded {
@@ -118,6 +123,7 @@ pub struct Uploaded {
     #[serde(rename = "itemURL")]
     pub item_url: String,
     pub byte_size: u64,
+    pub content_hash: String,
 }
 
 #[derive(serde::Serialize)]
@@ -383,6 +389,8 @@ impl Session {
         let sdk = self.sdk().await?;
         drive(async move {
             let byte_size = bytes.len() as u64;
+            // Before the bytes are moved into the upload cursor.
+            let content_hash = pin_crypto::content_hash(&bytes);
             let obj = sdk
                 .upload(
                     Object::default(),
@@ -401,6 +409,7 @@ impl Session {
                     .map_err(|e| format!("share: {e}"))?
                     .to_string(),
                 byte_size,
+                content_hash,
             })
         })
         .await
@@ -419,7 +428,10 @@ impl Session {
     ) -> Result<Vec<Uploaded>, String> {
         let sdk = self.sdk().await?;
         drive(async move {
+            // Both taken before the buffers are moved into the packed upload, and
+            // both indexed by input position — `finalize` preserves input order.
             let sizes: Vec<u64> = items.iter().map(|b| b.len() as u64).collect();
+            let hashes: Vec<String> = items.iter().map(|b| pin_crypto::content_hash(b)).collect();
 
             let mut packed = sdk
                 .upload_packed(upload_options(on_shard))
@@ -445,6 +457,7 @@ impl Session {
                         .map_err(|e| format!("share: {e}"))?
                         .to_string(),
                     byte_size: sizes.get(i).copied().unwrap_or(0),
+                    content_hash: hashes.get(i).cloned().unwrap_or_default(),
                 });
             }
             Ok(out)
@@ -633,10 +646,11 @@ mod tests {
             id: "id".into(),
             item_url: "url".into(),
             byte_size: 1,
+            content_hash: "b".into(),
         })
         .unwrap();
         // itemURL, not itemUrl — see the field's own note.
-        assert_eq!(keys(uploaded), ["byteSize", "id", "itemURL"]);
+        assert_eq!(keys(uploaded), ["byteSize", "contentHash", "id", "itemURL"]);
 
         let snapshot = serde_json::to_value(AccountSnapshot {
             pinned_data: 1,

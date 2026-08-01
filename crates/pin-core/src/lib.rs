@@ -549,6 +549,16 @@ fn live_event_label(ev: &LiveEvent) -> String {
 // the parameter names: `app_key` derivations are recoverable from the recovery
 // phrase, `channel_key` ones are what a subscriber holding only K can reach.
 
+/// A plaintext content fingerprint (CIDv1, raw codec, SHA-256).
+///
+/// Uploads already carry their own hash back from `pin-sia`, so nothing in the
+/// production path calls this — it exists for bytes the app holds without having just
+/// uploaded them, which today means the integration tier's fake client.
+#[wasm_bindgen]
+pub fn content_hash(bytes: &[u8]) -> String {
+    pin_crypto::content_hash(bytes)
+}
+
 /// Settings-record encryption key.
 #[wasm_bindgen]
 pub fn derive_settings_key(app_key: &[u8]) -> Vec<u8> {
