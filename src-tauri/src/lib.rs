@@ -1,3 +1,4 @@
+mod channel;
 mod curator;
 mod docstore;
 mod identity;
@@ -40,6 +41,9 @@ pub fn run() {
             sia::sia_resolve_object_id,
             sia::sia_delete_object,
             sia::sia_prune_slabs,
+            channel::channel_publish,
+            channel::channel_resolve,
+            channel::channel_republish_pointer,
             sia::sia_account_snapshot,
             sia::sia_list_pinned_objects,
             sia::sia_get_object_slabs,

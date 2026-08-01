@@ -82,7 +82,7 @@ impl SiaState {
     ///
     /// Takes a closure rather than a future so the session `Arc` is cloned on this
     /// side and moved in, keeping every command below to a single line of plumbing.
-    async fn run<T, F, Fut>(&self, f: F) -> Result<T, String>
+    pub(crate) async fn run<T, F, Fut>(&self, f: F) -> Result<T, String>
     where
         F: FnOnce(Arc<Session>) -> Fut + Send + 'static,
         Fut: std::future::Future<Output = Result<T, String>> + Send,

@@ -12,6 +12,17 @@
 // to Rust now: it uses the Rust Sia session, not the `SiaClient` the tests inject, and it
 // talks to pkarr itself. So neither of the old interception points reaches it, and a fake
 // has to stand in at this boundary — the whole round-trip — or not at all.
+//
+// It also FORKS BY PLATFORM, and must: the connected Sia session lives wherever the app
+// put it, and on desktop that is the native backend, not the WebView. `connectSiaClient`
+// hands the AppKey to Tauri there and never connects the wasm session, so reaching the
+// wasm round-trip on desktop fails instantly with "Sia is not connected" — which is
+// exactly how it broke when this first shipped. Running it natively also gives both halves
+// the better transport: native QUIC for the Sia object, and the Mainline DHT directly for
+// the pointer instead of relays whose read-after-write lag runs to minutes.
+//
+// `openBlob` does NOT fork. It is pure AES over bytes the caller already holds — no
+// session, no network — so the wasm path is correct on both platforms.
 
 import {
   channel_open_blob,
@@ -20,6 +31,7 @@ import {
   channel_resolve,
 } from '../../crates/pin-core/pkg/pin_core.js'
 import { ensureWasm } from '../core/wasm'
+import { inTauri } from './openExternal'
 
 /** Where a published manifest ended up. `objectId` is what the caller reclaims when it
  *  supersedes a generation — the pointer takes seconds to propagate, so the previous
@@ -34,15 +46,55 @@ export type PublishedLocator = {
  *  caller can cache that blob verbatim. */
 export type ResolvedLocator = { manifestJson: string; blob: string }
 
+/** The session-bound half of the round-trip, per platform. */
+interface ChannelLocatorTransport {
+  publishLocator(
+    channelKey: Uint8Array,
+    manifestJson: string,
+  ): Promise<PublishedLocator>
+  resolveLocator(channelKey: Uint8Array): Promise<ResolvedLocator | null>
+  republishPointer(channelKey: Uint8Array, itemURL: string): Promise<void>
+}
+
+let transportP: Promise<ChannelLocatorTransport> | null = null
+
+function transport(): Promise<ChannelLocatorTransport> {
+  if (!transportP) transportP = buildTransport()
+  return transportP
+}
+
+async function buildTransport(): Promise<ChannelLocatorTransport> {
+  if (inTauri()) {
+    // Dynamically imported so its `@tauri-apps/api` import never enters the web bundle
+    // (same pattern as connectSiaClient / pkarrTransport / docs).
+    const { makeTauriChannelLocator } = await import('./tauriChannelLocator')
+    return makeTauriChannelLocator()
+  }
+  return {
+    publishLocator: async (channelKey, manifestJson) => {
+      await ensureWasm()
+      return JSON.parse(
+        await channel_publish(channelKey, manifestJson),
+      ) as PublishedLocator
+    },
+    resolveLocator: async (channelKey) => {
+      await ensureWasm()
+      const json = await channel_resolve(channelKey)
+      return json === undefined ? null : (JSON.parse(json) as ResolvedLocator)
+    },
+    republishPointer: async (channelKey, itemURL) => {
+      await ensureWasm()
+      return channel_republish_pointer(channelKey, itemURL)
+    },
+  }
+}
+
 /** Seal a manifest under K, upload it, and sign the pointer. */
 export async function publishLocator(
   channelKey: Uint8Array,
   manifestJson: string,
 ): Promise<PublishedLocator> {
-  await ensureWasm()
-  return JSON.parse(
-    await channel_publish(channelKey, manifestJson),
-  ) as PublishedLocator
+  return (await transport()).publishLocator(channelKey, manifestJson)
 }
 
 /** Read a channel from K alone. Null when the locator resolves to nothing — the channel
@@ -50,9 +102,7 @@ export async function publishLocator(
 export async function resolveLocator(
   channelKey: Uint8Array,
 ): Promise<ResolvedLocator | null> {
-  await ensureWasm()
-  const json = await channel_resolve(channelKey)
-  return json === undefined ? null : (JSON.parse(json) as ResolvedLocator)
+  return (await transport()).resolveLocator(channelKey)
 }
 
 /** Re-sign a channel's current pointer to refresh its TTL, minting no new object. */
@@ -60,8 +110,7 @@ export async function republishPointer(
   channelKey: Uint8Array,
   itemURL: string,
 ): Promise<void> {
-  await ensureWasm()
-  return channel_republish_pointer(channelKey, itemURL)
+  return (await transport()).republishPointer(channelKey, itemURL)
 }
 
 /** Open a sealed manifest blob with K, returning its JSON. The path a CACHED copy takes,

@@ -54,6 +54,10 @@ pin-pkarr = { path = "../crates/pin-pkarr" }
 # namespace/author seeds, the did:dht identity seed, and the rest. Owning the hkdf/sha2
 # dependency here too would just be a second place for a derivation to drift.
 pin-derive = { path = "../crates/pin-derive" }
+# pin-channel: the channel locator's round-trip. Runs here rather than in the WebView
+# because the connected Sia session is in this process — and because both of its halves
+# get the better transport here (native QUIC, and the DHT rather than relays).
+pin-channel = { path = "../crates/pin-channel" }
 # The /hey wire protocol, shared with the browser instance (pin-core serves the same
 # ALPN) so the two can't drift apart.
 pin-rpc = { path = "../crates/pin-rpc" }

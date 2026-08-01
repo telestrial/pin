@@ -115,6 +115,7 @@ dependencies = [
  "iroh-docs",
  "iroh-gossip",
  "log",
+ "pin-channel",
  "pin-derive",
  "pin-pkarr",
  "pin-rpc",
