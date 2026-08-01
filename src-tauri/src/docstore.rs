@@ -20,6 +20,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::str::FromStr as _;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 use futures_lite::StreamExt as _;
@@ -41,9 +42,9 @@ use iroh_gossip::net::Gossip;
 // (`pin:did-dht:v1`), the atproto signing key (`pin:atproto-signing:v1`), and
 // settings (`pin:settings:v1`), all off the same AppKey root.
 use pin_derive::{
-    decode_app_key, decode_hex32, hkdf32, record_key, AUTHOR_INFO, EV_CONTENT_READY, EV_ERROR,
-    EV_INSERT_LOCAL, EV_INSERT_REMOTE, EV_NEIGHBOR_DOWN, EV_NEIGHBOR_UP, EV_PENDING_CONTENT_READY,
-    EV_SYNC_FINISHED, NS_INFO,
+    decode_app_key, decode_hex32, hkdf32, parse_record_key, record_key, AUTHOR_INFO,
+    EV_CONTENT_READY, EV_ERROR, EV_INSERT_LOCAL, EV_INSERT_REMOTE, EV_NEIGHBOR_DOWN,
+    EV_NEIGHBOR_UP, EV_PENDING_CONTENT_READY, EV_SYNC_FINISHED, NS_INFO,
 };
 
 /// The Curator's marker entry, mirroring the atrium repo's marker record — written
@@ -84,6 +85,10 @@ pub struct DocEngine {
     /// A `Doc` is cloned out under the lock and the lock released before any await —
     /// never held across one.
     channels: Mutex<HashMap<String, Doc>>,
+    /// Whether the doc-change pump is already running (see `subscribe_changes`).
+    /// One pump per engine: a second would double every change, and the frontend
+    /// that subscribes is the kind of caller that remounts.
+    changes_subscribed: AtomicBool,
 }
 
 /// Bring up (or reopen) the Curator's persistent iroh-docs engine on `endpoint`,
@@ -155,6 +160,7 @@ pub async fn open_or_create(
         namespace_id,
         reopened,
         channels: Mutex::new(HashMap::new()),
+        changes_subscribed: AtomicBool::new(false),
     })
 }
 
@@ -329,6 +335,42 @@ impl DocEngine {
     /// The namespace ids of every channel doc currently open.
     pub fn channel_namespaces(&self) -> Vec<String> {
         self.channels.lock().unwrap().keys().cloned().collect()
+    }
+
+    /// Report every change to the Curator's own doc as `(collection, rkey, kind)` —
+    /// the repo's change feed, and the mirror of pin-core's `subscribe_doc_changes`.
+    /// See that function for the contract (faithful, not filtered; stream-level
+    /// events carry empty strings; `pin_derive::parse_record_key` does the split on
+    /// both sides).
+    ///
+    /// This is how the frontend learns about work the Curator did on its own —
+    /// which, once the Curator runs the loops, is most of what changes.
+    ///
+    /// One pump per engine; a second call is a no-op. Ends when the doc's stream
+    /// closes (engine shutdown).
+    pub async fn subscribe_changes<F>(&self, on_change: F) -> Result<(), String>
+    where
+        F: Fn(&str, &str, &str) + Send + 'static,
+    {
+        if self.changes_subscribed.swap(true, Ordering::SeqCst) {
+            return Ok(());
+        }
+        let mut events = self
+            .doc
+            .subscribe()
+            .await
+            .map_err(|e| format!("subscribe doc: {e}"))?;
+        tokio::spawn(async move {
+            while let Some(res) = events.next().await {
+                let (kind, key) = match &res {
+                    Ok(ev) => live_event_parts(ev),
+                    Err(e) => (EV_ERROR, e.to_string()),
+                };
+                let (collection, rkey) = parse_record_key(&key).unwrap_or(("", ""));
+                on_change(collection, rkey, kind);
+            }
+        });
+        Ok(())
     }
 }
 

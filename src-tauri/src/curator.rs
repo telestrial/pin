@@ -492,10 +492,11 @@ struct ChannelDocEvent {
 /// Subscriber side: import a channel's read ticket into the Curator's engine and
 /// live-sync it. `LiveEvent`s are forwarded to the frontend as `CHANNEL_DOC_EVENT`.
 ///
-/// Unlike `curator_start_sync` (which deliberately doesn't surface events, since
-/// reconciling the identity doc needs no subscriber), a channel doc's whole point is
-/// that the frontend reacts to a remote write — so the events have to get out. Doing
-/// this by polling on desktop instead would leave web on push and desktop on poll.
+/// A channel doc's whole point is that the frontend reacts to a remote write, so the
+/// events have to get out. Doing this by polling on desktop instead would leave web
+/// on push and desktop on poll. (The identity doc has its own feed — see
+/// `docs_subscribe_changes` — which is why `curator_start_sync` doesn't surface
+/// events of its own: reconciling and reporting are separate jobs.)
 #[tauri::command]
 pub async fn docs_import_channel(
     app: tauri::AppHandle,
@@ -514,6 +515,53 @@ pub async fn docs_import_channel(
                     ns_id: ns_id.to_string(),
                     kind: kind.to_string(),
                     key: key.to_string(),
+                },
+            );
+        })
+        .await
+}
+
+/// The Tauri event the Curator's own doc changes are reported on — the desktop
+/// transport for pin-core's `subscribe_doc_changes` callback. Same three fields
+/// either way, so one frontend handler serves both.
+pub const DOC_CHANGE_EVENT: &str = "pin:doc-change";
+
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct DocChangeEvent {
+    /// The record's collection, or empty for stream-level events.
+    collection: String,
+    /// The record's key within its collection, or empty for stream-level events.
+    rkey: String,
+    /// One of `pin_derive`'s `EV_*` kinds — the shared vocabulary.
+    kind: String,
+}
+
+/// Start reporting changes to the Curator's own doc on `DOC_CHANGE_EVENT`.
+///
+/// This is what lets the frontend stop polling. The Curator writes to its doc on its
+/// own schedule — syncing a peer device in, and increasingly its own background work —
+/// and before this the only way for the UI to notice was a timer per interested
+/// feature. Now the engine says what moved and the UI re-reads that.
+///
+/// Idempotent (the engine keeps one pump), so a remounting caller can just call it.
+#[tauri::command]
+pub async fn docs_subscribe_changes(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, CuratorState>,
+) -> Result<(), String> {
+    current_engine(&state)?
+        .subscribe_changes(move |collection, rkey, kind| {
+            // A failed emit (window hidden to tray, torn down, not up yet) isn't worth
+            // killing the pump for. It does mean changes during that window go
+            // unannounced — which is why consumers still read once on mount: push for
+            // speed, pull for truth.
+            let _ = app.emit(
+                DOC_CHANGE_EVENT,
+                DocChangeEvent {
+                    collection: collection.to_string(),
+                    rkey: rkey.to_string(),
+                    kind: kind.to_string(),
                 },
             );
         })
