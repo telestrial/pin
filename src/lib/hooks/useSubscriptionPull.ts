@@ -1,32 +1,25 @@
-import { useEffect, useRef } from 'react'
+import { useEffect } from 'react'
 import { useAuthStore } from '../../stores/auth'
-import { dropSubscribedChannel } from '../channelLocator'
-import { revalidateSubscribedChannel } from '../channelRevalidate'
+import { applyCachedChannel } from '../channelRevalidate'
+import { openDocs, startPullLoop, subscribeDocChanges } from '../docs'
 
-// Resolution-ladder step 2: the eager cache loop. Every LIVE instance walks its
-// subscriptions, resolves each channel, and caches the ciphertext into the shared
-// iroh-docs doc (`sub/<channelID>`) — on mount, on subscription add/remove, and on
-// a cadence. This is what OWNS freshness: step 3 reads the doc, and this keeps the
-// doc current so those reads aren't stale.
+// The frontend half of the Curator's pull loop.
 //
-// It also FILLS THE FEED IN when a pass finds the content moved (via
-// channelRevalidate) — otherwise a cached read would keep serving the old manifest
-// until the user hit Refresh, which is a worse deal than the fresh-but-slow reads
-// step 3 replaced. The loop checks; the feed updates itself when there's something
-// to update.
+// The loop itself is Rust now (crates/pin-curator), running in whichever engine this
+// instance has — the native Curator on desktop, the wasm engine in a tab. It resolves
+// each subscribed channel and writes the sealed manifest to `sub/<channelID>`. What it
+// deliberately does NOT do is touch the feed: a loop that reached into the UI would
+// only work while a UI existed, which is the thing that had to stop being true.
 //
-// It's the SAME code on web and desktop (shared TS). What varies is capability, not
-// role: the desktop resolves over the direct DHT (fast) and runs even with no UI
-// open (always-on), so in practice it keeps the shared doc freshest for every
-// device. A web tab runs the identical loop while it's open (relay transport,
-// slower) — it isn't a lesser tier, just a shorter-lived, slower-resolving instance
-// of the same behavior.
+// So this hook does two small things. It starts the loop, and it turns a cached record
+// into a feed update when one lands. That second job is why the change feed exists:
+// without it, a pass would keep the cache warm and the screen would never know.
 //
-// Pulls ALL subscriptions, including channels the user owns (owners auto-subscribe).
-// That's a small redundancy with useChannelDocsMirror's `channel/<id>`; whether
-// step 3 prefers the local/own copy for own channels is a step-3 decision.
+// The read is what fills the feed in. `applyIfChanged` no-ops when the manifest hasn't
+// actually moved, so a quiet pass costs a decrypt and nothing else — no re-render, no
+// churn.
 
-const CADENCE_MS = 90_000
+const SUB_COLLECTION = 'sub'
 
 export function useSubscriptionPull() {
   const client = useAuthStore((s) => s.client)
@@ -35,52 +28,56 @@ export function useSubscriptionPull() {
   // network in the background; reads still resolve on demand, they just stop being
   // kept ahead of you.
   const curationEnabled = useAuthStore((s) => s.curationEnabled)
-  // Re-run only when the SET of subscribed channels changes (add/remove) — not on
-  // every cachedName/label rewrite of the subscriptions array. The cadence timer
-  // handles ongoing refresh.
-  const subKey = useAuthStore((s) =>
-    s.subscriptions
-      .map((sub) => sub.channelID)
-      .sort()
-      .join(','),
-  )
-  const knownRef = useRef<Set<string>>(new Set())
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: subKey is a re-run trigger — its change means the subscribed-channel SET changed; the effect reads the live subscriptions via getState()
   useEffect(() => {
     if (!curationEnabled || !client || !appKeyHex) return
-    const k = appKeyHex
+    const key = appKeyHex
     let cancelled = false
 
-    // The sub/ cache is for SUBSCRIBED (not-owned) channels — own channels resolve
-    // fresh (their freshest state is local). Drop cached records for channels no
-    // longer in that set (unsubscribed, or now owned).
-    const s0 = useAuthStore.getState()
-    const owned0 = new Set(s0.myChannels.map((c) => c.channelID))
-    const current = new Set(
-      s0.subscriptions.map((s) => s.channelID).filter((id) => !owned0.has(id)),
-    )
-    for (const id of knownRef.current) {
-      if (!current.has(id)) void dropSubscribedChannel(k, id)
+    const applyCached = (channelID: string) => {
+      const sub = useAuthStore
+        .getState()
+        .subscriptions.find((s) => s.channelID === channelID)
+      // A record for a channel we no longer subscribe to: the loop's own cleanup will
+      // drop it, and we have no key to read it with anyway.
+      if (!sub || cancelled) return
+      void applyCachedChannel(sub)
     }
-    knownRef.current = current
 
-    async function pullAll() {
-      // Read fresh each pass so K/cachedName/ownership changes are picked up.
-      const state = useAuthStore.getState()
-      const owned = new Set(state.myChannels.map((c) => c.channelID))
-      for (const sub of state.subscriptions) {
-        if (cancelled) return
-        if (owned.has(sub.channelID)) continue
-        await revalidateSubscribedChannel(k, sub)
+    const applyAllCached = () => {
+      if (cancelled) return
+      for (const sub of useAuthStore.getState().subscriptions) {
+        void applyCachedChannel(sub)
       }
     }
 
-    void pullAll()
-    const timer = setInterval(() => void pullAll(), CADENCE_MS)
+    const unsubChanges = subscribeDocChanges(({ collection, rkey }) => {
+      // NOT filtered to remote changes, unlike the settings overlay. Most `sub/`
+      // writes here are LOCAL — this instance's own loop made them — and those are
+      // exactly the ones the feed is waiting for. A remote one (a peer device's loop,
+      // synced in) is just as welcome.
+      if (collection === SUB_COLLECTION) {
+        void applyCached(rkey)
+        return
+      }
+      // A stream-level event names no record. It's the signal that content finished
+      // downloading, which is precisely when an earlier read may have come up empty,
+      // so re-check the set. Bounded by the subscription count.
+      if (collection === '') applyAllCached()
+    })
+
+    void (async () => {
+      await openDocs(key)
+      if (cancelled) return
+      // Whatever a previous session left cached is current enough to show immediately,
+      // rather than waiting out the first pass.
+      applyAllCached()
+      await startPullLoop(key)
+    })()
+
     return () => {
       cancelled = true
-      clearInterval(timer)
+      unsubChanges()
     }
-  }, [client, appKeyHex, subKey, curationEnabled])
+  }, [client, appKeyHex, curationEnabled])
 }

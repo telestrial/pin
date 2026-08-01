@@ -20,7 +20,7 @@ import {
   republishPointer,
   resolveLocator,
 } from './channelLocatorNative'
-import { deleteRecord, getRecord, openDocs, putRecord } from './docs'
+import { getRecord, openDocs, putRecord } from './docs'
 
 // Collection in the shared iroh-docs doc where resolved subscribed-channel
 // manifests are cached (the resolution-ladder "keep" step). Value = the EXACT Sia
@@ -170,41 +170,6 @@ export function makeLocatorReader(): FetchChannel {
       throw new Error(`Channel ${channelID} not resolvable (no locator)`)
     }
     return manifest
-  }
-}
-
-/** Resolve a subscribed channel and cache its ciphertext into the shared doc,
- *  AWAITING the cache (unlike the feed reader's fire-and-forget). Used by the
- *  eager pull loop (resolution-ladder step 2) to keep `sub/<channelID>` warm on a
- *  cadence. Returns the freshly-resolved manifest — so the caller can also act on
- *  a content change (see channelRevalidate) — or null when the locator isn't
- *  resolvable yet. Never throws for the loop's sake. */
-export async function cacheSubscribedChannel(
-  appKeyHex: string,
-  channelID: string,
-  channelKey: string,
-): Promise<ChannelManifest | null> {
-  try {
-    const resolved = await resolveChannelBytes(channelKey)
-    if (!resolved) return null
-    await cacheSubscribedManifest(appKeyHex, channelID, resolved.ciphertext)
-    return resolved.manifest
-  } catch {
-    return null
-  }
-}
-
-/** Remove a channel's cached manifest from the shared doc (on unsubscribe).
- *  Best-effort — a stray cached record is harmless. */
-export async function dropSubscribedChannel(
-  appKeyHex: string,
-  channelID: string,
-): Promise<void> {
-  try {
-    await openDocs(appKeyHex)
-    await deleteRecord(SUB_COLLECTION, channelID)
-  } catch {
-    // Doc unavailable — leave the stray record; it's opaque and small.
   }
 }
 

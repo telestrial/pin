@@ -7,16 +7,22 @@
 // already had. So something else has to check in the background and fill the feed
 // in when the content actually moved. That's this module.
 //
-// The split into two functions is deliberate. `applyIfChanged` is the fill-in;
-// `revalidateSubscribedChannel` is check-then-fill-in. The eager pull loop is the
-// FIRST caller, not the only intended one: ladder rung 1 (live-sync a subscribed
-// author's channel from their node) receives a manifest already in hand and calls
-// `applyIfChanged` directly, no resolve. A polled manifest and a pushed one land
+// The split into two functions is deliberate. `applyIfChanged` is the fill-in itself;
+// `applyCachedChannel` is read-then-fill-in, for when a cached record has moved. The
+// pull loop is the first caller of the second, not the only intended one: ladder rung 1
+// (live-sync of a subscribed author's channel doc) receives a manifest already in hand
+// and calls `applyIfChanged` directly, no read. A polled manifest and a pushed one land
 // by the same path.
 
+import { channelKeyFromBase64 } from '../core/crypto'
 import type { ChannelManifest, SubscriptionRef } from '../core/types'
 import { useFeedStore } from '../stores/feed'
-import { cacheSubscribedChannel } from './channelLocator'
+import { decodeChannelManifest } from './channelLocator'
+import { getRecord } from './docs'
+
+/** The collection the Curator's pull loop caches subscribed manifests into. Must
+ *  match `SUB_COLLECTION` in crates/pin-curator. */
+const SUB_COLLECTION = 'sub'
 
 /** Push a manifest into the feed IF it differs from what the store already holds.
  *  Returns whether it applied.
@@ -28,7 +34,8 @@ import { cacheSubscribedChannel } from './channelLocator'
  *  pass. Manifests are KBs; the compare is cheap.
  *
  *  A channel the store doesn't know yet counts as changed, so a background pass
- *  can populate a channel the feed hasn't loaded rather than sit on it. */
+ *  can populate a channel the feed hasn't loaded rather than sit on it.
+ */
 export function applyIfChanged(
   sub: SubscriptionRef,
   manifest: ChannelManifest,
@@ -42,22 +49,28 @@ export function applyIfChanged(
   return true
 }
 
-/** Check-then-fill-in for one subscribed channel: resolve it fresh (which also
- *  re-warms the `sub/<channelID>` cache the reader serves), then apply to the feed
- *  only if the content actually moved. Returns whether the feed changed.
+/** Read a subscribed channel's cached manifest out of the doc and land it in the feed.
+ *  Returns whether the feed changed.
  *
- *  Never throws — the caller is a background loop, and an unresolvable channel
- *  (DHT lag, author offline) is an ordinary outcome, not an error to surface. The
- *  feed keeps its last-known content in that case. */
-export async function revalidateSubscribedChannel(
-  appKeyHex: string,
+ *  This is what makes the Curator's pull loop visible. The loop writes
+ *  `sub/<channelID>` and stops there — deliberately, so that it doesn't depend on a UI
+ *  existing — and this is the other side of that: the change feed says a record moved,
+ *  and this turns the record into what's on screen.
+ *
+ *  Never throws. The value may not have finished downloading (iroh-blobs content lags
+ *  its entry), which is ordinary rather than exceptional; a later event re-reads it. */
+export async function applyCachedChannel(
   sub: SubscriptionRef,
 ): Promise<boolean> {
-  const manifest = await cacheSubscribedChannel(
-    appKeyHex,
-    sub.channelID,
-    sub.channelKey,
-  )
-  if (!manifest) return false
-  return applyIfChanged(sub, manifest)
+  try {
+    const cached = await getRecord(SUB_COLLECTION, sub.channelID)
+    if (!cached) return false
+    const manifest = await decodeChannelManifest(
+      channelKeyFromBase64(sub.channelKey),
+      cached,
+    )
+    return applyIfChanged(sub, manifest)
+  } catch {
+    return false
+  }
 }
