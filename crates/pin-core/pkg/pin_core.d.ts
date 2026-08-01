@@ -52,6 +52,17 @@ export function channel_doc_namespaces(): any;
 export function content_hash(bytes: Uint8Array): string;
 
 /**
+ * Open a base64 blob sealed under a channel key. The plaintext is UTF-8 (a manifest's
+ * JSON), so this returns it as a string.
+ */
+export function decrypt_for_channel(key: Uint8Array, blob_b64: string): string;
+
+/**
+ * Open a padded settings blob, returning the payload with the padding stripped.
+ */
+export function decrypt_settings(key: Uint8Array, blob_b64: string): string;
+
+/**
  * Delete a record from a channel doc (author side).
  */
 export function delete_channel_record(ns_id: string, collection: string, rkey: string): Promise<void>;
@@ -106,6 +117,16 @@ export function derive_settings_locator_seed(app_key: Uint8Array): Uint8Array;
  * Sia whole-doc snapshot encryption key.
  */
 export function derive_snapshot_key(app_key: Uint8Array): Uint8Array;
+
+/**
+ * Seal a UTF-8 string under a channel key, returning the base64 blob.
+ */
+export function encrypt_for_channel(key: Uint8Array, plaintext: string): string;
+
+/**
+ * Seal the settings payload, padded to a fixed size so its length carries nothing.
+ */
+export function encrypt_settings(key: Uint8Array, plaintext: string): string;
 
 /**
  * Read a record from a channel doc, or `undefined` if absent.
@@ -192,6 +213,12 @@ export function put_channel_record(ns_id: string, collection: string, rkey: stri
  * Write a record. `value` is opaque bytes (the app's encrypted blob).
  */
 export function put_record(collection: string, rkey: string, value: Uint8Array): Promise<void>;
+
+/**
+ * The settings pad size, exposed so the app has one definition of it rather than a
+ * copy that could drift out of step with what the padding actually does.
+ */
+export function settings_pad_size(): number;
 
 /**
  * Produce a shareable DocTicket for this identity's doc (write capability + this
@@ -323,6 +350,8 @@ export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly channel_doc_namespaces: () => [number, number, number];
     readonly content_hash: (a: number, b: number) => [number, number];
+    readonly decrypt_for_channel: (a: number, b: number, c: number, d: number) => [number, number, number, number];
+    readonly decrypt_settings: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly delete_channel_record: (a: number, b: number, c: number, d: number, e: number, f: number) => any;
     readonly delete_record: (a: number, b: number, c: number, d: number) => any;
     readonly derive_channel_doc_seed: (a: number, b: number, c: number, d: number) => [number, number];
@@ -334,6 +363,8 @@ export interface InitOutput {
     readonly derive_settings_key: (a: number, b: number) => [number, number];
     readonly derive_settings_locator_seed: (a: number, b: number) => [number, number];
     readonly derive_snapshot_key: (a: number, b: number) => [number, number];
+    readonly encrypt_for_channel: (a: number, b: number, c: number, d: number) => [number, number, number, number];
+    readonly encrypt_settings: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly get_channel_record: (a: number, b: number, c: number, d: number, e: number, f: number) => any;
     readonly get_record: (a: number, b: number, c: number, d: number) => any;
     readonly import_channel_doc: (a: number, b: number, c: any) => any;
@@ -346,6 +377,7 @@ export interface InitOutput {
     readonly pkarr_resolve: (a: number, b: number) => any;
     readonly put_channel_record: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => any;
     readonly put_record: (a: number, b: number, c: number, d: number, e: number, f: number) => any;
+    readonly settings_pad_size: () => number;
     readonly share: () => any;
     readonly share_channel_doc: (a: number, b: number) => any;
     readonly sia_account_snapshot: () => any;
@@ -390,7 +422,7 @@ export interface InitOutput {
     readonly wasm_bindgen__convert__closures_____invoke__h095b0027783d48e7_6: (a: number, b: number, c: any) => [number, number];
     readonly wasm_bindgen__convert__closures_____invoke__h08f43aa7048968fb: (a: number, b: number, c: any, d: any) => void;
     readonly wasm_bindgen__convert__closures_____invoke__h9c38374c5ff5ba70: (a: number, b: number, c: any) => void;
-    readonly wasm_bindgen__convert__closures_____invoke__h16773cfb6814ef94: (a: number, b: number, c: any) => void;
+    readonly wasm_bindgen__convert__closures_____invoke__ha8ba71d4db3f24d7: (a: number, b: number, c: any) => void;
     readonly wasm_bindgen__convert__closures_____invoke__hd745e8189b95fcf4: (a: number, b: number, c: any) => void;
     readonly wasm_bindgen__convert__closures_____invoke__h43ae6dd74759854d: (a: number, b: number) => void;
     readonly wasm_bindgen__convert__closures_____invoke__h5a55095f3e22c2db: (a: number, b: number) => void;

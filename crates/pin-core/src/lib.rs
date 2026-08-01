@@ -559,6 +559,57 @@ pub fn content_hash(bytes: &[u8]) -> String {
     pin_crypto::content_hash(bytes)
 }
 
+// --- the encrypted-blob envelope ----------------------------------------------
+//
+// Thin wrappers over `pin_crypto`, so the browser seals and opens blobs with the SAME
+// code the Curator will — and, more to the point, with one definition of a format that
+// live manifests on Sia are already written in. Web Crypto's AES-GCM used to be the
+// implementation here; pin-crypto's tests decrypt a blob it produced, which is what
+// makes swapping it out safe rather than hopeful.
+//
+// Keys arrive as bytes and are length-checked here: a JS caller can hand over any
+// Uint8Array, and a 31-byte key should say so rather than fail somewhere in the cipher.
+
+fn key32(key: &[u8]) -> Result<[u8; 32], JsValue> {
+    key.try_into()
+        .map_err(|_| JsValue::from_str(&format!("key must be 32 bytes; got {}", key.len())))
+}
+
+/// Seal a UTF-8 string under a channel key, returning the base64 blob.
+#[wasm_bindgen]
+pub fn encrypt_for_channel(key: &[u8], plaintext: &str) -> Result<String, JsValue> {
+    pin_crypto::encrypt(&key32(key)?, plaintext.as_bytes()).map_err(je)
+}
+
+/// Open a base64 blob sealed under a channel key. The plaintext is UTF-8 (a manifest's
+/// JSON), so this returns it as a string.
+#[wasm_bindgen]
+pub fn decrypt_for_channel(key: &[u8], blob_b64: &str) -> Result<String, JsValue> {
+    let bytes = pin_crypto::decrypt(&key32(key)?, blob_b64).map_err(je)?;
+    String::from_utf8(bytes).map_err(|_| JsValue::from_str("decrypted blob is not valid UTF-8"))
+}
+
+/// Seal the settings payload, padded to a fixed size so its length carries nothing.
+#[wasm_bindgen]
+pub fn encrypt_settings(key: &[u8], plaintext: &str) -> Result<String, JsValue> {
+    pin_crypto::encrypt_settings(&key32(key)?, plaintext.as_bytes()).map_err(je)
+}
+
+/// Open a padded settings blob, returning the payload with the padding stripped.
+#[wasm_bindgen]
+pub fn decrypt_settings(key: &[u8], blob_b64: &str) -> Result<String, JsValue> {
+    let bytes = pin_crypto::decrypt_settings(&key32(key)?, blob_b64).map_err(je)?;
+    String::from_utf8(bytes)
+        .map_err(|_| JsValue::from_str("decrypted settings blob is not valid UTF-8"))
+}
+
+/// The settings pad size, exposed so the app has one definition of it rather than a
+/// copy that could drift out of step with what the padding actually does.
+#[wasm_bindgen]
+pub fn settings_pad_size() -> usize {
+    pin_crypto::SETTINGS_PAD_SIZE
+}
+
 /// Settings-record encryption key.
 #[wasm_bindgen]
 pub fn derive_settings_key(app_key: &[u8]) -> Vec<u8> {

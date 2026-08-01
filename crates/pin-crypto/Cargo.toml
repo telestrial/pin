@@ -18,3 +18,16 @@ rust-version = "1.82"
 [dependencies]
 # Already in the tree via pin-derive's HKDF.
 sha2 = "0.10"
+# AES-256-GCM. `default-features = false` is load-bearing, not tidiness: the default
+# `getrandom` feature reaches rand_core 0.6 and getrandom 0.2, and getrandom 0.2 does
+# not build for wasm32-unknown-unknown without a js feature nothing here enables. We
+# generate the nonce ourselves anyway, so the RNG that feature exists to provide is
+# unused. Version matches what iroh's rpc feature already pulls in natively.
+aes-gcm = { version = "0.10", default-features = false, features = ["aes", "alloc"] }
+# The blob's outer encoding, matching the `btoa`/`atob` pair it replaces: standard
+# alphabet, with padding.
+base64 = "0.21"
+# The nonce. 0.4 is the version whose `wasm_js` backend the wasm build already selects
+# (see scripts/build-wasm.sh) — deliberately NOT getrandom 0.2, which aes-gcm would
+# have brought along.
+getrandom = { version = "0.4", features = ["wasm_js"] }

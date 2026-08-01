@@ -1,13 +1,18 @@
-// Channel-key cryptography. AES-GCM-256 via Web Crypto API; no external dep.
-// Encrypted blob format: 1-byte version || 12-byte IV || ciphertext-with-16-byte-tag.
+// Channel-key cryptography — a binding layer now, not an implementation.
 //
-// The KEY DERIVATIONS below are no longer implemented here — they're thin calls into
-// pin-core (Rust), where `pin_derive` owns every `info` string and the HKDF itself.
-// The Curator calls the same functions natively, so a user's did:dht (and every other
-// derived secret) is one value with one definition rather than two that a comment
-// asks to stay in step. This module keeps the AES-GCM half and the encodings.
+// Both halves live in Rust and are reached through pin-core: `pin_derive` owns every
+// HKDF `info` string, and `pin_crypto` owns the encrypted-blob envelope (1-byte
+// version || 12-byte nonce || AES-256-GCM ciphertext-with-tag, base64) plus the
+// fixed-size settings padding. The Curator runs the same code natively, so a user's
+// did:dht — and the format their manifests are sealed in — is ONE definition rather
+// than two that a comment asks to stay in step.
+//
+// What stays here is what has no second implementation to drift from: key generation,
+// the base64/base32 encodings, and the rkey derivation.
 
 import {
+  decrypt_for_channel,
+  decrypt_settings,
   derive_channel_doc_seed,
   derive_channel_doc_ticket_seed,
   derive_channel_locator_seed,
@@ -17,12 +22,13 @@ import {
   derive_settings_key,
   derive_settings_locator_seed,
   derive_snapshot_key,
+  encrypt_for_channel,
+  encrypt_settings,
+  settings_pad_size,
 } from '../../crates/pin-core/pkg/pin_core.js'
 import { ensureWasm } from './wasm'
 
 const KEY_BYTES = 32
-const IV_BYTES = 12
-const ENCRYPTION_VERSION = 1
 
 // rkey derivation: 10 bytes of SHA-256(K) → 16 lowercase base32 chars.
 // 80 bits of entropy from a uniform hash; collision-resistant for any
@@ -68,86 +74,43 @@ export async function deriveAtRkey(
   return base32Encode(hash.slice(0, CHANNEL_ID_HASH_BYTES))
 }
 
-// Byte-level AES-GCM core. Blob format: 1-byte version || 12-byte IV ||
-// ciphertext-with-16-byte-tag, base64-encoded. encryptForChannel and
-// encryptSettings both build on this so there's one GCM implementation.
-async function encryptBytes(
-  key: Uint8Array,
-  bytes: Uint8Array,
-): Promise<string> {
-  const iv = crypto.getRandomValues(new Uint8Array(IV_BYTES))
-  const cryptoKey = await importKey(key)
-  const ciphertext = new Uint8Array(
-    await crypto.subtle.encrypt(
-      { name: 'AES-GCM', iv },
-      cryptoKey,
-      bytes as BufferSource,
-    ),
-  )
-  const out = new Uint8Array(1 + iv.length + ciphertext.length)
-  out[0] = ENCRYPTION_VERSION
-  out.set(iv, 1)
-  out.set(ciphertext, 1 + iv.length)
-  return base64Encode(out)
-}
-
-async function decryptBytes(
-  key: Uint8Array,
-  base64Ciphertext: string,
-): Promise<Uint8Array> {
-  const all = base64Decode(base64Ciphertext)
-  if (all.length < 1 + IV_BYTES + 16) {
-    throw new Error(
-      'Encrypted blob too short to contain version + IV + auth tag',
-    )
-  }
-  const version = all[0]
-  if (version !== ENCRYPTION_VERSION) {
-    throw new Error(
-      `Unsupported encryption version (got ${version}, expected ${ENCRYPTION_VERSION})`,
-    )
-  }
-  const iv = all.slice(1, 1 + IV_BYTES)
-  const ciphertext = all.slice(1 + IV_BYTES)
-  const cryptoKey = await importKey(key)
-  const plaintext = await crypto.subtle.decrypt(
-    { name: 'AES-GCM', iv },
-    cryptoKey,
-    ciphertext,
-  )
-  return new Uint8Array(plaintext)
-}
-
 export async function encryptForChannel(
   key: Uint8Array,
   plaintext: string,
 ): Promise<string> {
-  return encryptBytes(key, new TextEncoder().encode(plaintext))
+  await ensureWasm()
+  return encrypt_for_channel(key, plaintext)
 }
 
 export async function decryptForChannel(
   key: Uint8Array,
   base64Ciphertext: string,
 ): Promise<string> {
-  return new TextDecoder().decode(await decryptBytes(key, base64Ciphertext))
+  await ensureWasm()
+  return decrypt_for_channel(key, base64Ciphertext)
 }
 
 // --- Settings encryption -------------------------------------------------
 //
-// The settings record lives PUBLICLY on the PDS (records are world-readable),
-// so it carries its own encryption — unlike channel manifests, whose key K is
-// shared deliberately, the settings key is never shared. It's derived from the
-// Sia AppKey, not the atproto identity (under OAuth we don't hold the atproto
-// signing key, but we DO hold the AppKey secret via export()).
+// Settings carry their own encryption because — unlike a channel manifest, whose K is
+// shared deliberately — this key is never shared with anyone. It's derived from the
+// Sia AppKey, which is what makes the whole account recoverable from the recovery
+// phrase alone.
 //
-// The plaintext is padded to a FIXED size before encryption so the ciphertext
-// length is constant regardless of how many channels/subs it holds — a
-// public, firehose-watchable record otherwise leaks channel/sub count via its
-// size. Fixed-size padding leaks nothing about content at any pad size; 128 KiB
-// is ~400+ entries of headroom (friend-scale is 5–50) and stays well inside
-// atproto's "keep records to a few dozen KB" guidance (1 MiB hard ceiling).
-export const SETTINGS_PAD_SIZE = 128 * 1024
-const SETTINGS_LENGTH_HEADER_BYTES = 4
+// The plaintext is padded to a FIXED size before sealing, because the ciphertext's
+// LENGTH is observable even where its content isn't: the record rides in the synced
+// doc replica and in the Sia snapshot, both of which are held as opaque bytes by
+// anything mirroring them, and an unpadded blob would leak how many channels and
+// subscriptions it holds. Fixed padding leaks nothing at any pad size, so 128 KiB is
+// chosen for headroom (~400+ entries against a friend-scale handful), not secrecy.
+//
+// The size, the layout and the loud overflow all live in pin-crypto; this reads the
+// constant from there rather than keeping a copy that could fall out of step with the
+// padding it describes.
+export async function settingsPadSize(): Promise<number> {
+  await ensureWasm()
+  return settings_pad_size()
+}
 
 export async function deriveSettingsKey(
   appKeyBytes: Uint8Array,
@@ -270,49 +233,16 @@ export async function encryptSettings(
   key: Uint8Array,
   plaintext: string,
 ): Promise<string> {
-  const json = new TextEncoder().encode(plaintext)
-  if (SETTINGS_LENGTH_HEADER_BYTES + json.length > SETTINGS_PAD_SIZE) {
-    // Loud, deliberate overflow — the signal to bump SETTINGS_PAD_SIZE and
-    // ship expansion handling. Never silently truncate.
-    throw new Error(
-      `Settings payload (${json.length} B) exceeds the ${SETTINGS_PAD_SIZE} B fixed pad`,
-    )
-  }
-  const padded = new Uint8Array(SETTINGS_PAD_SIZE)
-  new DataView(padded.buffer).setUint32(0, json.length, false)
-  padded.set(json, SETTINGS_LENGTH_HEADER_BYTES)
-  return encryptBytes(key, padded)
+  await ensureWasm()
+  return encrypt_settings(key, plaintext)
 }
 
 export async function decryptSettings(
   key: Uint8Array,
   base64Ciphertext: string,
 ): Promise<string> {
-  const padded = await decryptBytes(key, base64Ciphertext)
-  if (padded.length < SETTINGS_LENGTH_HEADER_BYTES) {
-    throw new Error('Decrypted settings blob too short for length header')
-  }
-  const len = new DataView(
-    padded.buffer,
-    padded.byteOffset,
-    padded.byteLength,
-  ).getUint32(0, false)
-  if (SETTINGS_LENGTH_HEADER_BYTES + len > padded.length) {
-    throw new Error('Settings length header exceeds blob size')
-  }
-  return new TextDecoder().decode(
-    padded.slice(
-      SETTINGS_LENGTH_HEADER_BYTES,
-      SETTINGS_LENGTH_HEADER_BYTES + len,
-    ),
-  )
-}
-
-async function importKey(key: Uint8Array): Promise<CryptoKey> {
-  return crypto.subtle.importKey('raw', key as BufferSource, 'AES-GCM', false, [
-    'encrypt',
-    'decrypt',
-  ])
+  await ensureWasm()
+  return decrypt_settings(key, base64Ciphertext)
 }
 
 function base64Encode(bytes: Uint8Array): string {

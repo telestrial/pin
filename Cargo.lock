@@ -4588,6 +4588,9 @@ dependencies = [
 name = "pin-crypto"
 version = "0.1.0"
 dependencies = [
+ "aes-gcm",
+ "base64 0.21.7",
+ "getrandom 0.4.3",
  "sha2 0.10.9",
 ]
 

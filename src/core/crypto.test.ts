@@ -14,7 +14,7 @@ import {
   encryptForChannel,
   encryptSettings,
   generateChannelKey,
-  SETTINGS_PAD_SIZE,
+  settingsPadSize,
 } from './crypto'
 
 describe('generateChannelKey', () => {
@@ -321,7 +321,7 @@ describe('encryptSettings / decryptSettings', () => {
 
   it('throws (loudly) when the payload exceeds the fixed pad', async () => {
     const key = await deriveSettingsKey(new Uint8Array(32).fill(6))
-    const tooBig = 'z'.repeat(SETTINGS_PAD_SIZE + 1)
+    const tooBig = 'z'.repeat((await settingsPadSize()) + 1)
     await expect(encryptSettings(key, tooBig)).rejects.toThrow(/exceeds/)
   })
 

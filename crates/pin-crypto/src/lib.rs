@@ -1,5 +1,9 @@
-//! Content fingerprinting and, later, the encrypted-blob envelope.
+//! Content fingerprinting and the encrypted-blob envelope.
 
+use aes_gcm::aead::{Aead, KeyInit, Payload};
+use aes_gcm::{Aes256Gcm, Key, Nonce};
+use base64::engine::general_purpose::STANDARD as B64;
+use base64::Engine as _;
 use sha2::{Digest, Sha256};
 
 const CID_VERSION_1: u8 = 0x01;
@@ -60,6 +64,119 @@ pub fn content_hash(bytes: &[u8]) -> String {
     format!("b{}", base32_encode(&cid))
 }
 
+// --- the encrypted-blob envelope ----------------------------------------------
+//
+// AES-256-GCM. Layout, base64-encoded (standard alphabet, padded):
+//
+//     1-byte version | 12-byte nonce | ciphertext-with-16-byte-tag
+//
+// This format is NOT ours to change: there are channel manifests already sealed this
+// way on Sia and settings snapshots alongside them, all written by the Web Crypto
+// implementation this replaces. Reading them back is the whole requirement, which is
+// why the tests below decrypt a blob captured from that implementation rather than
+// merely round-tripping our own output.
+
+const KEY_BYTES: usize = 32;
+const NONCE_BYTES: usize = 12;
+const TAG_BYTES: usize = 16;
+const ENVELOPE_VERSION: u8 = 1;
+
+fn cipher(key: &[u8; KEY_BYTES]) -> Aes256Gcm {
+    Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key))
+}
+
+/// Seal bytes under a 32-byte key, returning the base64 blob.
+pub fn encrypt(key: &[u8; KEY_BYTES], plaintext: &[u8]) -> Result<String, String> {
+    let mut nonce = [0u8; NONCE_BYTES];
+    getrandom::fill(&mut nonce).map_err(|e| format!("nonce: {e}"))?;
+
+    let sealed = cipher(key)
+        .encrypt(
+            Nonce::from_slice(&nonce),
+            Payload {
+                msg: plaintext,
+                aad: &[],
+            },
+        )
+        .map_err(|_| "encrypt failed".to_string())?;
+
+    let mut blob = Vec::with_capacity(1 + NONCE_BYTES + sealed.len());
+    blob.push(ENVELOPE_VERSION);
+    blob.extend_from_slice(&nonce);
+    blob.extend_from_slice(&sealed);
+    Ok(B64.encode(blob))
+}
+
+/// Open a base64 blob produced by `encrypt` — or by the Web Crypto implementation
+/// that came before it, which is the case that matters.
+pub fn decrypt(key: &[u8; KEY_BYTES], blob_b64: &str) -> Result<Vec<u8>, String> {
+    let blob = B64
+        .decode(blob_b64.as_bytes())
+        .map_err(|e| format!("base64: {e}"))?;
+    if blob.len() < 1 + NONCE_BYTES + TAG_BYTES {
+        return Err("blob too short to hold version + nonce + tag".into());
+    }
+    if blob[0] != ENVELOPE_VERSION {
+        return Err(format!(
+            "unsupported encryption version (got {}, expected {ENVELOPE_VERSION})",
+            blob[0]
+        ));
+    }
+    cipher(key)
+        .decrypt(
+            Nonce::from_slice(&blob[1..1 + NONCE_BYTES]),
+            Payload {
+                msg: &blob[1 + NONCE_BYTES..],
+                aad: &[],
+            },
+        )
+        // A wrong key and a tampered blob are the same failure here, deliberately —
+        // GCM authenticates, and distinguishing them would only leak which it was.
+        .map_err(|_| "decrypt failed (wrong key or corrupt blob)".to_string())
+}
+
+// --- settings: a fixed-size padded blob ---------------------------------------
+//
+// The settings record is world-readable wherever it sits, so its ciphertext is padded
+// to a constant size before sealing: length alone would otherwise leak how many
+// channels and subscriptions it holds. Fixed padding leaks nothing at any pad size, so
+// this one is chosen for headroom (~400+ entries against a friend-scale handful)
+// rather than for secrecy.
+//
+// Padded plaintext: 4-byte big-endian payload length | payload | zero fill.
+
+pub const SETTINGS_PAD_SIZE: usize = 128 * 1024;
+const SETTINGS_LENGTH_HEADER_BYTES: usize = 4;
+
+pub fn encrypt_settings(key: &[u8; KEY_BYTES], plaintext: &[u8]) -> Result<String, String> {
+    if SETTINGS_LENGTH_HEADER_BYTES + plaintext.len() > SETTINGS_PAD_SIZE {
+        // Loud on purpose. Silently truncating would corrupt someone's channel keys,
+        // and silently growing the pad would leak the size it exists to hide.
+        return Err(format!(
+            "settings payload ({} B) exceeds the {SETTINGS_PAD_SIZE} B fixed pad",
+            plaintext.len()
+        ));
+    }
+    let mut padded = vec![0u8; SETTINGS_PAD_SIZE];
+    padded[..SETTINGS_LENGTH_HEADER_BYTES].copy_from_slice(&(plaintext.len() as u32).to_be_bytes());
+    padded[SETTINGS_LENGTH_HEADER_BYTES..SETTINGS_LENGTH_HEADER_BYTES + plaintext.len()]
+        .copy_from_slice(plaintext);
+    encrypt(key, &padded)
+}
+
+pub fn decrypt_settings(key: &[u8; KEY_BYTES], blob_b64: &str) -> Result<Vec<u8>, String> {
+    let padded = decrypt(key, blob_b64)?;
+    if padded.len() < SETTINGS_LENGTH_HEADER_BYTES {
+        return Err("decrypted settings blob too short for its length header".into());
+    }
+    let len = u32::from_be_bytes([padded[0], padded[1], padded[2], padded[3]]) as usize;
+    let end = SETTINGS_LENGTH_HEADER_BYTES + len;
+    if end > padded.len() {
+        return Err("settings length header exceeds blob size".into());
+    }
+    Ok(padded[SETTINGS_LENGTH_HEADER_BYTES..end].to_vec())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -97,5 +214,101 @@ mod tests {
     #[test]
     fn differs_by_input() {
         assert_ne!(content_hash(b"alpha"), content_hash(b"beta"));
+    }
+
+    // 0x00..0x1f — the key the vectors below were captured under.
+    fn vector_key() -> [u8; KEY_BYTES] {
+        let mut k = [0u8; KEY_BYTES];
+        for (i, b) in k.iter_mut().enumerate() {
+            *b = i as u8;
+        }
+        k
+    }
+
+    // THE test that matters. This blob was produced by the Web Crypto implementation
+    // this crate replaces, so decrypting it proves the two agree on the version byte,
+    // the nonce's position and length, where GCM's tag lives, and the base64 alphabet
+    // and padding — every part of the format that a fresh implementation could get
+    // plausibly wrong while round-tripping its own output perfectly.
+    //
+    // It stands in for real data: manifests sealed this way are already on Sia, and
+    // failing to read them would not be a regression in a feature, it would be a user
+    // unable to open their own channels.
+    #[test]
+    fn decrypts_a_blob_sealed_by_the_web_crypto_implementation() {
+        let blob = "AZiISAgkJFOaX+sMlkv3mg5k2qKCX/95ZXPEzXwLpNphBo4rqU1epuXW/URatLgPfI/yLbGQ0Nx0wy24OI6r/2iBUA==";
+        let plaintext = decrypt(&vector_key(), blob).expect("decrypts");
+        assert_eq!(
+            String::from_utf8(plaintext).unwrap(),
+            r#"{"version":1,"name":"Test","items":[]}"#
+        );
+    }
+
+    // The empty payload, whose blob is exactly the minimum: version + nonce + tag.
+    #[test]
+    fn decrypts_the_empty_payload_vector() {
+        let blob = "Abj2IwQ7srFqotlJUolZt1TrcZThtYrqm+6kJIA=";
+        assert_eq!(decrypt(&vector_key(), blob).unwrap(), Vec::<u8>::new());
+        assert_eq!(B64.decode(blob).unwrap().len(), 1 + NONCE_BYTES + TAG_BYTES);
+    }
+
+    #[test]
+    fn round_trips_and_uses_a_fresh_nonce_each_time() {
+        let key = vector_key();
+        let msg = b"the quick brown fox";
+        let a = encrypt(&key, msg).unwrap();
+        let b = encrypt(&key, msg).unwrap();
+        // Reusing a nonce under one key is the way to break GCM, so this is a
+        // correctness assertion and not a statistical one.
+        assert_ne!(a, b);
+        assert_eq!(decrypt(&key, &a).unwrap(), msg);
+        assert_eq!(decrypt(&key, &b).unwrap(), msg);
+    }
+
+    #[test]
+    fn rejects_a_wrong_key_a_tampered_blob_and_a_bad_version() {
+        let key = vector_key();
+        let blob = encrypt(&key, b"secret").unwrap();
+
+        let mut other = key;
+        other[0] ^= 1;
+        assert!(decrypt(&other, &blob).is_err());
+
+        // Flip a bit in the ciphertext body; GCM's tag must catch it.
+        let mut raw = B64.decode(&blob).unwrap();
+        let last = raw.len() - 1;
+        raw[last] ^= 1;
+        assert!(decrypt(&key, &B64.encode(&raw)).is_err());
+
+        let mut wrong_version = B64.decode(&blob).unwrap();
+        wrong_version[0] = 2;
+        let err = decrypt(&key, &B64.encode(&wrong_version)).unwrap_err();
+        assert!(err.contains("version"), "{err}");
+    }
+
+    // The pad is what makes the settings blob's LENGTH carry no information, so the
+    // constant and the resulting size are both part of the format. 174804 is the
+    // base64 length the Web Crypto implementation produced for any payload at all.
+    #[test]
+    fn settings_pad_hides_the_payload_size() {
+        let key = vector_key();
+        let small = encrypt_settings(&key, br#"{"version":1}"#).unwrap();
+        let larger = encrypt_settings(&key, &vec![b'x'; 50_000]).unwrap();
+
+        assert_eq!(SETTINGS_PAD_SIZE, 131_072);
+        assert_eq!(small.len(), 174_804);
+        assert_eq!(small.len(), larger.len());
+
+        assert_eq!(
+            decrypt_settings(&key, &small).unwrap(),
+            br#"{"version":1}"#.to_vec()
+        );
+        assert_eq!(decrypt_settings(&key, &larger).unwrap().len(), 50_000);
+    }
+
+    #[test]
+    fn settings_overflow_is_an_error_rather_than_a_truncation() {
+        let err = encrypt_settings(&vector_key(), &vec![b'x'; SETTINGS_PAD_SIZE]).unwrap_err();
+        assert!(err.contains("exceeds"), "{err}");
     }
 }
