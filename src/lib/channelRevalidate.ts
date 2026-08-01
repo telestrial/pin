@@ -24,8 +24,8 @@ import { getRecord } from './docs'
  *  match `SUB_COLLECTION` in crates/pin-curator. */
 const SUB_COLLECTION = 'sub'
 
-/** Push a manifest into the feed IF it differs from what the store already holds.
- *  Returns whether it applied.
+/** Push a manifest into the feed IF it differs from what the store already holds AND
+ *  isn't older than it. Returns whether it applied.
  *
  *  Compared by serialization: both sides are parsed from the author's own
  *  `JSON.stringify(manifest)`, so key order matches and re-stringifying is a
@@ -45,6 +45,7 @@ export function applyIfChanged(
   if (existing && JSON.stringify(existing) === JSON.stringify(manifest)) {
     return false
   }
+  if (existing && manifest.publishedAt < existing.publishedAt) return false
   feed.applyManifest(sub, manifest)
   return true
 }

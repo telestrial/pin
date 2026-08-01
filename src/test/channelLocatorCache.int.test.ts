@@ -322,6 +322,48 @@ describe('integration: revalidate fills the feed in out of band', () => {
     expect(useFeedStore.getState().entries).toBe(entriesAfterFirst)
   })
 
+  it('applyIfChanged refuses a manifest older than the one on screen', async () => {
+    // The flash-then-vanish bug. A manifest reaches the feed from several places that
+    // disagree — a peer device's fresh copy syncing in, this instance's own pass
+    // resolving through relays that lag minutes behind. Without a recency check the
+    // last writer wins, so a stale resolve un-publishes a post that's already visible.
+    const app = createFakeApp()
+    const alice = app.createAccount({
+      did: 'did:plc:alice8',
+      handle: 'alice8.test',
+    })
+    const created = await createChannel(alice.client, {
+      name: 'Ordered',
+      description: '',
+    })
+    const sub = subFor(created.channelID, created.channelKey)
+
+    const older: ChannelManifest = {
+      ...created.manifest,
+      publishedAt: '2026-08-01T11:00:00.000Z',
+    }
+    const newer = {
+      ...withPost(created.manifest, 'the post'),
+      publishedAt: '2026-08-01T12:00:00.000Z',
+    }
+
+    expect(applyIfChanged(sub, newer)).toBe(true)
+    expect(useFeedStore.getState().entries).toHaveLength(1)
+
+    // The stale one differs, so a difference-only check would apply it and the post
+    // would vanish.
+    expect(applyIfChanged(sub, older)).toBe(false)
+    expect(useFeedStore.getState().entries).toHaveLength(1)
+
+    // Forward still moves: a later manifest applies over the one being protected.
+    const newest = {
+      ...withPost(newer, 'a second post'),
+      publishedAt: '2026-08-01T13:00:00.000Z',
+    }
+    expect(applyIfChanged(sub, newest)).toBe(true)
+    expect(useFeedStore.getState().entries).toHaveLength(2)
+  })
+
   it('applyCachedChannel surfaces a newly cached manifest and re-reads as a no-op', async () => {
     // The proof that the Curator's pull loop reaches the screen. The loop is Rust and
     // writes `sub/<id>`; this is the frontend half — a cached record becomes what the
