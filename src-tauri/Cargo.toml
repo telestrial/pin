@@ -39,9 +39,11 @@ iroh-blobs = "0.103"
 iroh-gossip = "0.101"
 futures-lite = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "time", "fs", "sync", "io-util"] }
-# sia_storage: the desktop's native Sia I/O backend (src-tauri/src/sia.rs),
-# replacing the in-webview WASM SDK so downloads work in WebView2.
-sia_storage = "0.9.1"
+# pin-sia: the shared Sia layer, the same crate the browser reaches through wasm —
+# so the connect flow, the pinned-objects walk and the descriptor shapes have one
+# definition rather than a Rust copy here and a TypeScript copy there. This file is
+# now only Tauri plumbing: the runtime, the IPC framing, the command surface.
+pin-sia = { path = "../crates/pin-sia" }
 # pkarr itself only via pin-pkarr now (identity.rs still uses the crate directly for
 # the Curator's own DID document; the generic TXT publish/resolve is shared).
 pkarr = "3"

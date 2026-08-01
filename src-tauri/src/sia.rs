@@ -1,72 +1,34 @@
-// Native Sia I/O over the `sia_storage` crate, exposed to the frontend as Tauri
-// commands — the desktop implementation of the `SiaClient` seam (src/core/siaClient.ts).
+// The desktop's Sia commands — thin Tauri wrappers over `pin_sia`, the same crate
+// the browser reaches through wasm. What differs between the two is the hop, not the
+// behaviour: the walk, the descriptors and the connect flow have one definition.
 //
-// WHY: on the web, Sia runs as the WASM SDK inside the page. In the desktop
-// WebView2 shell that WASM `download` path fails ("readable byte streams not
-// supported"). Moving Sia into this native backend (native QUIC, no browser
-// byte-stream dependency) is the documented fix. The frontend `makeTauriSiaClient`
-// (src/lib/tauriSiaClient.ts) invokes these commands; every op is coarse — plain
-// data in/out — so no live `Object` handle ever crosses the IPC boundary.
+// WHY THE DESKTOP HAS ITS OWN HOP AT ALL: the browser SDK's download path fails in
+// WebView2 ("readable byte streams not supported"). Running Sia in this process
+// instead — native QUIC, no browser byte-stream dependency — is the fix, and it also
+// means Sia keeps working when the window is closed to the tray.
 //
-// EXECUTION MODEL: we hold ONE `Sdk` (built at connect from the AppKey the
-// frontend already unlocked) plus a dedicated multi-thread tokio runtime with the
-// full driver set (`enable_all` → the net/IO driver Sia's QUIC needs is
-// guaranteed, independent of whatever Tauri's own runtime enables). Async commands
-// run off the main thread on Tauri's runtime, and dispatch the actual Sia futures
-// onto our dedicated runtime via `rt.spawn(..).await` — the future is polled by a
-// runtime we know has the net driver, and awaiting the JoinHandle from Tauri's
-// runtime is a plain future poll.
+// EXECUTION MODEL: a dedicated multi-thread tokio runtime with the full driver set
+// (`enable_all`), so the net/IO driver Sia's QUIC needs is guaranteed regardless of
+// what Tauri's own runtime enables. Async commands run off the main thread on Tauri's
+// runtime and dispatch the Sia futures onto ours via `rt.spawn(..).await` — the future
+// is polled by a runtime known to have the driver, and awaiting the JoinHandle is a
+// plain future poll.
 //
 // BYTES OVER IPC: raw both ways, no base64. Downloads return raw bytes via
-// `tauri::ipc::Response` (JS gets an ArrayBuffer). Uploads RECEIVE the raw request
-// body via `tauri::ipc::Request` (`InvokeBody::Raw`) — Tauri v2 async commands DO
-// accept a borrowed `Request`, so we read the bytes off it before the first await.
-// A `Vec<u8>` typed arg from a raw body is broken upstream (tauri #9948: raw→typed
-// does `serde_json::from_slice`), which is why it's `Request`, not a `Vec<u8>` arg.
-// Packed uploads carry N buffers in one raw body via a little-endian
-// [u32 count][u32 len][bytes]... frame (see `unframe`).
+// `tauri::ipc::Response` (an ArrayBuffer in JS). Uploads receive the raw request body
+// via `tauri::ipc::Request` — Tauri v2 async commands do accept a borrowed `Request`,
+// so the bytes are read off it before the first await. A `Vec<u8>` typed arg from a
+// raw body is broken upstream (tauri #9948: raw→typed runs serde_json::from_slice),
+// which is why it is a `Request` rather than an argument. Packed uploads carry N
+// buffers in one raw body via a little-endian [u32 count][u32 len][bytes]... frame,
+// because a raw body is a single blob (see `unframe`).
 
-use std::io::Cursor;
 use std::sync::Arc;
 
-use sia_storage::{
-    app_id, AppKey, AppMetadata, Builder, DateTime, DownloadOptions, Hash256, Object,
-    ObjectsCursor, Sdk, Slab, UploadOptions, Utc,
-};
-use tokio::sync::Mutex;
+use pin_sia::{AccountSnapshot, PinnedObjectInfo, Session, Uploaded};
 
-// Must match the frontend's APP_META (src/lib/constants.ts) exactly — the AppID
-// derives the encryption scope, so a mismatch reads/writes a different scope.
-fn app_meta() -> AppMetadata {
-    AppMetadata {
-        id: app_id!("f6b7539e181e45ee750a491a58aa8392830a17c402115cf47c6e7dfe9f7ffcb0"),
-        name: "Pin",
-        description: "A Sia storage app",
-        service_url: "https://sia.storage",
-        logo_url: None,
-        callback_url: None,
-    }
-}
-
-// Year-9999 makes item share URLs effectively permanent (mirrors core/sia.ts FAR_FUTURE).
-fn far_future() -> DateTime<Utc> {
-    "9999-12-31T00:00:00Z".parse().expect("valid timestamp")
-}
-
-fn hex_to_32(s: &str) -> Option<[u8; 32]> {
-    if s.len() != 64 {
-        return None;
-    }
-    let mut out = [0u8; 32];
-    for (i, b) in out.iter_mut().enumerate() {
-        *b = u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).ok()?;
-    }
-    Some(out)
-}
-
-// Split a framed raw payload — [u32 count][u32 len][bytes]... little-endian — back
-// into the individual buffers. The frontend frames N packed-upload buffers into
-// one raw IPC body (a raw request body is a single blob, so N buffers get framed).
+/// Split a framed raw payload — [u32 count][u32 len][bytes]... little-endian — back
+/// into the individual buffers.
 fn unframe(data: &[u8]) -> Result<Vec<Vec<u8>>, String> {
     let read_u32 = |o: usize| -> Result<u32, String> {
         data.get(o..o + 4)
@@ -90,10 +52,17 @@ fn unframe(data: &[u8]) -> Result<Vec<Vec<u8>>, String> {
     Ok(out)
 }
 
-/// Tauri-managed state: the dedicated Sia runtime + the connected Sdk (if any).
+fn raw_body(request: &tauri::ipc::Request<'_>) -> Result<Vec<u8>, String> {
+    match request.body() {
+        tauri::ipc::InvokeBody::Raw(v) => Ok(v.clone()),
+        _ => Err("this command requires a raw byte body".to_string()),
+    }
+}
+
+/// Tauri-managed state: the dedicated Sia runtime plus the session it drives.
 pub struct SiaState {
     rt: tokio::runtime::Runtime,
-    sdk: Mutex<Option<Arc<Sdk>>>,
+    session: Arc<Session>,
 }
 
 impl Default for SiaState {
@@ -103,139 +72,46 @@ impl Default for SiaState {
                 .enable_all()
                 .build()
                 .expect("sia tokio runtime"),
-            sdk: Mutex::new(None),
+            session: Arc::new(Session::new()),
         }
     }
 }
 
-async fn current_sdk(state: &SiaState) -> Result<Arc<Sdk>, String> {
-    state
-        .sdk
-        .lock()
-        .await
-        .clone()
-        .ok_or_else(|| "Sia is not connected".to_string())
-}
-
-// --- DTOs (serde camelCase → the shapes the TS client reads) -----------------
-
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct UploadDto {
-    id: String,
-    item_url: String,
-}
-
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AccountSnapshotDto {
-    pinned_data: u64,
-    pinned_size: u64,
-    raw_content_bytes: u64,
-    max_pinned_data: u64,
-    remaining_storage: u64,
-    fetched_at: String,
-}
-
-// `slabs` reuses the SDK's own `Slab` — its serde (camelCase, EncryptionKey→base64,
-// Hash256/PublicKey→string) produces byte-for-byte the TS `Slab` interface, so the
-// repack / slab-inspector consumers read it unchanged.
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PinnedObjectDto {
-    id: String,
-    created_at: String,
-    slabs: Vec<Slab>,
-}
-
-/// One current (non-deleted) object, owned so it survives past the event borrow.
-struct CurrentObj {
-    id: String,
-    created_at: DateTime<Utc>,
-    slabs: Vec<Slab>,
-}
-
-const EVENTS_PAGE_LIMIT: usize = 200;
-// Defensive cap — 200 × 50 = 10000 events covers any plausible scope.
-const EVENTS_MAX_PAGES: usize = 50;
-
-// Walk objectEvents, keep the latest event per id, drop deleted, return owned
-// descriptors. Single home for the walk the metering / repack / reset / slab
-// sites need (mirrors walkPinnedObjects in core/siaClient.ts).
-async fn walk_current(sdk: &Sdk) -> Result<Vec<CurrentObj>, String> {
-    use std::collections::HashMap;
-    let mut latest: HashMap<String, sia_storage::ObjectEvent> = HashMap::new();
-    let mut cursor: Option<ObjectsCursor> = None;
-    for _ in 0..EVENTS_MAX_PAGES {
-        let events = sdk
-            .object_events(cursor.take(), Some(EVENTS_PAGE_LIMIT))
+impl SiaState {
+    /// Run a Sia call on the dedicated runtime.
+    ///
+    /// Takes a closure rather than a future so the session `Arc` is cloned on this
+    /// side and moved in, keeping every command below to a single line of plumbing.
+    async fn run<T, F, Fut>(&self, f: F) -> Result<T, String>
+    where
+        F: FnOnce(Arc<Session>) -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = Result<T, String>> + Send,
+        T: Send + 'static,
+    {
+        let session = self.session.clone();
+        self.rt
+            .spawn(async move { f(session).await })
             .await
-            .map_err(|e| format!("object_events: {e}"))?;
-        let n = events.len();
-        if n == 0 {
-            break;
-        }
-        let last_after = events[n - 1].updated_at;
-        let last_id = events[n - 1].id.clone();
-        for ev in events {
-            let key = ev.id.to_string();
-            match latest.get(&key) {
-                Some(prev) if prev.updated_at >= ev.updated_at => {}
-                _ => {
-                    latest.insert(key, ev);
-                }
-            }
-        }
-        if n < EVENTS_PAGE_LIMIT {
-            break;
-        }
-        cursor = Some(ObjectsCursor {
-            after: last_after,
-            id: last_id,
-        });
+            .map_err(|e| format!("task: {e}"))?
     }
-    let mut out = Vec::new();
-    for ev in latest.into_values() {
-        if ev.deleted {
-            continue;
-        }
-        if let Some(obj) = ev.object {
-            out.push(CurrentObj {
-                id: ev.id.to_string(),
-                created_at: *obj.created_at(),
-                slabs: obj.slabs().to_vec(),
-            });
-        }
-    }
-    Ok(out)
 }
 
-// --- commands ----------------------------------------------------------------
+// --- commands ------------------------------------------------------------------
 
-/// Build the Sdk from the AppKey the frontend already unlocked, and hold it.
-/// Overwrites any previous connection (e.g. after a re-onboard).
+/// Connect from the AppKey the frontend already unlocked. Overwrites any previous
+/// connection, so re-onboarding lands cleanly.
 #[tauri::command]
 pub async fn sia_connect(
     state: tauri::State<'_, SiaState>,
     app_key_hex: String,
     indexer_url: String,
 ) -> Result<(), String> {
-    let bytes = hex_to_32(&app_key_hex).ok_or("app key must be 32-byte hex (64 chars)")?;
-    let sdk = state
-        .rt
-        .spawn(async move {
-            let app_key = AppKey::import(bytes);
-            let builder =
-                Builder::new(&indexer_url, app_meta()).map_err(|e| format!("builder: {e}"))?;
-            builder
-                .connected(&app_key)
-                .await
-                .map_err(|e| format!("connect: {e}"))?
-                .ok_or_else(|| "indexer did not recognize this app key".to_string())
-        })
-        .await
-        .map_err(|e| format!("task: {e}"))??;
-    *state.sdk.lock().await = Some(Arc::new(sdk));
+    let recognized = state
+        .run(move |s| async move { s.connect(&app_key_hex, &indexer_url).await })
+        .await?;
+    if !recognized {
+        return Err("indexer did not recognize this app key".to_string());
+    }
     Ok(())
 }
 
@@ -243,109 +119,34 @@ pub async fn sia_connect(
 pub async fn sia_upload_item(
     state: tauri::State<'_, SiaState>,
     request: tauri::ipc::Request<'_>,
-) -> Result<UploadDto, String> {
-    let bytes = match request.body() {
-        tauri::ipc::InvokeBody::Raw(v) => v.clone(),
-        _ => return Err("upload requires a raw byte body".to_string()),
-    };
-    let sdk = current_sdk(&state).await?;
+) -> Result<Uploaded, String> {
+    let bytes = raw_body(&request)?;
     state
-        .rt
-        .spawn(async move {
-            let obj = sdk
-                .upload(
-                    Object::default(),
-                    Cursor::new(bytes),
-                    UploadOptions::default(),
-                )
-                .await
-                .map_err(|e| format!("upload: {e}"))?;
-            sdk.pin_object(&obj)
-                .await
-                .map_err(|e| format!("pin: {e}"))?;
-            let url = sdk
-                .share_object(&obj, far_future())
-                .map_err(|e| format!("share: {e}"))?
-                .to_string();
-            Ok::<UploadDto, String>(UploadDto {
-                id: obj.id().to_string(),
-                item_url: url,
-            })
-        })
+        .run(move |s| async move { s.upload_item(bytes, None).await })
         .await
-        .map_err(|e| format!("task: {e}"))?
 }
 
 #[tauri::command]
 pub async fn sia_upload_items_packed(
     state: tauri::State<'_, SiaState>,
     request: tauri::ipc::Request<'_>,
-) -> Result<Vec<UploadDto>, String> {
-    let buffers = match request.body() {
-        tauri::ipc::InvokeBody::Raw(v) => unframe(v)?,
-        _ => return Err("packed upload requires a raw byte body".to_string()),
-    };
-    let sdk = current_sdk(&state).await?;
+) -> Result<Vec<Uploaded>, String> {
+    let buffers = unframe(&raw_body(&request)?)?;
     state
-        .rt
-        .spawn(async move {
-            let mut packed = sdk
-                .upload_packed(UploadOptions::default())
-                .map_err(|e| format!("packed: {e}"))?;
-            for b in buffers {
-                packed
-                    .add(Cursor::new(b))
-                    .await
-                    .map_err(|e| format!("packed add: {e}"))?;
-            }
-            let objects = packed
-                .finalize()
-                .await
-                .map_err(|e| format!("packed finalize: {e}"))?;
-            let mut out = Vec::with_capacity(objects.len());
-            for obj in &objects {
-                sdk.pin_object(obj).await.map_err(|e| format!("pin: {e}"))?;
-                let url = sdk
-                    .share_object(obj, far_future())
-                    .map_err(|e| format!("share: {e}"))?
-                    .to_string();
-                out.push(UploadDto {
-                    id: obj.id().to_string(),
-                    item_url: url,
-                });
-            }
-            Ok::<Vec<UploadDto>, String>(out)
-        })
+        .run(move |s| async move { s.upload_items_packed(buffers, None).await })
         .await
-        .map_err(|e| format!("task: {e}"))?
 }
 
-/// Returns raw bytes as an ArrayBuffer — the subscriber read path that WebView2's
-/// WASM SDK rejects, done natively.
+/// Returns raw bytes as an ArrayBuffer — the subscriber read path WebView2's browser
+/// SDK rejects, done natively.
 #[tauri::command]
 pub async fn sia_download_item(
     state: tauri::State<'_, SiaState>,
     url: String,
 ) -> Result<tauri::ipc::Response, String> {
-    let sdk = current_sdk(&state).await?;
     let bytes = state
-        .rt
-        .spawn(async move {
-            let obj = sdk
-                .shared_object(&url)
-                .await
-                .map_err(|e| format!("shared_object: {e}"))?;
-            let mut dl = sdk
-                .download(&obj, DownloadOptions::default())
-                .map_err(|e| format!("download start: {e}"))?;
-            let mut out = Vec::new();
-            tokio::io::copy(&mut dl, &mut out)
-                .await
-                .map_err(|e| format!("download read: {e}"))?;
-            Ok::<Vec<u8>, String>(out)
-        })
-        .await
-        .map_err(|e| format!("task: {e}"))??;
+        .run(move |s| async move { s.download_item(&url).await })
+        .await?;
     Ok(tauri::ipc::Response::new(bytes))
 }
 
@@ -354,21 +155,9 @@ pub async fn sia_pin_from_share_url(
     state: tauri::State<'_, SiaState>,
     url: String,
 ) -> Result<String, String> {
-    let sdk = current_sdk(&state).await?;
     state
-        .rt
-        .spawn(async move {
-            let obj = sdk
-                .shared_object(&url)
-                .await
-                .map_err(|e| format!("shared_object: {e}"))?;
-            sdk.pin_object(&obj)
-                .await
-                .map_err(|e| format!("pin: {e}"))?;
-            Ok::<String, String>(obj.id().to_string())
-        })
+        .run(move |s| async move { s.pin_from_share_url(&url).await })
         .await
-        .map_err(|e| format!("task: {e}"))?
 }
 
 #[tauri::command]
@@ -376,18 +165,9 @@ pub async fn sia_resolve_object_id(
     state: tauri::State<'_, SiaState>,
     url: String,
 ) -> Result<String, String> {
-    let sdk = current_sdk(&state).await?;
     state
-        .rt
-        .spawn(async move {
-            let obj = sdk
-                .shared_object(&url)
-                .await
-                .map_err(|e| format!("shared_object: {e}"))?;
-            Ok::<String, String>(obj.id().to_string())
-        })
+        .run(move |s| async move { s.resolve_object_id(&url).await })
         .await
-        .map_err(|e| format!("task: {e}"))?
 }
 
 #[tauri::command]
@@ -395,102 +175,42 @@ pub async fn sia_delete_object(
     state: tauri::State<'_, SiaState>,
     id: String,
 ) -> Result<(), String> {
-    let hash: Hash256 = id.parse().map_err(|e| format!("bad object id: {e:?}"))?;
-    let sdk = current_sdk(&state).await?;
     state
-        .rt
-        .spawn(async move {
-            sdk.delete_object(&hash)
-                .await
-                .map_err(|e| format!("delete: {e}"))
-        })
+        .run(move |s| async move { s.delete_object(&id).await })
         .await
-        .map_err(|e| format!("task: {e}"))?
 }
 
 #[tauri::command]
 pub async fn sia_prune_slabs(state: tauri::State<'_, SiaState>) -> Result<(), String> {
-    let sdk = current_sdk(&state).await?;
     state
-        .rt
-        .spawn(async move { sdk.prune_slabs().await.map_err(|e| format!("prune: {e}")) })
+        .run(move |s| async move { s.prune_slabs().await })
         .await
-        .map_err(|e| format!("task: {e}"))?
 }
 
 #[tauri::command]
 pub async fn sia_account_snapshot(
     state: tauri::State<'_, SiaState>,
-) -> Result<AccountSnapshotDto, String> {
-    let sdk = current_sdk(&state).await?;
+) -> Result<AccountSnapshot, String> {
     state
-        .rt
-        .spawn(async move {
-            let acct = sdk.account().await.map_err(|e| format!("account: {e}"))?;
-            let objs = walk_current(&sdk).await?;
-            let raw: u64 = objs
-                .iter()
-                .flat_map(|o| o.slabs.iter())
-                .map(|s| s.length as u64)
-                .sum();
-            Ok::<AccountSnapshotDto, String>(AccountSnapshotDto {
-                pinned_data: acct.pinned_data,
-                pinned_size: acct.pinned_size,
-                raw_content_bytes: raw,
-                max_pinned_data: acct.max_pinned_data,
-                remaining_storage: acct.remaining_storage,
-                fetched_at: Utc::now().to_rfc3339(),
-            })
-        })
+        .run(move |s| async move { s.account_snapshot().await })
         .await
-        .map_err(|e| format!("task: {e}"))?
 }
 
 #[tauri::command]
 pub async fn sia_list_pinned_objects(
     state: tauri::State<'_, SiaState>,
-) -> Result<Vec<PinnedObjectDto>, String> {
-    let sdk = current_sdk(&state).await?;
+) -> Result<Vec<PinnedObjectInfo>, String> {
     state
-        .rt
-        .spawn(async move {
-            let objs = walk_current(&sdk).await?;
-            Ok::<Vec<PinnedObjectDto>, String>(
-                objs.into_iter()
-                    .map(|o| PinnedObjectDto {
-                        id: o.id,
-                        created_at: o.created_at.to_rfc3339(),
-                        slabs: o.slabs,
-                    })
-                    .collect(),
-            )
-        })
+        .run(move |s| async move { s.list_pinned_objects().await })
         .await
-        .map_err(|e| format!("task: {e}"))?
 }
 
 #[tauri::command]
 pub async fn sia_get_object_slabs(
     state: tauri::State<'_, SiaState>,
     object_id: String,
-) -> Result<Option<PinnedObjectDto>, String> {
-    let hash: Hash256 = object_id
-        .parse()
-        .map_err(|e| format!("bad object id: {e:?}"))?;
-    let sdk = current_sdk(&state).await?;
+) -> Result<Option<PinnedObjectInfo>, String> {
     state
-        .rt
-        .spawn(async move {
-            // Not found → None (matches the WASM getObjectSlabs try/catch → null).
-            match sdk.object(&hash).await {
-                Ok(obj) => Ok::<Option<PinnedObjectDto>, String>(Some(PinnedObjectDto {
-                    id: hash.to_string(),
-                    created_at: obj.created_at().to_rfc3339(),
-                    slabs: obj.slabs().to_vec(),
-                })),
-                Err(_) => Ok(None),
-            }
-        })
+        .run(move |s| async move { s.get_object_slabs(&object_id).await })
         .await
-        .map_err(|e| format!("task: {e}"))?
 }
