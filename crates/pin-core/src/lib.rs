@@ -12,7 +12,7 @@
 // FsStore path returns in B2 when src-tauri adopts this crate for the Curator.
 #![allow(dead_code)]
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::str::FromStr;
@@ -35,8 +35,8 @@ use iroh_gossip::{net::Gossip, ALPN as GOSSIP_ALPN};
 // desktop signed in with the same Sia recovery phrase land on the same namespace +
 // author (the one-root-secret move).
 use pin_derive::{
-    collection_prefix, decode_app_key, decode_hex32, hkdf32, record_key, AUTHOR_INFO,
-    EV_CONTENT_READY, EV_ERROR, EV_INSERT_LOCAL, EV_INSERT_REMOTE, EV_NEIGHBOR_DOWN,
+    collection_prefix, decode_app_key, decode_hex32, hkdf32, parse_record_key, record_key,
+    AUTHOR_INFO, EV_CONTENT_READY, EV_ERROR, EV_INSERT_LOCAL, EV_INSERT_REMOTE, EV_NEIGHBOR_DOWN,
     EV_NEIGHBOR_UP, EV_PENDING_CONTENT_READY, EV_SYNC_FINISHED, NS_INFO,
 };
 // The /hey inbox knock, the same crate the native Curator serves — one protocol, so
@@ -62,6 +62,10 @@ struct Engine {
     /// Inbound /hey knocks, parked until a reconcile loop drains them. Held so
     /// `status()` can report the depth — the same field the native Curator reports.
     hey_inbox: HeyInbox,
+    /// Whether the doc-change pump is already running (see `subscribe_doc_changes`).
+    /// One pump per engine: a second would double every change, and the callers most
+    /// likely to subscribe twice are the ones that mount twice (StrictMode, hot reload).
+    changes_subscribed: Cell<bool>,
     _gossip: Gossip,
     docs: Docs,
     _router: Router,
@@ -132,6 +136,7 @@ pub async fn open(app_key_hex: String) -> Result<String, JsValue> {
         author_id,
         endpoint,
         hey_inbox,
+        changes_subscribed: Cell::new(false),
         _gossip: gossip,
         docs,
         _router: router,
@@ -177,6 +182,57 @@ pub async fn delete_record(collection: String, rkey: String) -> Result<(), JsVal
         .del(eng.author_id, record_key(&collection, &rkey))
         .await
         .map_err(je)?;
+    Ok(())
+}
+
+/// Report every change to this instance's own doc, as `(collection, rkey, kind)`.
+///
+/// This is the repo's CHANGE FEED — the "state out" half of repo-as-only-contract.
+/// The frontend never has to ask whether a record moved: whatever wrote it (a peer's
+/// device syncing in, or this instance's own Curator work) announces it, and one
+/// listener routes by collection to decide what to re-read. It replaces per-feature
+/// polling, which is what the app did before: each consumer that cared about a
+/// background write ran its own timer, and every new Curator job would have added
+/// another.
+///
+/// Faithful, not filtered — the engine reports what happened and the frontend decides
+/// what it means:
+///   - Record events (`insert-local` / `insert-remote`) carry `collection` + `rkey`,
+///     split by `pin_derive::parse_record_key` so both engines decompose keys the
+///     same way.
+///   - Stream-level events (`content-ready`, `sync-finished`, neighbor up/down) aren't
+///     about one record and carry EMPTY strings for both. `content-ready` in
+///     particular still matters: iroh-blobs content LAGS the entry, so a reader that
+///     acted only on `insert-remote` can find the value not yet readable. An empty
+///     collection means "something landed — re-check what you care about."
+///   - Local writes are reported too, so a consumer can see its own write land.
+///     Filtering them out is the caller's job (`isRemoteChange` in docs.ts).
+///
+/// One pump per engine; a second call is a no-op. Only `open()` (which rebuilds the
+/// engine) clears that.
+#[wasm_bindgen]
+pub async fn subscribe_doc_changes(on_change: js_sys::Function) -> Result<(), JsValue> {
+    let eng = engine()?;
+    if eng.changes_subscribed.replace(true) {
+        return Ok(());
+    }
+    let mut events = eng.doc.subscribe().await.map_err(je)?;
+    wasm_bindgen_futures::spawn_local(async move {
+        while let Some(res) = events.next().await {
+            let (kind, key) = match &res {
+                Ok(ev) => live_event_parts(ev),
+                Err(e) => (EV_ERROR, e.to_string()),
+            };
+            let (collection, rkey) = parse_record_key(&key).unwrap_or(("", ""));
+            // Ignore a JS callback throw; keep pumping.
+            let _ = on_change.call3(
+                &JsValue::NULL,
+                &JsValue::from_str(collection),
+                &JsValue::from_str(rkey),
+                &JsValue::from_str(kind),
+            );
+        }
+    });
     Ok(())
 }
 

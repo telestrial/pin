@@ -58,6 +58,7 @@ export const sia_validate_recovery_phrase: (a: number, b: number) => [number, nu
 export const sia_wait_for_approval: () => any;
 export const start_sync: (a: number, b: number, c: any) => any;
 export const status: () => [number, number, number];
+export const subscribe_doc_changes: (a: any) => any;
 export const start: () => void;
 export const __wbg_intounderlyingbytesource_free: (a: number, b: number) => void;
 export const intounderlyingbytesource_autoAllocateChunkSize: (a: number) => number;

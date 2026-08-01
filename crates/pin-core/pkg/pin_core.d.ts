@@ -367,6 +367,35 @@ export function start_sync(ticket: string, on_event: Function): Promise<void>;
  */
 export function status(): any;
 
+/**
+ * Report every change to this instance's own doc, as `(collection, rkey, kind)`.
+ *
+ * This is the repo's CHANGE FEED — the "state out" half of repo-as-only-contract.
+ * The frontend never has to ask whether a record moved: whatever wrote it (a peer's
+ * device syncing in, or this instance's own Curator work) announces it, and one
+ * listener routes by collection to decide what to re-read. It replaces per-feature
+ * polling, which is what the app did before: each consumer that cared about a
+ * background write ran its own timer, and every new Curator job would have added
+ * another.
+ *
+ * Faithful, not filtered — the engine reports what happened and the frontend decides
+ * what it means:
+ *   - Record events (`insert-local` / `insert-remote`) carry `collection` + `rkey`,
+ *     split by `pin_derive::parse_record_key` so both engines decompose keys the
+ *     same way.
+ *   - Stream-level events (`content-ready`, `sync-finished`, neighbor up/down) aren't
+ *     about one record and carry EMPTY strings for both. `content-ready` in
+ *     particular still matters: iroh-blobs content LAGS the entry, so a reader that
+ *     acted only on `insert-remote` can find the value not yet readable. An empty
+ *     collection means "something landed — re-check what you care about."
+ *   - Local writes are reported too, so a consumer can see its own write land.
+ *     Filtering them out is the caller's job (`isRemoteChange` in docs.ts).
+ *
+ * One pump per engine; a second call is a no-op. Only `open()` (which rebuilds the
+ * engine) clears that.
+ */
+export function subscribe_doc_changes(on_change: Function): Promise<void>;
+
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
 export interface InitOutput {
@@ -428,6 +457,7 @@ export interface InitOutput {
     readonly sia_wait_for_approval: () => any;
     readonly start_sync: (a: number, b: number, c: any) => any;
     readonly status: () => [number, number, number];
+    readonly subscribe_doc_changes: (a: any) => any;
     readonly start: () => void;
     readonly __wbg_intounderlyingbytesource_free: (a: number, b: number) => void;
     readonly intounderlyingbytesource_autoAllocateChunkSize: (a: number) => number;
