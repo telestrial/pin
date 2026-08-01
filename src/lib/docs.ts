@@ -29,6 +29,7 @@ import {
   put_channel_record,
   put_record,
   share_channel_doc,
+  subscribe_doc_changes,
 } from '../../crates/pin-core/pkg/pin_core.js'
 import { ensureWasm } from '../core/wasm'
 import { useCuratorStore } from '../stores/curator'
@@ -49,6 +50,7 @@ import {
   shareChannelNative,
   shareDocNative,
   startSyncNative,
+  subscribeDocChangesNative,
 } from './tauriDocs'
 
 // Open the engine exactly ONCE per identity and share it across every caller.
@@ -161,6 +163,88 @@ export async function startSync(
   if (inTauri()) return startSyncNative(ticket)
   await ensureWasm()
   await coreStartSync(ticket, onEvent)
+}
+
+// --- The doc-change feed -----------------------------------------------------
+//
+// The "state out" half of repo-as-only-contract: the Curator writes the repo, the
+// frontend reads it — and this is how the frontend LEARNS it should. Whatever moves a
+// record (a peer device syncing in, or this instance's own background work) announces
+// it here, so a consumer registers interest once instead of running a timer.
+//
+// One engine subscription, fanned out to every consumer. Both engines deliberately
+// allow only ONE pump (a second would double every change), so the fan-out has to be
+// here rather than each consumer subscribing to the engine directly.
+
+/** A change to a record in this identity's doc.
+ *
+ *  `collection`/`rkey` are the record that moved, split by `pin_derive`'s
+ *  `parse_record_key` so both engines decompose keys identically. They are EMPTY for
+ *  stream-level events (`content-ready`, `sync-finished`, neighbor up/down), which
+ *  aren't about one record — treat an empty collection as "something landed, re-check
+ *  what you care about". That matters most for `content-ready`: iroh-blobs content
+ *  lags the entry, so a value can become readable after its key already arrived.
+ *
+ *  Local writes are reported too; filter with {@link isRemoteChange} if you only want
+ *  a peer's. */
+export type DocChange = {
+  collection: string
+  rkey: string
+  kind: string
+}
+
+const docChangeHandlers = new Set<(change: DocChange) => void>()
+let docChangeStarted: Promise<void> | null = null
+
+function startDocChangeFeed(): Promise<void> {
+  if (!docChangeStarted) {
+    const fanOut = (change: DocChange) => {
+      for (const handler of docChangeHandlers) {
+        try {
+          handler(change)
+        } catch {
+          // One consumer throwing must not starve the others, or stop the feed.
+        }
+      }
+    }
+    docChangeStarted = (async () => {
+      if (inTauri()) return subscribeDocChangesNative(fanOut)
+      await ensureWasm()
+      // wasm-bindgen types the callback as a bare `Function`, so annotate what
+      // pin-core actually passes (collection, rkey, kind).
+      await subscribe_doc_changes(
+        (collection: string, rkey: string, kind: string) =>
+          fanOut({ collection, rkey, kind }),
+      )
+    })().catch((err) => {
+      // Let a later caller retry rather than wedging the feed off permanently.
+      docChangeStarted = null
+      throw err
+    })
+  }
+  return docChangeStarted
+}
+
+/** Be told when a record in this identity's doc changes. Returns an unsubscribe.
+ *
+ *  Requires an open doc ({@link openDocs}) — on desktop that's what waits for the
+ *  Curator. Registering is cheap and idempotent per handler; the underlying engine
+ *  subscription is started once and shared.
+ *
+ *  Push for speed, pull for truth: a consumer should still read once on mount. On
+ *  desktop the Curator keeps working with the window hidden to tray, and a change it
+ *  makes then is emitted to nobody — the read on mount is what covers that gap. */
+export function subscribeDocChanges(
+  onChange: (change: DocChange) => void,
+): () => void {
+  docChangeHandlers.add(onChange)
+  void startDocChangeFeed().catch(() => {
+    // Engine not up / transport failed — the consumer's own read-on-mount still
+    // works, it just won't get live updates. Not worth surfacing from a subscribe.
+  })
+  return () => {
+    docChangeHandlers.delete(onChange)
+  }
 }
 
 /** This instance's iroh network status (node id, relay/direct addresses), from the

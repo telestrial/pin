@@ -131,6 +131,36 @@ function ensureChannelListener(): Promise<void> {
   return channelListener
 }
 
+/** The Tauri event the Curator reports its own doc's changes on. Must match
+ *  `DOC_CHANGE_EVENT` in src-tauri/src/curator.rs. */
+const DOC_CHANGE_EVENT = 'pin:doc-change'
+
+type DocChangePayload = { collection: string; rkey: string; kind: string }
+
+let docChangeHandler: ((c: DocChangePayload) => void) | null = null
+let docChangeListener: Promise<void> | null = null
+
+/** Start reporting the Curator's doc changes to `onChange`.
+ *
+ *  One handler — docs.ts fans out to the app's consumers, so this only has to be the
+ *  transport. The listener is attached BEFORE the command runs so nothing the Curator
+ *  emits immediately is missed. */
+export async function subscribeDocChangesNative(
+  onChange: (c: DocChangePayload) => void,
+): Promise<void> {
+  docChangeHandler = onChange
+  if (!docChangeListener) {
+    docChangeListener = (async () => {
+      const { listen } = await import('@tauri-apps/api/event')
+      await listen<DocChangePayload>(DOC_CHANGE_EVENT, (e) =>
+        docChangeHandler?.(e.payload),
+      )
+    })()
+  }
+  await docChangeListener
+  await call<void>('docs_subscribe_changes', {})
+}
+
 export function openChannelNative(nsSeedHex: string): Promise<string> {
   return call<string>('docs_open_channel', { nsSeedHex })
 }

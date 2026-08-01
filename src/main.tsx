@@ -57,6 +57,8 @@ if (import.meta.env.DEV || inTauri()) {
       put: (collection: string, rkey: string, value: string) => Promise<void>
       get: (collection: string, rkey: string) => Promise<string | null>
       events: () => string[]
+      watchChanges: () => Promise<string>
+      changes: () => Array<{ collection: string; rkey: string; kind: string }>
     }
   }
   // Channel docs (the ladder's top rung), driven through whichever engine is active:
@@ -333,6 +335,11 @@ if (import.meta.env.DEV || inTauri()) {
   // lazy (docs.ts, and its 7 MB wasm, only load when a hook is first called).
   {
     const syncEvents: string[] = []
+    const docChanges: Array<{
+      collection: string
+      rkey: string
+      kind: string
+    }> = []
     // A per-page-load instance id for the rendezvous directory (the app uses its own
     // in useRendezvousSync; this is the harness's).
     const RZ_INSTANCE = Array.from(crypto.getRandomValues(new Uint8Array(8)))
@@ -395,6 +402,17 @@ if (import.meta.env.DEV || inTauri()) {
         }
       },
       events: () => syncEvents.slice(),
+      // The doc-change feed (docs.ts subscribeDocChanges): what the engine reports
+      // moved in this identity's doc. Recorded so a spec can assert a peer's write
+      // was ANNOUNCED, not merely readable — the difference between the feed working
+      // and the reader having polled its way there.
+      watchChanges: async () => {
+        ;(await docs()).subscribeDocChanges((c) => {
+          docChanges.push(c)
+        })
+        return 'watching'
+      },
+      changes: () => docChanges.slice(),
     }
   }
 }
