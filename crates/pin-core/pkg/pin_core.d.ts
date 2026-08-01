@@ -336,6 +336,22 @@ export function sia_wait_for_approval(): Promise<void>;
 export function start(): void;
 
 /**
+ * Start the Curator's subscription pull loop in this tab.
+ *
+ * The same loop the desktop Curator runs, from the same crate — a tab is a shorter-
+ * lived instance of the Curator, not a lesser one. What differs is uptime: this stops
+ * when the tab closes, and a desktop's doesn't.
+ *
+ * Reports each pass to `on_pass` as a JSON `PullOutcome` (or an error string), which
+ * is diagnostics only — the loop's actual output is the records it writes, and those
+ * announce themselves on the change feed.
+ *
+ * Spawned locally rather than by the shared crate, because which executor a task
+ * belongs on is a per-target question: here there is only one.
+ */
+export function start_pull_loop(app_key_hex: string, cadence_secs: number, on_pass: Function): Promise<void>;
+
+/**
  * Join the peer(s) in `ticket` and live-sync this identity's doc with them.
  * `on_event` is invoked with a short label string per `LiveEvent` (insert-local /
  * insert-remote / sync-finished / neighbor-up|down) so the UI can show the loop is
@@ -455,6 +471,7 @@ export interface InitOutput {
     readonly sia_upload_items_packed: (a: any, b: number) => any;
     readonly sia_validate_recovery_phrase: (a: number, b: number) => [number, number];
     readonly sia_wait_for_approval: () => any;
+    readonly start_pull_loop: (a: number, b: number, c: number, d: any) => any;
     readonly start_sync: (a: number, b: number, c: any) => any;
     readonly status: () => [number, number, number];
     readonly subscribe_doc_changes: (a: any) => any;

@@ -16,6 +16,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::str::FromStr;
+use std::sync::Arc;
 
 use futures_lite::StreamExt as _;
 use iroh::{endpoint::presets, protocol::Router, Endpoint};
@@ -66,6 +67,9 @@ struct Engine {
     /// One pump per engine: a second would double every change, and the callers most
     /// likely to subscribe twice are the ones that mount twice (StrictMode, hot reload).
     changes_subscribed: Cell<bool>,
+    /// Whether the pull loop is already running (see `start_pull_loop`). One per
+    /// engine — a second would double every pass's network work for nothing.
+    pull_running: Cell<bool>,
     _gossip: Gossip,
     docs: Docs,
     _router: Router,
@@ -137,6 +141,7 @@ pub async fn open(app_key_hex: String) -> Result<String, JsValue> {
         endpoint,
         hey_inbox,
         changes_subscribed: Cell::new(false),
+        pull_running: Cell::new(false),
         _gossip: gossip,
         docs,
         _router: router,
@@ -232,6 +237,61 @@ pub async fn subscribe_doc_changes(on_change: js_sys::Function) -> Result<(), Js
                 &JsValue::from_str(kind),
             );
         }
+    });
+    Ok(())
+}
+
+/// Start the Curator's subscription pull loop in this tab.
+///
+/// The same loop the desktop Curator runs, from the same crate — a tab is a shorter-
+/// lived instance of the Curator, not a lesser one. What differs is uptime: this stops
+/// when the tab closes, and a desktop's doesn't.
+///
+/// Reports each pass to `on_pass` as a JSON `PullOutcome` (or an error string), which
+/// is diagnostics only — the loop's actual output is the records it writes, and those
+/// announce themselves on the change feed.
+///
+/// Spawned locally rather than by the shared crate, because which executor a task
+/// belongs on is a per-target question: here there is only one.
+#[wasm_bindgen]
+pub async fn start_pull_loop(
+    app_key_hex: String,
+    cadence_secs: u32,
+    on_pass: js_sys::Function,
+) -> Result<(), JsValue> {
+    let eng = engine()?;
+    if eng.pull_running.replace(true) {
+        return Ok(());
+    }
+    let app_key = decode_app_key(&app_key_hex)
+        .ok_or_else(|| JsValue::from_str("app key hex must be 32 bytes (64 hex chars)"))?;
+    let ctx = pin_curator::PullContext {
+        doc: eng.doc.clone(),
+        blobs: (*eng.blobs).clone(),
+        author_id: eng.author_id,
+        sia: sia(),
+        app_key,
+    };
+    wasm_bindgen_futures::spawn_local(async move {
+        pin_curator::run_pull_loop(
+            ctx,
+            std::time::Duration::from_secs(cadence_secs as u64),
+            |result| {
+                let report = match &result {
+                    Ok(o) => serde_json::json!({
+                        "cached": o.cached,
+                        "unresolved": o.unresolved,
+                        "failed": o.failed,
+                        "dropped": o.dropped,
+                    })
+                    .to_string(),
+                    Err(e) => serde_json::json!({ "error": e }).to_string(),
+                };
+                // Ignore a JS callback throw; the loop outlives any one report.
+                let _ = on_pass.call1(&JsValue::NULL, &JsValue::from_str(&report));
+            },
+        )
+        .await
     });
     Ok(())
 }
@@ -825,8 +885,12 @@ pub async fn pkarr_resolve(key: String) -> Result<String, JsValue> {
 // whose serde emits byte-for-byte the shape the frontend's `Slab` interface expects.
 // Raw bytes cross as `Vec<u8>` (an ArrayBuffer in JS), never base64.
 
+// `Arc` rather than `Rc` even though this is single-threaded: the shared pull loop
+// takes an `Arc<Session>` so that natively the same type can cross a thread, and one
+// session type keeps that crate free of a target-conditional signature. Atomic
+// refcounting on a single thread is uncontended and costs nothing worth naming.
 thread_local! {
-    static SIA: RefCell<Option<Rc<pin_sia::Session>>> = const { RefCell::new(None) };
+    static SIA: RefCell<Option<Arc<pin_sia::Session>>> = const { RefCell::new(None) };
 }
 
 /// The session, created on first use.
@@ -835,11 +899,11 @@ thread_local! {
 /// inert until connected, and every operation below already reports the
 /// not-connected case, so lazily minting one keeps the auth screens free of an
 /// initialization step whose only job would be to fail later anyway.
-fn sia() -> Rc<pin_sia::Session> {
+fn sia() -> Arc<pin_sia::Session> {
     SIA.with(|s| {
         let mut slot = s.borrow_mut();
         if slot.is_none() {
-            *slot = Some(Rc::new(pin_sia::Session::new()));
+            *slot = Some(Arc::new(pin_sia::Session::new()));
         }
         slot.clone().expect("session just created")
     })

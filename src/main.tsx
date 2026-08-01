@@ -59,6 +59,8 @@ if (import.meta.env.DEV || inTauri()) {
       events: () => string[]
       watchChanges: () => Promise<string>
       changes: () => Array<{ collection: string; rkey: string; kind: string }>
+      startPull: (hex: string) => Promise<string>
+      passes: () => string[]
     }
   }
   // Channel docs (the ladder's top rung), driven through whichever engine is active:
@@ -340,6 +342,7 @@ if (import.meta.env.DEV || inTauri()) {
       rkey: string
       kind: string
     }> = []
+    const pullPasses: string[] = []
     // A per-page-load instance id for the rendezvous directory (the app uses its own
     // in useRendezvousSync; this is the harness's).
     const RZ_INSTANCE = Array.from(crypto.getRandomValues(new Uint8Array(8)))
@@ -413,6 +416,17 @@ if (import.meta.env.DEV || inTauri()) {
         return 'watching'
       },
       changes: () => docChanges.slice(),
+      // The Curator's pull loop, running in this tab. Pass reports are recorded so a
+      // spec can prove the loop TURNS — a pass that reports (even an error) is a pass
+      // that ran, which is the property a missing wasm executor would silently deny.
+      startPull: async (hex) => {
+        await (await docs()).openDocs(hex)
+        await (await docs()).startPullLoop(hex, (report) => {
+          pullPasses.push(report)
+        })
+        return 'started'
+      },
+      passes: () => pullPasses.slice(),
     }
   }
 }

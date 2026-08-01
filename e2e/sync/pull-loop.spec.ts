@@ -1,0 +1,57 @@
+// The Curator's pull loop, running in a browser tab.
+//
+// What this proves is narrow and specific: the loop TURNS. It starts, completes a
+// pass, and reports it — on the wasm target, through the same Rust the desktop
+// Curator runs.
+//
+// That's worth a spec because of how this fails. A shared crate that compiles for
+// wasm can still never run there: an async task needs an executor, and when one is
+// missing the future doesn't error, it stays pending forever. Nothing throws, nothing
+// logs, the loop simply never happens (see CLAUDE.md, step 3's `spawn_local` hang).
+// A pass that reports is the cheapest possible evidence against that.
+//
+// It does NOT prove a pass resolves channels — that needs Sia credentials, which this
+// tier deliberately doesn't have. Here the pass fails, and its failure is the proof:
+// reaching "no settings record yet" means the loop read the doc and came back.
+
+import { expect, type Page, test } from '@playwright/test'
+
+type SyncHarness = {
+  startPull: (hex: string) => Promise<string>
+  passes: () => string[]
+}
+declare global {
+  interface Window {
+    __pinSync?: SyncHarness
+  }
+}
+
+async function harness(page: Page): Promise<void> {
+  await page.goto('/')
+  await page.waitForFunction(() => !!window.__pinSync, null, { timeout: 30_000 })
+}
+
+test('the pull loop runs a pass in the browser and reports it', async ({
+  page,
+}) => {
+  // A fresh identity, so the doc is empty and the first pass has a known outcome.
+  const appKeyHex = Array.from(crypto.getRandomValues(new Uint8Array(32)))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('')
+
+  await harness(page)
+  await page.evaluate((hex) => window.__pinSync!.startPull(hex), appKeyHex)
+
+  await expect
+    .poll(() => page.evaluate(() => window.__pinSync!.passes()), {
+      timeout: 60_000,
+      intervals: [250],
+    })
+    .not.toHaveLength(0)
+
+  // An empty doc has no settings record, so the pass has nothing to read a
+  // subscription list out of. Reporting that is the loop working, not failing: it
+  // got as far as the doc and returned an answer rather than hanging.
+  const [first] = await page.evaluate(() => window.__pinSync!.passes())
+  expect(JSON.parse(first)).toEqual({ error: 'no settings record yet' })
+})

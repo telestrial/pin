@@ -161,6 +161,11 @@ export async function subscribeDocChangesNative(
   await call<void>('docs_subscribe_changes', {})
 }
 
+/** Start the Curator's pull loop. Idempotent — the engine keeps one. */
+export function startPullLoopNative(appKeyHex: string): Promise<void> {
+  return call<void>('curator_start_pull', { appKeyHex })
+}
+
 export function openChannelNative(nsSeedHex: string): Promise<string> {
   return call<string>('docs_open_channel', { nsSeedHex })
 }

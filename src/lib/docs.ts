@@ -29,6 +29,7 @@ import {
   put_channel_record,
   put_record,
   share_channel_doc,
+  start_pull_loop,
   subscribe_doc_changes,
 } from '../../crates/pin-core/pkg/pin_core.js'
 import { ensureWasm } from '../core/wasm'
@@ -49,6 +50,7 @@ import {
   putRecordNative,
   shareChannelNative,
   shareDocNative,
+  startPullLoopNative,
   startSyncNative,
   subscribeDocChangesNative,
 } from './tauriDocs'
@@ -245,6 +247,34 @@ export function subscribeDocChanges(
   return () => {
     docChangeHandlers.delete(onChange)
   }
+}
+
+/** How often a pull pass runs, in seconds. Matches the native Curator's cadence, so
+ *  the loop behaves the same wherever it's running. */
+const PULL_CADENCE_SECS = 90
+
+/** Start the Curator's subscription pull loop in this instance.
+ *
+ *  The same loop on both platforms, from the same crate — what differs is how long the
+ *  instance lives, not what it does. A desktop keeps passing while hidden to tray; a tab
+ *  passes until it closes.
+ *
+ *  Idempotent (each engine keeps one loop). Requires an open doc ({@link openDocs}).
+ *  The loop's output is the records it writes, which arrive on {@link subscribeDocChanges}
+ *  like any other change. */
+export async function startPullLoop(
+  appKeyHex: string,
+  onPass?: (report: string) => void,
+): Promise<void> {
+  if (inTauri()) return startPullLoopNative(appKeyHex)
+  await ensureWasm()
+  // Pass reports are diagnostics — nothing in the app depends on them, since the
+  // loop's real output is the records it writes. They're surfaced because a pass
+  // that reports is a pass that RAN, which is the only cheap way to see a loop
+  // that never turned.
+  await start_pull_loop(appKeyHex, PULL_CADENCE_SECS, (report: string) =>
+    onPass?.(report),
+  )
 }
 
 /** This instance's iroh network status (node id, relay/direct addresses), from the
