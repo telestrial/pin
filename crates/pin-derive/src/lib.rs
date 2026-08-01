@@ -180,6 +180,24 @@ pub fn collection_prefix(collection: &str) -> String {
     format!("{collection}/")
 }
 
+/// Split a record key back into `(collection, rkey)` — the inverse of
+/// [`record_key`]. `None` when the key isn't a record key (no separator, or an
+/// empty half).
+///
+/// Shared for the same reason `record_key` is, one step further along: the doc-change
+/// stream reports which record moved, and the frontend ROUTES on the collection to
+/// decide what to re-read. Two implementations of this split could disagree about a
+/// key containing a slash and quietly send changes to the wrong handler — or to none —
+/// on one platform only. Splitting at the FIRST separator is what makes it the exact
+/// inverse: collections never contain `/`, rkeys are free to.
+pub fn parse_record_key(key: &str) -> Option<(&str, &str)> {
+    let (collection, rkey) = key.split_once('/')?;
+    if collection.is_empty() || rkey.is_empty() {
+        return None;
+    }
+    Some((collection, rkey))
+}
+
 // --- Live-event kinds --------------------------------------------------------
 //
 // The `kind` an engine reports for an iroh-docs `LiveEvent`. Here for the same reason
@@ -247,6 +265,37 @@ mod tests {
         let key = String::from_utf8(key).unwrap();
         let prefix = collection_prefix("sub");
         assert_eq!(key.strip_prefix(&prefix), Some("xyz"));
+    }
+
+    #[test]
+    fn parse_record_key_inverts_record_key() {
+        for (collection, rkey) in [
+            ("settings", "self"),
+            ("sub", "abc123"),
+            ("channel", "xyz"),
+            // The marker's collection is dotted — dots are not separators.
+            ("dev.sia.pin.marker", "self"),
+        ] {
+            let key = String::from_utf8(record_key(collection, rkey)).unwrap();
+            assert_eq!(parse_record_key(&key), Some((collection, rkey)));
+        }
+    }
+
+    #[test]
+    fn parse_record_key_splits_at_the_first_separator() {
+        // An rkey containing a slash still round-trips, because the split is at the
+        // FIRST one. Getting this backwards would route such a record to a
+        // collection that doesn't exist.
+        let key = String::from_utf8(record_key("sub", "a/b")).unwrap();
+        assert_eq!(parse_record_key(&key), Some(("sub", "a/b")));
+    }
+
+    #[test]
+    fn parse_record_key_rejects_non_records() {
+        assert_eq!(parse_record_key("settings"), None);
+        assert_eq!(parse_record_key(""), None);
+        assert_eq!(parse_record_key("/self"), None);
+        assert_eq!(parse_record_key("sub/"), None);
     }
 
     fn hex(bytes: &[u8; 32]) -> String {
