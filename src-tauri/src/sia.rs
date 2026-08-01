@@ -94,6 +94,28 @@ impl SiaState {
             .await
             .map_err(|e| format!("task: {e}"))?
     }
+
+    /// The connected session itself, for work that outlives a single call.
+    ///
+    /// `run` is the right shape for a request/response command, but the Curator's loops
+    /// never return — awaiting one would hold the caller forever. They take the session
+    /// and are placed on the runtime directly instead (see `detach`).
+    pub(crate) fn session(&self) -> Arc<Session> {
+        self.session.clone()
+    }
+
+    /// Place a long-lived task on the Sia runtime and forget it.
+    ///
+    /// The runtime matters: the SDK spawns its own background work (host refresh,
+    /// connection pre-warming, per-shard transfers), and it lands on whichever runtime
+    /// the future is polled from. This one is built `enable_all`, so the timers and IO
+    /// drivers that work needs are present.
+    pub(crate) fn detach<F>(&self, fut: F)
+    where
+        F: std::future::Future<Output = ()> + Send + 'static,
+    {
+        self.rt.spawn(fut);
+    }
 }
 
 // --- commands ------------------------------------------------------------------

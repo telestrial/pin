@@ -568,6 +568,59 @@ pub async fn docs_subscribe_changes(
         .await
 }
 
+/// How often a pull pass runs. Slow on purpose: a pass is network work per subscribed
+/// channel, and the ladder's top rung (a live-synced channel doc) already delivers a
+/// reachable author's writes by push. This is the floor under the authors who aren't.
+const PULL_CADENCE: std::time::Duration = std::time::Duration::from_secs(90);
+
+/// Start the Curator's subscription pull loop.
+///
+/// This is the half of the Curator that stopped working when the window closed, back
+/// when the loop was a React effect. Here it outlives the webview: the desktop keeps
+/// subscribed channels current while hidden to tray, which is what makes a phone or a
+/// browser tab find the cache already warm.
+///
+/// Placed on the Sia runtime rather than Tauri's, because a pass downloads manifests
+/// and the SDK's background work has to land somewhere with the IO drivers to serve it.
+///
+/// Idempotent (the engine keeps one loop), so a remounting caller can just call it.
+#[tauri::command]
+pub async fn curator_start_pull(
+    curator: tauri::State<'_, CuratorState>,
+    sia: tauri::State<'_, crate::sia::SiaState>,
+    app_key_hex: String,
+) -> Result<(), String> {
+    let engine = current_engine(&curator)?;
+    if engine.pull_started() {
+        return Ok(());
+    }
+    let app_key = pin_derive::decode_app_key(&app_key_hex).ok_or("app key hex must be 32 bytes")?;
+    let ctx = pin_curator::PullContext {
+        doc: engine.doc.clone(),
+        blobs: (*engine.blobs).clone(),
+        author_id: engine.author_id,
+        sia: sia.session(),
+        app_key,
+    };
+    sia.detach(async move {
+        pin_curator::run_pull_loop(ctx, PULL_CADENCE, |result| match result {
+            Ok(o) => {
+                if o.cached > 0 || o.dropped > 0 || o.failed > 0 {
+                    println!(
+                        "curator pull: cached {} unresolved {} failed {} dropped {}",
+                        o.cached, o.unresolved, o.failed, o.dropped
+                    );
+                }
+            }
+            // Expected while the engine warms up (no settings record yet, Sia not
+            // connected), so this is a note rather than an alarm.
+            Err(e) => println!("curator pull: {e}"),
+        })
+        .await
+    });
+    Ok(())
+}
+
 /// The namespace ids of every channel doc the Curator currently holds. Empty when the
 /// engine is down, rather than an error — callers treat it as "none open yet".
 #[tauri::command]

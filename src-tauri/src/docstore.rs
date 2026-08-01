@@ -89,6 +89,9 @@ pub struct DocEngine {
     /// One pump per engine: a second would double every change, and the frontend
     /// that subscribes is the kind of caller that remounts.
     changes_subscribed: AtomicBool,
+    /// Whether the pull loop has been started on this engine. One per engine — a
+    /// second would double every pass's network work for nothing.
+    pull_started: AtomicBool,
 }
 
 /// Bring up (or reopen) the Curator's persistent iroh-docs engine on `endpoint`,
@@ -161,6 +164,7 @@ pub async fn open_or_create(
         reopened,
         channels: Mutex::new(HashMap::new()),
         changes_subscribed: AtomicBool::new(false),
+        pull_started: AtomicBool::new(false),
     })
 }
 
@@ -330,6 +334,12 @@ impl DocEngine {
             }
         });
         Ok(ns_id)
+    }
+
+    /// Claim the right to start the pull loop. True if it was already claimed, so a
+    /// caller that sees true should do nothing.
+    pub fn pull_started(&self) -> bool {
+        self.pull_started.swap(true, Ordering::SeqCst)
     }
 
     /// The namespace ids of every channel doc currently open.
