@@ -43,6 +43,29 @@ export class IntoUnderlyingSource {
 export function channel_doc_namespaces(): any;
 
 /**
+ * Open a sealed manifest blob with K — the path a CACHED copy takes, so that a cached
+ * read and a fresh resolve decode identically.
+ */
+export function channel_open_blob(channel_key: Uint8Array, blob: string): string;
+
+/**
+ * Seal a manifest under K, upload it, and publish the pointer. Returns `Published`
+ * as JSON — the caller needs the object id to reclaim the generation it superseded.
+ */
+export function channel_publish(channel_key: Uint8Array, manifest_json: string): Promise<string>;
+
+/**
+ * Re-sign a channel's current pointer to refresh its TTL, without minting a new object.
+ */
+export function channel_republish_pointer(channel_key: Uint8Array, item_url: string): Promise<void>;
+
+/**
+ * Read a channel from K alone. `undefined` when the locator resolves to nothing, which
+ * is ordinary — unpublished, or aged off the DHT.
+ */
+export function channel_resolve(channel_key: Uint8Array): Promise<string | undefined>;
+
+/**
  * A plaintext content fingerprint (CIDv1, raw codec, SHA-256).
  *
  * Uploads already carry their own hash back from `pin-sia`, so nothing in the
@@ -349,6 +372,10 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly channel_doc_namespaces: () => [number, number, number];
+    readonly channel_open_blob: (a: number, b: number, c: number, d: number) => [number, number, number, number];
+    readonly channel_publish: (a: number, b: number, c: number, d: number) => any;
+    readonly channel_republish_pointer: (a: number, b: number, c: number, d: number) => any;
+    readonly channel_resolve: (a: number, b: number) => any;
     readonly content_hash: (a: number, b: number) => [number, number];
     readonly decrypt_for_channel: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly decrypt_settings: (a: number, b: number, c: number, d: number) => [number, number, number, number];

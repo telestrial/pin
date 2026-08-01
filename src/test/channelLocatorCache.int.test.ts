@@ -10,6 +10,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 vi.mock('../lib/pkarr', async () =>
   (await import('./fakeModules')).fakePkarrModule(),
 )
+vi.mock('../lib/channelLocatorNative', async () =>
+  (await import('./fakeModules')).fakeChannelLocatorNativeModule(),
+)
 
 // Capture what the caching reader writes into the shared doc.
 const docStore = new Map<string, Uint8Array>()

@@ -2,6 +2,10 @@
 /* eslint-disable */
 export const memory: WebAssembly.Memory;
 export const channel_doc_namespaces: () => [number, number, number];
+export const channel_open_blob: (a: number, b: number, c: number, d: number) => [number, number, number, number];
+export const channel_publish: (a: number, b: number, c: number, d: number) => any;
+export const channel_republish_pointer: (a: number, b: number, c: number, d: number) => any;
+export const channel_resolve: (a: number, b: number) => any;
 export const content_hash: (a: number, b: number) => [number, number];
 export const decrypt_for_channel: (a: number, b: number, c: number, d: number) => [number, number, number, number];
 export const decrypt_settings: (a: number, b: number, c: number, d: number) => [number, number, number, number];

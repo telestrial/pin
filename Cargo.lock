@@ -4563,6 +4563,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "pin-channel"
+version = "0.1.0"
+dependencies = [
+ "pin-crypto",
+ "pin-derive",
+ "pin-pkarr",
+ "pin-sia",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "pin-core"
 version = "0.1.0"
 dependencies = [
@@ -4574,6 +4586,7 @@ dependencies = [
  "iroh-docs",
  "iroh-gossip",
  "js-sys",
+ "pin-channel",
  "pin-crypto",
  "pin-derive",
  "pin-pkarr",

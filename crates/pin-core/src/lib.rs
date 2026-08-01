@@ -559,6 +559,61 @@ pub fn content_hash(bytes: &[u8]) -> String {
     pin_crypto::content_hash(bytes)
 }
 
+// --- the channel locator ------------------------------------------------------
+//
+// A channel's durable round-trip, sequenced in `pin_channel` rather than here so the
+// Curator can resolve subscribed channels natively for its pull loop without the
+// sequence being written a second time.
+//
+// The manifest crosses as an opaque JSON string. Nothing in Rust reads a field of it,
+// so modelling the type would mean a second definition of a rich nested shape with
+// nothing to use it — and JSON is the plaintext inside every manifest already sealed on
+// Sia regardless, so it is what has to be produced either way.
+
+/// Seal a manifest under K, upload it, and publish the pointer. Returns `Published`
+/// as JSON — the caller needs the object id to reclaim the generation it superseded.
+#[wasm_bindgen]
+pub async fn channel_publish(channel_key: &[u8], manifest_json: String) -> Result<String, JsValue> {
+    let key = key32(channel_key)?;
+    let published = pin_channel::publish(&sia(), &key, &manifest_json)
+        .await
+        .map_err(je)?;
+    serde_json::to_string(&published).map_err(|e| JsValue::from_str(&format!("encode: {e}")))
+}
+
+/// Read a channel from K alone. `undefined` when the locator resolves to nothing, which
+/// is ordinary — unpublished, or aged off the DHT.
+#[wasm_bindgen]
+pub async fn channel_resolve(channel_key: &[u8]) -> Result<Option<String>, JsValue> {
+    let key = key32(channel_key)?;
+    match pin_channel::resolve(&sia(), &key).await.map_err(je)? {
+        None => Ok(None),
+        Some(resolved) => Ok(Some(
+            serde_json::to_string(&resolved)
+                .map_err(|e| JsValue::from_str(&format!("encode: {e}")))?,
+        )),
+    }
+}
+
+/// Re-sign a channel's current pointer to refresh its TTL, without minting a new object.
+#[wasm_bindgen]
+pub async fn channel_republish_pointer(
+    channel_key: &[u8],
+    item_url: String,
+) -> Result<(), JsValue> {
+    let key = key32(channel_key)?;
+    pin_channel::republish_pointer(&key, &item_url)
+        .await
+        .map_err(je)
+}
+
+/// Open a sealed manifest blob with K — the path a CACHED copy takes, so that a cached
+/// read and a fresh resolve decode identically.
+#[wasm_bindgen]
+pub fn channel_open_blob(channel_key: &[u8], blob: &str) -> Result<String, JsValue> {
+    pin_channel::open_blob(&key32(channel_key)?, blob).map_err(je)
+}
+
 // --- the encrypted-blob envelope ----------------------------------------------
 //
 // Thin wrappers over `pin_crypto`, so the browser seals and opens blobs with the SAME

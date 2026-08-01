@@ -12,6 +12,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 vi.mock('../lib/pkarr', async () =>
   (await import('./fakeModules')).fakePkarrModule(),
 )
+vi.mock('../lib/channelLocatorNative', async () =>
+  (await import('./fakeModules')).fakeChannelLocatorNativeModule(),
+)
 
 import { ChannelView } from '../components/channel/ChannelView'
 import type { SiaClient } from '../core/siaClient'

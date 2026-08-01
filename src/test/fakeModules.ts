@@ -17,6 +17,10 @@
 // there is no module to intercept — tests inject a `FakeSiaClient` at the
 // `SiaClient` seam instead, which is where the app's dependency always was.
 
+import {
+  decrypt_for_channel,
+  encrypt_for_channel,
+} from '../../crates/pin-core/pkg/pin_core.js'
 import type { FakeWorld } from './fakeSia'
 
 let currentWorld: FakeWorld | null = null
@@ -48,6 +52,68 @@ function fakePublicKey(seed: Uint8Array): string {
   return Array.from(seed)
     .map((b) => b.toString(16).padStart(2, '0'))
     .join('')
+}
+
+// ---------------------------------------------------------------------------
+// lib/channelLocatorNative replacement
+// ---------------------------------------------------------------------------
+
+// The channel round-trip is sequenced in Rust now (pin_channel), and BOTH of its halves
+// went with it: it uses the Rust Sia session rather than the `SiaClient` tests inject,
+// and it reaches pkarr itself. So neither of the old interception points can see it, and
+// the fake has to stand in for the whole round-trip.
+//
+// It models the same thing the real one does, over the FakeWorld: a pointer keyed by the
+// K-derived locator seed, and the manifest as an object in the author's scope.
+//
+// The seal is REAL — the same Rust AES the production path uses. Only Sia and pkarr are
+// faked, because those are the network. Faking the format too would make the cached blob
+// something no other code could open, and a test that checks the cache holds a genuinely
+// sealed manifest would fail against a fake rather than against the code.
+export function fakeChannelLocatorNativeModule() {
+  const locatorKeyFor = (channelKey: Uint8Array) =>
+    `loc-${fakePublicKey(channelKey)}`
+
+  return {
+    publishLocator: async (channelKey: Uint8Array, manifestJson: string) => {
+      const world = getCurrentWorld()
+      const id = world.nextObjectID()
+      const blob = encrypt_for_channel(channelKey, manifestJson)
+      world.objects.set(id, {
+        id,
+        bytes: new TextEncoder().encode(blob),
+        createdAt: new Date(),
+      })
+      const itemURL = `sia://fake/${id}#k=${id}`
+      world.pkarr.set(locatorKeyFor(channelKey), [
+        { name: '_c0', value: itemURL },
+      ])
+      return { locatorKey: locatorKeyFor(channelKey), objectId: id, itemURL }
+    },
+
+    resolveLocator: async (channelKey: Uint8Array) => {
+      const world = getCurrentWorld()
+      const records = world.pkarr.get(locatorKeyFor(channelKey))
+      const itemURL = records?.find((r) => r.name === '_c0')?.value
+      if (!itemURL) return null
+      const id = itemURL.slice('sia://fake/'.length, itemURL.indexOf('#'))
+      const bytes = world.objects.get(id)?.bytes
+      // The pointer outliving its object is a real state (grace deletion), and the
+      // caller treats it as a hard read failure rather than an absent channel.
+      if (!bytes) throw new Error(`Object not found: ${itemURL}`)
+      const blob = new TextDecoder().decode(bytes)
+      return { manifestJson: decrypt_for_channel(channelKey, blob), blob }
+    },
+
+    republishPointer: async (channelKey: Uint8Array, itemURL: string) => {
+      getCurrentWorld().pkarr.set(locatorKeyFor(channelKey), [
+        { name: '_c0', value: itemURL },
+      ])
+    },
+
+    openBlob: async (channelKey: Uint8Array, blob: string) =>
+      decrypt_for_channel(channelKey, blob),
+  }
 }
 
 export function fakePkarrModule() {

@@ -12,6 +12,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 vi.mock('../lib/pkarr', async () =>
   (await import('./fakeModules')).fakePkarrModule(),
 )
+vi.mock('../lib/channelLocatorNative', async () =>
+  (await import('./fakeModules')).fakeChannelLocatorNativeModule(),
+)
 
 import { createChannel } from '../core/channels'
 import type { ChannelManifest, ItemRef } from '../core/types'

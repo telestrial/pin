@@ -1,0 +1,36 @@
+# A channel's durable round-trip: how a manifest gets published so that anyone holding
+# the channel key K can find and read it, with no company in the path.
+#
+# This is the composition crate — it owns no primitive, it owns the ORDER. Sealing under
+# K, uploading the bytes, deriving the locator from K, chunking the pointer and signing
+# it onto the DHT is a sequence whose steps are individually meaningless: publish the
+# pointer before the bytes land and readers resolve to nothing; derive the locator from
+# anything but K and the subscriber who holds only K can never find it.
+#
+# It lives in a crate rather than in pin-core's binding layer because the Curator needs
+# to resolve subscribed channels natively for its pull loop. Leaving the sequence in the
+# frontend would mean writing it a second time in Rust for that loop, which is the
+# duplication this whole arc exists to remove.
+[package]
+name = "pin-channel"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+
+[dependencies]
+# The bytes. Takes a `&Session` rather than owning one, so the browser and the desktop
+# each pass the session they already hold connected.
+pin-sia = { path = "../pin-sia" }
+# The seal over the manifest, under K.
+pin-crypto = { path = "../pin-crypto" }
+# The locator seed, from K — the derivation a subscriber reproduces.
+pin-derive = { path = "../pin-derive" }
+# The signed pointer. Transport differs by target inside this crate's dependency, not
+# here: relays in the browser, the Mainline DHT natively.
+pin-pkarr = { path = "../pin-pkarr" }
+# The descriptors cross to the frontend as JSON.
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+# To assert the descriptors' serialized key names. Already in the tree via pin-core.
+serde_json = "1"

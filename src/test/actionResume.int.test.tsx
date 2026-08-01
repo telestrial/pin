@@ -13,6 +13,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 vi.mock('../lib/pkarr', async () =>
   (await import('./fakeModules')).fakePkarrModule(),
 )
+vi.mock('../lib/channelLocatorNative', async () =>
+  (await import('./fakeModules')).fakeChannelLocatorNativeModule(),
+)
 
 import { buildItemRef } from '../core/channels'
 import { resolveChannelViaLocator } from '../lib/channelLocator'

@@ -10,21 +10,17 @@
 // namespace and Pin's is per-channel K, so obscure channels stay unenumerable — you
 // can't derive a channel's locator without its K.
 
-import {
-  channelKeyFromBase64,
-  decryptForChannel,
-  deriveChannelLocatorSeed,
-  encryptForChannel,
-} from '../core/crypto'
+import { channelKeyFromBase64 } from '../core/crypto'
 import type { FetchChannel } from '../core/feed'
 import type { SiaClient } from '../core/siaClient'
 import { CHANNEL_MANIFEST_VERSION, type ChannelManifest } from '../core/types'
+import {
+  openBlob,
+  publishLocator,
+  republishPointer,
+  resolveLocator,
+} from './channelLocatorNative'
 import { deleteRecord, getRecord, openDocs, putRecord } from './docs'
-import { chunkForTxt, identityFromSeed, reassembleTxt } from './pkarr'
-import { pkarrTransport } from './pkarrTransport'
-
-// TXT record name prefix for the chunked Sia pointer in a channel-locator document.
-const POINTER_PREFIX = '_c'
 
 // Collection in the shared iroh-docs doc where resolved subscribed-channel
 // manifests are cached (the resolution-ladder "keep" step). Value = the EXACT Sia
@@ -77,21 +73,19 @@ export function clearLocatorObjectPointer(channelID: string): void {
  *  Returns the locator key + the Sia object's id/URL. The caller (the publish hook)
  *  deletes the superseded object using the returned id. */
 export async function publishChannelLocator(
-  client: SiaClient,
+  _client: SiaClient,
   channelKeyB64: string,
   manifest: ChannelManifest,
 ): Promise<{ locatorKey: string; id: string; url: string }> {
-  const kBytes = channelKeyFromBase64(channelKeyB64)
-  const ciphertext = await encryptForChannel(kBytes, JSON.stringify(manifest))
-  const uploaded = await client.uploadItem(new TextEncoder().encode(ciphertext))
-
-  const seed = await deriveChannelLocatorSeed(kBytes)
-  const { publicKey } = await identityFromSeed(seed)
-  await (await pkarrTransport()).publish(
-    seed,
-    chunkForTxt(POINTER_PREFIX, uploaded.itemURL),
+  const published = await publishLocator(
+    channelKeyFromBase64(channelKeyB64),
+    JSON.stringify(manifest),
   )
-  return { locatorKey: publicKey, id: uploaded.id, url: uploaded.itemURL }
+  return {
+    locatorKey: published.locatorKey,
+    id: published.objectId,
+    url: published.itemURL,
+  }
 }
 
 /** Decrypt + parse a channel-manifest ciphertext blob with K, checking the version.
@@ -101,11 +95,9 @@ export async function decodeChannelManifest(
   kBytes: Uint8Array,
   ciphertext: Uint8Array,
 ): Promise<ChannelManifest> {
-  const plaintext = await decryptForChannel(
-    kBytes,
-    new TextDecoder().decode(ciphertext),
+  const manifest = JSON.parse(
+    await openBlob(kBytes, new TextDecoder().decode(ciphertext)),
   )
-  const manifest = JSON.parse(plaintext)
   if (manifest?.version !== CHANNEL_MANIFEST_VERSION) {
     throw new Error(
       `Unsupported channel manifest version (got ${manifest?.version}, expected ${CHANNEL_MANIFEST_VERSION})`,
@@ -118,20 +110,24 @@ export async function decodeChannelManifest(
  *  ciphertext bytes (so a caller can cache the exact blob). Null when the locator
  *  isn't published / resolvable. */
 async function resolveChannelBytes(
-  client: SiaClient,
+  _client: SiaClient,
   channelKeyB64: string,
 ): Promise<{ manifest: ChannelManifest; ciphertext: Uint8Array } | null> {
-  const kBytes = channelKeyFromBase64(channelKeyB64)
-  const { publicKey } = await identityFromSeed(
-    await deriveChannelLocatorSeed(kBytes),
-  )
-  const records = await (await pkarrTransport()).resolve(publicKey)
-  const url = reassembleTxt(records, POINTER_PREFIX)
-  if (!url) return null
+  const resolved = await resolveLocator(channelKeyFromBase64(channelKeyB64))
+  if (!resolved) return null
 
-  const ciphertext = await client.downloadItem(url)
-  const manifest = await decodeChannelManifest(kBytes, ciphertext)
-  return { manifest, ciphertext }
+  const manifest = JSON.parse(resolved.manifestJson)
+  if (manifest?.version !== CHANNEL_MANIFEST_VERSION) {
+    throw new Error(
+      `Unsupported channel manifest version (got ${manifest?.version}, expected ${CHANNEL_MANIFEST_VERSION})`,
+    )
+  }
+  return {
+    manifest: manifest as ChannelManifest,
+    // The blob as the doc cache stores it — byte-identical to what came off Sia, since
+    // it is ASCII base64.
+    ciphertext: new TextEncoder().encode(resolved.blob),
+  }
 }
 
 /** Reader side: resolve a channel from its K alone (no atproto, no author handle).
@@ -326,10 +322,5 @@ export async function refreshChannelLocator(
 ): Promise<void> {
   const pointer = readLocatorObjectPointer(channelID)
   if (!pointer?.url) return
-  const kBytes = channelKeyFromBase64(channelKeyB64)
-  const seed = await deriveChannelLocatorSeed(kBytes)
-  await (await pkarrTransport()).publish(
-    seed,
-    chunkForTxt(POINTER_PREFIX, pointer.url),
-  )
+  await republishPointer(channelKeyFromBase64(channelKeyB64), pointer.url)
 }

@@ -16,6 +16,62 @@ pub struct TxtRecord {
     pub value: String,
 }
 
+/// Max bytes in one TXT character-string. A longer value is split across indexed
+/// records `<prefix>0`, `<prefix>1`, … and rejoined on the way back.
+///
+/// Not enforced by the DNS layer any more — the JS client this replaced threw past 255,
+/// while `simple_dns` splits into several character-strings and rejoins them invisibly.
+/// Chunking stays mandatory regardless: it is the convention every already-published
+/// record uses, and the ~1000-byte ceiling on the whole packet is a separate limit that
+/// chunking does not lift.
+const TXT_MAX: usize = 255;
+
+/// Split a value into indexed TXT records so a long pointer fits under the per-string
+/// cap. Generic over the prefix, since the splitting never differed between conventions.
+///
+/// The frontend has a parallel implementation for the conventions IT publishes (`_dir`
+/// for an identity document, the rendezvous ticket) — see `src/lib/pkarr.ts`. That is
+/// tolerable only because no convention currently crosses implementations: `_c` is
+/// written and read here, the others there. The moment one does cross — the Curator
+/// reading `_dir`, say — they have to become one, because a reader that cannot rejoin
+/// what a writer split is a silent data failure.
+pub fn chunk_txt(prefix: &str, value: &str) -> Vec<TxtRecord> {
+    value
+        .as_bytes()
+        .chunks(TXT_MAX)
+        .enumerate()
+        .map(|(i, part)| TxtRecord {
+            name: format!("{prefix}{i}"),
+            // Chunks land on byte offsets. Every value we publish is ASCII (share URLs,
+            // tickets, base64), so this cannot split a multi-byte character —
+            // `from_utf8_lossy` rather than a panic because a corrupted pointer is
+            // preferable to taking down a publish, and the guard is unreachable anyway.
+            value: String::from_utf8_lossy(part).into_owned(),
+        })
+        .collect()
+}
+
+/// Rejoin a value split by `chunk_txt`. Records arrive fully-qualified
+/// (`<prefix>0.<zbase32>`) and in arbitrary order, so match on the prefix and sort by
+/// the numeric index. Returns "" when no records match — which is how "nothing is
+/// published under this convention" is reported.
+pub fn rejoin_txt(records: &[TxtRecord], prefix: &str) -> String {
+    let mut parts: Vec<(u32, &str)> = records
+        .iter()
+        .filter_map(|r| {
+            let rest = r.name.strip_prefix(prefix)?;
+            let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+            // Reject a bare prefix with no index, so `_c` alone is not read as `_c0`.
+            if digits.is_empty() {
+                return None;
+            }
+            digits.parse().ok().map(|i| (i, r.value.as_str()))
+        })
+        .collect();
+    parts.sort_by_key(|(i, _)| *i);
+    parts.into_iter().map(|(_, v)| v).collect()
+}
+
 /// DNS TTL on every record we publish.
 ///
 /// This governs how long relays and resolver caches hold a packet — NOT how long the
@@ -338,5 +394,56 @@ mod tests {
         let back = extract_txt(&packet);
         assert_eq!(back.len(), 1);
         assert_eq!(back[0].value, long);
+    }
+
+    #[test]
+    fn chunks_and_rejoins_a_value_longer_than_one_txt_string() {
+        let url = "sia://host/".to_string() + &"a".repeat(600);
+        let records = chunk_txt("_c", &url);
+        assert_eq!(records.len(), 3);
+        assert_eq!(records[0].name, "_c0");
+        assert_eq!(records[2].name, "_c2");
+        assert!(records.iter().all(|r| r.value.len() <= TXT_MAX));
+        assert_eq!(rejoin_txt(&records, "_c"), url);
+    }
+
+    #[test]
+    fn rejoins_regardless_of_order_and_qualified_names() {
+        // What a resolver actually returns: fully-qualified names, arbitrary order.
+        let records = vec![
+            TxtRecord {
+                name: "_c1.abc123".into(),
+                value: "world".into(),
+            },
+            TxtRecord {
+                name: "_c0.abc123".into(),
+                value: "hello ".into(),
+            },
+        ];
+        assert_eq!(rejoin_txt(&records, "_c"), "hello world");
+    }
+
+    #[test]
+    fn conventions_do_not_read_each_other_s_records() {
+        // One packet can carry several payloads — an identity document holds `_dir`
+        // alongside `_iroh` — so a prefix must match only its own chunks.
+        let records = vec![
+            TxtRecord {
+                name: "_dir0.abc".into(),
+                value: "directory".into(),
+            },
+            TxtRecord {
+                name: "_iroh0.abc".into(),
+                value: "node".into(),
+            },
+        ];
+        assert_eq!(rejoin_txt(&records, "_dir"), "directory");
+        assert_eq!(rejoin_txt(&records, "_iroh"), "node");
+        assert_eq!(rejoin_txt(&records, "_c"), "");
+    }
+
+    #[test]
+    fn an_absent_convention_rejoins_to_nothing() {
+        assert_eq!(rejoin_txt(&[], "_c"), "");
     }
 }

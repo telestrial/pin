@@ -39,6 +39,9 @@ pin-sia = { path = "../pin-sia" }
 # exposed only for bytes the app already holds — chiefly the integration tier's fake
 # client, which needs the real hash for cache keys to behave as they do live.
 pin-crypto = { path = "../pin-crypto" }
+# The channel round-trip's sequencing — sealing under K, uploading, and signing the
+# pointer, in the order that keeps a resolved pointer always backed by bytes.
+pin-channel = { path = "../pin-channel" }
 serde_json = "1"
 futures-lite = "2"
 # Browser glue (compiles harmlessly on native; the exports are just inert there).

@@ -18,6 +18,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 vi.mock('../lib/pkarr', async () =>
   (await import('./fakeModules')).fakePkarrModule(),
 )
+vi.mock('../lib/channelLocatorNative', async () =>
+  (await import('./fakeModules')).fakeChannelLocatorNativeModule(),
+)
 
 import { HomeFeed } from '../components/HomeFeed'
 import type { SubscriptionRef } from '../core/types'
