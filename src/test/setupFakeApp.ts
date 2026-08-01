@@ -10,7 +10,6 @@ import {
   createChannel,
   editItem,
 } from '../core/channels'
-import type { SiaClient } from '../core/siaClient'
 import type { ChannelManifest, ItemRef, SubscriptionRef } from '../core/types'
 import {
   commitChannelManifest,
@@ -75,11 +74,10 @@ export function resetAllStores(): void {
 // The channel's current published manifest, read back off its locator (the
 // same path a reader uses). Helpers read-modify-write against this instead of
 // threading the manifest through the test.
-async function loadChannelManifest(
-  client: SiaClient,
-  channel: { channelKey: string },
-): Promise<ChannelManifest> {
-  const manifest = await resolveChannelViaLocator(client, channel.channelKey)
+async function loadChannelManifest(channel: {
+  channelKey: string
+}): Promise<ChannelManifest> {
+  const manifest = await resolveChannelViaLocator(channel.channelKey)
   if (!manifest) throw new Error('channel locator not resolvable')
   return manifest
 }
@@ -101,7 +99,7 @@ export async function publishTextPost(
     mimeType: 'text/markdown',
     bytes,
   })
-  const current = await loadChannelManifest(client, channel)
+  const current = await loadChannelManifest(channel)
   const manifest = appendItemToChannel(current, item)
   await commitChannelManifest(
     client,
@@ -133,7 +131,7 @@ export async function editTextPost(
     }),
     editedAt: new Date().toISOString(),
   }
-  const current = await loadChannelManifest(client, channel)
+  const current = await loadChannelManifest(channel)
   const { manifest, item } = editItem(current, oldItemID, newItem)
   await commitChannelManifest(
     client,
@@ -191,5 +189,5 @@ export function mountAs(
   // Reads go through the locator (pkarr → Sia), matching what App's
   // useChannelReader injects in production — so a subscriber's feed reads the
   // channel the author committed to the locator.
-  useFeedStore.getState().setChannelReader(makeLocatorReader(account.client))
+  useFeedStore.getState().setChannelReader(makeLocatorReader())
 }

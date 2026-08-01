@@ -357,11 +357,7 @@ export function Home() {
         // Enumerates the channel's byte objects (incl. its Sia manifest object),
         // clears the locator pointer, and drops the channel from the feed. The
         // pkarr record expires by TTL once we stop republishing it.
-        const { objectIDs, urls } = await retractChannel(
-          client,
-          owned,
-          protectedIDs,
-        )
+        const { objectIDs, urls } = await retractChannel(owned, protectedIDs)
         useAuthStore.getState().removeMyChannel(owned.channelID)
         useAuthStore.getState().removeSubscription(owned.channelID)
         // The removal is durable once it reaches the PDS settings record.

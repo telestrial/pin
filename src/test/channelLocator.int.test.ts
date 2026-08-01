@@ -102,7 +102,7 @@ describe('integration: channel locator grace deletion', () => {
     expect(app.world.objects.size).toBe(2)
 
     // And the locator resolves to the latest manifest throughout.
-    const resolved = await resolveChannelViaLocator(client, channel.channelKey)
+    const resolved = await resolveChannelViaLocator(channel.channelKey)
     expect(resolved?.items.map((i) => i.summary)).toEqual([
       'post 4',
       'post 3',

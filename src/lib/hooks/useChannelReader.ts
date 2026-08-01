@@ -41,8 +41,8 @@ export function useChannelReader() {
     const ownedIDs = new Set(ownedKey ? ownedKey.split(',') : [])
     feed.setChannelReader(
       appKeyHex
-        ? makeCachingLocatorReader(client, appKeyHex, ownedIDs)
-        : makeLocatorReader(client),
+        ? makeCachingLocatorReader(appKeyHex, ownedIDs)
+        : makeLocatorReader(),
     )
     // HomeFeed's first load fires as a child effect, which React runs BEFORE
     // this App-level parent effect — so on the connect commit it can read with

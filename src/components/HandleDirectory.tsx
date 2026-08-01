@@ -100,7 +100,7 @@ export function HandleDirectory({
       const resolved = await Promise.all(
         doc.channels.map(async (c): Promise<ChannelEntry | null> => {
           try {
-            const manifest = await resolveChannelViaLocator(client, c.key)
+            const manifest = await resolveChannelViaLocator(c.key)
             return manifest
               ? {
                   authorDID: '',

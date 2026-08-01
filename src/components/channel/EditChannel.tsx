@@ -56,7 +56,7 @@ export function EditChannel({
     const cached = useFeedStore.getState().manifests[channelID]
     const load = cached
       ? Promise.resolve(cached)
-      : makeLocatorReader(client)('', channelID, channelKey)
+      : makeLocatorReader()('', channelID, channelKey)
     load
       .then((manifest) => {
         if (cancelled) return

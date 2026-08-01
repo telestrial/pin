@@ -260,12 +260,8 @@ if (import.meta.env.DEV || inTauri()) {
     const { publishChannelLocator, resolveChannelViaLocator } = await import(
       './lib/channelLocator'
     )
-    const pub = await publishChannelLocator(
-      auth.client,
-      ch.channelKey,
-      manifest,
-    )
-    const got = await resolveChannelViaLocator(auth.client, ch.channelKey)
+    const pub = await publishChannelLocator(ch.channelKey, manifest)
+    const got = await resolveChannelViaLocator(ch.channelKey)
     const match =
       got?.name === manifest.name && got?.items.length === manifest.items.length
     return `locator ${pub.locatorKey.slice(0, 12)}… → reader resolved "${got?.name}" (${got?.items.length ?? 0}/${manifest.items.length} items) — ${match ? 'MATCH' : 'MISMATCH'}`

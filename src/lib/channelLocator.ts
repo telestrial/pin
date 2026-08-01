@@ -73,7 +73,6 @@ export function clearLocatorObjectPointer(channelID: string): void {
  *  Returns the locator key + the Sia object's id/URL. The caller (the publish hook)
  *  deletes the superseded object using the returned id. */
 export async function publishChannelLocator(
-  _client: SiaClient,
   channelKeyB64: string,
   manifest: ChannelManifest,
 ): Promise<{ locatorKey: string; id: string; url: string }> {
@@ -110,7 +109,6 @@ export async function decodeChannelManifest(
  *  ciphertext bytes (so a caller can cache the exact blob). Null when the locator
  *  isn't published / resolvable. */
 async function resolveChannelBytes(
-  _client: SiaClient,
   channelKeyB64: string,
 ): Promise<{ manifest: ChannelManifest; ciphertext: Uint8Array } | null> {
   const resolved = await resolveLocator(channelKeyFromBase64(channelKeyB64))
@@ -134,10 +132,9 @@ async function resolveChannelBytes(
  *  Derive the locator → resolve the Sia pointer off the DHT → download + decrypt
  *  with K. Returns null when the locator isn't published / resolvable. */
 export async function resolveChannelViaLocator(
-  client: SiaClient,
   channelKeyB64: string,
 ): Promise<ChannelManifest | null> {
-  const resolved = await resolveChannelBytes(client, channelKeyB64)
+  const resolved = await resolveChannelBytes(channelKeyB64)
   return resolved ? resolved.manifest : null
 }
 
@@ -163,12 +160,12 @@ async function cacheSubscribedManifest(
  *  atproto). Channels are locator-native now, so a miss/error is a genuine
  *  read failure — it throws, and `buildHomeFeed` records it as a channel error
  *  (rather than silently masking a DHT/Sia problem behind an atproto read that
- *  no longer has anything to serve). The sdk is closed over; the `FetchChannel`
- *  signature keeps its author-identifier arg (unused here) so this drops in
- *  wherever the feed's fetcher is injected. */
-export function makeLocatorReader(client: SiaClient): FetchChannel {
+ *  no longer has anything to serve). The `FetchChannel` signature keeps its
+ *  author-identifier arg (unused here) so this drops in wherever the feed's fetcher
+ *  is injected. */
+export function makeLocatorReader(): FetchChannel {
   return async (_authorHandleOrDID, channelID, channelKey) => {
-    const manifest = await resolveChannelViaLocator(client, channelKey)
+    const manifest = await resolveChannelViaLocator(channelKey)
     if (!manifest) {
       throw new Error(`Channel ${channelID} not resolvable (no locator)`)
     }
@@ -183,13 +180,12 @@ export function makeLocatorReader(client: SiaClient): FetchChannel {
  *  a content change (see channelRevalidate) — or null when the locator isn't
  *  resolvable yet. Never throws for the loop's sake. */
 export async function cacheSubscribedChannel(
-  client: SiaClient,
   appKeyHex: string,
   channelID: string,
   channelKey: string,
 ): Promise<ChannelManifest | null> {
   try {
-    const resolved = await resolveChannelBytes(client, channelKey)
+    const resolved = await resolveChannelBytes(channelKey)
     if (!resolved) return null
     await cacheSubscribedManifest(appKeyHex, channelID, resolved.ciphertext)
     return resolved.manifest
@@ -249,7 +245,6 @@ async function readCachedManifest(
  *  Falls back to a plain resolve (via `makeLocatorReader`) when there's no
  *  appKeyHex to open the doc with. */
 export function makeCachingLocatorReader(
-  client: SiaClient,
   appKeyHex: string,
   ownedChannelIDs: ReadonlySet<string>,
 ): FetchChannel {
@@ -258,7 +253,7 @@ export function makeCachingLocatorReader(
       const cached = await readCachedManifest(appKeyHex, channelID, channelKey)
       if (cached) return cached
     }
-    const resolved = await resolveChannelBytes(client, channelKey)
+    const resolved = await resolveChannelBytes(channelKey)
     if (!resolved) {
       throw new Error(`Channel ${channelID} not resolvable (no locator)`)
     }
@@ -288,11 +283,7 @@ export async function commitChannelManifest(
   manifest: ChannelManifest,
 ): Promise<void> {
   const prev = readLocatorObjectPointer(channelID)
-  const { id, url } = await publishChannelLocator(
-    client,
-    channelKeyB64,
-    manifest,
-  )
+  const { id, url } = await publishChannelLocator(channelKeyB64, manifest)
   // New current = id; keep prev.id as the grace generation; reclaim prev.olderId.
   writeLocatorObjectPointer(channelID, {
     id,

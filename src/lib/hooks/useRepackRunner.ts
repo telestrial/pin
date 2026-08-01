@@ -149,7 +149,7 @@ export function useRepackRunner() {
       readManifest: async (channelID, channelKey) => {
         const cached = useFeedStore.getState().manifests[channelID]
         if (cached) return cached
-        const resolved = await resolveChannelViaLocator(client, channelKey)
+        const resolved = await resolveChannelViaLocator(channelKey)
         if (!resolved) throw new Error(`repack: no locator for ${channelID}`)
         return resolved
       },

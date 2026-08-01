@@ -14,7 +14,6 @@
 // `applyIfChanged` directly, no resolve. A polled manifest and a pushed one land
 // by the same path.
 
-import type { SiaClient } from '../core/siaClient'
 import type { ChannelManifest, SubscriptionRef } from '../core/types'
 import { useFeedStore } from '../stores/feed'
 import { cacheSubscribedChannel } from './channelLocator'
@@ -51,12 +50,10 @@ export function applyIfChanged(
  *  (DHT lag, author offline) is an ordinary outcome, not an error to surface. The
  *  feed keeps its last-known content in that case. */
 export async function revalidateSubscribedChannel(
-  client: SiaClient,
   appKeyHex: string,
   sub: SubscriptionRef,
 ): Promise<boolean> {
   const manifest = await cacheSubscribedChannel(
-    client,
     appKeyHex,
     sub.channelID,
     sub.channelKey,

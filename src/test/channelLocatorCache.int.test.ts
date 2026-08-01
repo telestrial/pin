@@ -75,7 +75,7 @@ describe('integration: caching locator reader seeds sub/<id>', () => {
       created.manifest,
     )
 
-    const reader = makeCachingLocatorReader(client, 'deadbeef', new Set())
+    const reader = makeCachingLocatorReader('deadbeef', new Set())
     const manifest = await reader('', created.channelID, created.channelKey)
     expect(manifest.name).toBe("Alice's voice")
 
@@ -113,7 +113,7 @@ describe('integration: caching locator reader seeds sub/<id>', () => {
     )
 
     // A doc write that throws must not break the read (cache is best-effort).
-    const reader = makeCachingLocatorReader(client, '', new Set())
+    const reader = makeCachingLocatorReader('', new Set())
     const manifest = await reader('', created.channelID, created.channelKey)
     expect(manifest.name).toBe('Resilient')
   })
@@ -150,7 +150,7 @@ describe('integration: caching locator reader seeds sub/<id>', () => {
     )
 
     // Not owned → serves the cached manifest.
-    const reader = makeCachingLocatorReader(client, 'deadbeef', new Set())
+    const reader = makeCachingLocatorReader('deadbeef', new Set())
     const m = await reader('', created.channelID, created.channelKey)
     expect(m.name).toBe('Cached')
   })
@@ -186,7 +186,7 @@ describe('integration: caching locator reader seeds sub/<id>', () => {
       ),
     )
 
-    const reader = makeCachingLocatorReader(client, 'deadbeef', new Set())
+    const reader = makeCachingLocatorReader('deadbeef', new Set())
     // Normal read: cache wins (fast path).
     expect((await reader('', created.channelID, created.channelKey)).name).toBe(
       'Stale',
@@ -236,7 +236,6 @@ describe('integration: caching locator reader seeds sub/<id>', () => {
 
     // Owned → ignores the cache, resolves the fresh locator manifest.
     const reader = makeCachingLocatorReader(
-      client,
       'deadbeef',
       new Set([created.channelID]),
     )
@@ -265,7 +264,6 @@ describe('integration: caching locator reader seeds sub/<id>', () => {
       published.manifest,
     )
     const ok = await cacheSubscribedChannel(
-      client,
       'deadbeef',
       published.channelID,
       published.channelKey,
@@ -282,7 +280,6 @@ describe('integration: caching locator reader seeds sub/<id>', () => {
       description: '',
     })
     const miss = await cacheSubscribedChannel(
-      client,
       'deadbeef',
       uncommitted.channelID,
       uncommitted.channelKey,
@@ -308,12 +305,7 @@ describe('integration: caching locator reader seeds sub/<id>', () => {
       ch.channelKey,
       ch.manifest,
     )
-    await cacheSubscribedChannel(
-      client,
-      'deadbeef',
-      ch.channelID,
-      ch.channelKey,
-    )
+    await cacheSubscribedChannel('deadbeef', ch.channelID, ch.channelKey)
     expect(docStore.has(`sub/${ch.channelID}`)).toBe(true)
 
     await dropSubscribedChannel('deadbeef', ch.channelID)
@@ -438,7 +430,7 @@ describe('integration: revalidate fills the feed in out of band', () => {
     )
 
     // ...so the background check is what surfaces it.
-    const changed = await revalidateSubscribedChannel(client, 'deadbeef', sub)
+    const changed = await revalidateSubscribedChannel('deadbeef', sub)
     expect(changed).toBe(true)
     expect(useFeedStore.getState().entries.map((e) => e.item.summary)).toEqual([
       'fresh post',
@@ -456,8 +448,6 @@ describe('integration: revalidate fills the feed in out of band', () => {
     expect(decoded.items).toHaveLength(1)
 
     // A second pass with nothing new must report no change.
-    expect(await revalidateSubscribedChannel(client, 'deadbeef', sub)).toBe(
-      false,
-    )
+    expect(await revalidateSubscribedChannel('deadbeef', sub)).toBe(false)
   })
 })

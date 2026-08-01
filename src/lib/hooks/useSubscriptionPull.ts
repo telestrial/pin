@@ -49,7 +49,6 @@ export function useSubscriptionPull() {
   // biome-ignore lint/correctness/useExhaustiveDependencies: subKey is a re-run trigger — its change means the subscribed-channel SET changed; the effect reads the live subscriptions via getState()
   useEffect(() => {
     if (!curationEnabled || !client || !appKeyHex) return
-    const c = client
     const k = appKeyHex
     let cancelled = false
 
@@ -73,7 +72,7 @@ export function useSubscriptionPull() {
       for (const sub of state.subscriptions) {
         if (cancelled) return
         if (owned.has(sub.channelID)) continue
-        await revalidateSubscribedChannel(c, k, sub)
+        await revalidateSubscribedChannel(k, sub)
       }
     }
 

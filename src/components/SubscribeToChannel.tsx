@@ -49,7 +49,7 @@ export function SubscribeToChannel({
       // Locator-only read (via K from the URL), same reader as the feed. A
       // legacy authorATProtoDID off the manifest is stored when present, but
       // identity is the did:dht from the subscribe URL.
-      const manifest = await makeLocatorReader(client)(
+      const manifest = await makeLocatorReader()(
         parsed.didDht ?? parsed.authorHandle,
         parsed.channelID,
         parsed.channelKey,
