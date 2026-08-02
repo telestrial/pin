@@ -1,0 +1,22 @@
+# The channel manifest: the shape of a channel and the rules for changing it.
+#
+# This is the data model the Curator acts on. Everything the Curator does as the user —
+# publishing an item, editing one, retracting one, repacking the bytes underneath —
+# is a transform over this type, so it has to be the Curator's type and not something
+# it borrows back from a webview.
+#
+# Pure on purpose: serde and nothing else. The transforms take the current manifest and
+# return the next one plus the objects that fell out of reference, so a caller supplies
+# the network (pin-sia, pin-channel) and this supplies the rules. That split is what
+# lets the same rules run in a browser tab and in a desktop Curator with no second
+# implementation to keep in step — and the rules decide which bytes get DELETED, so a
+# divergence here wouldn't be untidy, it would drop bytes something still points at.
+[package]
+name = "pin-manifest"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
