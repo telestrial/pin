@@ -218,26 +218,33 @@ pub fn surviving_object_ids(
     set
 }
 
+// The three result shapes below serialize straight across the boundary to the caller
+// that journals the cleanup, so their field names are the names that caller reads —
+// `orphanedObjectIDs`, not the `orphanedObjectIds` a camelCase derivation would give.
+
 /// A transform that removed something: the next manifest, plus the object IDs whose
 /// bytes nothing surviving still references.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Pruned {
     pub manifest: ChannelManifest,
+    #[serde(rename = "orphanedObjectIDs")]
     pub orphaned_object_ids: Vec<String>,
 }
 
 /// A transform that rewrote one item in place.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Rewritten {
     pub manifest: ChannelManifest,
     pub item: ItemRef,
+    #[serde(rename = "orphanedObjectIDs")]
     pub orphaned_object_ids: Vec<String>,
 }
 
 /// Everything a retracted channel leaves behind: byte objects to delete, and the
 /// image URLs whose objects the caller resolves and deletes alongside them.
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize)]
 pub struct Retracted {
+    #[serde(rename = "objectIDs")]
     pub object_ids: Vec<String>,
     pub urls: Vec<String>,
 }
@@ -414,21 +421,31 @@ pub fn enumerate_retract(
 }
 
 /// What an upload hands back about the bytes it just stored.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UploadedItem {
     pub id: String,
+    #[serde(rename = "itemURL")]
     pub item_url: String,
+    #[serde(rename = "byteSize")]
     pub byte_size: u64,
+    #[serde(rename = "contentHash")]
     pub content_hash: String,
 }
 
-/// Everything about an item that isn't decided by the upload.
-#[derive(Debug, Clone, PartialEq, Default)]
+/// Everything about an item that isn't decided by the upload. Every field defaults, so
+/// a caller sends only what it has — the composer's payload carries more than this
+/// (the bytes themselves, the unresolved attachment sources) and none of that survives
+/// to the manifest.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ItemDraft {
+    #[serde(rename = "type")]
     pub type_: Option<ItemType>,
     pub title: String,
     pub summary: Option<String>,
+    #[serde(rename = "mimeType")]
     pub mime_type: String,
+    #[serde(rename = "durationMs")]
     pub duration_ms: Option<u64>,
     pub filename: Option<String>,
     pub attachments: Option<Vec<AttachmentRef>>,
@@ -588,6 +605,34 @@ mod tests {
         assert_eq!(
             keys(&v["avatar"]),
             ["byteSize", "contentHash", "itemURL", "mimeType"]
+        );
+    }
+
+    #[test]
+    fn transform_results_carry_the_names_the_caller_reads() {
+        fn keys(v: &Value) -> Vec<&str> {
+            let mut k: Vec<&str> = v.as_object().unwrap().keys().map(String::as_str).collect();
+            k.sort_unstable();
+            k
+        }
+        let base = manifest(vec![item("a", vec![])]);
+
+        let pruned = delete_item(&base, "a", &HashSet::new(), NOW);
+        assert_eq!(
+            keys(&serde_json::to_value(&pruned).unwrap()),
+            ["manifest", "orphanedObjectIDs"]
+        );
+
+        let rewritten = edit_item(&base, "a", item("b", vec![]), &[], NOW).unwrap();
+        assert_eq!(
+            keys(&serde_json::to_value(&rewritten).unwrap()),
+            ["item", "manifest", "orphanedObjectIDs"]
+        );
+
+        let retracted = enumerate_retract(Some(&base), &HashSet::new());
+        assert_eq!(
+            keys(&serde_json::to_value(&retracted).unwrap()),
+            ["objectIDs", "urls"]
         );
     }
 

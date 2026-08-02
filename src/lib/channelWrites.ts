@@ -96,7 +96,7 @@ export async function publishItemToChannel(
   itemRef: ItemRef,
 ): Promise<ChannelManifest> {
   const current = await loadCurrentManifest(channel)
-  const manifest = appendItemToChannel(current, itemRef)
+  const manifest = await appendItemToChannel(current, itemRef)
   await commitChannelManifest(
     client,
     channel.channelID,
@@ -119,7 +119,7 @@ export async function editPublishedItem(
   orphanedObjectIDs: string[]
 }> {
   const current = await loadCurrentManifest(channel)
-  const result = editItem(
+  const result = await editItem(
     current,
     oldItemID,
     newItem,
@@ -142,7 +142,7 @@ export async function deleteItemFromChannel(
   protectedObjectIDs?: ReadonlySet<string>,
 ): Promise<{ manifest: ChannelManifest; orphanedObjectIDs: string[] }> {
   const current = await loadCurrentManifest(channel)
-  const result = deletePublishedItem(current, itemID, protectedObjectIDs)
+  const result = await deletePublishedItem(current, itemID, protectedObjectIDs)
   await commitChannelManifest(
     client,
     channel.channelID,
@@ -165,7 +165,7 @@ export async function removeAttachment(
   orphanedObjectIDs: string[]
 }> {
   const current = await loadCurrentManifest(channel)
-  const result = removeAttachmentFromItem(
+  const result = await removeAttachmentFromItem(
     current,
     itemID,
     attachmentURL,
@@ -198,7 +198,7 @@ export async function retractChannel(
     // Locator unresolvable — treat as already gone; enumerate nothing.
   }
 
-  const { objectIDs, urls } = unpinChannel(current, protectedObjectIDs)
+  const { objectIDs, urls } = await unpinChannel(current, protectedObjectIDs)
 
   // The Sia objects holding the manifest generations (current + the kept grace
   // generation) are orphans on retract — include both so the journaled cleanup

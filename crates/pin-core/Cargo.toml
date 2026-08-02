@@ -42,9 +42,14 @@ pin-crypto = { path = "../pin-crypto" }
 # The channel round-trip's sequencing — sealing under K, uploading, and signing the
 # pointer, in the order that keeps a resolved pointer always backed by bytes.
 pin-channel = { path = "../pin-channel" }
+# The manifest and the rules for changing it. Shared with the Curator so publishing,
+# editing and retracting mean the same thing wherever the user does them — and so the
+# reference-safe cleanup, which decides which bytes get deleted, has one definition.
+pin-manifest = { path = "../pin-manifest" }
 # The Curator's loops. The browser runs the same ones the desktop does, for as long as
 # its tab is open — the difference is uptime, not capability.
 pin-curator = { path = "../pin-curator" }
+serde = "1"
 serde_json = "1"
 futures-lite = "2"
 # Browser glue (compiles harmlessly on native; the exports are just inert there).

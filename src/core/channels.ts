@@ -1,4 +1,12 @@
 import {
+  manifest_append_item,
+  manifest_build_item,
+  manifest_delete_item,
+  manifest_edit_item,
+  manifest_enumerate_retract,
+  manifest_remove_attachment,
+} from '../../crates/pin-core/pkg/pin_core.js'
+import {
   channelKeyFromBase64,
   channelKeyToBase64,
   deriveChannelID,
@@ -14,26 +22,8 @@ import {
   type Facet,
   type ItemRef,
   type ItemType,
-  isValidAttachment,
 } from './types'
-
-// Object IDs that survive an edit/retract and must therefore NOT be deleted:
-// the post-edit manifest's own objects (body ids + attachment objectIDs) unioned
-// with `external` — the caller's other-scope refs (other channels' manifests +
-// pins). Eager cleanup deletes a candidate object only when it's absent here.
-function survivingObjectIDs(
-  manifest: ChannelManifest,
-  external: ReadonlySet<string>,
-): Set<string> {
-  const set = new Set(external)
-  for (const item of manifest.items) {
-    set.add(item.id)
-    for (const att of item.attachments ?? []) {
-      if (isValidAttachment(att) && att.objectID) set.add(att.objectID)
-    }
-  }
-  return set
-}
+import { ensureWasm } from './wasm'
 
 // Upload an optional channel image (avatar or cover) to Sia and shape it into
 // a ChannelImage ref. Shared by createChannel and editChannel.
@@ -188,7 +178,25 @@ export async function editChannel(
   return { manifest: updated, reclaimURLs }
 }
 
-export function buildItemRef(
+// --- manifest transforms -------------------------------------------------------
+//
+// Bindings now, not implementations. The rules for changing a channel live in
+// `pin_manifest` and are reached through pin-core, because the Curator applies the
+// same rules when it publishes or repacks with no UI open — and because these are what
+// decide which bytes get DELETED, so two implementations disagreeing wouldn't be
+// untidy, it would drop bytes something still points at.
+//
+// Each hands the clock across explicitly: SystemTime::now() panics on wasm32, and the
+// timestamp has to be the one JavaScript would have written, since a manifest's
+// publishedAt is compared as a string to tell a newer copy from an older one.
+//
+// Manifests cross as JSON — the shape they already travel in everywhere else (sealed
+// under K on Sia, cached in the doc), so nothing here invents a second encoding.
+
+const stamp = () => new Date().toISOString()
+const idList = (set: ReadonlySet<string>) => [...set]
+
+export async function buildItemRef(
   uploaded: {
     id: string
     itemURL: string
@@ -196,192 +204,131 @@ export function buildItemRef(
     contentHash: string
   },
   payload: ItemPayload,
-): ItemRef {
-  return {
-    id: uploaded.id,
-    itemURL: uploaded.itemURL,
+): Promise<ItemRef> {
+  await ensureWasm()
+  // Only the fields that reach the manifest — deliberately NOT the whole payload,
+  // which also carries the body bytes and the unresolved attachment sources. A
+  // Uint8Array serializes as a numbered object, so handing the payload over wholesale
+  // would marshal the entire upload through JSON for fields nobody reads.
+  const draft = {
     type: payload.type,
     title: payload.title,
     summary: payload.summary,
-    publishedAt: new Date().toISOString(),
     mimeType: payload.mimeType,
-    byteSize: uploaded.byteSize,
     durationMs: payload.durationMs,
     filename: payload.filename,
     attachments: payload.attachments,
     facets: payload.facets,
-    contentHash: uploaded.contentHash,
   }
+  return JSON.parse(
+    manifest_build_item(
+      JSON.stringify(uploaded),
+      JSON.stringify(draft),
+      stamp(),
+    ),
+  )
 }
 
-// Enumerate a retracted channel's byte objects for reference-safe cleanup.
-// Pure: takes the channel's current manifest (resolved by the caller via the
-// locator, or null when it's already gone) and returns the object IDs (items +
-// their attachment objects, reference-filtered) and image URLs (avatar/cover)
-// the caller should journal as a delete-objects action. Dropping the channel's
-// locator (Sia manifest object + pkarr pointer) is the caller's job too —
-// there's no atproto record to delete anymore.
-export function unpinChannel(
+// Enumerate a retracted channel's byte objects for reference-safe cleanup. Takes the
+// channel's current manifest (resolved by the caller via the locator, or null when
+// it's already gone — a retract whose target has vanished enumerates nothing and still
+// succeeds) and returns the object IDs and the avatar/cover URLs the caller should
+// journal as a delete-objects action. Dropping the channel's locator is the caller's
+// job too.
+export async function unpinChannel(
   current: ChannelManifest | null,
   // Object IDs referenced elsewhere in the author's own scope (other channel
-  // manifests + pins) — survive the retract, same reference-safety as
-  // deletePublishedItem. Defaults to empty.
+  // manifests + pins) — these survive the retract.
   protectedObjectIDs: ReadonlySet<string> = new Set(),
-): { objectIDs: string[]; urls: string[] } {
-  const objectIDs: string[] = []
-  const urls: string[] = []
-  if (current) {
-    for (const item of current.items) {
-      if (!protectedObjectIDs.has(item.id)) objectIDs.push(item.id)
-      for (const att of item.attachments ?? []) {
-        if (!isValidAttachment(att) || !att.objectID) continue
-        if (protectedObjectIDs.has(att.objectID)) continue
-        objectIDs.push(att.objectID)
-      }
-    }
-    for (const image of [current.avatar, current.cover]) {
-      if (image) urls.push(image.itemURL)
-    }
-  }
-  return { objectIDs, urls }
+): Promise<{ objectIDs: string[]; urls: string[] }> {
+  await ensureWasm()
+  return JSON.parse(
+    manifest_enumerate_retract(
+      current ? JSON.stringify(current) : '',
+      idList(protectedObjectIDs),
+    ),
+  )
 }
 
-// All four below are PURE manifest transforms — they take the channel's current
-// manifest and return the next one (+ reference-safe orphan enumeration). The
-// caller reads `current` (from feedStore.manifests or the locator) and commits
-// the returned manifest to the pkarr locator via lib/channelWrites. No atproto,
-// no encryption here — encryption lives in the locator commit.
-
-export function deletePublishedItem(
+export async function deletePublishedItem(
   current: ChannelManifest,
   itemID: string,
-  // Object IDs referenced elsewhere in the author's own scope (other channel
-  // manifests + pins). Bytes in this set survive the retract — a file shared
-  // with another of your posts, or held by a standalone library pin, isn't
-  // yanked out from under it. Defaults to empty; callers pass their in-memory
-  // scope refs to make the reference-safe prune correct.
+  // Bytes in this set survive the retract — a file shared with another of your posts,
+  // or held by a standalone library pin, isn't yanked out from under it. Callers pass
+  // their in-memory scope refs to make the reference-safe prune correct.
   protectedObjectIDs: ReadonlySet<string> = new Set(),
-): { manifest: ChannelManifest; orphanedObjectIDs: string[] } {
-  const removed = current.items.find((i) => i.id === itemID)
-
-  const updated: ChannelManifest = {
-    ...current,
-    publishedAt: new Date().toISOString(),
-    items: current.items.filter((i) => i.id !== itemID),
-  }
-
-  // Reference-safe prune: collect the body + every attachment whose bytes
-  // nothing surviving still references, and hand them back. The caller journals
-  // them as a durable, retried delete-objects action. Subscribers' pinned copies
-  // live in their own scope, so this never touches them. (Legacy attachments
-  // without an objectID can't be enumerated here; a known, bounded gap.)
-  const surviving = survivingObjectIDs(updated, protectedObjectIDs)
-  const orphanedObjectIDs: string[] = []
-  if (!surviving.has(itemID)) orphanedObjectIDs.push(itemID)
-  for (const att of removed?.attachments ?? []) {
-    if (!isValidAttachment(att) || !att.objectID) continue
-    if (surviving.has(att.objectID)) continue
-    orphanedObjectIDs.push(att.objectID)
-  }
-
-  return { manifest: updated, orphanedObjectIDs }
+): Promise<{ manifest: ChannelManifest; orphanedObjectIDs: string[] }> {
+  await ensureWasm()
+  return JSON.parse(
+    manifest_delete_item(
+      JSON.stringify(current),
+      itemID,
+      idList(protectedObjectIDs),
+      stamp(),
+    ),
+  )
 }
 
 // Retract a single attachment from a published item — the file-level analog of
-// deletePublishedItem. Rewrites the item with that attachment dropped (body and
-// other attachments untouched, publishedAt preserved, editedAt stamped) and
-// hands back the file's bytes for cleanup unless something surviving still
-// references them. Subscribers who pinned the post or the file keep their copies.
-export function removeAttachmentFromItem(
+// deletePublishedItem. The body and the other attachments are untouched and the item
+// keeps its place in the channel's chronology; editedAt records the drift. Subscribers
+// who pinned the post or the file keep their copies.
+export async function removeAttachmentFromItem(
   current: ChannelManifest,
   itemID: string,
   attachmentURL: string,
   protectedObjectIDs: ReadonlySet<string> = new Set(),
-): {
+): Promise<{
   manifest: ChannelManifest
   item: ItemRef
   orphanedObjectIDs: string[]
-} {
-  const index = current.items.findIndex((i) => i.id === itemID)
-  if (index === -1) throw new Error('Item not found in channel')
-  const item = current.items[index]
-  const removed = (item.attachments ?? []).find(
-    (a) => isValidAttachment(a) && a.url === attachmentURL,
-  )
-
-  const finalItem: ItemRef = {
-    ...item,
-    attachments: (item.attachments ?? []).filter(
-      (a) => !(isValidAttachment(a) && a.url === attachmentURL),
+}> {
+  await ensureWasm()
+  return JSON.parse(
+    manifest_remove_attachment(
+      JSON.stringify(current),
+      itemID,
+      attachmentURL,
+      idList(protectedObjectIDs),
+      stamp(),
     ),
-    editedAt: new Date().toISOString(),
-  }
-  const updatedItems = [...current.items]
-  updatedItems[index] = finalItem
-  const updated: ChannelManifest = {
-    ...current,
-    publishedAt: new Date().toISOString(),
-    items: updatedItems,
-  }
-
-  const surviving = survivingObjectIDs(updated, protectedObjectIDs)
-  const orphanedObjectIDs: string[] = []
-  if (
-    removed &&
-    isValidAttachment(removed) &&
-    removed.objectID &&
-    !surviving.has(removed.objectID)
-  ) {
-    orphanedObjectIDs.push(removed.objectID)
-  }
-
-  return { manifest: updated, item: finalItem, orphanedObjectIDs }
+  )
 }
 
-export function editItem(
+export async function editItem(
   current: ChannelManifest,
   oldItemID: string,
   newItem: ItemRef,
   removedAttachmentObjectIDs?: string[],
-): {
+): Promise<{
   manifest: ChannelManifest
   item: ItemRef
   orphanedObjectIDs: string[]
-} {
-  const oldIndex = current.items.findIndex((i) => i.id === oldItemID)
-  if (oldIndex === -1) throw new Error('Item not found in channel')
-  const oldItem = current.items[oldIndex]
-
-  // Preserve original publishedAt — chronology doesn't change on edit.
-  // Caller is responsible for stamping editedAt on the incoming ItemRef.
-  const finalItem: ItemRef = { ...newItem, publishedAt: oldItem.publishedAt }
-
-  const updatedItems = [...current.items]
-  updatedItems[oldIndex] = finalItem
-
-  const updated: ChannelManifest = {
-    ...current,
-    publishedAt: new Date().toISOString(),
-    items: updatedItems,
-  }
-
-  // Hand back the old body + any removed-attachment bytes for the caller to
-  // journal as a delete-objects action. Subscribers who pinned the old version
-  // keep their snapshots (their copies live in their own scope).
-  const orphanedObjectIDs = [oldItemID, ...(removedAttachmentObjectIDs ?? [])]
-
-  return { manifest: updated, item: finalItem, orphanedObjectIDs }
+}> {
+  await ensureWasm()
+  return JSON.parse(
+    manifest_edit_item(
+      JSON.stringify(current),
+      oldItemID,
+      JSON.stringify(newItem),
+      removedAttachmentObjectIDs ?? [],
+      stamp(),
+    ),
+  )
 }
 
-export function appendItemToChannel(
+export async function appendItemToChannel(
   current: ChannelManifest,
   itemRef: ItemRef,
-): ChannelManifest {
-  return {
-    ...current,
-    publishedAt: new Date().toISOString(),
-    items: [itemRef, ...current.items],
-  }
+): Promise<ChannelManifest> {
+  await ensureWasm()
+  return JSON.parse(
+    manifest_append_item(
+      JSON.stringify(current),
+      JSON.stringify(itemRef),
+      stamp(),
+    ),
+  )
 }
 
 export async function downloadItemBytes(

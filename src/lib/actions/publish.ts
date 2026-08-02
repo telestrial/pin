@@ -121,7 +121,7 @@ export async function runPublish(
       attachments: attachmentRefs.length > 0 ? attachmentRefs : undefined,
       attachmentSources: undefined,
     }
-    itemRef = buildItemRef(uploaded, resolvedPayload)
+    itemRef = await buildItemRef(uploaded, resolvedPayload)
 
     // Checkpoint before any manifest write. The bytes are committed, so a crash
     // in the publish loop below resumes from here without re-uploading;

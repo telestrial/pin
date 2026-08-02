@@ -192,6 +192,38 @@ export function list_all(): Promise<any>;
 export function list_records(collection: string): Promise<any>;
 
 /**
+ * Add a newly published item to the front of the channel.
+ */
+export function manifest_append_item(manifest_json: string, item_json: string, now: string): string;
+
+/**
+ * Shape an upload result and a draft into the item that goes in the manifest.
+ */
+export function manifest_build_item(uploaded_json: string, draft_json: string, now: string): string;
+
+/**
+ * Retract one item, returning the next manifest and the bytes nothing else references.
+ */
+export function manifest_delete_item(manifest_json: string, item_id: string, protected_object_ids: string[], now: string): string;
+
+/**
+ * Replace an item's content, keeping its place in the channel's chronology.
+ */
+export function manifest_edit_item(manifest_json: string, old_item_id: string, new_item_json: string, removed_attachment_object_ids: string[], now: string): string;
+
+/**
+ * Enumerate what a whole-channel retract leaves behind. `manifest_json` is empty when
+ * the locator no longer resolves — a retract whose target is already gone still
+ * succeeds, having nothing to enumerate.
+ */
+export function manifest_enumerate_retract(manifest_json: string, protected_object_ids: string[]): string;
+
+/**
+ * Retract a single attachment, leaving the post and its other files in place.
+ */
+export function manifest_remove_attachment(manifest_json: string, item_id: string, attachment_url: string, protected_object_ids: string[], now: string): string;
+
+/**
  * Open (create) the in-memory doc engine, with the namespace + author derived from
  * the Sia AppKey. Returns the namespace id. A second call rebuilds from scratch.
  */
@@ -442,6 +474,12 @@ export interface InitOutput {
     readonly import_channel_doc: (a: number, b: number, c: any) => any;
     readonly list_all: () => any;
     readonly list_records: (a: number, b: number) => any;
+    readonly manifest_append_item: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
+    readonly manifest_build_item: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
+    readonly manifest_delete_item: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
+    readonly manifest_edit_item: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number, number, number];
+    readonly manifest_enumerate_retract: (a: number, b: number, c: number, d: number) => [number, number, number, number];
+    readonly manifest_remove_attachment: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number, number, number];
     readonly open: (a: number, b: number) => any;
     readonly open_channel_doc: (a: number, b: number) => any;
     readonly pkarr_public_key: (a: number, b: number) => [number, number, number, number];

@@ -730,6 +730,131 @@ pub fn channel_open_blob(channel_key: &[u8], blob: &str) -> Result<String, JsVal
     pin_channel::open_blob(&key32(channel_key)?, blob).map_err(je)
 }
 
+// --- manifest transforms -------------------------------------------------------
+//
+// The rules for changing a channel, reached from the browser. Manifests and items cross
+// as JSON strings, which is the shape they already travel in everywhere else — sealed
+// under K on Sia, cached in the doc — so nothing here invents a second encoding.
+//
+// Each takes `now` from the caller rather than reading a clock: `SystemTime::now()`
+// panics on wasm32, and the timestamp has to be the one JavaScript would have written,
+// because a manifest's `publishedAt` is compared as a string to decide which of two
+// copies is newer.
+
+fn manifest_in(json: &str) -> Result<pin_manifest::ChannelManifest, JsValue> {
+    serde_json::from_str(json)
+        .map_err(|e| JsValue::from_str(&format!("manifest is not readable: {e}")))
+}
+
+fn item_in(json: &str) -> Result<pin_manifest::ItemRef, JsValue> {
+    serde_json::from_str(json).map_err(|e| JsValue::from_str(&format!("item is not readable: {e}")))
+}
+
+fn out<T: serde::Serialize>(value: &T) -> Result<String, JsValue> {
+    serde_json::to_string(value).map_err(|e| JsValue::from_str(&format!("encode: {e}")))
+}
+
+/// Add a newly published item to the front of the channel.
+#[wasm_bindgen]
+pub fn manifest_append_item(
+    manifest_json: &str,
+    item_json: &str,
+    now: &str,
+) -> Result<String, JsValue> {
+    let manifest =
+        pin_manifest::append_item(&manifest_in(manifest_json)?, item_in(item_json)?, now);
+    out(&manifest)
+}
+
+/// Retract one item, returning the next manifest and the bytes nothing else references.
+#[wasm_bindgen]
+pub fn manifest_delete_item(
+    manifest_json: &str,
+    item_id: &str,
+    protected_object_ids: Vec<String>,
+    now: &str,
+) -> Result<String, JsValue> {
+    out(&pin_manifest::delete_item(
+        &manifest_in(manifest_json)?,
+        item_id,
+        &protected_object_ids.into_iter().collect(),
+        now,
+    ))
+}
+
+/// Retract a single attachment, leaving the post and its other files in place.
+#[wasm_bindgen]
+pub fn manifest_remove_attachment(
+    manifest_json: &str,
+    item_id: &str,
+    attachment_url: &str,
+    protected_object_ids: Vec<String>,
+    now: &str,
+) -> Result<String, JsValue> {
+    let rewritten = pin_manifest::remove_attachment(
+        &manifest_in(manifest_json)?,
+        item_id,
+        attachment_url,
+        &protected_object_ids.into_iter().collect(),
+        now,
+    )
+    .map_err(je)?;
+    out(&rewritten)
+}
+
+/// Replace an item's content, keeping its place in the channel's chronology.
+#[wasm_bindgen]
+pub fn manifest_edit_item(
+    manifest_json: &str,
+    old_item_id: &str,
+    new_item_json: &str,
+    removed_attachment_object_ids: Vec<String>,
+    now: &str,
+) -> Result<String, JsValue> {
+    let rewritten = pin_manifest::edit_item(
+        &manifest_in(manifest_json)?,
+        old_item_id,
+        item_in(new_item_json)?,
+        &removed_attachment_object_ids,
+        now,
+    )
+    .map_err(je)?;
+    out(&rewritten)
+}
+
+/// Enumerate what a whole-channel retract leaves behind. `manifest_json` is empty when
+/// the locator no longer resolves — a retract whose target is already gone still
+/// succeeds, having nothing to enumerate.
+#[wasm_bindgen]
+pub fn manifest_enumerate_retract(
+    manifest_json: &str,
+    protected_object_ids: Vec<String>,
+) -> Result<String, JsValue> {
+    let manifest = if manifest_json.is_empty() {
+        None
+    } else {
+        Some(manifest_in(manifest_json)?)
+    };
+    out(&pin_manifest::enumerate_retract(
+        manifest.as_ref(),
+        &protected_object_ids.into_iter().collect(),
+    ))
+}
+
+/// Shape an upload result and a draft into the item that goes in the manifest.
+#[wasm_bindgen]
+pub fn manifest_build_item(
+    uploaded_json: &str,
+    draft_json: &str,
+    now: &str,
+) -> Result<String, JsValue> {
+    let uploaded: pin_manifest::UploadedItem = serde_json::from_str(uploaded_json)
+        .map_err(|e| JsValue::from_str(&format!("upload result is not readable: {e}")))?;
+    let draft: pin_manifest::ItemDraft = serde_json::from_str(draft_json)
+        .map_err(|e| JsValue::from_str(&format!("draft is not readable: {e}")))?;
+    out(&pin_manifest::build_item_ref(&uploaded, draft, now))
+}
+
 // --- the encrypted-blob envelope ----------------------------------------------
 //
 // Thin wrappers over `pin_crypto`, so the browser seals and opens blobs with the SAME

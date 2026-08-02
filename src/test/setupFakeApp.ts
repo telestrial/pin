@@ -92,7 +92,7 @@ export async function publishTextPost(
   const client = author.client
   const bytes = new TextEncoder().encode(body)
   const uploaded = await client.uploadItem(bytes)
-  const item = buildItemRef(uploaded, {
+  const item = await buildItemRef(uploaded, {
     type: 'text',
     title: '',
     summary: body,
@@ -100,7 +100,7 @@ export async function publishTextPost(
     bytes,
   })
   const current = await loadChannelManifest(channel)
-  const manifest = appendItemToChannel(current, item)
+  const manifest = await appendItemToChannel(current, item)
   await commitChannelManifest(
     client,
     channel.channelID,
@@ -121,18 +121,16 @@ export async function editTextPost(
   const client = author.client
   const bytes = new TextEncoder().encode(newBody)
   const uploaded = await client.uploadItem(bytes)
-  const newItem: ItemRef = {
-    ...buildItemRef(uploaded, {
-      type: 'text',
-      title: '',
-      summary: newBody,
-      mimeType: 'text/markdown',
-      bytes,
-    }),
-    editedAt: new Date().toISOString(),
-  }
+  const built = await buildItemRef(uploaded, {
+    type: 'text',
+    title: '',
+    summary: newBody,
+    mimeType: 'text/markdown',
+    bytes,
+  })
+  const newItem: ItemRef = { ...built, editedAt: new Date().toISOString() }
   const current = await loadChannelManifest(channel)
-  const { manifest, item } = editItem(current, oldItemID, newItem)
+  const { manifest, item } = await editItem(current, oldItemID, newItem)
   await commitChannelManifest(
     client,
     channel.channelID,

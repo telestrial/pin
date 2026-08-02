@@ -63,19 +63,17 @@ async function publishPostWithAttachments(
 
   const bytes = new TextEncoder().encode(body)
   const uploaded = await client.uploadItem(bytes)
-  const item: ItemRef = {
-    ...buildItemRef(uploaded, {
-      type: 'text',
-      title: '',
-      summary: body,
-      mimeType: 'text/markdown',
-      bytes,
-    }),
-    attachments,
-  }
+  const built = await buildItemRef(uploaded, {
+    type: 'text',
+    title: '',
+    summary: body,
+    mimeType: 'text/markdown',
+    bytes,
+  })
+  const item: ItemRef = { ...built, attachments }
   return {
     item,
-    manifest: appendItemToChannel(manifest, item),
+    manifest: await appendItemToChannel(manifest, item),
     bodyObjectID: uploaded.id,
     attachmentObjectIDs,
   }
@@ -119,7 +117,7 @@ describe('integration: author-side granular pinning', () => {
       ])
     expect(app.world.scopeOf('did:plc:alice').size).toBe(3)
 
-    const { orphanedObjectIDs } = deletePublishedItem(manifest, item.id)
+    const { orphanedObjectIDs } = await deletePublishedItem(manifest, item.id)
 
     // Core computes the reference-safe prune but does NOT delete — that's the
     // journal's job. Scope is unchanged until the cleanup runs.
@@ -142,7 +140,7 @@ describe('integration: author-side granular pinning', () => {
     )
     expect(app.world.scopeOf('did:plc:alice').size).toBe(3)
 
-    const { orphanedObjectIDs } = deletePublishedItem(manifest, item.id)
+    const { orphanedObjectIDs } = await deletePublishedItem(manifest, item.id)
     await runDeleteObjects(cleanup(orphanedObjectIDs), {
       client: alice.client,
       markDone: () => {},
@@ -162,7 +160,7 @@ describe('integration: author-side granular pinning', () => {
     const sharedFileID = attachmentObjectIDs[0]
 
     // Simulate the file being held by another of alice's posts / a library pin.
-    const { orphanedObjectIDs } = deletePublishedItem(
+    const { orphanedObjectIDs } = await deletePublishedItem(
       manifest,
       item.id,
       new Set([sharedFileID]),
@@ -182,7 +180,7 @@ describe('integration: author-side granular pinning', () => {
     const fileA = attachmentObjectIDs[0]
     const fileAURL = item.attachments?.[0].url as string
 
-    const { item: edited, orphanedObjectIDs } = removeAttachmentFromItem(
+    const { item: edited, orphanedObjectIDs } = await removeAttachmentFromItem(
       manifest,
       item.id,
       fileAURL,
@@ -203,7 +201,7 @@ describe('integration: author-side granular pinning', () => {
     const fileA = attachmentObjectIDs[0]
     const fileAURL = item.attachments?.[0].url as string
 
-    const { item: edited, orphanedObjectIDs } = removeAttachmentFromItem(
+    const { item: edited, orphanedObjectIDs } = await removeAttachmentFromItem(
       manifest,
       item.id,
       fileAURL,
@@ -223,7 +221,7 @@ describe('integration: author-side granular pinning', () => {
       ])
     expect(app.world.scopeOf('did:plc:alice').size).toBe(2)
 
-    const { objectIDs, urls } = unpinChannel(manifest)
+    const { objectIDs, urls } = await unpinChannel(manifest)
 
     // Bytes are enumerated for the journal, not deleted by core.
     expect(new Set(objectIDs)).toEqual(
@@ -241,7 +239,7 @@ describe('integration: author-side granular pinning', () => {
       'hi',
       [{ mime: 'image/png', size: 200 }],
     )
-    const { objectIDs } = unpinChannel(manifest)
+    const { objectIDs } = await unpinChannel(manifest)
     await runDeleteObjects(cleanup(objectIDs), {
       client: alice.client,
       markDone: () => {},
@@ -257,7 +255,7 @@ describe('integration: author-side granular pinning', () => {
       ])
     const sharedFileID = attachmentObjectIDs[0]
 
-    const { objectIDs } = unpinChannel(manifest, new Set([sharedFileID]))
+    const { objectIDs } = await unpinChannel(manifest, new Set([sharedFileID]))
 
     // The protected attachment is left out; the body is still orphaned.
     expect(objectIDs).toEqual([bodyObjectID])

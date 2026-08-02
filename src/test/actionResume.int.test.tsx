@@ -100,7 +100,7 @@ describe('integration: action journal resume', () => {
     // Sia, the checkpoint holds the resolved ItemRef.
     const body = 'resumed post'
     const uploaded = await alice.client.uploadItem(enc(body))
-    const itemRef = buildItemRef(uploaded, {
+    const itemRef = await buildItemRef(uploaded, {
       type: 'text',
       title: '',
       summary: body,
