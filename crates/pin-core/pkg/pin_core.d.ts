@@ -43,6 +43,14 @@ export class IntoUnderlyingSource {
 export function channel_doc_namespaces(): any;
 
 /**
+ * A channel's public identifier, derived from its key. Pin's own format (a truncated
+ * SHA-256 in a specific base32 alphabet), so it is derived in one place rather than
+ * independently on each side — two sides disagreeing would name the same channel
+ * differently and never find each other's.
+ */
+export function channel_id(channel_key: Uint8Array): string;
+
+/**
  * Open a sealed manifest blob with K — the path a CACHED copy takes, so that a cached
  * read and a fresh resolve decode identically.
  */
@@ -449,6 +457,7 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly channel_doc_namespaces: () => [number, number, number];
+    readonly channel_id: (a: number, b: number) => [number, number, number, number];
     readonly channel_open_blob: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly channel_publish: (a: number, b: number, c: number, d: number) => any;
     readonly channel_republish_pointer: (a: number, b: number, c: number, d: number) => any;

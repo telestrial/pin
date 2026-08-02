@@ -1,4 +1,5 @@
-//! Content fingerprinting and the encrypted-blob envelope.
+//! Content fingerprinting, the channel key's own encodings, and the encrypted-blob
+//! envelope.
 
 use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::{Aes256Gcm, Key, Nonce};
@@ -62,6 +63,43 @@ pub fn content_hash(bytes: &[u8]) -> String {
     cid.extend_from_slice(&digest);
 
     format!("b{}", base32_encode(&cid))
+}
+
+// --- the channel key and the identifier it implies ------------------------------
+//
+// A channel key K is the whole capability: it locates the channel (its pkarr locator
+// key derives from K) and it decrypts the manifest. `channel_id` is the public name
+// that falls out of it — derived, never stored as truth, so anyone holding K arrives at
+// the same identifier without being told it.
+
+/// How many bytes of SHA-256(K) the identifier keeps: 10, giving 16 base32 characters
+/// and 80 bits of entropy. Collision-resistant for any realistic number of channels,
+/// and short enough to read.
+const CHANNEL_ID_HASH_BYTES: usize = 10;
+
+/// A channel's public identifier, derived from its key.
+///
+/// Pin's own format, not a standard one — a truncated hash in a specific base32
+/// alphabet — so both sides deriving it independently would be two chances to disagree
+/// about the same channel's name. An author and a subscriber who disagreed here would
+/// compute different identifiers from the same K and never find each other's channel.
+pub fn channel_id(channel_key: &[u8; 32]) -> String {
+    let digest = Sha256::digest(channel_key);
+    base32_encode(&digest[..CHANNEL_ID_HASH_BYTES])
+}
+
+/// Read a channel key from the base64 form the settings record stores it in.
+///
+/// `None` covers both "not base64" and "not 32 bytes". The length check is the part
+/// worth having: a short key would otherwise fail later and less clearly, somewhere
+/// inside a cipher or a seed derivation.
+pub fn channel_key_from_base64(b64: &str) -> Option<[u8; 32]> {
+    B64.decode(b64).ok()?.try_into().ok()
+}
+
+/// Write a channel key in the base64 form the settings record and subscribe URLs use.
+pub fn channel_key_to_base64(channel_key: &[u8; 32]) -> String {
+    B64.encode(channel_key)
 }
 
 // --- the encrypted-blob envelope ----------------------------------------------
@@ -214,6 +252,51 @@ mod tests {
     #[test]
     fn differs_by_input() {
         assert_ne!(content_hash(b"alpha"), content_hash(b"beta"));
+    }
+
+    // --- the channel key -------------------------------------------------------
+
+    #[test]
+    fn a_channel_id_matches_the_value_the_frontend_already_locks() {
+        // The same regression lock the TypeScript suite asserts for the all-zeros key,
+        // so both implementations are pinned to one value rather than each to itself.
+        // Two sides disagreeing here would name the same channel differently and never
+        // find each other's.
+        assert_eq!(channel_id(&[0u8; 32]), "mzuhvlpymk6xo3ep");
+    }
+
+    #[test]
+    fn a_channel_id_is_sixteen_lowercase_base32_characters() {
+        let id = channel_id(&vector_key());
+        assert_eq!(id.len(), 16);
+        assert!(id
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || ('2'..='7').contains(&c)));
+    }
+
+    #[test]
+    fn a_channel_id_is_deterministic_and_key_specific() {
+        let mut other = vector_key();
+        other[0] ^= 1;
+        assert_eq!(channel_id(&vector_key()), channel_id(&vector_key()));
+        assert_ne!(channel_id(&vector_key()), channel_id(&other));
+    }
+
+    #[test]
+    fn a_channel_key_round_trips_through_its_stored_form() {
+        let key = vector_key();
+        assert_eq!(
+            channel_key_from_base64(&channel_key_to_base64(&key)),
+            Some(key)
+        );
+    }
+
+    #[test]
+    fn a_channel_key_that_is_the_wrong_length_or_not_base64_is_rejected() {
+        // The length check is the part worth having — a 16-byte key is valid base64 and
+        // would otherwise fail later, inside a cipher or a seed derivation.
+        assert_eq!(channel_key_from_base64(&B64.encode([0u8; 16])), None);
+        assert_eq!(channel_key_from_base64("not base64!!"), None);
     }
 
     // 0x00..0x1f — the key the vectors below were captured under.

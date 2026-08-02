@@ -871,6 +871,15 @@ fn key32(key: &[u8]) -> Result<[u8; 32], JsValue> {
         .map_err(|_| JsValue::from_str(&format!("key must be 32 bytes; got {}", key.len())))
 }
 
+/// A channel's public identifier, derived from its key. Pin's own format (a truncated
+/// SHA-256 in a specific base32 alphabet), so it is derived in one place rather than
+/// independently on each side — two sides disagreeing would name the same channel
+/// differently and never find each other's.
+#[wasm_bindgen]
+pub fn channel_id(channel_key: &[u8]) -> Result<String, JsValue> {
+    Ok(pin_crypto::channel_id(&key32(channel_key)?))
+}
+
 /// Seal a UTF-8 string under a channel key, returning the base64 blob.
 #[wasm_bindgen]
 pub fn encrypt_for_channel(key: &[u8], plaintext: &str) -> Result<String, JsValue> {

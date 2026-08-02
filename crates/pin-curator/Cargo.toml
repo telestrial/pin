@@ -27,11 +27,9 @@ n0-future = "0.3"
 pin-channel = { path = "../pin-channel" }
 # The settings key + the record-key spelling both engines share.
 pin-derive = { path = "../pin-derive" }
-# Opening the settings blob to read the subscription list.
+# Opening the settings blob to read the subscription list, and decoding the channel
+# keys it holds — the same encoding the frontend writes them in.
 pin-crypto = { path = "../pin-crypto" }
-# Decoding a stored channel key. Not a sealing concern, so it doesn't belong behind
-# pin-crypto; same version + alphabet as everywhere else in the tree.
-base64 = "0.21"
 # The session a resolve needs; passed in already connected.
 pin-sia = { path = "../pin-sia" }
 serde = { version = "1", features = ["derive"] }

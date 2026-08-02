@@ -4616,7 +4616,6 @@ dependencies = [
 name = "pin-curator"
 version = "0.1.0"
 dependencies = [
- "base64 0.21.7",
  "iroh-blobs",
  "iroh-docs",
  "n0-future",

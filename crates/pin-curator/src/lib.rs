@@ -139,14 +139,6 @@ fn wanted_channels(settings: &SettingsView) -> Vec<(&str, &str)> {
         .collect()
 }
 
-/// Decode a base64 channel key (K) as settings stores it. Standard alphabet with
-/// padding — the same encoding the frontend's `channelKeyFromBase64` reads.
-fn decode_channel_key(b64: &str) -> Option<[u8; 32]> {
-    use base64::Engine as _;
-    let bytes = base64::engine::general_purpose::STANDARD.decode(b64).ok()?;
-    bytes.try_into().ok()
-}
-
 /// A manifest's version marker. Every mutation stamps a fresh `publishedAt`, and all
 /// of one channel's manifests come from one author's clock, so comparing two of them
 /// compares versions rather than guessing.
@@ -214,7 +206,7 @@ pub async fn pull_once(ctx: &PullContext) -> Result<PullOutcome, String> {
     let mut outcome = PullOutcome::default();
 
     for (channel_id, channel_key_b64) in &wanted {
-        let Some(k) = decode_channel_key(channel_key_b64) else {
+        let Some(k) = pin_crypto::channel_key_from_base64(channel_key_b64) else {
             // A key we can't decode can never resolve; counting it as failed would
             // make the next pass retry something that cannot succeed.
             continue;
@@ -434,14 +426,6 @@ mod tests {
         assert!(wanted_channels(&empty).is_empty());
     }
 
-    #[test]
-    fn a_channel_key_round_trips_from_its_stored_form() {
-        use base64::Engine as _;
-        let b64 = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
-        let k: [u8; 32] = core::array::from_fn(|i| i as u8);
-        assert_eq!(decode_channel_key(&b64(&k)), Some(k));
-        assert_eq!(decode_channel_key("not base64!!"), None);
-        // Right encoding, wrong length — a key that isn't 32 bytes can't be one.
-        assert_eq!(decode_channel_key(&b64(&[0u8; 16])), None);
-    }
+    // Channel-key decoding is pin-crypto's now, and tested there — one home for the
+    // encoding both the frontend and this loop have to agree on.
 }

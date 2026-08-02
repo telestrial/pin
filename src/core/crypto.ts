@@ -11,6 +11,7 @@
 // the base64/base32 encodings, and the rkey derivation.
 
 import {
+  channel_id,
   decrypt_for_channel,
   decrypt_settings,
   derive_channel_doc_seed,
@@ -30,11 +31,6 @@ import { ensureWasm } from './wasm'
 
 const KEY_BYTES = 32
 
-// rkey derivation: 10 bytes of SHA-256(K) → 16 lowercase base32 chars.
-// 80 bits of entropy from a uniform hash; collision-resistant for any
-// realistic number of channels per user.
-const CHANNEL_ID_HASH_BYTES = 10
-
 export async function generateChannelKey(): Promise<Uint8Array> {
   return crypto.getRandomValues(new Uint8Array(KEY_BYTES))
 }
@@ -53,25 +49,16 @@ export function channelKeyFromBase64(b64: string): Uint8Array {
   return bytes
 }
 
+// A channel's public identifier, derived from its key: base32(sha256(K))[:16], 80 bits
+// of entropy. Derived rather than stored, so anyone holding K arrives at the same name
+// without being told it — which is also why it's one implementation and not two.
+//
+// This used to go through a generic `deriveAtRkey(bytes | string)`, generalized for the
+// atproto subscription records that keyed on a subject AT-URI. Those records left with
+// atproto, so the generalization had one caller and no second shape to serve.
 export async function deriveChannelID(key: Uint8Array): Promise<string> {
-  return deriveAtRkey(key)
-}
-
-// Generic ATProto-rkey-safe deterministic identifier derivation from any
-// input bytes. base32(sha256(input))[:16] — 80 bits of entropy. Used by
-// channelID (input = K) and by the subscription stand-off records (input
-// = subject AT-URI) so re-following an already-followed channel rewrites
-// the same record (idempotent put) and unfollow is a single deleteRecord
-// call rather than a list-then-find scan.
-export async function deriveAtRkey(
-  input: Uint8Array | string,
-): Promise<string> {
-  const bytes =
-    typeof input === 'string' ? new TextEncoder().encode(input) : input
-  const hash = new Uint8Array(
-    await crypto.subtle.digest('SHA-256', bytes as BufferSource),
-  )
-  return base32Encode(hash.slice(0, CHANNEL_ID_HASH_BYTES))
+  await ensureWasm()
+  return channel_id(key)
 }
 
 export async function encryptForChannel(
@@ -258,22 +245,6 @@ function base64Decode(b64: string): Uint8Array {
   return out
 }
 
-// RFC 4648 base32 (lowercase, no padding). Output is ATProto-rkey-safe.
-function base32Encode(bytes: Uint8Array): string {
-  const ALPHABET = 'abcdefghijklmnopqrstuvwxyz234567'
-  let out = ''
-  let bits = 0
-  let value = 0
-  for (let i = 0; i < bytes.length; i++) {
-    value = (value << 8) | bytes[i]
-    bits += 8
-    while (bits >= 5) {
-      out += ALPHABET[(value >>> (bits - 5)) & 0x1f]
-      bits -= 5
-    }
-  }
-  if (bits > 0) {
-    out += ALPHABET[(value << (5 - bits)) & 0x1f]
-  }
-  return out
-}
+// The base32 that used to live here went with deriveChannelID — a hand-rolled alphabet
+// and bit-packing loop is exactly the kind of Pin-invented format that shouldn't exist
+// twice. Base64 stays: it's a standard both sides implement, not a format we defined.
