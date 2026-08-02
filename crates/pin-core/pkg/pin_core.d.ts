@@ -210,9 +210,23 @@ export function manifest_append_item(manifest_json: string, item_json: string, n
 export function manifest_build_item(uploaded_json: string, draft_json: string, now: string): string;
 
 /**
+ * Build the manifest a new channel starts life as.
+ *
+ * Images arrive already stored, as references inside the args — storing bytes needs a
+ * connected Sia session, and which one that is differs by platform, so it stays with the
+ * caller and this stays a pure build.
+ */
+export function manifest_create_channel(new_channel_json: string, now: string): string;
+
+/**
  * Retract one item, returning the next manifest and the bytes nothing else references.
  */
 export function manifest_delete_item(manifest_json: string, item_id: string, protected_object_ids: string[], now: string): string;
+
+/**
+ * Apply a patch to a channel's details, reporting the images it left behind.
+ */
+export function manifest_edit_channel(manifest_json: string, patch_json: string, now: string): string;
 
 /**
  * Replace an item's content, keeping its place in the channel's chronology.
@@ -485,7 +499,9 @@ export interface InitOutput {
     readonly list_records: (a: number, b: number) => any;
     readonly manifest_append_item: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
     readonly manifest_build_item: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
+    readonly manifest_create_channel: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly manifest_delete_item: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
+    readonly manifest_edit_channel: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
     readonly manifest_edit_item: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number, number, number];
     readonly manifest_enumerate_retract: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly manifest_remove_attachment: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number, number, number];

@@ -1,7 +1,9 @@
 import {
   manifest_append_item,
   manifest_build_item,
+  manifest_create_channel,
   manifest_delete_item,
+  manifest_edit_channel,
   manifest_edit_item,
   manifest_enumerate_retract,
   manifest_remove_attachment,
@@ -13,15 +15,14 @@ import {
   generateChannelKey,
 } from './crypto'
 import type { SiaClient } from './siaClient'
-import {
-  type AttachmentRef,
-  CHANNEL_MANIFEST_VERSION,
-  type ChannelImage,
-  type ChannelManifest,
-  type ChannelVisibility,
-  type Facet,
-  type ItemRef,
-  type ItemType,
+import type {
+  AttachmentRef,
+  ChannelImage,
+  ChannelManifest,
+  ChannelVisibility,
+  Facet,
+  ItemRef,
+  ItemType,
 } from './types'
 import { ensureWasm } from './wasm'
 
@@ -103,21 +104,27 @@ export async function createChannel(
   const channelKey = channelKeyToBase64(keyBytes)
   const channelID = await deriveChannelID(keyBytes)
 
+  // Store the images first, then build. Storing needs the Sia client — which is the
+  // platform-correct one already — so it stays here; the manifest itself is built by
+  // pin_manifest, the same code the Curator builds one with.
   const avatar = await uploadChannelImage(client, args.avatarImage)
   const cover = await uploadChannelImage(client, args.coverImage)
 
-  const manifest: ChannelManifest = {
-    version: CHANNEL_MANIFEST_VERSION,
-    name: args.name,
-    description: args.description,
-    authorPubkey: client.appKeyPublicKey(),
-    authorDidDht: args.authorDidDht,
-    publishedAt: new Date().toISOString(),
-    visibility: args.visibility ?? 'public',
-    avatar,
-    cover,
-    items: [],
-  }
+  await ensureWasm()
+  const manifest: ChannelManifest = JSON.parse(
+    manifest_create_channel(
+      JSON.stringify({
+        name: args.name,
+        description: args.description,
+        visibility: args.visibility,
+        authorPubkey: client.appKeyPublicKey(),
+        authorDidDht: args.authorDidDht,
+        avatar,
+        cover,
+      }),
+      stamp(),
+    ),
+  )
 
   // No atproto write — the caller commits this manifest to the channel's pkarr
   // locator (Sia object + K-derived DHT pointer) via lib/channelWrites. Claim
@@ -139,43 +146,34 @@ export async function editChannel(
   current: ChannelManifest,
   patch: EditChannelPatch,
 ): Promise<{ manifest: ChannelManifest; reclaimURLs: string[] }> {
-  let avatar: ChannelImage | undefined = current.avatar
-  if (patch.removeAvatar) {
-    avatar = undefined
-  } else if (patch.avatarImage) {
-    avatar = await uploadChannelImage(client, patch.avatarImage)
-  }
+  // Store any replacement images first — that's the part that needs the Sia client —
+  // then let pin_manifest settle which image survives and which bytes the edit
+  // orphaned. Those orphans are why the caller gets `reclaimURLs` back: per-object Sia
+  // encryption gives every upload its own object, so an old avatar is never shared with
+  // anything else and can be journaled for cleanup without a refcount check.
+  const avatar = patch.removeAvatar
+    ? undefined
+    : await uploadChannelImage(client, patch.avatarImage)
+  const cover = patch.removeCover
+    ? undefined
+    : await uploadChannelImage(client, patch.coverImage)
 
-  let cover: ChannelImage | undefined = current.cover
-  if (patch.removeCover) {
-    cover = undefined
-  } else if (patch.coverImage) {
-    cover = await uploadChannelImage(client, patch.coverImage)
-  }
-
-  const updated: ChannelManifest = {
-    ...current,
-    name: patch.name ?? current.name,
-    description: patch.description ?? current.description,
-    avatar,
-    cover,
-    publishedAt: new Date().toISOString(),
-  }
-
-  // Old avatar/cover bytes a replace/remove orphaned. Per-object Sia encryption
-  // gives each upload a unique objectID, so an old image is never shared with
-  // another channel — handing back its URL for the caller to journal as a
-  // delete-objects cleanup is reference-safe without a refcount check. Closes
-  // the image-swap leak (these bytes previously just accumulated).
-  const reclaimURLs: string[] = []
-  if ((patch.removeAvatar || patch.avatarImage) && current.avatar) {
-    reclaimURLs.push(current.avatar.itemURL)
-  }
-  if ((patch.removeCover || patch.coverImage) && current.cover) {
-    reclaimURLs.push(current.cover.itemURL)
-  }
-
-  return { manifest: updated, reclaimURLs }
+  await ensureWasm()
+  const { manifest, reclaimURLs } = JSON.parse(
+    manifest_edit_channel(
+      JSON.stringify(current),
+      JSON.stringify({
+        name: patch.name,
+        description: patch.description,
+        avatar,
+        cover,
+        removeAvatar: patch.removeAvatar ?? false,
+        removeCover: patch.removeCover ?? false,
+      }),
+      stamp(),
+    ),
+  )
+  return { manifest, reclaimURLs }
 }
 
 // --- manifest transforms -------------------------------------------------------

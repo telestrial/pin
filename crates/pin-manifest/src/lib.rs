@@ -190,6 +190,123 @@ pub struct ChannelManifest {
     pub items: Vec<ItemRef>,
 }
 
+// --- making and changing a channel ----------------------------------------------
+//
+// Both take images that are ALREADY stored, as `ChannelImage` references. Storing bytes
+// is the caller's job, and deliberately so: it needs a connected Sia session, and which
+// session that is differs by where the code runs. Keeping it out means these two stay
+// pure — no session, no network, nothing to fork by platform — and a caller composes
+// "store the bytes, then build the manifest" in the two steps it actually is.
+
+/// Everything a new channel is made of. Images arrive already stored.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct NewChannel {
+    pub name: String,
+    pub description: String,
+    /// Sticky at creation, defaulting to public. A public channel can't later be
+    /// obscured: the follow edges pointing at it would become orphan pointers.
+    pub visibility: Option<ChannelVisibility>,
+    /// The author's Sia identity, as `ed25519:<hex>`.
+    #[serde(rename = "authorPubkey")]
+    pub author_pubkey: String,
+    /// The author's self-sovereign did:dht, so a reader can reach their directory with
+    /// no atproto in the path.
+    #[serde(rename = "authorDidDht")]
+    pub author_did_dht: Option<String>,
+    pub avatar: Option<ChannelImage>,
+    pub cover: Option<ChannelImage>,
+}
+
+/// Build the manifest a new channel starts life as: its identity, and no items yet.
+///
+/// The channel's key isn't here, because the manifest never holds it — the key is the
+/// capability that finds and opens this, and it travels separately by design.
+pub fn create_channel(new: NewChannel, now: &str) -> ChannelManifest {
+    ChannelManifest {
+        version: CHANNEL_MANIFEST_VERSION,
+        name: new.name,
+        description: new.description,
+        author_pubkey: new.author_pubkey,
+        author_did_dht: new.author_did_dht,
+        published_at: now.to_string(),
+        visibility: Some(new.visibility.unwrap_or(ChannelVisibility::Public)),
+        avatar: new.avatar,
+        cover: new.cover,
+        language: None,
+        items: Vec::new(),
+    }
+}
+
+/// What's changing about a channel. An absent field is left alone; the `remove_*` flags
+/// are how a caller says "none" rather than "unchanged", which an absent field can't
+/// distinguish.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ChannelPatch {
+    pub name: Option<String>,
+    pub description: Option<String>,
+    /// A replacement image, already stored. Ignored when the matching `remove_*` is set.
+    pub avatar: Option<ChannelImage>,
+    pub cover: Option<ChannelImage>,
+    pub remove_avatar: bool,
+    pub remove_cover: bool,
+}
+
+/// An edited channel, plus the images the edit left behind.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EditedChannel {
+    pub manifest: ChannelManifest,
+    /// URLs of images a replace or a remove orphaned. Reference-safe with no refcount
+    /// check needed: per-object Sia encryption gives every upload its own object, so an
+    /// old avatar is never the same bytes as anything else.
+    #[serde(rename = "reclaimURLs")]
+    pub reclaim_urls: Vec<String>,
+}
+
+/// Apply a patch to a channel's details.
+pub fn edit_channel(current: &ChannelManifest, patch: ChannelPatch, now: &str) -> EditedChannel {
+    let mut reclaim_urls = Vec::new();
+    let mut settle = |remove: bool,
+                      replacement: Option<ChannelImage>,
+                      existing: Option<ChannelImage>|
+     -> Option<ChannelImage> {
+        if remove {
+            if let Some(old) = &existing {
+                reclaim_urls.push(old.item_url.clone());
+            }
+            return None;
+        }
+        match replacement {
+            Some(new) => {
+                if let Some(old) = &existing {
+                    reclaim_urls.push(old.item_url.clone());
+                }
+                Some(new)
+            }
+            None => existing,
+        }
+    };
+
+    let avatar = settle(patch.remove_avatar, patch.avatar, current.avatar.clone());
+    let cover = settle(patch.remove_cover, patch.cover, current.cover.clone());
+
+    EditedChannel {
+        manifest: ChannelManifest {
+            name: patch.name.unwrap_or_else(|| current.name.clone()),
+            description: patch
+                .description
+                .unwrap_or_else(|| current.description.clone()),
+            avatar,
+            cover,
+            published_at: now.to_string(),
+            ..current.clone()
+        },
+        reclaim_urls,
+    }
+}
+
 // --- reference-safe cleanup ----------------------------------------------------
 //
 // Sia objects are content-addressed and shared: the same bytes can be reached from
@@ -665,6 +782,151 @@ mod tests {
         assert_eq!(
             serde_json::from_value::<ItemType>(json!("app")).unwrap(),
             ItemType::App
+        );
+    }
+
+    // --- making and changing a channel ------------------------------------------
+
+    fn image(url: &str) -> ChannelImage {
+        ChannelImage {
+            item_url: url.to_string(),
+            mime_type: "image/png".to_string(),
+            content_hash: None,
+            byte_size: None,
+        }
+    }
+
+    #[test]
+    fn a_new_channel_starts_public_with_no_items() {
+        let m = create_channel(
+            NewChannel {
+                name: "Mine".into(),
+                description: "Words".into(),
+                author_pubkey: "ed25519:aa".into(),
+                author_did_dht: Some("did:dht:abc".into()),
+                ..Default::default()
+            },
+            NOW,
+        );
+        assert_eq!(m.version, CHANNEL_MANIFEST_VERSION);
+        assert!(m.items.is_empty());
+        assert_eq!(m.visibility, Some(ChannelVisibility::Public));
+        assert_eq!(m.published_at, NOW);
+        assert!(m.avatar.is_none());
+    }
+
+    #[test]
+    fn a_new_channel_can_be_obscure() {
+        let m = create_channel(
+            NewChannel {
+                visibility: Some(ChannelVisibility::Obscure),
+                ..Default::default()
+            },
+            NOW,
+        );
+        assert_eq!(m.visibility, Some(ChannelVisibility::Obscure));
+    }
+
+    #[test]
+    fn an_edit_changes_only_what_the_patch_names() {
+        let before = manifest(vec![item("a", vec![])]);
+        let out = edit_channel(
+            &before,
+            ChannelPatch {
+                name: Some("After".into()),
+                ..Default::default()
+            },
+            NOW,
+        );
+        assert_eq!(out.manifest.name, "After");
+        // Untouched, not blanked — an absent field means "unchanged".
+        assert_eq!(out.manifest.description, before.description);
+        assert_eq!(out.manifest.author_did_dht, before.author_did_dht);
+        assert_eq!(out.manifest.items.len(), 1);
+        assert_eq!(out.manifest.published_at, NOW);
+        assert!(out.reclaim_urls.is_empty());
+    }
+
+    #[test]
+    fn replacing_an_image_reports_the_one_it_replaced() {
+        let mut before = manifest(vec![]);
+        before.avatar = Some(image("sia://old"));
+        let out = edit_channel(
+            &before,
+            ChannelPatch {
+                avatar: Some(image("sia://new")),
+                ..Default::default()
+            },
+            NOW,
+        );
+        assert_eq!(out.manifest.avatar.unwrap().item_url, "sia://new");
+        assert_eq!(out.reclaim_urls, ["sia://old"]);
+    }
+
+    #[test]
+    fn removing_an_image_drops_it_and_reports_it() {
+        let mut before = manifest(vec![]);
+        before.avatar = Some(image("sia://old-avatar"));
+        before.cover = Some(image("sia://keep-cover"));
+        let out = edit_channel(
+            &before,
+            ChannelPatch {
+                remove_avatar: true,
+                ..Default::default()
+            },
+            NOW,
+        );
+        assert!(out.manifest.avatar.is_none());
+        // The cover wasn't named, so it survives untouched and isn't reclaimed.
+        assert_eq!(out.manifest.cover.unwrap().item_url, "sia://keep-cover");
+        assert_eq!(out.reclaim_urls, ["sia://old-avatar"]);
+    }
+
+    #[test]
+    fn a_remove_beats_a_replacement_for_the_same_image() {
+        // Contradictory input, but it has to resolve one way: remove wins, and the old
+        // image is still reported. The replacement's bytes are the caller's to deal with
+        // — they stored them before asking for this.
+        let mut before = manifest(vec![]);
+        before.avatar = Some(image("sia://old"));
+        let out = edit_channel(
+            &before,
+            ChannelPatch {
+                avatar: Some(image("sia://new")),
+                remove_avatar: true,
+                ..Default::default()
+            },
+            NOW,
+        );
+        assert!(out.manifest.avatar.is_none());
+        assert_eq!(out.reclaim_urls, ["sia://old"]);
+    }
+
+    #[test]
+    fn removing_an_image_that_was_never_set_reports_nothing() {
+        let out = edit_channel(
+            &manifest(vec![]),
+            ChannelPatch {
+                remove_avatar: true,
+                remove_cover: true,
+                ..Default::default()
+            },
+            NOW,
+        );
+        assert!(out.reclaim_urls.is_empty());
+    }
+
+    #[test]
+    fn the_edit_result_carries_the_name_the_caller_reads() {
+        fn keys(v: &Value) -> Vec<&str> {
+            let mut k: Vec<&str> = v.as_object().unwrap().keys().map(String::as_str).collect();
+            k.sort_unstable();
+            k
+        }
+        let out = edit_channel(&manifest(vec![]), ChannelPatch::default(), NOW);
+        assert_eq!(
+            keys(&serde_json::to_value(&out).unwrap()),
+            ["manifest", "reclaimURLs"]
         );
     }
 

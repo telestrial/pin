@@ -841,6 +841,34 @@ pub fn manifest_enumerate_retract(
     ))
 }
 
+/// Build the manifest a new channel starts life as.
+///
+/// Images arrive already stored, as references inside the args — storing bytes needs a
+/// connected Sia session, and which one that is differs by platform, so it stays with the
+/// caller and this stays a pure build.
+#[wasm_bindgen]
+pub fn manifest_create_channel(new_channel_json: &str, now: &str) -> Result<String, JsValue> {
+    let new: pin_manifest::NewChannel = serde_json::from_str(new_channel_json)
+        .map_err(|e| JsValue::from_str(&format!("new channel is not readable: {e}")))?;
+    out(&pin_manifest::create_channel(new, now))
+}
+
+/// Apply a patch to a channel's details, reporting the images it left behind.
+#[wasm_bindgen]
+pub fn manifest_edit_channel(
+    manifest_json: &str,
+    patch_json: &str,
+    now: &str,
+) -> Result<String, JsValue> {
+    let patch: pin_manifest::ChannelPatch = serde_json::from_str(patch_json)
+        .map_err(|e| JsValue::from_str(&format!("channel patch is not readable: {e}")))?;
+    out(&pin_manifest::edit_channel(
+        &manifest_in(manifest_json)?,
+        patch,
+        now,
+    ))
+}
+
 /// Shape an upload result and a draft into the item that goes in the manifest.
 #[wasm_bindgen]
 pub fn manifest_build_item(
