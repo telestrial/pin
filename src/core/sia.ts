@@ -3,8 +3,8 @@
 // The byte operations that used to live here moved into Rust (crates/pin-sia), so
 // one implementation serves the browser and the desktop, and the far-future share
 // horizon is pinned there too. This type stays because it is the shape the rest of
-// the app builds item refs from — and because `contentHash` is added on this side:
-// it is a hash of the plaintext, belonging to the channel layer rather than to Sia.
+// the app builds item refs from; every field on it — `contentHash` included — is
+// filled in by pin-sia, which hashes the plaintext while it still holds it.
 
 export type UploadedItem = {
   id: string
