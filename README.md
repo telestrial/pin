@@ -2,8 +2,6 @@
 
 Decentralized personal feeds. Channels you own, subscriptions you pick, no platform between author and reader.
 
-https://github.com/user-attachments/assets/cba3bc35-934c-4e58-a372-1358824e49f2
-
 ## What it does
 
 A **channel** is a publishing handle — a person, a persona, a topic, a project. You own as many as you want and subscribe to others' by pasting a URL. The thing you publish is a **post** — short plaintext (281 characters, one more than Twitter, intentional), optionally with attachments (images, audio, video, files, or HTML apps that run sandboxed inline) shown beneath the body. Your home is a chronological mix from every channel you've subscribed to. When something's worth keeping, **pin it** — pinning mirrors the bytes into your own Sia storage so your copy survives even if the original publisher unpins. It's the verb the app is named after.
@@ -249,6 +247,8 @@ Scaffolded from [SiaFoundation/create-sia-app](https://github.com/SiaFoundation/
 ## The hackathon entry
 
 > Pin was built for the Sia Foundation's internal hackathon (April 29 – May 1, 2026), and it won. What follows is this README's above-the-fold section exactly as it stood at the deadline.
+
+https://github.com/user-attachments/assets/cba3bc35-934c-4e58-a372-1358824e49f2
 
 ### What it does
 
