@@ -139,9 +139,10 @@ async function buildScope(client: SiaClient): Promise<ScopeRef[]> {
 
 export function useRepackRunner() {
   const client = useAuthStore((s) => s.client)
+  const appKeyHex = useAuthStore((s) => s.storedKeyHex)
 
   useEffect(() => {
-    if (!client) return
+    if (!client || !appKeyHex) return
 
     // Channel manifest I/O over the locator: prefer the local cache for the
     // read (fresh + no DHT round-trip), commit the rewrite to the locator.
@@ -154,7 +155,13 @@ export function useRepackRunner() {
         return resolved
       },
       commitManifest: (channelID, channelKey, manifest) =>
-        commitChannelManifest(client, channelID, channelKey, manifest),
+        commitChannelManifest(
+          client,
+          appKeyHex,
+          channelID,
+          channelKey,
+          manifest,
+        ),
     }
 
     let running = false
@@ -270,5 +277,5 @@ export function useRepackRunner() {
       unsubQueue()
       unsubPin()
     }
-  }, [client])
+  }, [client, appKeyHex])
 }

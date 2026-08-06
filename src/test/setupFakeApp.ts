@@ -25,6 +25,12 @@ import { useToastStore } from '../stores/toast'
 import { setCurrentWorld } from './fakeModules'
 import { createFakeWorld, FakeSiaClient, type FakeWorld } from './fakeSia'
 
+// A real-shaped AppKey hex (64 chars), because it's now an HKDF input rather than an
+// opaque label — publish state is sealed under a key derived from it. One value for
+// every fake account: they already share a doc in these tests, and nothing here turns
+// on two accounts deriving different keys.
+export const FAKE_APP_KEY_HEX = 'a1'.repeat(32)
+
 export type FakeAccount = {
   // The Sia surface the app talks to. Tests that need to assert on storage
   // directly (scope contents, byte totals) go through this too — there is no
@@ -103,6 +109,7 @@ export async function publishTextPost(
   const manifest = await appendItemToChannel(current, item)
   await commitChannelManifest(
     client,
+    FAKE_APP_KEY_HEX,
     channel.channelID,
     channel.channelKey,
     manifest,
@@ -133,6 +140,7 @@ export async function editTextPost(
   const { manifest, item } = await editItem(current, oldItemID, newItem)
   await commitChannelManifest(
     client,
+    FAKE_APP_KEY_HEX,
     channel.channelID,
     channel.channelKey,
     manifest,
@@ -152,6 +160,7 @@ export async function authorCreateChannel(
   })
   await commitChannelManifest(
     client,
+    FAKE_APP_KEY_HEX,
     created.channelID,
     created.channelKey,
     created.manifest,
@@ -173,7 +182,7 @@ export function mountAs(
 ): void {
   useAuthStore.setState({
     client: account.client,
-    storedKeyHex: 'fake-key-hex',
+    storedKeyHex: FAKE_APP_KEY_HEX,
     indexerURL: 'https://indexer.fake',
     step: 'connected',
     subscriptions: options.subscriptions ?? [],

@@ -24,13 +24,26 @@ import type { ChannelManifest, ItemRef } from '../core/types'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
 import {
-  clearLocatorObjectPointer,
   commitChannelManifest,
-  readLocatorObjectPointer,
   resolveChannelViaLocator,
 } from './channelLocator'
+import {
+  channelPublishKey,
+  clearPublished,
+  readPublished,
+} from './publishState'
 
 type Channel = { channelID: string; channelKey: string }
+
+// The AppKey the publish-state records are sealed under. Read from the store rather
+// than threaded through every caller: this module is already the layer that knows
+// about stores (it reads the feed and the owner's subscription), and every write path
+// through here runs connected — the callers gate on the client before arriving.
+function appKey(): string {
+  const hex = useAuthStore.getState().storedKeyHex
+  if (!hex) throw new Error('Not connected to Sia')
+  return hex
+}
 
 // The channel's current manifest: the author's local copy (feedStore) is
 // authoritative for single-device authoring and avoids a DHT round-trip; fall
@@ -65,6 +78,7 @@ export async function createAndPublishChannel(
   const created = await createChannel(client, args)
   await commitChannelManifest(
     client,
+    appKey(),
     created.channelID,
     created.channelKey,
     created.manifest,
@@ -82,6 +96,7 @@ export async function saveChannelEdits(
   const { manifest, reclaimURLs } = await editChannel(client, current, patch)
   await commitChannelManifest(
     client,
+    appKey(),
     channel.channelID,
     channel.channelKey,
     manifest,
@@ -99,6 +114,7 @@ export async function publishItemToChannel(
   const manifest = await appendItemToChannel(current, itemRef)
   await commitChannelManifest(
     client,
+    appKey(),
     channel.channelID,
     channel.channelKey,
     manifest,
@@ -127,6 +143,7 @@ export async function editPublishedItem(
   )
   await commitChannelManifest(
     client,
+    appKey(),
     channel.channelID,
     channel.channelKey,
     result.manifest,
@@ -145,6 +162,7 @@ export async function deleteItemFromChannel(
   const result = await deletePublishedItem(current, itemID, protectedObjectIDs)
   await commitChannelManifest(
     client,
+    appKey(),
     channel.channelID,
     channel.channelKey,
     result.manifest,
@@ -173,6 +191,7 @@ export async function removeAttachment(
   )
   await commitChannelManifest(
     client,
+    appKey(),
     channel.channelID,
     channel.channelKey,
     result.manifest,
@@ -203,11 +222,12 @@ export async function retractChannel(
   // The Sia objects holding the manifest generations (current + the kept grace
   // generation) are orphans on retract — include both so the journaled cleanup
   // reclaims them.
-  const manifestObject = readLocatorObjectPointer(channel.channelID)
+  const rkey = channelPublishKey(channel.channelID)
+  const manifestObject = await readPublished(appKey(), rkey)
   for (const id of [manifestObject?.id, manifestObject?.olderId]) {
     if (id && !protectedObjectIDs?.has(id)) objectIDs.push(id)
   }
-  clearLocatorObjectPointer(channel.channelID)
+  await clearPublished(appKey(), rkey)
 
   useFeedStore.getState().removeChannel(channel.channelID)
   return { objectIDs, urls }

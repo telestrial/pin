@@ -15,6 +15,11 @@ vi.mock('../lib/pkarr', async () =>
 vi.mock('../lib/channelLocatorNative', async () =>
   (await import('./fakeModules')).fakeChannelLocatorNativeModule(),
 )
+// Publish state (which object each generation is) rides the doc now, so the keep-2
+// bookkeeping this file locks reads and writes through it.
+vi.mock('../lib/docs', async () =>
+  (await import('./fakeModules')).fakeDocsModule(),
+)
 
 import { createChannel } from '../core/channels'
 import type { ChannelManifest, ItemRef } from '../core/types'
@@ -22,7 +27,7 @@ import {
   commitChannelManifest,
   resolveChannelViaLocator,
 } from '../lib/channelLocator'
-import { createFakeApp, resetAllStores } from './setupFakeApp'
+import { createFakeApp, FAKE_APP_KEY_HEX, resetAllStores } from './setupFakeApp'
 
 function withItem(manifest: ChannelManifest, n: number): ChannelManifest {
   const item = {
@@ -64,6 +69,7 @@ describe('integration: channel locator grace deletion', () => {
     // Commit 1 (empty). One manifest object, nothing to reclaim yet.
     await commitChannelManifest(
       client,
+      FAKE_APP_KEY_HEX,
       channel.channelID,
       channel.channelKey,
       created.manifest,
@@ -75,6 +81,7 @@ describe('integration: channel locator grace deletion', () => {
     const m2 = withItem(created.manifest, 2)
     await commitChannelManifest(
       client,
+      FAKE_APP_KEY_HEX,
       channel.channelID,
       channel.channelKey,
       m2,
@@ -85,6 +92,7 @@ describe('integration: channel locator grace deletion', () => {
     const m3 = withItem(m2, 3)
     await commitChannelManifest(
       client,
+      FAKE_APP_KEY_HEX,
       channel.channelID,
       channel.channelKey,
       m3,
@@ -95,6 +103,7 @@ describe('integration: channel locator grace deletion', () => {
     const m4 = withItem(m3, 4)
     await commitChannelManifest(
       client,
+      FAKE_APP_KEY_HEX,
       channel.channelID,
       channel.channelKey,
       m4,

@@ -157,3 +157,44 @@ export function fakePkarrModule() {
     },
   }
 }
+
+// ---------------------------------------------------------------------------
+// lib/docs replacement
+// ---------------------------------------------------------------------------
+
+// The doc engine is Rust (pin-core wasm / the native Curator), and opening it binds
+// a real iroh endpoint — which no integration test should be doing. This stands in
+// with a plain map, which is all the record layer is from the app's side: put, get,
+// delete, list by collection prefix.
+//
+// Shared rather than re-declared per test file because publish state now rides the
+// doc, so ANY test that publishes a channel goes through here. The store is module
+// -level so a test can reset it between cases.
+// Exported so a test can inspect or seed what the app wrote — the doc is a record
+// store, and asserting on records is most of what these tests are for.
+export const fakeDocStore = new Map<string, Uint8Array>()
+
+export function fakeDocsModule() {
+  return {
+    openDocs: async () => 'fake-namespace',
+    putRecord: async (collection: string, rkey: string, value: Uint8Array) => {
+      fakeDocStore.set(`${collection}/${rkey}`, value)
+    },
+    getRecord: async (collection: string, rkey: string) =>
+      fakeDocStore.get(`${collection}/${rkey}`),
+    deleteRecord: async (collection: string, rkey: string) => {
+      fakeDocStore.delete(`${collection}/${rkey}`)
+    },
+    listRecords: async (collection: string) =>
+      [...fakeDocStore.keys()]
+        .filter((k) => k.startsWith(`${collection}/`))
+        .map((k) => k.slice(collection.length + 1)),
+    listAll: async () =>
+      [...fakeDocStore.keys()].map((k) => {
+        const i = k.indexOf('/')
+        return { collection: k.slice(0, i), rkey: k.slice(i + 1) }
+      }),
+    subscribeDocChanges: () => () => {},
+    startPullLoop: async () => {},
+  }
+}

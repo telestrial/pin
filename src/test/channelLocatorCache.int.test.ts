@@ -14,19 +14,11 @@ vi.mock('../lib/channelLocatorNative', async () =>
   (await import('./fakeModules')).fakeChannelLocatorNativeModule(),
 )
 
-// Capture what the caching reader writes into the shared doc.
-const docStore = new Map<string, Uint8Array>()
-vi.mock('../lib/docs', () => ({
-  openDocs: async () => '',
-  putRecord: async (collection: string, rkey: string, value: Uint8Array) => {
-    docStore.set(`${collection}/${rkey}`, value)
-  },
-  getRecord: async (collection: string, rkey: string) =>
-    docStore.get(`${collection}/${rkey}`),
-  deleteRecord: async (collection: string, rkey: string) => {
-    docStore.delete(`${collection}/${rkey}`)
-  },
-}))
+// The shared doc, faked: this file reads back what the caching reader wrote, and
+// publish state rides the same store.
+vi.mock('../lib/docs', async () =>
+  (await import('./fakeModules')).fakeDocsModule(),
+)
 
 import { createChannel } from '../core/channels'
 import {
@@ -41,7 +33,8 @@ import {
 } from '../lib/channelLocator'
 import { applyCachedChannel, applyIfChanged } from '../lib/channelRevalidate'
 import { useFeedStore } from '../stores/feed'
-import { createFakeApp, resetAllStores } from './setupFakeApp'
+import { fakeDocStore as docStore } from './fakeModules'
+import { createFakeApp, FAKE_APP_KEY_HEX, resetAllStores } from './setupFakeApp'
 
 describe('integration: caching locator reader seeds sub/<id>', () => {
   beforeEach(() => {
@@ -65,6 +58,7 @@ describe('integration: caching locator reader seeds sub/<id>', () => {
     // commit is what puts the pointer + Sia object in place).
     await commitChannelManifest(
       client,
+      FAKE_APP_KEY_HEX,
       created.channelID,
       created.channelKey,
       created.manifest,
@@ -102,6 +96,7 @@ describe('integration: caching locator reader seeds sub/<id>', () => {
     })
     await commitChannelManifest(
       client,
+      FAKE_APP_KEY_HEX,
       created.channelID,
       created.channelKey,
       created.manifest,
@@ -128,6 +123,7 @@ describe('integration: caching locator reader seeds sub/<id>', () => {
     })
     await commitChannelManifest(
       client,
+      FAKE_APP_KEY_HEX,
       created.channelID,
       created.channelKey,
       created.manifest,
@@ -165,6 +161,7 @@ describe('integration: caching locator reader seeds sub/<id>', () => {
     })
     await commitChannelManifest(
       client,
+      FAKE_APP_KEY_HEX,
       created.channelID,
       created.channelKey,
       created.manifest,
@@ -214,6 +211,7 @@ describe('integration: caching locator reader seeds sub/<id>', () => {
     })
     await commitChannelManifest(
       client,
+      FAKE_APP_KEY_HEX,
       created.channelID,
       created.channelKey,
       created.manifest,
@@ -382,6 +380,7 @@ describe('integration: revalidate fills the feed in out of band', () => {
     })
     await commitChannelManifest(
       client,
+      FAKE_APP_KEY_HEX,
       created.channelID,
       created.channelKey,
       created.manifest,
@@ -397,6 +396,7 @@ describe('integration: revalidate fills the feed in out of band', () => {
     const v2 = withPost(created.manifest, 'fresh post')
     await commitChannelManifest(
       client,
+      FAKE_APP_KEY_HEX,
       created.channelID,
       created.channelKey,
       v2,

@@ -17,9 +17,10 @@ import { refreshChannelLocator } from '../channelLocator'
 
 export function useChannelLocatorPublish() {
   const client = useAuthStore((s) => s.client)
+  const appKeyHex = useAuthStore((s) => s.storedKeyHex)
 
   useEffect(() => {
-    if (!client) return
+    if (!client || !appKeyHex) return
 
     let cancelled = false
     const keptAlive = new Set<string>()
@@ -31,7 +32,7 @@ export function useChannelLocatorPublish() {
         if (keptAlive.has(c.channelID)) continue
         keptAlive.add(c.channelID)
         try {
-          await refreshChannelLocator(c.channelKey, c.channelID)
+          await refreshChannelLocator(appKeyHex, c.channelKey, c.channelID)
         } catch (e) {
           keptAlive.delete(c.channelID) // let a later tick retry
           console.warn(
@@ -52,5 +53,5 @@ export function useChannelLocatorPublish() {
       cancelled = true
       unsubAuth()
     }
-  }, [client])
+  }, [client, appKeyHex])
 }

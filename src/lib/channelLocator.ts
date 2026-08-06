@@ -21,6 +21,11 @@ import {
   resolveLocator,
 } from './channelLocatorNative'
 import { getRecord, openDocs, putRecord } from './docs'
+import {
+  channelPublishKey,
+  readPublished,
+  writePublished,
+} from './publishState'
 
 // Collection in the shared iroh-docs doc where resolved subscribed-channel
 // manifests are cached (the resolution-ladder "keep" step). Value = the EXACT Sia
@@ -28,43 +33,6 @@ import { getRecord, openDocs, putRecord } from './docs'
 // it identically to a fresh resolve — no second code path, and whatever writes it
 // stays content-blind. Keyed by channelID.
 const SUB_COLLECTION = 'sub'
-
-// localStorage key prefix for the manifest-object generations behind a channel's
-// locator, one entry per owned channel. `id` = the current object the pkarr
-// pointer names; `olderId` = the immediately-previous generation, kept ALIVE as
-// a grace window. localStorage is a cache: losing it only risks a couple of
-// stray small manifest objects, never data.
-const OBJECT_POINTER_PREFIX = 'pin:chanloc:'
-type LocatorObjectPointer = { id: string; url?: string; olderId?: string }
-
-export function readLocatorObjectPointer(
-  channelID: string,
-): LocatorObjectPointer | null {
-  try {
-    const s = localStorage.getItem(OBJECT_POINTER_PREFIX + channelID)
-    return s ? (JSON.parse(s) as LocatorObjectPointer) : null
-  } catch {
-    return null
-  }
-}
-function writeLocatorObjectPointer(
-  channelID: string,
-  pointer: LocatorObjectPointer,
-): void {
-  try {
-    localStorage.setItem(
-      OBJECT_POINTER_PREFIX + channelID,
-      JSON.stringify(pointer),
-    )
-  } catch {
-    // localStorage unavailable/quota — the pointer is a cache, safe to skip.
-  }
-}
-export function clearLocatorObjectPointer(channelID: string): void {
-  try {
-    localStorage.removeItem(OBJECT_POINTER_PREFIX + channelID)
-  } catch {}
-}
 
 /** Mirror a channel's manifest to its own Sia object (encrypted under K) and publish
  *  the pointer to that object under the channel's K-derived pkarr locator. Call
@@ -243,14 +211,16 @@ export function makeCachingLocatorReader(
  *  live manifest objects per channel. */
 export async function commitChannelManifest(
   client: SiaClient,
+  appKeyHex: string,
   channelID: string,
   channelKeyB64: string,
   manifest: ChannelManifest,
 ): Promise<void> {
-  const prev = readLocatorObjectPointer(channelID)
+  const rkey = channelPublishKey(channelID)
+  const prev = await readPublished(appKeyHex, rkey)
   const { id, url } = await publishChannelLocator(channelKeyB64, manifest)
   // New current = id; keep prev.id as the grace generation; reclaim prev.olderId.
-  writeLocatorObjectPointer(channelID, {
+  await writePublished(appKeyHex, rkey, {
     id,
     url,
     olderId: prev && prev.id !== id ? prev.id : prev?.olderId,
@@ -267,16 +237,17 @@ export async function commitChannelManifest(
 /** Keep-alive: refresh a channel locator's pkarr TTL WITHOUT minting a new Sia
  *  object, so a channel published in an earlier session stays resolvable as the
  *  record ages off the DHT. Re-signs/re-publishes the author's OWN current
- *  pointer — read from the LOCAL locator record, NOT a fresh DHT resolve. A
+ *  pointer — read from the publish-state record, NOT a fresh DHT resolve. A
  *  resolve here could read back a stale value from a lagging relay and then
  *  re-sign it with a newer timestamp, burying the real current pointer; the
- *  author already knows their current pointer locally, so use that. No-op if
- *  nothing's published for this channel yet (a commit establishes it). */
+ *  author already knows their current pointer, so use that. No-op if nothing's
+ *  published for this channel yet (a commit establishes it). */
 export async function refreshChannelLocator(
+  appKeyHex: string,
   channelKeyB64: string,
   channelID: string,
 ): Promise<void> {
-  const pointer = readLocatorObjectPointer(channelID)
-  if (!pointer?.url) return
-  await republishPointer(channelKeyFromBase64(channelKeyB64), pointer.url)
+  const published = await readPublished(appKeyHex, channelPublishKey(channelID))
+  if (!published?.url) return
+  await republishPointer(channelKeyFromBase64(channelKeyB64), published.url)
 }
