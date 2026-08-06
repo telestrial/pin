@@ -12,22 +12,7 @@ A **channel** is a publishing handle — a person, a persona, a topic, a project
 
 There is no Pin server, no Pin database, no company between authors and readers. Item bytes live on Sia, encrypted with per-object keys. A channel's current state is an encrypted manifest — also a Sia object — found through a signed pointer published to a public DHT (Mainline, via pkarr) under a key derived from the channel's secret `K`. `K` never leaves the URL fragment of the subscribe link: holding it lets you *find* the channel (derive the pointer) and *read* it (decrypt the manifest). Your identity is a `did:dht` derived from your Sia recovery phrase — self-sovereign, no account rented from anyone. A reader who pins becomes a host of those bytes — Sia gets stronger for that channel as more readers commit. An author can retract from their own storage, but a subscriber's pinned copy persists. Twitter delete is unilateral; Pin retract is custody being released.
 
-## Demo flow
-
-### ▶ Clone and run it — [Run it locally](#run-it-locally)
-
-Best in Chrome. Best with a friend — pair up, each run it on your own machine, walk through it together. One of you plays the author, the other the subscriber. (Solo? Two browser windows on one machine, Incognito for the second so the Sia accounts stay distinct.)
-
-1. **Both of you**: finish onboarding — approve at sia.storage, save your recovery phrase, then pick a name for yourself. That's it; your identity is a `did:dht` derived from that phrase, no account to create anywhere.
-2. **Author** (one of you): click **+ Create a channel**, give it a name and (optionally) a cover image. Copy the subscribe URL — it's `pin://did:dht:…#k=…`, the channel's identity plus its secret key — and send it to the subscriber.
-3. **Subscriber** (the other): click **+ Subscribe** and paste the author's URL. The channel resolves — Pin derives the DHT pointer from `K`, fetches the encrypted manifest from Sia, and decrypts it.
-4. **Author**: publish from the inline composer at the top of the feed. The composer is one line at rest — click it and it expands. Type your post (up to 281 characters), and **drag a file onto the composer** to attach it (image / audio / video / file) below the body. Click Publish — the form clears immediately, and the **upload queue** in the right sidebar takes over, uploading the attachment bytes then the body bytes, then publishing the updated channel pointer to the DHT. The UI never blocks.
-5. **Subscriber**: hit **Refresh**. The new post appears — the channel pointer on the DHT is eventually-consistent, so a fresh publish shows up within seconds. (A channel that momentarily fails to re-resolve keeps its last-known content rather than blanking out.)
-6. **Pin moment.** **Subscriber**: hover an item and click the pin icon. The item is now mirrored into your Sia storage; the right sidebar's bar ticks up and the item appears in **Pinned**. Then the **author**: click the (filled, owned-author-green) pin icon on the same item and type `DELETE` to retract. The item disappears from the author's feed and storage — but the subscriber's pinned copy persists, with a working share URL. That's custody at work.
-
----
-
-The rest of this README goes deeper: the specific Sia SDK calls Pin uses (and where), the architecture, the sandboxed App Host API, the roadmap, and the full local setup.
+Everything below goes deeper: the Sia SDK calls Pin uses and where, the architecture, the sandboxed App host API, editing and drift, mentions, the testing pyramid, the roadmap, and [how to run it locally](#run-it-locally). The hackathon entry Pin started as is [archived at the bottom](#the-hackathon-entry).
 
 ## Sia SDK usage
 
@@ -258,3 +243,37 @@ Pin sits on infrastructure built by other people:
 - **[pkarr](https://github.com/pubky/pkarr) and the [Mainline DHT](https://en.wikipedia.org/wiki/Mainline_DHT)** for the public, company-free naming layer — signed records that let a `did:dht` identity and a channel's location be published and resolved by anyone, no server in between. `did:dht` follows the [DID method](https://did.dht.dev/) built on the same substrate.
 
 Scaffolded from [SiaFoundation/create-sia-app](https://github.com/SiaFoundation/create-sia-app) by [Alex Freska](https://github.com/alexfreska).
+
+---
+
+## The hackathon entry
+
+> Pin was built for the Sia Foundation's internal hackathon (April 29 – May 1, 2026), and it won. What follows is this README's above-the-fold section exactly as it stood at the deadline.
+
+### What it does
+
+A **channel** is a publishing handle — a person, a persona, a topic, a project. You own as many as you want and subscribe to others' by pasting a URL. Items inside a channel are typed: text (notes inline, posts click-through), image, audio, video, file, or app (a self-contained HTML widget that runs in a sandboxed iframe). Your home is a chronological mix from every channel you've subscribed to. When something's worth keeping, **pin it** — pinning mirrors the bytes into your own Sia storage so your copy survives even if the original publisher unpins. It's the verb the app is named after.
+
+### Why it's cool
+
+There is no Pin server, no Pin database, no platform between authors and readers. Item bytes live on Sia, encrypted with per-object keys. The mutable channel record lives on ATProto as a publicly-readable record whose body is ciphertext encrypted under a per-channel key `K` that never leaves the URL fragment of the subscribe link. Anyone can fetch a record; only people you sent the URL to can decrypt it. A reader who pins becomes a host of those bytes — Sia gets stronger for that channel as more readers commit. An author can retract from their own storage, but a subscriber's pinned copy persists. Twitter delete is unilateral; Pin retract is custody being released.
+
+### Demo flow
+
+#### ▶ [pin-liard.vercel.app](https://pin-liard.vercel.app/)
+
+Best in Chrome. Best with a friend — pair up, each open the URL on your own machine, walk through it together. One of you plays the author, the other the subscriber. (Solo? Two browser windows on one machine, Incognito for the second so the Sia accounts stay distinct.)
+
+1. **Both of you**: finish Sia onboarding. Then click **+ Subscribe** and paste this — it's the build journal I kept while making Pin:
+
+   ```
+   pin://johnwilliams.codes#k=zDaitAkRQnSa2X3YsNXlLEomoIStjfGyxSlbIL0/7bs=
+   ```
+
+   Your feed populates immediately with the day-by-day record of building this app. That's what subscribing to a real channel feels like.
+
+2. **Author** (one of you): also finish Bluesky onboarding. Click **+ Create a channel**, give it a name and (optionally) a cover image. Copy the subscribe URL and send it to the subscriber.
+3. **Subscriber** (the other): in **+ Subscribe**, paste the author's URL.
+4. **Author**: publish a few items from the inline composer at the top of the feed. **Drag a file directly onto the composer card** to auto-route to the right tab (image / audio / video / file / app, by MIME) and pre-fill it. The Note tab has a 281-character limit (one more than Twitter, intentional). Click Publish — the form resets immediately and the **upload queue** in the right sidebar takes over, ticking through shard-upload progress and finally going green when the manifest commits. The UI never blocks.
+5. **Subscriber**: items appear LIVE as the author publishes — no refresh needed. Pin subscribes to ATProto's JetStream firehose, filtered to the channels you follow, so publishes propagate within ~1 second. The green pulsing **Live** indicator on the toolbar shows the WS connection. Manual Refresh stays as a backstop.
+6. **Pin moment.** **Subscriber**: hover an item and click the pin icon. The item is now mirrored into your Sia storage; the right sidebar's bar ticks up and the item appears in **Pinned**. Then the **author**: click the (filled, owned-author-green) pin icon on the same item and type `DELETE` to retract. The item disappears from the author's feed and storage — but the subscriber's pinned copy persists, with a working share URL. That's custody at work.
