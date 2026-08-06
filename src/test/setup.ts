@@ -52,3 +52,27 @@ if (
     },
   })
 }
+
+// jsdom doesn't ship `Uint8Array.fromHex` (the TC39 base64/hex proposal), which is
+// how every AppKey reaches an HKDF call. Production has it; without it here, any code
+// path that derives from the stored key throws in tests — and because those paths
+// mostly catch and degrade, the failure surfaces as a quiet wrong answer rather than
+// an error. Polyfill it so the fast tiers can actually cover them.
+if (
+  typeof (Uint8Array as unknown as { fromHex?: unknown }).fromHex !== 'function'
+) {
+  Object.defineProperty(Uint8Array, 'fromHex', {
+    configurable: true,
+    writable: true,
+    value: (hex: string): Uint8Array => {
+      if (hex.length % 2 !== 0) throw new SyntaxError('odd-length hex string')
+      const out = new Uint8Array(hex.length / 2)
+      for (let i = 0; i < out.length; i++) {
+        const byte = Number.parseInt(hex.slice(i * 2, i * 2 + 2), 16)
+        if (Number.isNaN(byte)) throw new SyntaxError('invalid hex string')
+        out[i] = byte
+      }
+      return out
+    },
+  })
+}
