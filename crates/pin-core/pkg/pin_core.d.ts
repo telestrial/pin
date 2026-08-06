@@ -125,6 +125,11 @@ export function derive_channel_locator_seed(channel_key: Uint8Array): Uint8Array
 export function derive_did_dht_seed(app_key: Uint8Array): Uint8Array;
 
 /**
+ * Publish-state encryption key.
+ */
+export function derive_published_key(app_key: Uint8Array): Uint8Array;
+
+/**
  * The pkarr seed for one instance's rendezvous entry.
  */
 export function derive_rendezvous_instance_seed(rendezvous_seed: Uint8Array, instance_id: string): Uint8Array;
@@ -485,6 +490,7 @@ export interface InitOutput {
     readonly derive_channel_doc_ticket_seed: (a: number, b: number) => [number, number];
     readonly derive_channel_locator_seed: (a: number, b: number) => [number, number];
     readonly derive_did_dht_seed: (a: number, b: number) => [number, number];
+    readonly derive_published_key: (a: number, b: number) => [number, number];
     readonly derive_rendezvous_instance_seed: (a: number, b: number, c: number, d: number) => [number, number];
     readonly derive_rendezvous_seed: (a: number, b: number) => [number, number];
     readonly derive_settings_key: (a: number, b: number) => [number, number];

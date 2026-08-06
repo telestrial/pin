@@ -18,6 +18,7 @@ import {
   derive_channel_doc_ticket_seed,
   derive_channel_locator_seed,
   derive_did_dht_seed,
+  derive_published_key,
   derive_rendezvous_instance_seed,
   derive_rendezvous_seed,
   derive_settings_key,
@@ -114,6 +115,16 @@ export async function deriveSnapshotKey(
 ): Promise<Uint8Array> {
   await ensureWasm()
   return derive_snapshot_key(appKeyBytes)
+}
+
+// Publish-state key — what this identity has published to Sia, and which object each
+// pointer names. Those records carry share URLs, and a share URL's fragment IS the
+// object's decryption key, so they get their own domain rather than the settings one.
+export async function derivePublishedKey(
+  appKeyBytes: Uint8Array,
+): Promise<Uint8Array> {
+  await ensureWasm()
+  return derive_published_key(appKeyBytes)
 }
 
 // The 32-byte ed25519 seed for this identity's did:dht key — the browser's pkarr

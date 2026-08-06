@@ -62,6 +62,11 @@ pub fn hkdf32(ikm: &[u8], info: &[u8]) -> [u8; 32] {
 pub const SETTINGS_KEY_INFO: &[u8] = b"pin:settings:v1";
 /// HKDF `info` for the whole-doc Sia snapshot encryption key (AppKey-derived).
 pub const SNAPSHOT_KEY_INFO: &[u8] = b"pin:docsnapshot:v1";
+/// HKDF `info` for the publish-state encryption key (AppKey-derived, never shared).
+/// Publish state names Sia objects by share URL, and a share URL carries that
+/// object's encryption key in its fragment — so these records are as secret as the
+/// content they point at, and get their own domain rather than riding the settings key.
+pub const PUBLISHED_KEY_INFO: &[u8] = b"pin:published:v1";
 /// HKDF `info` for the identity's did:dht ed25519 seed (AppKey-derived).
 pub const DID_DHT_INFO: &[u8] = b"pin:did-dht:v1";
 /// HKDF `info` for a channel's pkarr locator key — derived from K, not the AppKey,
@@ -93,6 +98,11 @@ pub fn settings_key(app_key: &[u8]) -> [u8; 32] {
 /// The Sia snapshot encryption key.
 pub fn snapshot_key(app_key: &[u8]) -> [u8; 32] {
     hkdf32(app_key, SNAPSHOT_KEY_INFO)
+}
+
+/// The publish-state encryption key.
+pub fn published_key(app_key: &[u8]) -> [u8; 32] {
+    hkdf32(app_key, PUBLISHED_KEY_INFO)
 }
 
 /// The identity's did:dht ed25519 seed.
@@ -340,6 +350,7 @@ mod tests {
         let all = [
             settings_key(&ikm),
             snapshot_key(&ikm),
+            published_key(&ikm),
             did_dht_seed(&ikm),
             channel_locator_seed(&ikm),
             channel_doc_seed(&ikm, "chan"),

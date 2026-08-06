@@ -16,6 +16,7 @@ export const derive_channel_doc_seed: (a: number, b: number, c: number, d: numbe
 export const derive_channel_doc_ticket_seed: (a: number, b: number) => [number, number];
 export const derive_channel_locator_seed: (a: number, b: number) => [number, number];
 export const derive_did_dht_seed: (a: number, b: number) => [number, number];
+export const derive_published_key: (a: number, b: number) => [number, number];
 export const derive_rendezvous_instance_seed: (a: number, b: number, c: number, d: number) => [number, number];
 export const derive_rendezvous_seed: (a: number, b: number) => [number, number];
 export const derive_settings_key: (a: number, b: number) => [number, number];

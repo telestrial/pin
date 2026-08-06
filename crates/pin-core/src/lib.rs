@@ -955,6 +955,12 @@ pub fn derive_snapshot_key(app_key: &[u8]) -> Vec<u8> {
     pin_derive::snapshot_key(app_key).to_vec()
 }
 
+/// Publish-state encryption key.
+#[wasm_bindgen]
+pub fn derive_published_key(app_key: &[u8]) -> Vec<u8> {
+    pin_derive::published_key(app_key).to_vec()
+}
+
 /// The identity's did:dht ed25519 seed — the same value `identity.rs` derives.
 #[wasm_bindgen]
 pub fn derive_did_dht_seed(app_key: &[u8]) -> Vec<u8> {
