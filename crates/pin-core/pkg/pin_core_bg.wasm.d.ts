@@ -68,6 +68,7 @@ export const sia_upload_item: (a: number, b: number, c: number) => any;
 export const sia_upload_items_packed: (a: any, b: number) => any;
 export const sia_validate_recovery_phrase: (a: number, b: number) => [number, number];
 export const sia_wait_for_approval: () => any;
+export const start_identity_loop: (a: number, b: number, c: number, d: number, e: number, f: any) => any;
 export const start_instance_loop: (a: number, b: any) => any;
 export const start_keep_alive_loop: (a: number, b: number, c: number, d: any) => any;
 export const start_pull_loop: (a: number, b: number, c: number, d: any) => any;

@@ -176,6 +176,11 @@ export function startInstanceLoopNative(): Promise<void> {
   return call<void>('curator_start_instance', {})
 }
 
+/** Start the identity-publishing loop. Idempotent — the engine keeps one. */
+export function startIdentityLoopNative(appKeyHex: string): Promise<void> {
+  return call<void>('curator_start_identity', { appKeyHex })
+}
+
 export function openChannelNative(nsSeedHex: string): Promise<string> {
   return call<string>('docs_open_channel', { nsSeedHex })
 }

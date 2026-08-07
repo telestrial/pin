@@ -148,6 +148,17 @@ struct Inner {
 pub struct CuratorState(Mutex<Inner>);
 
 impl CuratorState {
+    /// A handle the identity loop reports through, so its result reaches the Curate
+    /// page's diagnostics the same way the startup publish used to.
+    fn report_handle(&self) -> impl Fn(String) + Send + Sync + 'static {
+        let diag = self.0.lock().unwrap().diag.clone();
+        move |note: String| {
+            if let Some(d) = &diag {
+                d.lock().unwrap().did_dht_published = Some(note);
+            }
+        }
+    }
+
     fn snapshot(inner: &Inner) -> CuratorStatus {
         let running = inner.running.load(Ordering::SeqCst);
         match &inner.diag {
@@ -714,8 +725,96 @@ pub async fn curator_start_instance(
     Ok(())
 }
 
+/// How often the identity's coordinates are republished. Same reasoning as the locator
+/// keep-alive: a pkarr record ages off Mainline in a couple of hours, and an identity
+/// nobody republishes stops resolving.
+const IDENTITY_CADENCE: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+
+/// Start the identity-publishing loop — one packet under the did:dht key carrying the
+/// directory pointer, the doc namespace, and every live endpoint.
+///
+/// The one writer of that record. It used to be two (this process at startup, a React
+/// effect seconds later), each publishing a whole packet over the other.
+///
+/// Idempotent (the engine keeps one loop), so a remounting caller can just call it.
+#[tauri::command]
+pub async fn curator_start_identity(
+    curator: tauri::State<'_, CuratorState>,
+    sia: tauri::State<'_, crate::sia::SiaState>,
+    app_key_hex: String,
+) -> Result<(), String> {
+    let engine = current_engine(&curator)?;
+    if engine.identity_started() {
+        return Ok(());
+    }
+    let app_key = pin_derive::decode_app_key(&app_key_hex).ok_or("app key hex must be 32 bytes")?;
+    let ctx = pin_curator::IdentityContext {
+        doc: engine.doc.clone(),
+        blobs: (*engine.blobs).clone(),
+        author_id: engine.author_id,
+        sia: sia.session(),
+        app_key,
+        namespace_id: engine.namespace_id.clone(),
+    };
+    let report = curator.report_handle();
+    sia.detach(async move {
+        pin_curator::run_identity_loop(ctx, IDENTITY_CADENCE, now_iso, now_secs, move |result| {
+            let note = match &result {
+                Ok(o) if o.empty => "nothing to advertise yet".to_string(),
+                Ok(o) => format!(
+                    "ok (published{}, {} endpoint(s))",
+                    if o.uploaded { " + uploaded" } else { "" },
+                    o.endpoints
+                ),
+                Err(e) => format!("failed: {e}"),
+            };
+            println!("curator identity: {note}");
+            report(note);
+        })
+        .await
+    });
+    Ok(())
+}
+
 /// Wall-clock seconds. Passed into the shared loop rather than read inside it, because
 /// `SystemTime::now()` panics on the wasm target the same crate compiles for.
+fn now_iso() -> String {
+    // RFC 3339 with milliseconds, matching `new Date().toISOString()` — the directory's
+    // `updatedAt` is read by clients that expect that shape.
+    let d = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    let secs = d.as_secs() as i64;
+    let millis = d.subsec_millis();
+    let (y, mo, da, h, mi, s) = civil_from_unix(secs);
+    format!("{y:04}-{mo:02}-{da:02}T{h:02}:{mi:02}:{s:02}.{millis:03}Z")
+}
+
+/// Days-from-civil, inverted (Howard Hinnant's algorithm). Cheaper than a date crate
+/// for the one timestamp this process formats.
+fn civil_from_unix(secs: i64) -> (i64, u32, u32, u32, u32, u32) {
+    let days = secs.div_euclid(86_400);
+    let rem = secs.rem_euclid(86_400);
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    let y = if m <= 2 { y + 1 } else { y };
+    (
+        y,
+        m,
+        d,
+        (rem / 3600) as u32,
+        ((rem % 3600) / 60) as u32,
+        (rem % 60) as u32,
+    )
+}
+
 fn now_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -921,11 +1020,8 @@ async fn curator_loop(
     let hey_inbox = Some(inbox);
     let router = Some(r);
 
-    // The Curator's did:dht identity (ed25519, derived from the AppKey) — was carried
-    // on the atrium repo handle; now derived directly, since identity is independent
-    // of the repo engine. Publish the DID document to Mainline DHT (just `_iroh`, the
-    // node to dial — binding the doc namespace via `_ns` is the next slice) and
-    // self-resolve to verify. Best-effort: a failure leaves the node serving.
+    // The Curator's did:dht identity (ed25519, derived from the AppKey), for the
+    // diagnostics panel.
     let identity = creds
         .as_ref()
         .and_then(|c| pin_derive::decode_app_key(&c.app_key_hex))
@@ -937,46 +1033,11 @@ async fn curator_loop(
             }
         });
     if let Some(kp) = &identity {
-        let did_dht = crate::identity::did_dht(kp);
-        diag.lock().unwrap().did_dht = Some(did_dht.clone());
-        let node_id_str = endpoint.id().to_string();
-        // The doc's namespace id — what a peer resolving this DID needs to import +
-        // sync the Curator's iroh-docs replica (alongside `_iroh`, where to dial).
-        let namespace = doc_engine.as_ref().map(|e| e.namespace_id.clone());
-        let mut records = vec![("_iroh".to_string(), node_id_str.clone())];
-        if let Some(ns) = &namespace {
-            records.push(("_ns".to_string(), ns.clone()));
-        }
-        match crate::identity::publish_doc(kp, &records).await {
-            Ok(msg) => {
-                log::info!("curator did:dht doc: {msg}");
-                let note = match crate::identity::resolve_did(&did_dht).await {
-                    Ok(r) => {
-                        let node_ok = r.iroh_node.as_deref() == Some(node_id_str.as_str());
-                        let ns_ok = r.namespace == namespace;
-                        log::info!(
-                            "curator did:dht resolver: iroh={:?} ns={:?} (node matches: {node_ok}, ns matches: {ns_ok})",
-                            r.iroh_node,
-                            r.namespace
-                        );
-                        format!(
-                            "; resolved back (iroh {}, ns {})",
-                            if r.iroh_node.is_some() { "ok" } else { "—" },
-                            if r.namespace.is_some() { "ok" } else { "—" }
-                        )
-                    }
-                    Err(e) => {
-                        log::warn!("curator did:dht resolver failed: {e}");
-                        format!("; resolve failed: {e}")
-                    }
-                };
-                diag.lock().unwrap().did_dht_published = Some(format!("{msg}{note}"));
-            }
-            Err(e) => {
-                log::warn!("curator did:dht doc publish failed: {e}");
-                diag.lock().unwrap().did_dht_published = Some(format!("failed: {e}"));
-            }
-        }
+        // Just the DID for diagnostics. PUBLISHING it is the identity loop's job now
+        // (pin_curator::run_identity_loop): it goes out on a cadence rather than once
+        // at startup, and it carries `_dir` and every live endpoint alongside `_ns` —
+        // one packet from one writer, assembled from the doc.
+        diag.lock().unwrap().did_dht = Some(crate::identity::did_dht(kp));
     }
 
     // Poll the endpoint's address set so relay connection + discovered direct

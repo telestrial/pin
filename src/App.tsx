@@ -19,7 +19,6 @@ import { useChannelReader } from './lib/hooks/useChannelReader'
 import { useCuratorAutostart } from './lib/hooks/useCuratorAutostart'
 import { useCuratorLoops } from './lib/hooks/useCuratorLoops'
 import { useHandleFollowReconciliation } from './lib/hooks/useHandleFollowReconciliation'
-import { useIdentityDocPublish } from './lib/hooks/useIdentityDocPublish'
 import { useRendezvousSync } from './lib/hooks/useRendezvousSync'
 import { useRepackRunner } from './lib/hooks/useRepackRunner'
 import { useSettingsDocsMirror } from './lib/hooks/useSettingsDocsMirror'
@@ -88,7 +87,6 @@ export default function App() {
   // Purely additive over the rungs above — if either goes quiet, reads fall back.
   useChannelDocPublish()
   useChannelDocSync()
-  useIdentityDocPublish()
   useHandleFollowReconciliation()
   useRendezvousSync()
 

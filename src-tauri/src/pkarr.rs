@@ -10,7 +10,7 @@
 // sandbox cannot send UDP), not a tier.
 //
 // These are GENERIC TXT publish/resolve under any key, distinct from identity.rs's
-// publish_doc/resolve_did, which self-verify and decode the Curator's own `_iroh`/`_ns`
+// the identity loop, which publishes the Curator's own record
 // document. The frontend hands over the 32-byte SEED rather than a keypair — a wasm
 // keypair can't cross IPC, and pin_pkarr rebuilds the key identically on this side.
 //

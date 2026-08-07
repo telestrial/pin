@@ -4622,6 +4622,7 @@ dependencies = [
  "pin-channel",
  "pin-crypto",
  "pin-derive",
+ "pin-pkarr",
  "pin-sia",
  "serde",
  "serde_json",

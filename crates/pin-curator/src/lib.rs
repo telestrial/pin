@@ -41,8 +41,13 @@ use iroh_blobs::api::Store;
 use iroh_docs::{api::Doc, AuthorId};
 use pin_derive::{record_key, settings_key};
 
+mod identity;
 mod instance;
 mod keepalive;
+pub use identity::{
+    publish_identity_once, run_identity_loop, IdentityContext, IdentityOutcome,
+    DIRECTORY_DOC_VERSION,
+};
 pub use instance::{
     live_instances, register_instance, run_instance_loop, InstanceContext, InstanceOutcome,
     INSTANCE_TTL_SECS,
@@ -103,6 +108,16 @@ pub(crate) struct SettingsView {
     subscriptions: Vec<SubscriptionView>,
     #[serde(default, rename = "myChannels")]
     pub(crate) my_channels: Vec<OwnedChannelView>,
+    /// Copied into the published directory untouched — the Curator publishes a
+    /// profile, it doesn't own its shape.
+    #[serde(default)]
+    pub(crate) profile: Option<serde_json::Value>,
+    /// Public channel-follows, likewise opaque.
+    #[serde(default)]
+    pub(crate) follows: Vec<serde_json::Value>,
+    /// The did:dhts of identities followed wholesale.
+    #[serde(default, rename = "handleFollows")]
+    pub(crate) handle_follows: Vec<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -122,6 +137,27 @@ pub(crate) struct OwnedChannelView {
     /// not stop a whole settings record from decoding.
     #[serde(default, rename = "channelKey")]
     pub(crate) channel_key: String,
+    /// Whether this public channel is advertised in the identity's directory.
+    /// Absent means advertised — the default, claimed at creation.
+    #[serde(default)]
+    pub(crate) advertised: Option<bool>,
+}
+
+/// What this identity last published to Sia under some rkey, and the fingerprint of
+/// the content it was, so a republish can tell "same document, refresh its TTL" from
+/// "new document, mint a new object".
+///
+/// Shared with the frontend, which writes the per-channel entries. `fp` is only set by
+/// the directory publisher; both sides ignore what they don't set.
+#[derive(serde::Serialize, serde::Deserialize)]
+pub(crate) struct PublishedState {
+    pub(crate) id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) url: Option<String>,
+    #[serde(default, rename = "olderId", skip_serializing_if = "Option::is_none")]
+    pub(crate) older_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) fp: Option<String>,
 }
 
 /// Read a record's bytes out of the doc, or `None` when it isn't there.

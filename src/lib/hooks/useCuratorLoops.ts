@@ -1,6 +1,11 @@
 import { useEffect } from 'react'
 import { useAuthStore } from '../../stores/auth'
-import { openDocs, startInstanceLoop, startKeepAliveLoop } from '../docs'
+import {
+  openDocs,
+  startIdentityLoop,
+  startInstanceLoop,
+  startKeepAliveLoop,
+} from '../docs'
 
 // Turn on the Curator's background loops, and then get out of the way.
 //
@@ -17,6 +22,10 @@ import { openDocs, startInstanceLoop, startKeepAliveLoop } from '../docs'
 //   instance — record that this node id is a live endpoint of this identity, so the
 //     identity's published coordinates can be the SET of live endpoints rather than
 //     whichever instance wrote last.
+//   identity — publish those coordinates: one packet under the did:dht key carrying
+//     the directory pointer, the doc namespace, and every live endpoint. This was two
+//     writers until now — the Curator at startup and a React effect seconds later,
+//     each publishing a whole packet over the other's half.
 //
 // Started independently: one loop failing to start must not keep the other off.
 
@@ -33,11 +42,12 @@ export function useCuratorLoops() {
     let cancelled = false
 
     void (async () => {
-      await openDocs(appKeyHex)
+      const namespaceId = await openDocs(appKeyHex)
       if (cancelled) return
       await Promise.allSettled([
         startKeepAliveLoop(appKeyHex),
         startInstanceLoop(),
+        startIdentityLoop(appKeyHex, namespaceId),
       ])
     })()
 

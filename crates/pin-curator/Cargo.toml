@@ -30,6 +30,7 @@ pin-derive = { path = "../pin-derive" }
 # Opening the settings blob to read the subscription list, and decoding the channel
 # keys it holds — the same encoding the frontend writes them in.
 pin-crypto = { path = "../pin-crypto" }
+pin-pkarr = { path = "../pin-pkarr" }
 # The session a resolve needs; passed in already connected.
 pin-sia = { path = "../pin-sia" }
 serde = { version = "1", features = ["derive"] }

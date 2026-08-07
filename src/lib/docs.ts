@@ -29,6 +29,7 @@ import {
   put_channel_record,
   put_record,
   share_channel_doc,
+  start_identity_loop,
   start_instance_loop,
   start_keep_alive_loop,
   start_pull_loop,
@@ -52,6 +53,7 @@ import {
   putRecordNative,
   shareChannelNative,
   shareDocNative,
+  startIdentityLoopNative,
   startInstanceLoopNative,
   startKeepAliveLoopNative,
   startPullLoopNative,
@@ -326,6 +328,35 @@ export async function startInstanceLoop(
   await ensureWasm()
   await start_instance_loop(INSTANCE_CADENCE_SECS, (report: string) =>
     onPass?.(report),
+  )
+}
+
+/** How often the identity's coordinates are republished, in seconds. Same reasoning as
+ *  the locator keep-alive: a pkarr record ages off Mainline, and an identity nobody
+ *  republishes stops resolving. */
+const IDENTITY_CADENCE_SECS = 30 * 60
+
+/** Start the identity-publishing loop — ONE packet under the did:dht key carrying the
+ *  directory pointer, the doc namespace, and every live endpoint of this identity.
+ *
+ *  The one writer of that record. It used to be two, each publishing a whole packet
+ *  over the other, because neither could see the other's contribution; now every part
+ *  is assembled from the doc, which every instance syncs.
+ *
+ *  Idempotent (each engine keeps one loop). Requires an open doc ({@link openDocs}) —
+ *  which is also where the namespace id comes from. */
+export async function startIdentityLoop(
+  appKeyHex: string,
+  namespaceId: string,
+  onPass?: (report: string) => void,
+): Promise<void> {
+  if (inTauri()) return startIdentityLoopNative(appKeyHex)
+  await ensureWasm()
+  await start_identity_loop(
+    appKeyHex,
+    namespaceId,
+    IDENTITY_CADENCE_SECS,
+    (report: string) => onPass?.(report),
   )
 }
 

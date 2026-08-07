@@ -406,6 +406,16 @@ export function sia_wait_for_approval(): Promise<void>;
 export function start(): void;
 
 /**
+ * Start the identity-publishing loop in this tab — one packet under the did:dht key
+ * carrying the directory pointer, the doc namespace, and every live endpoint.
+ *
+ * A tab publishes the same record a desktop does, from the same crate, because both
+ * assemble it from the doc rather than from what they happen to know locally. That's
+ * what stopped them overwriting each other.
+ */
+export function start_identity_loop(app_key_hex: string, namespace_id: string, cadence_secs: number, on_pass: Function): Promise<void>;
+
+/**
  * Start this instance's registration loop in this tab.
  *
  * A tab is a real endpoint of this identity — it can be synced with and dialed over
@@ -575,6 +585,7 @@ export interface InitOutput {
     readonly sia_upload_items_packed: (a: any, b: number) => any;
     readonly sia_validate_recovery_phrase: (a: number, b: number) => [number, number];
     readonly sia_wait_for_approval: () => any;
+    readonly start_identity_loop: (a: number, b: number, c: number, d: number, e: number, f: any) => any;
     readonly start_instance_loop: (a: number, b: any) => any;
     readonly start_keep_alive_loop: (a: number, b: number, c: number, d: any) => any;
     readonly start_pull_loop: (a: number, b: number, c: number, d: any) => any;

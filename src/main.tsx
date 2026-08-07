@@ -32,7 +32,6 @@ if (import.meta.env.DEV || inTauri()) {
     __pinDidDht?: () => Promise<string>
     __pinPkarrRoundTrip?: () => Promise<string>
     __pinChannelLocatorRoundTrip?: () => Promise<string>
-    __pinIdentityDocRoundTrip?: () => Promise<string>
     __pinCuratorDocsRoundTrip?: () => Promise<string>
     __pinCuratorDocsList?: () => Promise<string>
     __pinChannelDocs?: {
@@ -65,6 +64,8 @@ if (import.meta.env.DEV || inTauri()) {
       keepAlivePasses: () => string[]
       startInstance: (hex: string) => Promise<string>
       instancePasses: () => string[]
+      startIdentity: (hex: string) => Promise<string>
+      identityPasses: () => string[]
     }
   }
   // Channel docs (the ladder's top rung), driven through whichever engine is active:
@@ -274,41 +275,6 @@ if (import.meta.env.DEV || inTauri()) {
       got?.name === manifest.name && got?.items.length === manifest.items.length
     return `locator ${pub.locatorKey.slice(0, 12)}… → reader resolved "${got?.name}" (${got?.items.length ?? 0}/${manifest.items.length} items) — ${match ? 'MATCH' : 'MISMATCH'}`
   }
-  // Phase D step-3 proof: the identity-doc read path. Publishes your directory
-  // (profile + advertised public channels + follows) under your did:dht, then
-  // resolves it back the way a visitor would — no atproto. MATCH confirms profile +
-  // channel count + follow count survive the pkarr/Sia round-trip.
-  g.__pinIdentityDocRoundTrip = async () => {
-    const { useAuthStore } = await import('./stores/auth')
-    const { useFeedStore } = await import('./stores/feed')
-    const auth = useAuthStore.getState()
-    if (!auth.client || !auth.storedKeyHex) return 'not signed in'
-    const appKeyBytes = hexToBytes(auth.storedKeyHex)
-    const { deriveDidDht } = await import('./lib/pkarr')
-    const { publishIdentityDoc, resolveIdentityDoc } = await import(
-      './lib/identityDoc'
-    )
-    const { manifests } = useFeedStore.getState()
-    const channels = auth.myChannels.flatMap((c) => {
-      const m = manifests[c.channelID]
-      return m?.visibility === 'public'
-        ? [{ channelID: c.channelID, key: c.channelKey, name: m.name }]
-        : []
-    })
-    const doc = {
-      version: 2 as const,
-      profile: null,
-      channels,
-      follows: [],
-      handleFollows: [],
-      updatedAt: new Date().toISOString(),
-    }
-    await publishIdentityDoc(auth.client, appKeyBytes, doc)
-    const { did } = await deriveDidDht(appKeyBytes)
-    const got = await resolveIdentityDoc(auth.client, did)
-    const match = got?.channels.length === channels.length
-    return `identity-doc → resolved ${got?.channels.length ?? 0}/${channels.length} public channels, ${got?.follows.length ?? 0} follows — ${match ? 'MATCH' : 'MISMATCH'}`
-  }
   // "One repo" Slice A proof (DESKTOP ONLY): drive the native Curator's persistent
   // iroh-docs replica through put / get / list / delete over Tauri IPC. Proves the
   // frontend can reach the SAME replica the Curator serves over iroh — the mechanic
@@ -349,6 +315,7 @@ if (import.meta.env.DEV || inTauri()) {
     const pullPasses: string[] = []
     const keepAlivePasses: string[] = []
     const instancePasses: string[] = []
+    const identityPasses: string[] = []
     // A per-page-load instance id for the rendezvous directory (the app uses its own
     // in useRendezvousSync; this is the harness's).
     const RZ_INSTANCE = Array.from(crypto.getRandomValues(new Uint8Array(8)))
@@ -454,6 +421,16 @@ if (import.meta.env.DEV || inTauri()) {
         return 'started'
       },
       instancePasses: () => instancePasses.slice(),
+      // And the identity publisher. Like the other reading loops it stops at an empty
+      // doc, which is the proof available without credentials: a real pass uploads.
+      startIdentity: async (hex) => {
+        const ns = await (await docs()).openDocs(hex)
+        await (await docs()).startIdentityLoop(hex, ns, (report) => {
+          identityPasses.push(report)
+        })
+        return 'started'
+      },
+      identityPasses: () => identityPasses.slice(),
     }
   }
 }

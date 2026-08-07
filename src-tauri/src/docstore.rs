@@ -99,6 +99,8 @@ pub struct DocEngine {
     keep_alive_started: AtomicBool,
     /// Same, for the instance-registration loop.
     instance_started: AtomicBool,
+    /// Same, for the identity-publishing loop.
+    identity_started: AtomicBool,
 }
 
 /// Bring up (or reopen) the Curator's persistent iroh-docs engine on `endpoint`,
@@ -175,6 +177,7 @@ pub async fn open_or_create(
         pull_started: AtomicBool::new(false),
         keep_alive_started: AtomicBool::new(false),
         instance_started: AtomicBool::new(false),
+        identity_started: AtomicBool::new(false),
     })
 }
 
@@ -360,6 +363,11 @@ impl DocEngine {
     /// Whether the instance-registration loop was already running; marks it started.
     pub fn instance_started(&self) -> bool {
         self.instance_started.swap(true, Ordering::SeqCst)
+    }
+
+    /// Whether the identity-publishing loop was already running; marks it started.
+    pub fn identity_started(&self) -> bool {
+        self.identity_started.swap(true, Ordering::SeqCst)
     }
 
     /// The namespace ids of every channel doc currently open.

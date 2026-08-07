@@ -74,6 +74,8 @@ struct Engine {
     keep_alive_running: Cell<bool>,
     /// Same, for the instance-registration loop.
     instance_running: Cell<bool>,
+    /// Same, for the identity-publishing loop.
+    identity_running: Cell<bool>,
     _gossip: Gossip,
     docs: Docs,
     _router: Router,
@@ -148,6 +150,7 @@ pub async fn open(app_key_hex: String) -> Result<String, JsValue> {
         pull_running: Cell::new(false),
         keep_alive_running: Cell::new(false),
         instance_running: Cell::new(false),
+        identity_running: Cell::new(false),
         _gossip: gossip,
         docs,
         _router: router,
@@ -381,6 +384,60 @@ pub async fn start_instance_loop(
             |result| {
                 let report = match &result {
                     Ok(o) => serde_json::json!({ "live": o.live, "pruned": o.pruned }).to_string(),
+                    Err(e) => serde_json::json!({ "error": e }).to_string(),
+                };
+                let _ = on_pass.call1(&JsValue::NULL, &JsValue::from_str(&report));
+            },
+        )
+        .await
+    });
+    Ok(())
+}
+
+/// Start the identity-publishing loop in this tab — one packet under the did:dht key
+/// carrying the directory pointer, the doc namespace, and every live endpoint.
+///
+/// A tab publishes the same record a desktop does, from the same crate, because both
+/// assemble it from the doc rather than from what they happen to know locally. That's
+/// what stopped them overwriting each other.
+#[wasm_bindgen]
+pub async fn start_identity_loop(
+    app_key_hex: String,
+    namespace_id: String,
+    cadence_secs: u32,
+    on_pass: js_sys::Function,
+) -> Result<(), JsValue> {
+    let eng = engine()?;
+    if eng.identity_running.replace(true) {
+        return Ok(());
+    }
+    let app_key = decode_app_key(&app_key_hex)
+        .ok_or_else(|| JsValue::from_str("app key hex must be 32 bytes (64 hex chars)"))?;
+    let ctx = pin_curator::IdentityContext {
+        doc: eng.doc.clone(),
+        blobs: (*eng.blobs).clone(),
+        author_id: eng.author_id,
+        sia: sia(),
+        app_key,
+        namespace_id,
+    };
+    wasm_bindgen_futures::spawn_local(async move {
+        pin_curator::run_identity_loop(
+            ctx,
+            std::time::Duration::from_secs(cadence_secs as u64),
+            // Both clocks come from JS: neither SystemTime nor a date formatter is
+            // available on this target.
+            || js_sys::Date::new_0().to_iso_string().into(),
+            || (js_sys::Date::now() / 1000.0) as u64,
+            |result| {
+                let report = match &result {
+                    Ok(o) => serde_json::json!({
+                        "uploaded": o.uploaded,
+                        "published": o.published,
+                        "endpoints": o.endpoints,
+                        "empty": o.empty,
+                    })
+                    .to_string(),
                     Err(e) => serde_json::json!({ "error": e }).to_string(),
                 };
                 let _ = on_pass.call1(&JsValue::NULL, &JsValue::from_str(&report));

@@ -23,6 +23,8 @@ type SyncHarness = {
   keepAlivePasses: () => string[]
   startInstance: (hex: string) => Promise<string>
   instancePasses: () => string[]
+  startIdentity: (hex: string) => Promise<string>
+  identityPasses: () => string[]
 }
 declare global {
   interface Window {
@@ -108,4 +110,28 @@ test('the instance loop registers this tab as a live endpoint', async ({
   // coordinates where its other devices can see them, which is the whole job.
   const [first] = await page.evaluate(() => window.__pinSync!.instancePasses())
   expect(JSON.parse(first)).toEqual({ live: 1, pruned: 0 })
+})
+
+test('the identity loop runs a pass in the browser and reports it', async ({
+  page,
+}) => {
+  const appKeyHex = Array.from(crypto.getRandomValues(new Uint8Array(32)))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('')
+
+  await harness(page)
+  await page.evaluate((hex) => window.__pinSync!.startIdentity(hex), appKeyHex)
+
+  await expect
+    .poll(() => page.evaluate(() => window.__pinSync!.identityPasses()), {
+      timeout: 60_000,
+      intervals: [250],
+    })
+    .not.toHaveLength(0)
+
+  // A real pass uploads a directory blob to Sia, which this tier has no credentials
+  // for — so the reachable proof is the same one the other reading loops give: it got
+  // to the doc, found no settings, and said so instead of hanging.
+  const [first] = await page.evaluate(() => window.__pinSync!.identityPasses())
+  expect(JSON.parse(first)).toEqual({ error: 'no settings record yet' })
 })
