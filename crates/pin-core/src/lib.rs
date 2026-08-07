@@ -436,6 +436,7 @@ pub async fn start_identity_loop(
                         "published": o.published,
                         "endpoints": o.endpoints,
                         "empty": o.empty,
+                        "incomplete": o.incomplete,
                     })
                     .to_string(),
                     Err(e) => serde_json::json!({ "error": e }).to_string(),

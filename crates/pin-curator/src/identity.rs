@@ -74,6 +74,9 @@ pub struct IdentityOutcome {
     pub endpoints: usize,
     /// Whether there was nothing to advertise, so nothing was published.
     pub empty: bool,
+    /// Owned channels whose manifest this instance couldn't read. Non-zero means the
+    /// pass published NOTHING — see `advertised_channels`.
+    pub incomplete: usize,
 }
 
 /// One advertised public channel: enough for a resolver to read it — the channelID
@@ -117,24 +120,35 @@ struct ChannelView {
     visibility: Option<String>,
 }
 
-/// The advertised public channels, in the order settings lists them.
+/// The advertised public channels, in the order settings lists them, plus a count of
+/// the owned channels this instance couldn't read.
 ///
 /// Advertised means: public visibility, and not explicitly unclaimed. Obscure channels
 /// are ABSENT by construction — they're reachable only through their own K-derived
 /// locator, so resolving an identity must never enumerate them.
+///
+/// The unreadable count is the important half. An instance whose doc hasn't finished
+/// syncing knows from settings that it owns a channel while having no manifest for it,
+/// and silently skipping that channel would publish a directory that omits it — the
+/// same failure as publishing settings you never read, one layer up. So the caller
+/// treats any unreadable manifest as "this view is incomplete" and publishes nothing.
 async fn advertised_channels(
     ctx: &IdentityContext,
     settings: &SettingsView,
-) -> Vec<DirectoryChannel> {
+) -> (Vec<DirectoryChannel>, usize) {
     let mut out = Vec::new();
+    let mut unreadable = 0;
     for owned in &settings.my_channels {
         if owned.advertised == Some(false) {
             continue;
         }
         let Some(k) = pin_crypto::channel_key_from_base64(&owned.channel_key) else {
+            // An undecodable key can't be advertised OR resolved by anyone, so it isn't
+            // something a later pass would do better with.
             continue;
         };
         let Some(view) = read_channel(ctx, &owned.channel_id, &k).await else {
+            unreadable += 1;
             continue;
         };
         if view.visibility.as_deref() != Some("public") {
@@ -146,7 +160,7 @@ async fn advertised_channels(
             name: view.name,
         });
     }
-    out
+    (out, unreadable)
 }
 
 /// An owned channel's manifest from the doc, opened with its K.
@@ -184,6 +198,24 @@ fn has_anything(doc: &DirectoryDoc) -> bool {
         || !doc.handle_follows.is_empty()
 }
 
+/// Which generation to reclaim, and which to keep alive, after publishing `current`.
+///
+/// Pulled out of the pass so the rule is testable on its own: the previous generation
+/// is deliberately NOT deleted, because a reader on lagging relays is still being
+/// handed the pointer to it.
+fn reclaim_plan(held: Option<&PublishedState>, current: &str) -> (Option<String>, Option<String>) {
+    match held {
+        // Same object as last time — a keep-alive pass. Nothing was superseded, so
+        // no generation shifts and nothing is reclaimed.
+        Some(h) if h.id == current => (h.older_id.clone(), None),
+        // A new object supersedes the current one, which becomes the grace generation.
+        // The one it displaces is now two publishes back, past any propagation window,
+        // and safe to reclaim.
+        Some(h) => (Some(h.id.clone()), h.older_id.clone()),
+        None => (None, None),
+    }
+}
+
 /// One pass: assemble, upload if the content moved, and publish the packet.
 ///
 /// The publish happens every pass even when nothing changed — that IS the keep-alive.
@@ -195,16 +227,27 @@ pub async fn publish_identity_once(
     now_secs: u64,
 ) -> Result<IdentityOutcome, String> {
     let settings = read_settings(&ctx.doc, &ctx.blobs, ctx.author_id, &ctx.app_key).await?;
+    let (channels, unreadable) = advertised_channels(ctx, &settings).await;
+    let mut outcome = IdentityOutcome::default();
+
+    // Publish nothing from a view we know is partial. This instance owns channels it
+    // has no manifest for — its doc hasn't finished syncing — and the directory it
+    // would assemble omits them. Publishing it replaces a complete directory with a
+    // lie, from an instance that simply hasn't caught up yet.
+    if unreadable > 0 {
+        outcome.incomplete = unreadable;
+        return Ok(outcome);
+    }
+
     let doc = DirectoryDoc {
         version: DIRECTORY_DOC_VERSION,
         profile: settings.profile.clone(),
-        channels: advertised_channels(ctx, &settings).await,
+        channels,
         follows: settings.follows.clone(),
         handle_follows: settings.handle_follows.clone(),
         updated_at: now_iso,
     };
 
-    let mut outcome = IdentityOutcome::default();
     if !has_anything(&doc) {
         outcome.empty = true;
         return Ok(outcome);
@@ -214,17 +257,16 @@ pub async fn publish_identity_once(
     let held = read_published(ctx, &published_key).await;
     let fp = fingerprint(&doc);
 
-    // Reuse the existing blob when the content hasn't moved; otherwise mint a new one
-    // and hand the superseded id to the reclaim below.
-    let (item_url, object_id, superseded) = match &held {
+    // Reuse the existing blob when the content hasn't moved; otherwise mint a new one.
+    let (item_url, object_id) = match &held {
         Some(h) if h.fp.as_deref() == Some(fp.as_str()) && h.url.is_some() => {
-            (h.url.clone().unwrap(), h.id.clone(), None)
+            (h.url.clone().unwrap(), h.id.clone())
         }
         _ => {
             let bytes = serde_json::to_vec(&doc).map_err(|e| format!("encode directory: {e}"))?;
             let up = ctx.sia.upload_item(bytes, None).await?;
             outcome.uploaded = true;
-            (up.item_url, up.id, held.as_ref().map(|h| h.id.clone()))
+            (up.item_url, up.id)
         }
     };
 
@@ -248,22 +290,28 @@ pub async fn publish_identity_once(
     pin_pkarr::publish(&seed, &records).await?;
     outcome.published = true;
 
+    // Grace deletion (keep-2), exactly as a channel manifest does it — and for exactly
+    // the same reason, which the first cut of this got wrong. Publishing a new pointer
+    // does not make the old one stop being served: a pkarr record takes time to
+    // propagate, and a reader on public relays resolves the previous pointer for
+    // minutes afterwards. Deleting the object it names turns "slightly stale" into
+    // "object not found". So the current AND immediately-previous generations stay
+    // alive, and only the one two publishes back is reclaimed.
+    let (older_id, to_reclaim) = reclaim_plan(held.as_ref(), &object_id);
+
     write_published(
         ctx,
         &published_key,
         &PublishedState {
             id: object_id,
             url: Some(item_url),
-            older_id: None,
+            older_id,
             fp: Some(fp),
         },
     )
     .await;
 
-    // Reclaim the blob we just replaced. No grace window, unlike a channel manifest:
-    // the directory is read on demand by a visitor rather than polled, and a reader
-    // mid-resolve holds the URL they already fetched.
-    if let Some(old) = superseded {
+    if let Some(old) = to_reclaim {
         let _ = ctx.sia.delete_object(&old).await;
     }
     Ok(outcome)
@@ -409,6 +457,50 @@ mod tests {
                 name: "n".into(),
             }]
         )));
+    }
+
+    fn state(id: &str, older: Option<&str>) -> PublishedState {
+        PublishedState {
+            id: id.into(),
+            url: Some(format!("sia://{id}")),
+            older_id: older.map(Into::into),
+            fp: None,
+        }
+    }
+
+    #[test]
+    fn the_previous_generation_is_kept_alive() {
+        // The bug this exists for: publishing a new pointer does not stop the old one
+        // being served. A reader on public relays resolves the previous pointer for
+        // minutes afterwards, so deleting the object it names turns "slightly stale"
+        // into "object not found" — which is exactly what a browser hit.
+        let (older, reclaim) = reclaim_plan(Some(&state("gen1", None)), "gen2");
+        assert_eq!(older.as_deref(), Some("gen1"));
+        assert_eq!(reclaim, None);
+    }
+
+    #[test]
+    fn only_the_generation_two_back_is_reclaimed() {
+        let (older, reclaim) = reclaim_plan(Some(&state("gen2", Some("gen1"))), "gen3");
+        assert_eq!(older.as_deref(), Some("gen2"));
+        assert_eq!(reclaim.as_deref(), Some("gen1"));
+    }
+
+    #[test]
+    fn a_keep_alive_pass_supersedes_nothing() {
+        // Most passes republish the SAME object to refresh its TTL. Nothing was
+        // superseded, so no generation shifts and no delete is issued — otherwise
+        // every pass would re-delete the same id forever.
+        let (older, reclaim) = reclaim_plan(Some(&state("gen2", Some("gen1"))), "gen2");
+        assert_eq!(older.as_deref(), Some("gen1"));
+        assert_eq!(reclaim, None);
+    }
+
+    #[test]
+    fn a_first_publish_reclaims_nothing() {
+        let (older, reclaim) = reclaim_plan(None, "gen1");
+        assert_eq!(older, None);
+        assert_eq!(reclaim, None);
     }
 
     #[test]
