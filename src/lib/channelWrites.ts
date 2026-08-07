@@ -222,7 +222,7 @@ export async function retractChannel(
   // The Sia objects holding the manifest generations (current + the kept grace
   // generation) are orphans on retract — include both so the journaled cleanup
   // reclaims them.
-  const rkey = channelPublishKey(channel.channelID)
+  const rkey = await channelPublishKey(channel.channelID)
   const manifestObject = await readPublished(appKey(), rkey)
   for (const id of [manifestObject?.id, manifestObject?.olderId]) {
     if (id && !protectedObjectIDs?.has(id)) objectIDs.push(id)

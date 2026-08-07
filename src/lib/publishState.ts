@@ -16,13 +16,16 @@
 // share URL's fragment IS that object's decryption key.
 
 import {
+  published_channel_rkey,
+  published_collection,
+} from '../../crates/pin-core/pkg/pin_core.js'
+import {
   decryptForChannel,
   derivePublishedKey,
   encryptForChannel,
 } from '../core/crypto'
+import { ensureWasm } from '../core/wasm'
 import { deleteRecord, getRecord, openDocs, putRecord } from './docs'
-
-const COLLECTION = 'published'
 
 /** One publisher's current Sia object, plus the generation it just superseded.
  *  `olderId` is kept ALIVE deliberately where a grace window is wanted (see
@@ -33,10 +36,19 @@ export type PublishedObject = {
   olderId?: string
 }
 
-/** rkeys are prefixed by what published them, so channels can't collide with the
- *  identity-level publishers that join this collection later. */
-export function channelPublishKey(channelID: string): string {
-  return `channel:${channelID}`
+/** The rkey for one channel's publish state.
+ *
+ *  From Rust, because the Curator's keep-alive loop reads these records: a divergence
+ *  wouldn't error, it would just find nothing, and a locator nobody republishes ages
+ *  off the DHT until the channel stops resolving for its subscribers. */
+export async function channelPublishKey(channelID: string): Promise<string> {
+  await ensureWasm()
+  return published_channel_rkey(channelID)
+}
+
+async function collection(): Promise<string> {
+  await ensureWasm()
+  return published_collection()
 }
 
 async function key(appKeyHex: string): Promise<Uint8Array> {
@@ -53,7 +65,7 @@ export async function readPublished(
 ): Promise<PublishedObject | null> {
   try {
     await openDocs(appKeyHex)
-    const sealed = await getRecord(COLLECTION, rkey)
+    const sealed = await getRecord(await collection(), rkey)
     if (!sealed) return null
     const json = await decryptForChannel(
       await key(appKeyHex),
@@ -79,7 +91,7 @@ export async function writePublished(
       await key(appKeyHex),
       JSON.stringify(value),
     )
-    await putRecord(COLLECTION, rkey, new TextEncoder().encode(sealed))
+    await putRecord(await collection(), rkey, new TextEncoder().encode(sealed))
   } catch (e) {
     console.warn(`publish state write failed for ${rkey}:`, e)
   }
@@ -93,7 +105,7 @@ export async function clearPublished(
 ): Promise<void> {
   try {
     await openDocs(appKeyHex)
-    await deleteRecord(COLLECTION, rkey)
+    await deleteRecord(await collection(), rkey)
   } catch {
     // A stray record is small and opaque; the next publish overwrites it anyway.
   }

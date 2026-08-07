@@ -286,6 +286,17 @@ export function pkarr_publish(seed: Uint8Array, records_json: string): Promise<v
 export function pkarr_resolve(key: string): Promise<string>;
 
 /**
+ * The rkey for one channel's publish state — the spelling the keep-alive loop looks
+ * under, so the frontend has to write it the same way.
+ */
+export function published_channel_rkey(channel_id: string): string;
+
+/**
+ * The collection holding publish state.
+ */
+export function published_collection(): string;
+
+/**
  * Write a record into a channel doc (author side only — a read replica rejects it
  * with "Attempted to insert to read only replica").
  */
@@ -516,6 +527,8 @@ export interface InitOutput {
     readonly pkarr_public_key: (a: number, b: number) => [number, number, number, number];
     readonly pkarr_publish: (a: number, b: number, c: number, d: number) => any;
     readonly pkarr_resolve: (a: number, b: number) => any;
+    readonly published_channel_rkey: (a: number, b: number) => [number, number];
+    readonly published_collection: () => [number, number];
     readonly put_channel_record: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => any;
     readonly put_record: (a: number, b: number, c: number, d: number, e: number, f: number) => any;
     readonly settings_pad_size: () => number;

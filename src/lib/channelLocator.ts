@@ -216,7 +216,7 @@ export async function commitChannelManifest(
   channelKeyB64: string,
   manifest: ChannelManifest,
 ): Promise<void> {
-  const rkey = channelPublishKey(channelID)
+  const rkey = await channelPublishKey(channelID)
   const prev = await readPublished(appKeyHex, rkey)
   const { id, url } = await publishChannelLocator(channelKeyB64, manifest)
   // New current = id; keep prev.id as the grace generation; reclaim prev.olderId.
@@ -247,7 +247,10 @@ export async function refreshChannelLocator(
   channelKeyB64: string,
   channelID: string,
 ): Promise<void> {
-  const published = await readPublished(appKeyHex, channelPublishKey(channelID))
+  const published = await readPublished(
+    appKeyHex,
+    await channelPublishKey(channelID),
+  )
   if (!published?.url) return
   await republishPointer(channelKeyFromBase64(channelKeyB64), published.url)
 }

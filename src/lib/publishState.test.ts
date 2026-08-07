@@ -25,7 +25,7 @@ describe('publish state', () => {
   })
 
   it('round-trips what was published', async () => {
-    const rkey = channelPublishKey('chan-1')
+    const rkey = await channelPublishKey('chan-1')
     await writePublished(APP_KEY_HEX, rkey, {
       id: 'obj-2',
       url: 'sia://obj-2#encryption_key=k',
@@ -41,7 +41,7 @@ describe('publish state', () => {
   it('seals the record', async () => {
     // The URL's fragment IS the object's decryption key, so this must not sit in the
     // doc as readable JSON — the doc syncs between instances and is mirrored to Sia.
-    const rkey = channelPublishKey('chan-1')
+    const rkey = await channelPublishKey('chan-1')
     await writePublished(APP_KEY_HEX, rkey, {
       id: 'obj-1',
       url: 'sia://obj-1#encryption_key=secret',
@@ -57,30 +57,34 @@ describe('publish state', () => {
     // A caller that doesn't know what it published skips the reclaim and the
     // keep-alive; throwing would fail a publish over its own bookkeeping.
     expect(
-      await readPublished(APP_KEY_HEX, channelPublishKey('never')),
+      await readPublished(APP_KEY_HEX, await channelPublishKey('never')),
     ).toBeNull()
 
     // Present but unreadable — a record sealed under a different identity's key,
     // which is what a shared doc could hand us. Same answer.
-    const rkey = channelPublishKey('chan-1')
+    const rkey = await channelPublishKey('chan-1')
     await writePublished('b2'.repeat(32), rkey, { id: 'obj-1' })
     expect(await readPublished(APP_KEY_HEX, rkey)).toBeNull()
   })
 
   it('forgets a record when its subject is gone', async () => {
-    const rkey = channelPublishKey('chan-1')
+    const rkey = await channelPublishKey('chan-1')
     await writePublished(APP_KEY_HEX, rkey, { id: 'obj-1' })
     await clearPublished(APP_KEY_HEX, rkey)
     expect(await readPublished(APP_KEY_HEX, rkey)).toBeNull()
   })
 
   it('keeps channels apart, and apart from identity-level publishers', async () => {
-    await writePublished(APP_KEY_HEX, channelPublishKey('a'), { id: 'obj-a' })
-    await writePublished(APP_KEY_HEX, channelPublishKey('b'), { id: 'obj-b' })
-    expect((await readPublished(APP_KEY_HEX, channelPublishKey('a')))?.id).toBe(
-      'obj-a',
-    )
+    await writePublished(APP_KEY_HEX, await channelPublishKey('a'), {
+      id: 'obj-a',
+    })
+    await writePublished(APP_KEY_HEX, await channelPublishKey('b'), {
+      id: 'obj-b',
+    })
+    expect(
+      (await readPublished(APP_KEY_HEX, await channelPublishKey('a')))?.id,
+    ).toBe('obj-a')
     // Prefixed, so a channel named like a future identity-level rkey can't collide.
-    expect(channelPublishKey('directory')).not.toBe('directory')
+    expect(await channelPublishKey('directory')).not.toBe('directory')
   })
 })

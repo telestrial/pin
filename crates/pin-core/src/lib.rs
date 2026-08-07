@@ -955,6 +955,19 @@ pub fn derive_snapshot_key(app_key: &[u8]) -> Vec<u8> {
     pin_derive::snapshot_key(app_key).to_vec()
 }
 
+/// The collection holding publish state.
+#[wasm_bindgen]
+pub fn published_collection() -> String {
+    pin_derive::PUBLISHED_COLLECTION.to_string()
+}
+
+/// The rkey for one channel's publish state — the spelling the keep-alive loop looks
+/// under, so the frontend has to write it the same way.
+#[wasm_bindgen]
+pub fn published_channel_rkey(channel_id: &str) -> String {
+    pin_derive::published_channel_rkey(channel_id)
+}
+
 /// Publish-state encryption key.
 #[wasm_bindgen]
 pub fn derive_published_key(app_key: &[u8]) -> Vec<u8> {

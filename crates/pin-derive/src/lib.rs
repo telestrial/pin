@@ -178,6 +178,21 @@ pub fn decode_app_key(hex: &str) -> Option<[u8; 32]> {
     decode_hex32(hex)
 }
 
+/// The collection holding publish state — what this identity last published to Sia,
+/// so the superseded object can be reclaimed and the current one kept alive.
+pub const PUBLISHED_COLLECTION: &str = "published";
+
+/// The rkey for one channel's publish state.
+///
+/// Prefixed so channels can't collide with the identity-level publishers that share
+/// this collection. Here rather than beside either caller because the frontend writes
+/// these records and the keep-alive loop reads them: a divergence wouldn't error, it
+/// would just find nothing, and a locator nobody republishes ages off the DHT until
+/// the channel stops resolving for its subscribers.
+pub fn published_channel_rkey(channel_id: &str) -> String {
+    format!("channel:{channel_id}")
+}
+
 /// A record's key in the doc: `collection/rkey`, as bytes. The one spelling both
 /// engines write and read — they sync the same doc, so this can't diverge.
 pub fn record_key(collection: &str, rkey: &str) -> Vec<u8> {
@@ -258,6 +273,22 @@ mod tests {
         let mut bytes = [0u8; 32];
         bytes[31] = 0x0f;
         assert_eq!(decode_hex32(&encode_hex32(&bytes)), Some(bytes));
+    }
+
+    #[test]
+    fn a_channels_publish_state_is_prefixed_and_parseable() {
+        // Prefixed, so a channel whose id happens to read like an identity-level
+        // publisher's rkey can't take its record.
+        assert_eq!(published_channel_rkey("abc"), "channel:abc");
+        assert_ne!(published_channel_rkey("directory"), "directory");
+        // And it survives the round-trip through a record key, which is what the
+        // keep-alive loop does to find it.
+        let key = record_key(PUBLISHED_COLLECTION, &published_channel_rkey("abc"));
+        let key = String::from_utf8(key).unwrap();
+        assert_eq!(
+            parse_record_key(&key),
+            Some((PUBLISHED_COLLECTION, "channel:abc"))
+        );
     }
 
     #[test]
