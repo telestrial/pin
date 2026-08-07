@@ -29,6 +29,11 @@ export async function flushSettingsBestEffort(): Promise<void> {
 // written by useSettingsDocsMirror). No atproto: settings are keyed on the Sia
 // AppKey alone, so a session-less did:dht-native user rehydrates from Sia just
 // the same.
+// How long between attempts to recover a restore's settings. The durable pointer is
+// a pkarr record, and a browser resolves those through public relays that lag — so a
+// single miss says nothing, and giving up says something false.
+const RECOVERY_RETRY_MS = 10_000
+
 export function useSettingsSync() {
   const client = useAuthStore((s) => s.client)
   const storedKeyHex = useAuthStore((s) => s.storedKeyHex)
@@ -50,42 +55,69 @@ export function useSettingsSync() {
           // Local has unpushed mutations (crash mid-mirror last session). Local
           // is fresher — don't overwrite it; mark loaded and let the mirror's
           // boot catch-up (stale fingerprint) re-push.
+          useAuthStore.getState().setSettingsOrigin('loaded')
           useAuthStore.getState().setSettingsLoaded(true)
           return
         }
 
         // A brand-new account (this session created it) has nothing to recover, so
-        // skip the DHT locator resolve. A restore / wiped-pointer boot recovers
-        // settings from the durable locator when there's no local pointer.
-        const recoverViaLocator = !useAuthStore.getState().justCreatedAccount
-        const snap = await readSettingsFromSnapshot(
-          client,
-          appKeyBytes,
-          key,
-          recoverViaLocator,
-        ).catch(() => null)
-        if (cancelled) return
-        if (snap) {
-          useAuthStore
-            .getState()
-            .hydrateSettings(
-              snap.myChannels,
-              snap.subscriptions,
-              snap.dismissedAutoWatch ?? [],
-              snap.theme ?? useAuthStore.getState().theme,
-              snap.follows ?? [],
-              snap.handleFollows ?? [],
-              snap.profile ?? null,
-            )
-        } else {
-          // No snapshot yet — first user mutation creates it.
+        // skip the DHT locator resolve. Its local state is authoritative by
+        // definition — there is no durable copy it could be contradicting.
+        if (useAuthStore.getState().justCreatedAccount) {
+          useAuthStore.getState().setSettingsOrigin('created')
           useAuthStore.getState().setSettingsLoaded(true)
+          return
+        }
+
+        // A RESTORE. From here on, failing to find settings must never be read as
+        // "there aren't any": a resolve that comes back empty is indistinguishable
+        // from one that couldn't reach the network, and the durable pointer lives on
+        // pkarr, which a browser reaches through relays that lag. Concluding
+        // emptiness here is what lets the naming gate fire and the mirror publish an
+        // empty settings record over a real one — a second device silently erasing
+        // the account's channels.
+        //
+        // So: keep trying, and until it succeeds leave the origin 'unknown', which
+        // is what stops anything being written. The doc-sync overlay can also finish
+        // this for us by handing over a peer's copy.
+        useAuthStore.getState().setSettingsLoaded(true)
+        for (let attempt = 0; !cancelled; attempt++) {
+          if (attempt > 0) {
+            await new Promise((r) => setTimeout(r, RECOVERY_RETRY_MS))
+            if (cancelled) return
+            // A peer's synced settings may have arrived meanwhile — that counts.
+            if (useAuthStore.getState().settingsOrigin !== 'unknown') return
+          }
+          const snap = await readSettingsFromSnapshot(
+            client,
+            appKeyBytes,
+            key,
+            true,
+          ).catch(() => null)
+          if (cancelled) return
+          if (snap) {
+            useAuthStore
+              .getState()
+              .hydrateSettings(
+                snap.myChannels,
+                snap.subscriptions,
+                snap.dismissedAutoWatch ?? [],
+                snap.theme ?? useAuthStore.getState().theme,
+                snap.follows ?? [],
+                snap.handleFollows ?? [],
+                snap.profile ?? null,
+              )
+            return
+          }
+          console.warn(
+            `Settings not recovered yet (attempt ${attempt + 1}); retrying. Nothing will be published until they are.`,
+          )
         }
       } catch (e) {
         if (cancelled) return
+        // Origin stays 'unknown', which is the point: the app renders, but nothing
+        // it holds may be written anywhere.
         console.warn('Settings load failed:', e)
-        // Treat load failure as "no settings yet" rather than blocking — a
-        // transient hiccup shouldn't wipe local state.
         useAuthStore.getState().setSettingsLoaded(true)
       }
     })()

@@ -13,6 +13,10 @@ import type {
   ThemeMode,
 } from '../core/types'
 import { APP_KEY } from '../lib/constants'
+
+/** Where the settings this session holds came from — see the field's comment. */
+export type SettingsOrigin = 'unknown' | 'loaded' | 'created'
+
 import { useActionStore } from './actionQueue'
 import { useFeedStore } from './feed'
 import { usePinStore } from './pin'
@@ -76,6 +80,19 @@ type AuthState = {
   theme: ThemeMode
   settingsObjectID: string | null
   settingsLoaded: boolean
+  // Where the settings this session is holding CAME from — and therefore whether
+  // we're entitled to publish them.
+  //
+  //   'created' — this session created the account, so there was nothing to recover
+  //               and local state is authoritative by definition.
+  //   'loaded'  — read from the durable source (the Sia snapshot) or from a peer's
+  //               synced record. Local state is a known-good starting point.
+  //   'unknown' — a RESTORE whose settings we could not reach. Local emptiness here
+  //               means "we don't know", not "there is nothing" — and the two are
+  //               indistinguishable from a failed read, so nothing may be written
+  //               from this state. Publishing it is how a second device silently
+  //               erases an account's channels.
+  settingsOrigin: SettingsOrigin
   settingsDirty: boolean
   // True when THIS session just created a brand-new account (the "Create a new
   // account" onboarding path), so there is nothing to recover. Gates the settings
@@ -127,6 +144,7 @@ type AuthState = {
   ) => void
   setSettingsObjectID: (id: string) => void
   setSettingsLoaded: (loaded: boolean) => void
+  setSettingsOrigin: (origin: SettingsOrigin) => void
   setSettingsDirty: (dirty: boolean) => void
   setJustCreatedAccount: (justCreated: boolean) => void
   setLocked: (locked: boolean) => void
@@ -154,6 +172,7 @@ export const useAuthStore = create<AuthState>()(
       theme: 'rounded',
       settingsObjectID: null,
       settingsLoaded: false,
+      settingsOrigin: 'unknown',
       settingsDirty: false,
       justCreatedAccount: false,
       locked: false,
@@ -267,9 +286,12 @@ export const useAuthStore = create<AuthState>()(
           handleFollows,
           profile,
           settingsLoaded: true,
+          // Anything that hydrates whole settings did so from a real source.
+          settingsOrigin: 'loaded',
         }),
       setSettingsObjectID: (settingsObjectID) => set({ settingsObjectID }),
       setSettingsLoaded: (settingsLoaded) => set({ settingsLoaded }),
+      setSettingsOrigin: (settingsOrigin) => set({ settingsOrigin }),
       setSettingsDirty: (settingsDirty) => set({ settingsDirty }),
       setJustCreatedAccount: (justCreatedAccount) =>
         set({ justCreatedAccount }),
@@ -293,6 +315,7 @@ export const useAuthStore = create<AuthState>()(
           myDidDht: null,
           settingsObjectID: null,
           settingsLoaded: false,
+          settingsOrigin: 'unknown',
           settingsDirty: false,
           justCreatedAccount: false,
           locked: false,

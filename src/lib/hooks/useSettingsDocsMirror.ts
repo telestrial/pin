@@ -12,7 +12,7 @@ import type {
   SubscriptionRef,
   ThemeMode,
 } from '../../core/types'
-import { useAuthStore } from '../../stores/auth'
+import { type SettingsOrigin, useAuthStore } from '../../stores/auth'
 import { useCuratorStore } from '../../stores/curator'
 import { useStorageActivityStore } from '../../stores/storageActivity'
 import {
@@ -100,13 +100,29 @@ function settingsFingerprint(): string {
  *  equals what we already hold (no-op). `defaultTheme` fills an omitted (back-compat)
  *  theme, matching hydrateSettings. NOTE: garbage/undecryptable input never reaches
  *  here — the caller bails on decrypt failure before calling this. */
+/** Whether settings held in this state may be written anywhere.
+ *
+ *  The one rule that stops a second device erasing an account: a RESTORE whose
+ *  settings were never read holds emptiness that means "we don't know", and a failed
+ *  read is indistinguishable from an empty one. Publishing from there overwrites the
+ *  real record with nothing — which is exactly how a browser signing into an existing
+ *  identity wiped its channel list. Only state we know the provenance of goes out.
+ */
+export function mayPublishSettings(origin: SettingsOrigin): boolean {
+  return origin !== 'unknown'
+}
+
 export function decidePeerSettings(
   peer: DispatchSettings,
   current: SettingsFields,
   mirrorClean: boolean,
   defaultTheme: ThemeMode,
+  recovering = false,
 ): SettingsFields | null {
-  if (!mirrorClean) return null
+  // A restore that never reached its settings has nothing worth protecting — its
+  // local state is ignorance, not work — so the clobber guard doesn't apply and a
+  // peer's copy is strictly better. This is one of the two ways out of 'unknown'.
+  if (!recovering && !mirrorClean) return null
   if (peer.version !== SETTINGS_VERSION) return null
   const next: SettingsFields = {
     myChannels: peer.myChannels,
@@ -160,6 +176,11 @@ export function useSettingsDocsMirror() {
     }
 
     const mirror = async () => {
+      // The entitlement check. 'unknown' means this is a restore whose settings we
+      // never managed to read — so local emptiness is ignorance, not fact, and
+      // publishing it would overwrite the real record with nothing. This is the
+      // guard that stops a second device silently erasing an account's channels.
+      if (!mayPublishSettings(useAuthStore.getState().settingsOrigin)) return
       const fp = settingsFingerprint()
       // Already mirrored this exact content — skip before touching pin-core.
       if (fp === readFingerprint()) return
@@ -246,6 +267,8 @@ export function useSettingsDocsMirror() {
       while (saving) await new Promise((r) => setTimeout(r, 50))
       if (settingsFingerprint() !== readFingerprint()) await mirror()
     }
+    // (mirror() itself refuses when the origin is 'unknown', so the flush contract
+    // degrades to "nothing was durable" rather than "something wrong was".)
 
     // READ overlay: reflect a peer's freshly-synced settings into the store.
     let overlayBusy = false
@@ -254,11 +277,17 @@ export function useSettingsDocsMirror() {
       overlayBusy = true
       try {
         if (!useAuthStore.getState().settingsLoaded) return
-        // Only reflect peer state when OUR local state is fully mirrored — a
-        // mismatch means an unsynced local edit we must not clobber (the mirror
+        // A restore that never reached its settings has nothing worth protecting —
+        // its local state is ignorance, not work — so a peer's copy is strictly
+        // better and is taken unconditionally. This is the second way out of
+        // 'unknown': the durable pointer may be unreachable while another instance
+        // of the same identity is right there holding the answer.
+        const recovering = useAuthStore.getState().settingsOrigin === 'unknown'
+        // Otherwise: only reflect peer state when OUR local state is fully mirrored —
+        // a mismatch means an unsynced local edit we must not clobber (the mirror
         // will push it, then this resumes). This is also the wipe guard: we never
         // overwrite pending local work.
-        if (settingsFingerprint() !== readFingerprint()) return
+        if (!recovering && settingsFingerprint() !== readFingerprint()) return
 
         await ensureOpen()
         if (cancelled) return
@@ -275,6 +304,13 @@ export function useSettingsDocsMirror() {
         } catch {
           return
         }
+        // Decrypting a peer's record IS the recovery, whether or not its content
+        // differs from what we hold: it proves we've now seen the account's real
+        // settings. Promote before the differs-check, or an identical copy would
+        // leave us stuck in 'unknown' forever.
+        if (recovering && peer.version === SETTINGS_VERSION) {
+          useAuthStore.getState().setSettingsOrigin('loaded')
+        }
         // The guarded decision (mirror-clean / version / differs) lives in a pure,
         // unit-tested function. A differing value ⟹ (by LWW-newest) a newer peer write.
         const s = useAuthStore.getState()
@@ -283,6 +319,7 @@ export function useSettingsDocsMirror() {
           s,
           settingsFingerprint() === readFingerprint(),
           s.theme,
+          recovering,
         )
         if (!next || cancelled) return
         useAuthStore
