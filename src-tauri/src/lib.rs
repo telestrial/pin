@@ -34,6 +34,7 @@ pub fn run() {
             curator::docs_channel_namespaces,
             curator::docs_subscribe_changes,
             curator::curator_start_pull,
+            curator::curator_start_keep_alive,
             curator::curator_start_sync,
             sia::sia_connect,
             sia::sia_upload_item,

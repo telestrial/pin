@@ -1,4 +1,4 @@
-// The Curator's pull loop, running in a browser tab.
+// The Curator's loops, running in a browser tab.
 //
 // What this proves is narrow and specific: the loop TURNS. It starts, completes a
 // pass, and reports it — on the wasm target, through the same Rust the desktop
@@ -19,6 +19,8 @@ import { expect, type Page, test } from '@playwright/test'
 type SyncHarness = {
   startPull: (hex: string) => Promise<string>
   passes: () => string[]
+  startKeepAlive: (hex: string) => Promise<string>
+  keepAlivePasses: () => string[]
 }
 declare global {
   interface Window {
@@ -53,5 +55,31 @@ test('the pull loop runs a pass in the browser and reports it', async ({
   // subscription list out of. Reporting that is the loop working, not failing: it
   // got as far as the doc and returned an answer rather than hanging.
   const [first] = await page.evaluate(() => window.__pinSync!.passes())
+  expect(JSON.parse(first)).toEqual({ error: 'no settings record yet' })
+})
+
+test('the keep-alive loop runs a pass in the browser and reports it', async ({
+  page,
+}) => {
+  const appKeyHex = Array.from(crypto.getRandomValues(new Uint8Array(32)))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('')
+
+  await harness(page)
+  await page.evaluate((hex) => window.__pinSync!.startKeepAlive(hex), appKeyHex)
+
+  await expect
+    .poll(() => page.evaluate(() => window.__pinSync!.keepAlivePasses()), {
+      timeout: 60_000,
+      intervals: [250],
+    })
+    .not.toHaveLength(0)
+
+  // Same shape as the pull loop's proof, and for the same reason: the keep-alive reads
+  // the identity's settings to learn what it owns, so an empty doc stops it there. That
+  // it reports at all is the evidence — a loop with no executor would just never speak.
+  const [first] = await page.evaluate(() =>
+    window.__pinSync!.keepAlivePasses(),
+  )
   expect(JSON.parse(first)).toEqual({ error: 'no settings record yet' })
 })

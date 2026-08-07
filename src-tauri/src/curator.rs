@@ -621,6 +621,56 @@ pub async fn curator_start_pull(
     Ok(())
 }
 
+/// How often a keep-alive pass runs.
+///
+/// Sized against the DHT, not against how often anything changes: a pkarr record ages
+/// off Mainline in a couple of hours, so this has to come round several times inside
+/// that window to survive a missed pass or two. A pass re-signs one small packet per
+/// owned channel and touches no bytes, so being early costs nothing and being late
+/// costs the channel its discoverability.
+const KEEP_ALIVE_CADENCE: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+
+/// Start the Curator's locator keep-alive loop.
+///
+/// Needs no Sia session: republishing re-signs a pointer that already names its object.
+/// Still placed on the Sia runtime, which is the long-lived one the Curator owns.
+///
+/// Idempotent (the engine keeps one loop), so a remounting caller can just call it.
+#[tauri::command]
+pub async fn curator_start_keep_alive(
+    curator: tauri::State<'_, CuratorState>,
+    sia: tauri::State<'_, crate::sia::SiaState>,
+    app_key_hex: String,
+) -> Result<(), String> {
+    let engine = current_engine(&curator)?;
+    if engine.keep_alive_started() {
+        return Ok(());
+    }
+    let app_key = pin_derive::decode_app_key(&app_key_hex).ok_or("app key hex must be 32 bytes")?;
+    let ctx = pin_curator::KeepAliveContext {
+        doc: engine.doc.clone(),
+        blobs: (*engine.blobs).clone(),
+        author_id: engine.author_id,
+        app_key,
+    };
+    sia.detach(async move {
+        pin_curator::run_keep_alive_loop(ctx, KEEP_ALIVE_CADENCE, |result| match result {
+            Ok(o) => {
+                if o.refreshed > 0 || o.failed > 0 {
+                    println!(
+                        "curator keep-alive: refreshed {} unknown {} failed {}",
+                        o.refreshed, o.unknown, o.failed
+                    );
+                }
+            }
+            // Expected while the engine warms up (no settings record yet).
+            Err(e) => println!("curator keep-alive: {e}"),
+        })
+        .await
+    });
+    Ok(())
+}
+
 /// The namespace ids of every channel doc the Curator currently holds. Empty when the
 /// engine is down, rather than an error — callers treat it as "none open yet".
 #[tauri::command]

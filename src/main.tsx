@@ -61,6 +61,8 @@ if (import.meta.env.DEV || inTauri()) {
       changes: () => Array<{ collection: string; rkey: string; kind: string }>
       startPull: (hex: string) => Promise<string>
       passes: () => string[]
+      startKeepAlive: (hex: string) => Promise<string>
+      keepAlivePasses: () => string[]
     }
   }
   // Channel docs (the ladder's top rung), driven through whichever engine is active:
@@ -343,6 +345,7 @@ if (import.meta.env.DEV || inTauri()) {
       kind: string
     }> = []
     const pullPasses: string[] = []
+    const keepAlivePasses: string[] = []
     // A per-page-load instance id for the rendezvous directory (the app uses its own
     // in useRendezvousSync; this is the harness's).
     const RZ_INSTANCE = Array.from(crypto.getRandomValues(new Uint8Array(8)))
@@ -427,6 +430,16 @@ if (import.meta.env.DEV || inTauri()) {
         return 'started'
       },
       passes: () => pullPasses.slice(),
+      // Same, for the locator keep-alive loop — a second loop from the same crate, so
+      // the property worth proving is the same one: that it turns.
+      startKeepAlive: async (hex) => {
+        await (await docs()).openDocs(hex)
+        await (await docs()).startKeepAliveLoop(hex, (report) => {
+          keepAlivePasses.push(report)
+        })
+        return 'started'
+      },
+      keepAlivePasses: () => keepAlivePasses.slice(),
     }
   }
 }

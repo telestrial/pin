@@ -1,5 +1,17 @@
-// The Curator's pull loop: keep the subscribed channels' manifests current in the
-// doc, so a reader lands on a cached copy instead of waiting on the DHT.
+// The Curator's loops — the work that has to keep happening whether or not anyone is
+// watching, which is what distinguishes the Curator from the UI in front of it.
+//
+// Two of them so far. The PULL loop keeps the subscribed channels' manifests current in
+// the doc, so a reader lands on a cached copy instead of waiting on the DHT. The
+// KEEP-ALIVE loop (see `keepalive`) republishes the owned channels' locators so they
+// don't age off the DHT and take those channels' discoverability with them.
+//
+// Both read the identity's settings record to learn what it subscribes to and owns, and
+// both are returned rather than spawned so the caller can place them on the executor it
+// has. Neither touches the feed: a pass announces itself by writing a record, and the
+// doc's change feed carries that to whatever is rendering.
+//
+// The pull loop, specifically:
 //
 // This is the resolution ladder's "keep" step, moved off the frontend. It ran as a
 // React effect until now, which meant the intake half of the Curator only worked while
@@ -25,6 +37,9 @@ use std::time::Duration;
 use iroh_blobs::api::Store;
 use iroh_docs::{api::Doc, AuthorId};
 use pin_derive::{record_key, settings_key};
+
+mod keepalive;
+pub use keepalive::{keep_alive_once, run_keep_alive_loop, KeepAliveContext, KeepAliveOutcome};
 
 /// The collection holding cached manifests of channels the user subscribes to. Keyed
 /// by channelID; the value is the sealed blob, byte-identical to Sia's copy.
@@ -75,11 +90,11 @@ pub struct PullOutcome {
 /// record that grows a field must not stop the loop. Only the fields below are
 /// required to mean anything.
 #[derive(serde::Deserialize)]
-struct SettingsView {
+pub(crate) struct SettingsView {
     #[serde(default)]
     subscriptions: Vec<SubscriptionView>,
     #[serde(default, rename = "myChannels")]
-    my_channels: Vec<OwnedChannelView>,
+    pub(crate) my_channels: Vec<OwnedChannelView>,
 }
 
 #[derive(serde::Deserialize)]
@@ -91,33 +106,60 @@ struct SubscriptionView {
 }
 
 #[derive(serde::Deserialize)]
-struct OwnedChannelView {
+pub(crate) struct OwnedChannelView {
     #[serde(rename = "channelID")]
-    channel_id: String,
+    pub(crate) channel_id: String,
+    /// The channel's K — the keep-alive loop needs it to derive the locator it
+    /// republishes to. Defaulted like everything else here: one malformed entry must
+    /// not stop a whole settings record from decoding.
+    #[serde(default, rename = "channelKey")]
+    pub(crate) channel_key: String,
 }
 
 /// Read a record's bytes out of the doc, or `None` when it isn't there.
-async fn read_record(
-    ctx: &PullContext,
+///
+/// Takes the pieces rather than a context so every loop in this crate can use it —
+/// they hold the same doc and blobs store, and differ only in what else they need.
+pub(crate) async fn read_record(
+    doc: &Doc,
+    blobs: &Store,
+    author_id: AuthorId,
     collection: &str,
     rkey: &str,
 ) -> Result<Option<Vec<u8>>, String> {
-    let entry = ctx
-        .doc
-        .get_exact(ctx.author_id, record_key(collection, rkey), false)
+    let entry = doc
+        .get_exact(author_id, record_key(collection, rkey), false)
         .await
         .map_err(|e| format!("get {collection}/{rkey}: {e}"))?;
     match entry {
         None => Ok(None),
         Some(e) => {
-            let bytes = ctx
-                .blobs
+            let bytes = blobs
                 .get_bytes(e.content_hash())
                 .await
                 .map_err(|e| format!("get_bytes {collection}/{rkey}: {e}"))?;
             Ok(Some(bytes.to_vec()))
         }
     }
+}
+
+/// The identity's own settings record, decrypted and decoded.
+///
+/// Every loop starts here: settings is where the doc says what this identity
+/// subscribes to and what it owns.
+pub(crate) async fn read_settings(
+    doc: &Doc,
+    blobs: &Store,
+    author_id: AuthorId,
+    app_key: &[u8; 32],
+) -> Result<SettingsView, String> {
+    let raw = read_record(doc, blobs, author_id, SETTINGS_COLLECTION, SETTINGS_RKEY)
+        .await?
+        .ok_or("no settings record yet")?;
+    let blob = String::from_utf8(raw).map_err(|_| "settings blob is not UTF-8")?;
+    let key = settings_key(app_key);
+    let json = pin_crypto::decrypt_settings(&key, &blob)?;
+    serde_json::from_slice(&json).map_err(|e| format!("settings decode: {e}"))
 }
 
 /// Which channels a pass should keep cached: subscribed and not the user's own.
@@ -193,14 +235,7 @@ fn is_older_than_cached(
 /// left for the next pass — one unreachable author must not stop the rest from being
 /// kept current.
 pub async fn pull_once(ctx: &PullContext) -> Result<PullOutcome, String> {
-    let raw = read_record(ctx, SETTINGS_COLLECTION, SETTINGS_RKEY)
-        .await?
-        .ok_or("no settings record yet")?;
-    let blob = String::from_utf8(raw).map_err(|_| "settings blob is not UTF-8")?;
-    let key = settings_key(&ctx.app_key);
-    let json = pin_crypto::decrypt_settings(&key, &blob)?;
-    let settings: SettingsView =
-        serde_json::from_slice(&json).map_err(|e| format!("settings decode: {e}"))?;
+    let settings = read_settings(&ctx.doc, &ctx.blobs, ctx.author_id, &ctx.app_key).await?;
 
     let wanted = wanted_channels(&settings);
     let mut outcome = PullOutcome::default();
@@ -219,10 +254,16 @@ pub async fn pull_once(ctx: &PullContext) -> Result<PullOutcome, String> {
                 // routinely holds a fresher manifest than its own pass can find.
                 // Writing anyway would un-publish a post: the record is what the
                 // reader serves and what syncs back to the peer that had it right.
-                let cached = read_record(ctx, SUB_COLLECTION, channel_id)
-                    .await
-                    .ok()
-                    .flatten();
+                let cached = read_record(
+                    &ctx.doc,
+                    &ctx.blobs,
+                    ctx.author_id,
+                    SUB_COLLECTION,
+                    channel_id,
+                )
+                .await
+                .ok()
+                .flatten();
                 if is_older_than_cached(&k, &resolved.manifest_json, cached.as_deref()) {
                     outcome.stale += 1;
                     continue;

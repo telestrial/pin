@@ -166,6 +166,11 @@ export function startPullLoopNative(appKeyHex: string): Promise<void> {
   return call<void>('curator_start_pull', { appKeyHex })
 }
 
+/** Start the Curator's locator keep-alive loop. Idempotent — the engine keeps one. */
+export function startKeepAliveLoopNative(appKeyHex: string): Promise<void> {
+  return call<void>('curator_start_keep_alive', { appKeyHex })
+}
+
 export function openChannelNative(nsSeedHex: string): Promise<string> {
   return call<string>('docs_open_channel', { nsSeedHex })
 }

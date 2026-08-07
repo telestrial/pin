@@ -29,6 +29,7 @@ import {
   put_channel_record,
   put_record,
   share_channel_doc,
+  start_keep_alive_loop,
   start_pull_loop,
   subscribe_doc_changes,
 } from '../../crates/pin-core/pkg/pin_core.js'
@@ -50,6 +51,7 @@ import {
   putRecordNative,
   shareChannelNative,
   shareDocNative,
+  startKeepAliveLoopNative,
   startPullLoopNative,
   startSyncNative,
   subscribeDocChangesNative,
@@ -274,6 +276,31 @@ export async function startPullLoop(
   // that never turned.
   await start_pull_loop(appKeyHex, PULL_CADENCE_SECS, (report: string) =>
     onPass?.(report),
+  )
+}
+
+/** How often a keep-alive pass runs, in seconds. Matches the native Curator's cadence.
+ *  Sized against the DHT rather than against how often anything changes: a pkarr record
+ *  ages off Mainline in a couple of hours, so a pass has to come round several times
+ *  inside that window to survive a missed one. */
+const KEEP_ALIVE_CADENCE_SECS = 30 * 60
+
+/** Start the Curator's locator keep-alive loop in this instance — republishing the
+ *  owned channels' pkarr pointers so they don't age off the DHT and take those
+ *  channels' discoverability with them.
+ *
+ *  Idempotent (each engine keeps one loop). Requires an open doc ({@link openDocs}),
+ *  which is also where it reads what this identity owns and last published. */
+export async function startKeepAliveLoop(
+  appKeyHex: string,
+  onPass?: (report: string) => void,
+): Promise<void> {
+  if (inTauri()) return startKeepAliveLoopNative(appKeyHex)
+  await ensureWasm()
+  await start_keep_alive_loop(
+    appKeyHex,
+    KEEP_ALIVE_CADENCE_SECS,
+    (report: string) => onPass?.(report),
   )
 }
 

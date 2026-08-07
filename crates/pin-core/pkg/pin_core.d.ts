@@ -406,6 +406,18 @@ export function sia_wait_for_approval(): Promise<void>;
 export function start(): void;
 
 /**
+ * Start the Curator's locator keep-alive loop in this tab.
+ *
+ * The same loop the desktop runs, and it matters here for the same reason: an owned
+ * channel whose locator ages off the DHT stops resolving for its subscribers, and a
+ * tab is a full instance of the Curator rather than a lesser one. Uptime is what
+ * differs — a tab republishes while it's open, a desktop while it's on.
+ *
+ * Needs no Sia session: republishing re-signs a pointer that already names its object.
+ */
+export function start_keep_alive_loop(app_key_hex: string, cadence_secs: number, on_pass: Function): Promise<void>;
+
+/**
  * Start the Curator's subscription pull loop in this tab.
  *
  * The same loop the desktop Curator runs, from the same crate — a tab is a shorter-
@@ -553,6 +565,7 @@ export interface InitOutput {
     readonly sia_upload_items_packed: (a: any, b: number) => any;
     readonly sia_validate_recovery_phrase: (a: number, b: number) => [number, number];
     readonly sia_wait_for_approval: () => any;
+    readonly start_keep_alive_loop: (a: number, b: number, c: number, d: any) => any;
     readonly start_pull_loop: (a: number, b: number, c: number, d: any) => any;
     readonly start_sync: (a: number, b: number, c: any) => any;
     readonly status: () => [number, number, number];

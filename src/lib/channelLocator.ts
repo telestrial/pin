@@ -17,7 +17,6 @@ import { CHANNEL_MANIFEST_VERSION, type ChannelManifest } from '../core/types'
 import {
   openBlob,
   publishLocator,
-  republishPointer,
   resolveLocator,
 } from './channelLocatorNative'
 import { getRecord, openDocs, putRecord } from './docs'
@@ -232,25 +231,4 @@ export async function commitChannelManifest(
       .then(() => client.pruneSlabs())
       .catch(() => {})
   }
-}
-
-/** Keep-alive: refresh a channel locator's pkarr TTL WITHOUT minting a new Sia
- *  object, so a channel published in an earlier session stays resolvable as the
- *  record ages off the DHT. Re-signs/re-publishes the author's OWN current
- *  pointer — read from the publish-state record, NOT a fresh DHT resolve. A
- *  resolve here could read back a stale value from a lagging relay and then
- *  re-sign it with a newer timestamp, burying the real current pointer; the
- *  author already knows their current pointer, so use that. No-op if nothing's
- *  published for this channel yet (a commit establishes it). */
-export async function refreshChannelLocator(
-  appKeyHex: string,
-  channelKeyB64: string,
-  channelID: string,
-): Promise<void> {
-  const published = await readPublished(
-    appKeyHex,
-    await channelPublishKey(channelID),
-  )
-  if (!published?.url) return
-  await republishPointer(channelKeyFromBase64(channelKeyB64), published.url)
 }

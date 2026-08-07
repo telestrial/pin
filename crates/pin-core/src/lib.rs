@@ -70,6 +70,8 @@ struct Engine {
     /// Whether the pull loop is already running (see `start_pull_loop`). One per
     /// engine — a second would double every pass's network work for nothing.
     pull_running: Cell<bool>,
+    /// Same, for the locator keep-alive loop.
+    keep_alive_running: Cell<bool>,
     _gossip: Gossip,
     docs: Docs,
     _router: Router,
@@ -142,6 +144,7 @@ pub async fn open(app_key_hex: String) -> Result<String, JsValue> {
         hey_inbox,
         changes_subscribed: Cell::new(false),
         pull_running: Cell::new(false),
+        keep_alive_running: Cell::new(false),
         _gossip: gossip,
         docs,
         _router: router,
@@ -288,6 +291,54 @@ pub async fn start_pull_loop(
                     Err(e) => serde_json::json!({ "error": e }).to_string(),
                 };
                 // Ignore a JS callback throw; the loop outlives any one report.
+                let _ = on_pass.call1(&JsValue::NULL, &JsValue::from_str(&report));
+            },
+        )
+        .await
+    });
+    Ok(())
+}
+
+/// Start the Curator's locator keep-alive loop in this tab.
+///
+/// The same loop the desktop runs, and it matters here for the same reason: an owned
+/// channel whose locator ages off the DHT stops resolving for its subscribers, and a
+/// tab is a full instance of the Curator rather than a lesser one. Uptime is what
+/// differs — a tab republishes while it's open, a desktop while it's on.
+///
+/// Needs no Sia session: republishing re-signs a pointer that already names its object.
+#[wasm_bindgen]
+pub async fn start_keep_alive_loop(
+    app_key_hex: String,
+    cadence_secs: u32,
+    on_pass: js_sys::Function,
+) -> Result<(), JsValue> {
+    let eng = engine()?;
+    if eng.keep_alive_running.replace(true) {
+        return Ok(());
+    }
+    let app_key = decode_app_key(&app_key_hex)
+        .ok_or_else(|| JsValue::from_str("app key hex must be 32 bytes (64 hex chars)"))?;
+    let ctx = pin_curator::KeepAliveContext {
+        doc: eng.doc.clone(),
+        blobs: (*eng.blobs).clone(),
+        author_id: eng.author_id,
+        app_key,
+    };
+    wasm_bindgen_futures::spawn_local(async move {
+        pin_curator::run_keep_alive_loop(
+            ctx,
+            std::time::Duration::from_secs(cadence_secs as u64),
+            |result| {
+                let report = match &result {
+                    Ok(o) => serde_json::json!({
+                        "refreshed": o.refreshed,
+                        "unknown": o.unknown,
+                        "failed": o.failed,
+                    })
+                    .to_string(),
+                    Err(e) => serde_json::json!({ "error": e }).to_string(),
+                };
                 let _ = on_pass.call1(&JsValue::NULL, &JsValue::from_str(&report));
             },
         )
