@@ -72,6 +72,8 @@ struct Engine {
     pull_running: Cell<bool>,
     /// Same, for the locator keep-alive loop.
     keep_alive_running: Cell<bool>,
+    /// Same, for the instance-registration loop.
+    instance_running: Cell<bool>,
     _gossip: Gossip,
     docs: Docs,
     _router: Router,
@@ -145,6 +147,7 @@ pub async fn open(app_key_hex: String) -> Result<String, JsValue> {
         changes_subscribed: Cell::new(false),
         pull_running: Cell::new(false),
         keep_alive_running: Cell::new(false),
+        instance_running: Cell::new(false),
         _gossip: gossip,
         docs,
         _router: router,
@@ -337,6 +340,47 @@ pub async fn start_keep_alive_loop(
                         "failed": o.failed,
                     })
                     .to_string(),
+                    Err(e) => serde_json::json!({ "error": e }).to_string(),
+                };
+                let _ = on_pass.call1(&JsValue::NULL, &JsValue::from_str(&report));
+            },
+        )
+        .await
+    });
+    Ok(())
+}
+
+/// Start this instance's registration loop in this tab.
+///
+/// A tab is a real endpoint of this identity — it can be synced with and dialed over
+/// its relay — so it belongs in the published set while it's open. It registers as NOT
+/// durable, which is the honest difference: a desktop stays up, a tab doesn't, and a
+/// peer choosing among endpoints should know which is which.
+#[wasm_bindgen]
+pub async fn start_instance_loop(
+    cadence_secs: u32,
+    on_pass: js_sys::Function,
+) -> Result<(), JsValue> {
+    let eng = engine()?;
+    if eng.instance_running.replace(true) {
+        return Ok(());
+    }
+    let ctx = pin_curator::InstanceContext {
+        doc: eng.doc.clone(),
+        blobs: (*eng.blobs).clone(),
+        author_id: eng.author_id,
+        node_id: eng.endpoint.id().to_string(),
+        durable: false,
+    };
+    wasm_bindgen_futures::spawn_local(async move {
+        pin_curator::run_instance_loop(
+            ctx,
+            std::time::Duration::from_secs(cadence_secs as u64),
+            // js_sys::Date rather than SystemTime, which panics on this target.
+            || (js_sys::Date::now() / 1000.0) as u64,
+            |result| {
+                let report = match &result {
+                    Ok(o) => serde_json::json!({ "live": o.live, "pruned": o.pruned }).to_string(),
                     Err(e) => serde_json::json!({ "error": e }).to_string(),
                 };
                 let _ = on_pass.call1(&JsValue::NULL, &JsValue::from_str(&report));

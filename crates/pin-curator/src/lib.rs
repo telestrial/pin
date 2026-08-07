@@ -1,10 +1,13 @@
 // The Curator's loops — the work that has to keep happening whether or not anyone is
 // watching, which is what distinguishes the Curator from the UI in front of it.
 //
-// Two of them so far. The PULL loop keeps the subscribed channels' manifests current in
+// Three of them so far. The PULL loop keeps the subscribed channels' manifests current in
 // the doc, so a reader lands on a cached copy instead of waiting on the DHT. The
 // KEEP-ALIVE loop (see `keepalive`) republishes the owned channels' locators so they
-// don't age off the DHT and take those channels' discoverability with them.
+// don't age off the DHT and take those channels' discoverability with them. The
+// INSTANCE loop (see `instance`) records where THIS instance can be dialed, so the
+// identity's published coordinates are the set of its live endpoints rather than
+// whichever one wrote last.
 //
 // Both read the identity's settings record to learn what it subscribes to and owns, and
 // both are returned rather than spawned so the caller can place them on the executor it
@@ -38,7 +41,12 @@ use iroh_blobs::api::Store;
 use iroh_docs::{api::Doc, AuthorId};
 use pin_derive::{record_key, settings_key};
 
+mod instance;
 mod keepalive;
+pub use instance::{
+    live_instances, register_instance, run_instance_loop, InstanceContext, InstanceOutcome,
+    INSTANCE_TTL_SECS,
+};
 pub use keepalive::{keep_alive_once, run_keep_alive_loop, KeepAliveContext, KeepAliveOutcome};
 
 /// The collection holding cached manifests of channels the user subscribes to. Keyed

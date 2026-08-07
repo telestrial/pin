@@ -17,9 +17,9 @@ import { useChannelDocSync } from './lib/hooks/useChannelDocSync'
 import { useChannelDocsMirror } from './lib/hooks/useChannelDocsMirror'
 import { useChannelReader } from './lib/hooks/useChannelReader'
 import { useCuratorAutostart } from './lib/hooks/useCuratorAutostart'
+import { useCuratorLoops } from './lib/hooks/useCuratorLoops'
 import { useHandleFollowReconciliation } from './lib/hooks/useHandleFollowReconciliation'
 import { useIdentityDocPublish } from './lib/hooks/useIdentityDocPublish'
-import { useLocatorKeepAlive } from './lib/hooks/useLocatorKeepAlive'
 import { useRendezvousSync } from './lib/hooks/useRendezvousSync'
 import { useRepackRunner } from './lib/hooks/useRepackRunner'
 import { useSettingsDocsMirror } from './lib/hooks/useSettingsDocsMirror'
@@ -82,7 +82,7 @@ export default function App() {
   useChannelDocsMirror()
   useChannelReader()
   useSubscriptionPull()
-  useLocatorKeepAlive()
+  useCuratorLoops()
   // Ladder rung 1 (live-sync): the author serves each owned channel as a doc and
   // keeps a read ticket published; the subscriber imports and is pushed updates.
   // Purely additive over the rungs above — if either goes quiet, reads fall back.

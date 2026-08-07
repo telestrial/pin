@@ -406,6 +406,16 @@ export function sia_wait_for_approval(): Promise<void>;
 export function start(): void;
 
 /**
+ * Start this instance's registration loop in this tab.
+ *
+ * A tab is a real endpoint of this identity — it can be synced with and dialed over
+ * its relay — so it belongs in the published set while it's open. It registers as NOT
+ * durable, which is the honest difference: a desktop stays up, a tab doesn't, and a
+ * peer choosing among endpoints should know which is which.
+ */
+export function start_instance_loop(cadence_secs: number, on_pass: Function): Promise<void>;
+
+/**
  * Start the Curator's locator keep-alive loop in this tab.
  *
  * The same loop the desktop runs, and it matters here for the same reason: an owned
@@ -565,6 +575,7 @@ export interface InitOutput {
     readonly sia_upload_items_packed: (a: any, b: number) => any;
     readonly sia_validate_recovery_phrase: (a: number, b: number) => [number, number];
     readonly sia_wait_for_approval: () => any;
+    readonly start_instance_loop: (a: number, b: any) => any;
     readonly start_keep_alive_loop: (a: number, b: number, c: number, d: any) => any;
     readonly start_pull_loop: (a: number, b: number, c: number, d: any) => any;
     readonly start_sync: (a: number, b: number, c: any) => any;

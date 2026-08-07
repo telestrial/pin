@@ -182,6 +182,15 @@ pub fn decode_app_key(hex: &str) -> Option<[u8; 32]> {
 /// so the superseded object can be reclaimed and the current one kept alive.
 pub const PUBLISHED_COLLECTION: &str = "published";
 
+/// The collection where each of this identity's live instances registers itself,
+/// keyed by its iroh node id.
+///
+/// One identity is reachable at as many endpoints as it has devices, and each device
+/// mints its own node key — so "where can I be dialed" is a set, not a value. Keeping
+/// that set in the doc is what lets ANY instance publish the whole set: the thing that
+/// made two writers clobber each other was that neither could see the other.
+pub const INSTANCE_COLLECTION: &str = "instance";
+
 /// The rkey for one channel's publish state.
 ///
 /// Prefixed so channels can't collide with the identity-level publishers that share

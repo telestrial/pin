@@ -171,6 +171,11 @@ export function startKeepAliveLoopNative(appKeyHex: string): Promise<void> {
   return call<void>('curator_start_keep_alive', { appKeyHex })
 }
 
+/** Start this instance's registration loop. Idempotent — the engine keeps one. */
+export function startInstanceLoopNative(): Promise<void> {
+  return call<void>('curator_start_instance', {})
+}
+
 export function openChannelNative(nsSeedHex: string): Promise<string> {
   return call<string>('docs_open_channel', { nsSeedHex })
 }

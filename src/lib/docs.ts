@@ -29,6 +29,7 @@ import {
   put_channel_record,
   put_record,
   share_channel_doc,
+  start_instance_loop,
   start_keep_alive_loop,
   start_pull_loop,
   subscribe_doc_changes,
@@ -51,6 +52,7 @@ import {
   putRecordNative,
   shareChannelNative,
   shareDocNative,
+  startInstanceLoopNative,
   startKeepAliveLoopNative,
   startPullLoopNative,
   startSyncNative,
@@ -301,6 +303,29 @@ export async function startKeepAliveLoop(
     appKeyHex,
     KEEP_ALIVE_CADENCE_SECS,
     (report: string) => onPass?.(report),
+  )
+}
+
+/** How often this instance re-registers its dial coordinates, in seconds. Well under
+ *  the liveness window the Curator crate defines, so a missed pass doesn't drop a
+ *  running instance out of the identity's published endpoints. */
+const INSTANCE_CADENCE_SECS = 15 * 60
+
+/** Start this instance's registration loop — a heartbeat recording that this node id
+ *  is a live endpoint for this identity.
+ *
+ *  It exists so the identity's published coordinates are the SET of live endpoints
+ *  rather than whichever instance wrote last: every instance registers into the doc,
+ *  which every instance syncs, so any of them can publish all of them.
+ *
+ *  Idempotent (each engine keeps one loop). Requires an open doc ({@link openDocs}). */
+export async function startInstanceLoop(
+  onPass?: (report: string) => void,
+): Promise<void> {
+  if (inTauri()) return startInstanceLoopNative()
+  await ensureWasm()
+  await start_instance_loop(INSTANCE_CADENCE_SECS, (report: string) =>
+    onPass?.(report),
   )
 }
 

@@ -72,6 +72,9 @@ pub struct DocEngine {
     pub author_id: AuthorId,
     /// The Curator's doc namespace id (the doc's public identifier).
     pub namespace_id: String,
+    /// The iroh node id this engine is serving on — this instance's dial coordinate,
+    /// and the rkey it registers itself under.
+    pub node_id: String,
     /// True if the marker was already present on load — i.e. the doc persisted from
     /// a prior run. False on first-ever creation. This is the persistence proof.
     pub reopened: bool,
@@ -94,6 +97,8 @@ pub struct DocEngine {
     pull_started: AtomicBool,
     /// Same, for the locator keep-alive loop.
     keep_alive_started: AtomicBool,
+    /// Same, for the instance-registration loop.
+    instance_started: AtomicBool,
 }
 
 /// Bring up (or reopen) the Curator's persistent iroh-docs engine on `endpoint`,
@@ -163,11 +168,13 @@ pub async fn open_or_create(
         gossip,
         author_id,
         namespace_id,
+        node_id: endpoint.id().to_string(),
         reopened,
         channels: Mutex::new(HashMap::new()),
         changes_subscribed: AtomicBool::new(false),
         pull_started: AtomicBool::new(false),
         keep_alive_started: AtomicBool::new(false),
+        instance_started: AtomicBool::new(false),
     })
 }
 
@@ -348,6 +355,11 @@ impl DocEngine {
     /// Whether the keep-alive loop was already running; marks it started either way.
     pub fn keep_alive_started(&self) -> bool {
         self.keep_alive_started.swap(true, Ordering::SeqCst)
+    }
+
+    /// Whether the instance-registration loop was already running; marks it started.
+    pub fn instance_started(&self) -> bool {
+        self.instance_started.swap(true, Ordering::SeqCst)
     }
 
     /// The namespace ids of every channel doc currently open.

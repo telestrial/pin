@@ -63,6 +63,8 @@ if (import.meta.env.DEV || inTauri()) {
       passes: () => string[]
       startKeepAlive: (hex: string) => Promise<string>
       keepAlivePasses: () => string[]
+      startInstance: (hex: string) => Promise<string>
+      instancePasses: () => string[]
     }
   }
   // Channel docs (the ladder's top rung), driven through whichever engine is active:
@@ -346,6 +348,7 @@ if (import.meta.env.DEV || inTauri()) {
     }> = []
     const pullPasses: string[] = []
     const keepAlivePasses: string[] = []
+    const instancePasses: string[] = []
     // A per-page-load instance id for the rendezvous directory (the app uses its own
     // in useRendezvousSync; this is the harness's).
     const RZ_INSTANCE = Array.from(crypto.getRandomValues(new Uint8Array(8)))
@@ -440,6 +443,17 @@ if (import.meta.env.DEV || inTauri()) {
         return 'started'
       },
       keepAlivePasses: () => keepAlivePasses.slice(),
+      // And the instance-registration loop. Unlike the other two this one SUCCEEDS on
+      // an empty doc — it writes its own registration rather than reading anything —
+      // so the spec can assert the real outcome instead of a reached-the-doc error.
+      startInstance: async (hex) => {
+        await (await docs()).openDocs(hex)
+        await (await docs()).startInstanceLoop((report) => {
+          instancePasses.push(report)
+        })
+        return 'started'
+      },
+      instancePasses: () => instancePasses.slice(),
     }
   }
 }

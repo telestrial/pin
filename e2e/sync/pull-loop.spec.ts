@@ -21,6 +21,8 @@ type SyncHarness = {
   passes: () => string[]
   startKeepAlive: (hex: string) => Promise<string>
   keepAlivePasses: () => string[]
+  startInstance: (hex: string) => Promise<string>
+  instancePasses: () => string[]
 }
 declare global {
   interface Window {
@@ -82,4 +84,28 @@ test('the keep-alive loop runs a pass in the browser and reports it', async ({
     window.__pinSync!.keepAlivePasses(),
   )
   expect(JSON.parse(first)).toEqual({ error: 'no settings record yet' })
+})
+
+test('the instance loop registers this tab as a live endpoint', async ({
+  page,
+}) => {
+  const appKeyHex = Array.from(crypto.getRandomValues(new Uint8Array(32)))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('')
+
+  await harness(page)
+  await page.evaluate((hex) => window.__pinSync!.startInstance(hex), appKeyHex)
+
+  await expect
+    .poll(() => page.evaluate(() => window.__pinSync!.instancePasses()), {
+      timeout: 60_000,
+      intervals: [250],
+    })
+    .not.toHaveLength(0)
+
+  // This loop writes rather than reads, so an empty doc is no obstacle: it registers
+  // itself and counts itself live. One live instance is a tab that put its own dial
+  // coordinates where its other devices can see them, which is the whole job.
+  const [first] = await page.evaluate(() => window.__pinSync!.instancePasses())
+  expect(JSON.parse(first)).toEqual({ live: 1, pruned: 0 })
 })

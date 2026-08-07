@@ -671,6 +671,58 @@ pub async fn curator_start_keep_alive(
     Ok(())
 }
 
+/// How often this instance re-registers its dial coordinates. Well under
+/// `INSTANCE_TTL_SECS`, so a missed pass doesn't drop a running instance out of the
+/// identity's published endpoints.
+const INSTANCE_CADENCE: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+
+/// Start this instance's registration loop — a heartbeat saying "this node id is a
+/// live endpoint for this identity", so whoever publishes the identity's coordinates
+/// publishes the whole set rather than only its own.
+///
+/// Marks itself `durable`: the desktop is the always-on one, which is the property a
+/// peer choosing among endpoints cares about.
+///
+/// Idempotent (the engine keeps one loop), so a remounting caller can just call it.
+#[tauri::command]
+pub async fn curator_start_instance(
+    curator: tauri::State<'_, CuratorState>,
+    sia: tauri::State<'_, crate::sia::SiaState>,
+) -> Result<(), String> {
+    let engine = current_engine(&curator)?;
+    if engine.instance_started() {
+        return Ok(());
+    }
+    let ctx = pin_curator::InstanceContext {
+        doc: engine.doc.clone(),
+        blobs: (*engine.blobs).clone(),
+        author_id: engine.author_id,
+        node_id: engine.node_id.clone(),
+        durable: true,
+    };
+    sia.detach(async move {
+        pin_curator::run_instance_loop(ctx, INSTANCE_CADENCE, now_secs, |result| match result {
+            Ok(o) => {
+                if o.pruned > 0 {
+                    println!("curator instance: {} live, {} pruned", o.live, o.pruned);
+                }
+            }
+            Err(e) => println!("curator instance: {e}"),
+        })
+        .await
+    });
+    Ok(())
+}
+
+/// Wall-clock seconds. Passed into the shared loop rather than read inside it, because
+/// `SystemTime::now()` panics on the wasm target the same crate compiles for.
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
 /// The namespace ids of every channel doc the Curator currently holds. Empty when the
 /// engine is down, rather than an error — callers treat it as "none open yet".
 #[tauri::command]
