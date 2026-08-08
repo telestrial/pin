@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { AuthFlow } from './components/auth/AuthFlow'
 import { NamingScreen } from './components/auth/NamingScreen'
-import { RecoveringScreen } from './components/auth/RecoveringScreen'
 import { Home } from './components/Home'
 import { LockScreen } from './components/LockScreen'
 import { Navbar } from './components/Navbar'
@@ -37,7 +36,6 @@ export default function App() {
   const client = useAuthStore((s) => s.client)
   const locked = useAuthStore((s) => s.locked)
   const settingsLoaded = useAuthStore((s) => s.settingsLoaded)
-  const settingsOrigin = useAuthStore((s) => s.settingsOrigin)
   const hasUsername = useAuthStore((s) => !!s.profile?.username)
   const theme = useAuthStore((s) => s.theme)
   const armedItem = useComposeStore((s) => s.armedItem)
@@ -146,25 +144,17 @@ export default function App() {
   }, [client])
 
   const connected = step === 'connected'
-  // A restore that hasn't reached its settings yet. Its local state is ignorance
-  // rather than fact, so it must not be shown as an empty account and must not be
-  // acted on — see RecoveringScreen.
-  const recovering = connected && settingsLoaded && settingsOrigin === 'unknown'
   // Genesis naming gate: a connected identity with no chosen @name yet lands on
   // the naming beat before Home. settingsLoaded first so we don't flash it while
-  // the profile is still hydrating from the Sia snapshot — and NOT while
-  // recovering, because "no username" would then mean "we couldn't read one",
-  // and naming yourself again is a settings write over settings we never read.
-  const needsNaming = connected && settingsLoaded && !recovering && !hasUsername
+  // the profile is still hydrating from the Sia snapshot.
+  const needsNaming = connected && settingsLoaded && !hasUsername
 
   return (
     <div
       id="app-shell"
       className="min-h-screen lg:h-screen flex flex-col lg:overflow-hidden"
     >
-      {connected && !locked && !needsNaming && !recovering && (
-        <Navbar onLock={lock} />
-      )}
+      {connected && !locked && !needsNaming && <Navbar onLock={lock} />}
       {/* Desktop (lg+): the app is locked to the viewport — the navbar is a
           fixed-height flex child and this region fills the rest without
           scrolling itself (lg:overflow-hidden). Each column inside then
@@ -174,8 +164,6 @@ export default function App() {
         {connected ? (
           locked ? (
             <LockScreen onContinue={unlock} />
-          ) : recovering ? (
-            <RecoveringScreen />
           ) : needsNaming ? (
             <NamingScreen />
           ) : (
