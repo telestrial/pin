@@ -104,17 +104,22 @@ impl SiaState {
         self.session.clone()
     }
 
-    /// Place a long-lived task on the Sia runtime and forget it.
+    /// Place a long-lived task on the Sia runtime.
     ///
     /// The runtime matters: the SDK spawns its own background work (host refresh,
     /// connection pre-warming, per-shard transfers), and it lands on whichever runtime
     /// the future is polled from. This one is built `enable_all`, so the timers and IO
     /// drivers that work needs are present.
-    pub(crate) fn detach<F>(&self, fut: F)
+    ///
+    /// Returns the handle to abort it. The Curator's loops run forever by design, so
+    /// without one there is no way to stop them — they outlived the Curator that
+    /// started them, kept its doc handles alive, and so kept the store's files open
+    /// after it had supposedly shut down.
+    pub(crate) fn detach<F>(&self, fut: F) -> tokio::task::AbortHandle
     where
         F: std::future::Future<Output = ()> + Send + 'static,
     {
-        self.rt.spawn(fut);
+        self.rt.spawn(fut).abort_handle()
     }
 }
 

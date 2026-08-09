@@ -141,6 +141,26 @@ struct Inner {
     /// slot is minted per start (like `diag`), so a stopped loop clearing its old
     /// slot can't clear the current one.
     doc_slot: DocSlot,
+    /// Abort handles for the background loops (pull, keep-alive, instance, identity,
+    /// repack). They run forever and hold doc handles, so stopping the Curator means
+    /// stopping them — otherwise they outlive it and keep its store open.
+    loops: Vec<tokio::task::AbortHandle>,
+}
+
+impl Inner {
+    /// Stop the Curator: signal the loop thread, wait for it, abort the background
+    /// loops, and drop the shared engine handle. Waiting matters — the store's files
+    /// stay open until the thread that owns it has actually wound down.
+    fn shut_down(&mut self) {
+        self.running.store(false, Ordering::SeqCst);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+        for l in self.loops.drain(..) {
+            l.abort();
+        }
+        *self.doc_slot.lock().unwrap() = None;
+    }
 }
 
 /// Tauri-managed state holding the running Curator, if any.
@@ -271,11 +291,47 @@ pub fn start_curator(
 #[tauri::command]
 pub fn stop_curator(state: tauri::State<CuratorState>) -> CuratorStatus {
     let mut inner = state.0.lock().unwrap();
-    inner.running.store(false, Ordering::SeqCst);
-    if let Some(handle) = inner.handle.take() {
-        let _ = handle.join();
-    }
+    inner.shut_down();
     CuratorState::snapshot(&inner)
+}
+
+/// Stop the Curator and delete everything it keeps on disk.
+///
+/// For the full reset, which otherwise clears Sia, the atproto-era records, and the
+/// browser's storage — but not this, because it lives outside the webview entirely.
+/// Restoring the same recovery phrase then reopened the same namespace with the old
+/// replica still in it: channels that no longer exist, publish pointers naming Sia
+/// objects the reset had deleted, and every one of them riding along in each new Sia
+/// snapshot. A reset that leaves state behind is worse than no reset, because what it
+/// leaves is inconsistent with everything around it.
+///
+/// The stop has to come first and has to finish: the docs store holds these files
+/// open, and Windows won't delete a file out from under a live handle. Deleting the
+/// whole directory takes the per-device iroh node key with it, which is right — a
+/// reset device should look like a new one, and the node key is minted per device
+/// rather than recovered.
+#[tauri::command]
+pub fn curator_reset(
+    app: tauri::AppHandle,
+    state: tauri::State<CuratorState>,
+) -> Result<(), String> {
+    {
+        let mut inner = state.0.lock().unwrap();
+        inner.shut_down();
+        inner.diag = None;
+    }
+
+    let dir = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|e| format!("no app data dir: {e}"))?
+        .join("curator");
+    match fs::remove_dir_all(&dir) {
+        Ok(()) => Ok(()),
+        // Nothing to remove is the goal state, not a failure.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!("remove {}: {e}", dir.display())),
+    }
 }
 
 #[tauri::command]
@@ -613,7 +669,7 @@ pub async fn curator_start_pull(
         sia: sia.session(),
         app_key,
     };
-    sia.detach(async move {
+    let loop_handle = sia.detach(async move {
         pin_curator::run_pull_loop(ctx, PULL_CADENCE, |result| match result {
             Ok(o) => {
                 if o.cached > 0 || o.dropped > 0 || o.failed > 0 {
@@ -629,6 +685,7 @@ pub async fn curator_start_pull(
         })
         .await
     });
+    curator.0.lock().unwrap().loops.push(loop_handle);
     Ok(())
 }
 
@@ -667,7 +724,7 @@ pub async fn curator_start_repack(
         sia: sia.session(),
         app_key,
     };
-    sia.detach(async move {
+    let loop_handle = sia.detach(async move {
         pin_curator::run_repack_loop(
             ctx,
             REPACK_CADENCE,
@@ -686,6 +743,7 @@ pub async fn curator_start_repack(
         )
         .await
     });
+    curator.0.lock().unwrap().loops.push(loop_handle);
     Ok(())
 }
 
@@ -714,7 +772,7 @@ pub async fn curator_start_keep_alive(
         author_id: engine.author_id,
         app_key,
     };
-    sia.detach(async move {
+    let loop_handle = sia.detach(async move {
         pin_curator::run_keep_alive_loop(ctx, KEEP_ALIVE_CADENCE, |result| match result {
             Ok(o) => {
                 let quiet = o.refreshed == 0
@@ -732,6 +790,7 @@ pub async fn curator_start_keep_alive(
         })
         .await
     });
+    curator.0.lock().unwrap().loops.push(loop_handle);
     Ok(())
 }
 
@@ -764,7 +823,7 @@ pub async fn curator_start_instance(
         node_id: engine.node_id.clone(),
         durable: true,
     };
-    sia.detach(async move {
+    let loop_handle = sia.detach(async move {
         pin_curator::run_instance_loop(ctx, INSTANCE_CADENCE, now_secs, |result| match result {
             Ok(o) => {
                 if o.pruned > 0 {
@@ -775,6 +834,7 @@ pub async fn curator_start_instance(
         })
         .await
     });
+    curator.0.lock().unwrap().loops.push(loop_handle);
     Ok(())
 }
 
@@ -810,7 +870,7 @@ pub async fn curator_start_identity(
         namespace_id: engine.namespace_id.clone(),
     };
     let report = curator.report_handle();
-    sia.detach(async move {
+    let loop_handle = sia.detach(async move {
         pin_curator::run_identity_loop(ctx, IDENTITY_CADENCE, now_iso, now_secs, move |result| {
             let note = match &result {
                 Ok(o) if o.empty => "nothing to advertise yet".to_string(),
@@ -826,6 +886,7 @@ pub async fn curator_start_identity(
         })
         .await
     });
+    curator.0.lock().unwrap().loops.push(loop_handle);
     Ok(())
 }
 

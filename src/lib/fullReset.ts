@@ -1,5 +1,6 @@
 import { wipeAllSiaObjects } from '../core/reset'
 import type { SiaClient } from '../core/siaClient'
+import { inTauri } from './openExternal'
 
 // Nuke everything and reload to the login screen. Order matters: do the Sia
 // wipe while the client is still alive, then clear all local storage and reload —
@@ -22,6 +23,14 @@ export async function fullReset(opts: {
     }
   }
 
+  // The Curator's replica lives outside the webview, so none of the clearing below
+  // reaches it. Left in place, restoring the same recovery phrase reopens the same
+  // namespace with the old records still there — channels that no longer exist, and
+  // publish pointers naming Sia objects this reset has just deleted — which then ride
+  // along in every new snapshot. Do it AFTER the Sia wipe, which needs a live client,
+  // and BEFORE the reload, which would otherwise restart the Curator on the old store.
+  await resetCuratorStore()
+
   try {
     localStorage.clear()
   } catch {}
@@ -31,6 +40,20 @@ export async function fullReset(opts: {
   await clearAllIndexedDB()
 
   location.reload()
+}
+
+// Stop the Curator and delete its on-disk store. Desktop only — on web there's no
+// native process, and the doc lives in memory that the reload clears anyway. The
+// import is dynamic so @tauri-apps/api never enters the web bundle.
+async function resetCuratorStore(): Promise<void> {
+  if (!inTauri()) return
+  try {
+    const { invoke } = await import('@tauri-apps/api/core')
+    await invoke('curator_reset')
+    console.log('full reset: curator store cleared')
+  } catch (e) {
+    console.warn('full reset: curator store clear failed', e)
+  }
 }
 
 // Delete every IndexedDB database — item cache, action journal, etc.
