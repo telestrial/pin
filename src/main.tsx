@@ -151,7 +151,7 @@ if (import.meta.env.DEV || inTauri()) {
     const { snapshotToSia } = await import('./lib/docsMirror')
     await openDocs(hex)
     await putRecord('probe', 'persist', new TextEncoder().encode(text))
-    const p = await snapshotToSia(client, hexToBytes(hex))
+    const p = await snapshotToSia(client, hex)
     return `snapshotted (${p.url.slice(0, 48)}...)`
   }
   g.__pinMirrorRead = async () => {

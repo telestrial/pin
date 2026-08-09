@@ -341,6 +341,7 @@ pub async fn start_keep_alive_loop(
                         "refreshed": o.refreshed,
                         "unknown": o.unknown,
                         "failed": o.failed,
+                        "settings": format!("{:?}", o.settings).to_lowercase(),
                     })
                     .to_string(),
                     Err(e) => serde_json::json!({ "error": e }).to_string(),
@@ -1118,6 +1119,23 @@ pub fn published_collection() -> String {
 #[wasm_bindgen]
 pub fn published_channel_rkey(channel_id: &str) -> String {
     pin_derive::published_channel_rkey(channel_id)
+}
+
+/// The rkey for the settings snapshot's publish state. Same contract as above: the
+/// frontend writes it when it snapshots, the keep-alive loop reads it to know which
+/// pointer to republish.
+#[wasm_bindgen]
+pub fn published_settings_rkey() -> String {
+    pin_derive::PUBLISHED_SETTINGS_RKEY.to_string()
+}
+
+/// The TXT prefix the settings locator's pointer is chunked under. Read from here
+/// rather than spelled again in TypeScript, because the frontend publishes this record
+/// and the Curator republishes it — and a mismatch writes the pointer somewhere no
+/// reader looks, which recovery cannot tell apart from having no settings at all.
+#[wasm_bindgen]
+pub fn settings_pointer_prefix() -> String {
+    pin_derive::SETTINGS_POINTER_PREFIX.to_string()
 }
 
 /// Publish-state encryption key.

@@ -297,6 +297,13 @@ export function published_channel_rkey(channel_id: string): string;
 export function published_collection(): string;
 
 /**
+ * The rkey for the settings snapshot's publish state. Same contract as above: the
+ * frontend writes it when it snapshots, the keep-alive loop reads it to know which
+ * pointer to republish.
+ */
+export function published_settings_rkey(): string;
+
+/**
  * Write a record into a channel doc (author side only — a read replica rejects it
  * with "Attempted to insert to read only replica").
  */
@@ -312,6 +319,14 @@ export function put_record(collection: string, rkey: string, value: Uint8Array):
  * copy that could drift out of step with what the padding actually does.
  */
 export function settings_pad_size(): number;
+
+/**
+ * The TXT prefix the settings locator's pointer is chunked under. Read from here
+ * rather than spelled again in TypeScript, because the frontend publishes this record
+ * and the Curator republishes it — and a mismatch writes the pointer somewhere no
+ * reader looks, which recovery cannot tell apart from having no settings at all.
+ */
+export function settings_pointer_prefix(): string;
 
 /**
  * Produce a shareable DocTicket for this identity's doc (write capability + this
@@ -561,9 +576,11 @@ export interface InitOutput {
     readonly pkarr_resolve: (a: number, b: number) => any;
     readonly published_channel_rkey: (a: number, b: number) => [number, number];
     readonly published_collection: () => [number, number];
+    readonly published_settings_rkey: () => [number, number];
     readonly put_channel_record: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => any;
     readonly put_record: (a: number, b: number, c: number, d: number, e: number, f: number) => any;
     readonly settings_pad_size: () => number;
+    readonly settings_pointer_prefix: () => [number, number];
     readonly share: () => any;
     readonly share_channel_doc: (a: number, b: number) => any;
     readonly sia_account_snapshot: () => any;

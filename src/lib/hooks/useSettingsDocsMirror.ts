@@ -183,7 +183,7 @@ export function useSettingsDocsMirror() {
         const key = await deriveSettingsKey(appKeyBytes)
         const enc = await encryptSettings(key, JSON.stringify(settings))
         await putRecord('settings', 'self', new TextEncoder().encode(enc))
-        const pointer = await snapshotToSia(client, appKeyBytes)
+        const pointer = await snapshotToSia(client, storedKeyHex)
         // Only advance the fingerprint on full success — a failure leaves it
         // stale so the next change/boot retries (no silent loss).
         writeFingerprint(fp)

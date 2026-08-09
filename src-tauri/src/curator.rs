@@ -667,10 +667,13 @@ pub async fn curator_start_keep_alive(
     sia.detach(async move {
         pin_curator::run_keep_alive_loop(ctx, KEEP_ALIVE_CADENCE, |result| match result {
             Ok(o) => {
-                if o.refreshed > 0 || o.failed > 0 {
+                let quiet = o.refreshed == 0
+                    && o.failed == 0
+                    && o.settings == pin_curator::SettingsLocator::Unknown;
+                if !quiet {
                     println!(
-                        "curator keep-alive: refreshed {} unknown {} failed {}",
-                        o.refreshed, o.unknown, o.failed
+                        "curator keep-alive: refreshed {} unknown {} failed {} settings {:?}",
+                        o.refreshed, o.unknown, o.failed, o.settings
                     );
                 }
             }

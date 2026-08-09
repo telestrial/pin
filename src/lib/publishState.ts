@@ -18,6 +18,7 @@
 import {
   published_channel_rkey,
   published_collection,
+  published_settings_rkey,
 } from '../../crates/pin-core/pkg/pin_core.js'
 import {
   decryptForChannel,
@@ -44,6 +45,15 @@ export type PublishedObject = {
 export async function channelPublishKey(channelID: string): Promise<string> {
   await ensureWasm()
   return published_channel_rkey(channelID)
+}
+
+/** The rkey for the settings snapshot's publish state. From Rust for the same reason:
+ *  the Curator's keep-alive republishes the settings locator from this record, and it
+ *  is the pointer a device holding only the recovery phrase follows to find the
+ *  account. */
+export async function settingsPublishKey(): Promise<string> {
+  await ensureWasm()
+  return published_settings_rkey()
 }
 
 async function collection(): Promise<string> {

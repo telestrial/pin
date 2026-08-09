@@ -1,9 +1,16 @@
-//! Keep every owned channel's pkarr locator alive.
+//! Keep this identity's pkarr locators alive — every owned channel's, and the
+//! settings snapshot's.
 //!
-//! A locator is a signed pointer on the Mainline DHT saying "this channel's current
-//! manifest is that Sia object". DHT records are not permanent — they age off unless
+//! A locator is a signed pointer on the Mainline DHT saying "the current version of
+//! this thing is that Sia object". DHT records are not permanent — they age off unless
 //! somebody republishes them — so a channel published in an earlier session quietly
 //! stops resolving for its subscribers, which is the same as disappearing.
+//!
+//! The settings locator ages off the same way, and its failure is worse: it's the
+//! pointer a device with nothing but the recovery phrase follows to find your account.
+//! It was published only when settings CHANGED, so an identity that stopped changing
+//! its settings stopped being recoverable — the single most recovery-critical pointer
+//! was the one nothing republished.
 //!
 //! It ran as a React effect until now, and fire-once: it republished on mount and then
 //! never again, so an instance left running for a day republished at hour zero and let
@@ -24,7 +31,9 @@ use std::time::Duration;
 
 use iroh_blobs::api::Store;
 use iroh_docs::{api::Doc, AuthorId};
-use pin_derive::{published_channel_rkey, PUBLISHED_COLLECTION};
+use pin_derive::{
+    published_channel_rkey, PUBLISHED_COLLECTION, PUBLISHED_SETTINGS_RKEY, SETTINGS_POINTER_PREFIX,
+};
 
 use crate::{read_record, read_settings};
 
@@ -49,6 +58,22 @@ pub struct KeepAliveOutcome {
     /// Channels whose republish failed. The next pass retries — which is the point of
     /// there being a next pass.
     pub failed: usize,
+    /// What happened to the settings locator, reported separately from the channel
+    /// counts: "3 refreshed" would otherwise say nothing about whether the one pointer
+    /// that recovers a whole account is still alive.
+    pub settings: SettingsLocator,
+}
+
+/// The settings locator's fate on one pass.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsLocator {
+    /// No snapshot pointer in publish state — nothing has been mirrored yet, or this
+    /// instance's doc hasn't synced one. Ordinary on a fresh identity, and NOT a
+    /// failure: there is genuinely nothing to keep alive.
+    #[default]
+    Unknown,
+    Refreshed,
+    Failed,
 }
 
 /// One channel's publish state, as the frontend writes it.
@@ -88,6 +113,18 @@ pub async fn keep_alive_once(ctx: &KeepAliveContext) -> Result<KeepAliveOutcome,
             Err(_) => outcome.failed += 1,
         }
     }
+
+    // The settings locator, republished from the same publish state and by the same
+    // rule: re-sign the pointer we know, never one read back off the network.
+    if let Some(url) = read_published_url(ctx, &published_key, PUBLISHED_SETTINGS_RKEY).await {
+        let seed = pin_derive::settings_locator_seed(&ctx.app_key);
+        let records = pin_pkarr::chunk_txt(SETTINGS_POINTER_PREFIX, &url);
+        outcome.settings = match pin_pkarr::publish(&seed, &records).await {
+            Ok(()) => SettingsLocator::Refreshed,
+            Err(_) => SettingsLocator::Failed,
+        };
+    }
+
     Ok(outcome)
 }
 

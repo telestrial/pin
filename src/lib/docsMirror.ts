@@ -4,11 +4,15 @@
 // back into a fresh doc when the app boots. All in TS over the Sia SDK the app
 // already has — no Rust Curator / did:dht needed (that's Phase D).
 //
-// Pointer: "which Sia object is the latest snapshot" is cached in localStorage
-// (the data lives on Sia; the pointer is cache). A cold/wiped device has no
-// pointer, so hydrate is a no-op today — the objectEvents cold-recovery walk
-// (find the newest pin:docsnapshot-tagged object) is a deferred follow-up.
+// Pointer: "which Sia object is the latest snapshot" is recorded TWICE, for two
+// different jobs. In the DOC, as publish state — the record of what this identity
+// published, which has to travel: it's what the Curator's keep-alive republishes
+// from, and what a second device needs to reclaim the object this one superseded.
+// And in localStorage, as a device-local READ cache, so the boot-time settings read
+// stays a plain Sia download with no doc and no pin-core engine behind it. Cache and
+// record, not two copies of one thing.
 
+import { settings_pointer_prefix } from '../../crates/pin-core/pkg/pin_core.js'
 import {
   decryptForChannel,
   deriveSettingsLocatorSeed,
@@ -16,13 +20,25 @@ import {
   encryptForChannel,
 } from '../core/crypto'
 import type { SiaClient } from '../core/siaClient'
+import { ensureWasm } from '../core/wasm'
 import { getRecord, listAll, putRecord } from './docs'
 import { chunkForTxt, identityFromSeed, reassembleTxt } from './pkarr'
 import { pkarrTransport } from './pkarrTransport'
+import {
+  readPublished,
+  settingsPublishKey,
+  writePublished,
+} from './publishState'
 
 const POINTER_KEY = 'pin:docsnapshot:pointer'
-// TXT prefix for the chunked Sia-snapshot URL in the settings-locator document.
-const SETTINGS_POINTER_PREFIX = '_s'
+
+/** TXT prefix for the chunked Sia-snapshot URL in the settings-locator document.
+ *  From Rust: the Curator's keep-alive republishes this record, so the prefix is a
+ *  convention that crosses implementations. */
+async function pointerPrefix(): Promise<string> {
+  await ensureWasm()
+  return settings_pointer_prefix()
+}
 
 // collection, rkey, value(base64). Short keys keep the snapshot JSON compact.
 type SnapshotEntry = { c: string; k: string; v: string }
@@ -71,7 +87,7 @@ async function publishSettingsLocator(
   const seed = await deriveSettingsLocatorSeed(appKeyBytes)
   await (await pkarrTransport()).publish(
     seed,
-    chunkForTxt(SETTINGS_POINTER_PREFIX, url),
+    chunkForTxt(await pointerPrefix(), url),
   )
 }
 
@@ -84,16 +100,17 @@ async function resolveSettingsPointer(
   const seed = await deriveSettingsLocatorSeed(appKeyBytes)
   const { publicKey } = await identityFromSeed(seed)
   const records = await (await pkarrTransport()).resolve(publicKey)
-  return reassembleTxt(records, SETTINGS_POINTER_PREFIX) || null
+  return reassembleTxt(records, await pointerPrefix()) || null
 }
 
-/** Snapshot the whole doc to Sia (encrypted), update the pointer, publish the
+/** Snapshot the whole doc to Sia (encrypted), record the pointer, publish the
  *  durable pkarr locator, prune the previous snapshot. Call (debounced) after
  *  writes. */
 export async function snapshotToSia(
   client: SiaClient,
-  appKeyBytes: Uint8Array,
+  appKeyHex: string,
 ): Promise<Pointer> {
+  const appKeyBytes = Uint8Array.fromHex(appKeyHex)
   const key = await deriveSnapshotKey(appKeyBytes)
   const entries: SnapshotEntry[] = []
   for (const { collection, rkey } of await listAll()) {
@@ -103,12 +120,23 @@ export async function snapshotToSia(
   const ciphertext = await encryptForChannel(key, JSON.stringify(entries))
   const uploaded = await client.uploadItem(new TextEncoder().encode(ciphertext))
 
-  const prev = readPointer()
+  // What we're superseding. Publish state first — it's the record, and it's the one
+  // that travels — falling back to the local cache for identities whose publish state
+  // predates this, so their last snapshot object still gets reclaimed rather than
+  // stranded.
+  const rkey = await settingsPublishKey()
+  const prev = (await readPublished(appKeyHex, rkey)) ?? readPointer()
+
+  await writePublished(appKeyHex, rkey, {
+    id: uploaded.id,
+    url: uploaded.itemURL,
+  })
   writePointer({ id: uploaded.id, url: uploaded.itemURL })
 
-  // Publish the durable DHT pointer (best-effort — the localStorage pointer above
-  // already made this snapshot readable on THIS device; a failed publish just
-  // retries on the next snapshot, and the previous locator still resolves).
+  // Publish the durable DHT pointer (best-effort — the local pointer above already
+  // made this snapshot readable on THIS device, and the Curator's keep-alive
+  // republishes from the publish state either way, so a failed publish here costs
+  // freshness rather than the pointer).
   await publishSettingsLocator(appKeyBytes, uploaded.itemURL).catch((e) =>
     console.warn('settings locator publish failed (will retry):', e),
   )

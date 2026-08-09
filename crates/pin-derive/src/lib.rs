@@ -82,6 +82,11 @@ pub const CHANNEL_DOC_NS_INFO_PREFIX: &str = "pin:channel-doc-ns:v1:";
 pub const CHANNEL_DOC_TICKET_INFO: &[u8] = b"pin:channel-doc:v1";
 /// HKDF `info` for the pkarr key holding the pointer to your settings snapshot.
 pub const SETTINGS_LOCATOR_INFO: &[u8] = b"pin:settings-locator:v1";
+/// The TXT-record prefix the settings locator's pointer is chunked under. Here rather
+/// than beside either caller because the frontend PUBLISHES this record and the
+/// Curator's keep-alive REPUBLISHES it: a divergence wouldn't error, it would write the
+/// pointer under a name the reader never looks for, and recovery would find nothing.
+pub const SETTINGS_POINTER_PREFIX: &str = "_s";
 /// HKDF `info` for the instance-rendezvous pkarr key (where your instances advertise
 /// their DocTickets to find each other).
 pub const RENDEZVOUS_INFO: &[u8] = b"pin:iroh-rendezvous:v1";
@@ -202,6 +207,15 @@ pub fn published_channel_rkey(channel_id: &str) -> String {
     format!("channel:{channel_id}")
 }
 
+/// The rkey for the settings snapshot's publish state — which Sia object the settings
+/// locator currently names, and the generation before it.
+///
+/// Unprefixed, like the directory's, because it's identity-level: there is one settings
+/// snapshot, not one per anything. Shared for the same reason the channel rkey is: the
+/// frontend writes this record when it snapshots, and the keep-alive loop reads it to
+/// know what to republish.
+pub const PUBLISHED_SETTINGS_RKEY: &str = "settings";
+
 /// A record's key in the doc: `collection/rkey`, as bytes. The one spelling both
 /// engines write and read — they sync the same doc, so this can't diverge.
 pub fn record_key(collection: &str, rkey: &str) -> Vec<u8> {
@@ -298,6 +312,21 @@ mod tests {
             parse_record_key(&key),
             Some((PUBLISHED_COLLECTION, "channel:abc"))
         );
+    }
+
+    #[test]
+    fn the_identity_level_publishers_cannot_be_taken_by_a_channel() {
+        // A channel named "settings" must not land on the settings snapshot's record.
+        // The prefix is what guarantees it, so assert the property rather than trust it.
+        assert_ne!(
+            published_channel_rkey(PUBLISHED_SETTINGS_RKEY),
+            PUBLISHED_SETTINGS_RKEY
+        );
+        assert_eq!(PUBLISHED_SETTINGS_RKEY, "settings");
+        // The pointer prefix the frontend publishes under and the keep-alive
+        // republishes under. Pinned: a reader looking for `_s` finds nothing if this
+        // moves, and "recovery finds nothing" is indistinguishable from "no settings".
+        assert_eq!(SETTINGS_POINTER_PREFIX, "_s");
     }
 
     #[test]

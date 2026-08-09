@@ -52,7 +52,9 @@ pub use instance::{
     live_instances, register_instance, run_instance_loop, InstanceContext, InstanceOutcome,
     INSTANCE_TTL_SECS,
 };
-pub use keepalive::{keep_alive_once, run_keep_alive_loop, KeepAliveContext, KeepAliveOutcome};
+pub use keepalive::{
+    keep_alive_once, run_keep_alive_loop, KeepAliveContext, KeepAliveOutcome, SettingsLocator,
+};
 
 /// The collection holding cached manifests of channels the user subscribes to. Keyed
 /// by channelID; the value is the sealed blob, byte-identical to Sia's copy.
