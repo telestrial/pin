@@ -10,7 +10,7 @@
 // namespace and Pin's is per-channel K, so obscure channels stay unenumerable — you
 // can't derive a channel's locator without its K.
 
-import { channelKeyFromBase64 } from '../core/crypto'
+import { channelKeyFromBase64, encryptForChannel } from '../core/crypto'
 import type { FetchChannel } from '../core/feed'
 import type { SiaClient } from '../core/siaClient'
 import { CHANNEL_MANIFEST_VERSION, type ChannelManifest } from '../core/types'
@@ -19,7 +19,7 @@ import {
   publishLocator,
   resolveLocator,
 } from './channelLocatorNative'
-import { getRecord, openDocs, putRecord } from './docs'
+import { deleteRecord, getRecord, openDocs, putRecord } from './docs'
 import {
   channelPublishKey,
   readPublished,
@@ -32,6 +32,11 @@ import {
 // it identically to a fresh resolve — no second code path, and whatever writes it
 // stays content-blind. Keyed by channelID.
 const SUB_COLLECTION = 'sub'
+
+// And where an OWNED channel's manifest is recorded. Separate from `sub` because the
+// two answer different questions — what I follow, versus what I publish — and only
+// one of them is mine to rewrite.
+const OWN_COLLECTION = 'channel'
 
 /** Mirror a channel's manifest to its own Sia object (encrypted under K) and publish
  *  the pointer to that object under the channel's K-derived pkarr locator. Call
@@ -123,6 +128,63 @@ async function cacheSubscribedManifest(
   }
 }
 
+/** Record an OWNED channel's manifest in the doc, under its channelID.
+ *
+ *  The owner's counterpart to `sub/<id>`: the same sealed blob, for a channel you
+ *  publish rather than one you follow. It exists because a manifest can now be
+ *  rewritten by something that isn't the tab you're looking at — the Curator's repack
+ *  moves an item's bytes and swaps the URLs — and a screen still holding the old
+ *  manifest would be pointing at objects that no longer exist. The doc is how that
+ *  reaches the screen. It travels too, so your own channels arrive on your other
+ *  devices without each one resolving every locator.
+ *
+ *  Part of the commit rather than best-effort beside it: a doc that lags the locator
+ *  is precisely the stale read this is meant to prevent. */
+async function recordOwnManifest(
+  appKeyHex: string,
+  channelID: string,
+  channelKeyB64: string,
+  manifest: ChannelManifest,
+): Promise<void> {
+  await openDocs(appKeyHex)
+  const sealed = await encryptForChannel(
+    channelKeyFromBase64(channelKeyB64),
+    JSON.stringify(manifest),
+  )
+  await putRecord(OWN_COLLECTION, channelID, new TextEncoder().encode(sealed))
+}
+
+/** An owned channel's manifest as the doc has it, or null when the doc doesn't hold
+ *  one (a fresh device, or a channel published before this record existed). */
+export async function readOwnManifest(
+  appKeyHex: string,
+  channelID: string,
+  channelKey: string,
+): Promise<ChannelManifest | null> {
+  try {
+    await openDocs(appKeyHex)
+    const stored = await getRecord(OWN_COLLECTION, channelID)
+    if (!stored) return null
+    return await decodeChannelManifest(channelKeyFromBase64(channelKey), stored)
+  } catch {
+    return null
+  }
+}
+
+/** Forget an owned channel's manifest — for a retract, so the record doesn't outlive
+ *  the channel. */
+export async function forgetOwnManifest(
+  appKeyHex: string,
+  channelID: string,
+): Promise<void> {
+  try {
+    await openDocs(appKeyHex)
+    await deleteRecord(OWN_COLLECTION, channelID)
+  } catch {
+    // A stray record is small, sealed, and overwritten by the next publish.
+  }
+}
+
 /** A `FetchChannel` that reads a channel purely from its pkarr locator (no
  *  atproto). Channels are locator-native now, so a miss/error is a genuine
  *  read failure — it throws, and `buildHomeFeed` records it as a channel error
@@ -181,9 +243,16 @@ export function makeCachingLocatorReader(
   ownedChannelIDs: ReadonlySet<string>,
 ): FetchChannel {
   return async (_authorHandleOrDID, channelID, channelKey, fresh) => {
-    if (!fresh && !ownedChannelIDs.has(channelID)) {
-      const cached = await readCachedManifest(appKeyHex, channelID, channelKey)
-      if (cached) return cached
+    if (!fresh) {
+      // Owned channels read their own record, subscribed ones read the cache. The
+      // owned read used to be excluded from caching entirely, because a stale cache
+      // could clobber a post you'd just published — but `channel/<id>` is written as
+      // part of the commit, so it cannot lag a local publish. What it CAN carry is a
+      // rewrite from elsewhere: the Curator's repack, or another of your devices.
+      const stored = ownedChannelIDs.has(channelID)
+        ? await readOwnManifest(appKeyHex, channelID, channelKey)
+        : await readCachedManifest(appKeyHex, channelID, channelKey)
+      if (stored) return stored
     }
     const resolved = await resolveChannelBytes(channelKey)
     if (!resolved) {
@@ -224,6 +293,9 @@ export async function commitChannelManifest(
     url,
     olderId: prev && prev.id !== id ? prev.id : prev?.olderId,
   })
+  // Record it in the doc too, awaited: the screen reads this, and a doc that lagged
+  // the locator would be the stale read it exists to prevent.
+  await recordOwnManifest(appKeyHex, channelID, channelKeyB64, manifest)
   const toReclaim = prev?.olderId
   if (toReclaim && toReclaim !== id && toReclaim !== prev?.id) {
     await client

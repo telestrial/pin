@@ -25,6 +25,7 @@ import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
 import {
   commitChannelManifest,
+  forgetOwnManifest,
   resolveChannelViaLocator,
 } from './channelLocator'
 import {
@@ -228,6 +229,8 @@ export async function retractChannel(
     if (id && !protectedObjectIDs?.has(id)) objectIDs.push(id)
   }
   await clearPublished(appKey(), rkey)
+  // And the doc's copy of the manifest, so the record doesn't outlive its channel.
+  await forgetOwnManifest(appKey(), channel.channelID)
 
   useFeedStore.getState().removeChannel(channel.channelID)
   return { objectIDs, urls }

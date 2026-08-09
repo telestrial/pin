@@ -432,4 +432,48 @@ describe('integration: revalidate fills the feed in out of band', () => {
     const sub = subFor('nevercached', 'AAAA')
     expect(await applyCachedChannel(sub)).toBe(false)
   })
+
+  it('serves an owned channel from the doc, so a rewrite elsewhere reaches it', async () => {
+    const app = createFakeApp()
+    const alice = app.createAccount({
+      did: 'did:plc:alice',
+      handle: 'alice.test',
+    })
+    const created = await createChannel(alice.client, {
+      name: 'Mine',
+      description: '',
+    })
+    await commitChannelManifest(
+      alice.client,
+      FAKE_APP_KEY_HEX,
+      created.channelID,
+      created.channelKey,
+      created.manifest,
+    )
+
+    // Stand in for the Curator's repack, or another of your devices: the record moves
+    // without this tab doing anything. Reading fresh from the locator would miss it,
+    // which is the whole reason owned channels stopped being excluded from the doc.
+    const rewritten = { ...created.manifest, name: 'Repacked' }
+    docStore.set(
+      `channel/${created.channelID}`,
+      new TextEncoder().encode(
+        await encryptForChannel(
+          channelKeyFromBase64(created.channelKey),
+          JSON.stringify(rewritten),
+        ),
+      ),
+    )
+
+    const reader = makeCachingLocatorReader(
+      FAKE_APP_KEY_HEX,
+      new Set([created.channelID]),
+    )
+    const seen = await reader('', created.channelID, created.channelKey)
+    expect(seen.name).toBe('Repacked')
+
+    // And an explicit Refresh still bypasses it for the network's answer.
+    const forced = await reader('', created.channelID, created.channelKey, true)
+    expect(forced.name).toBe('Mine')
+  })
 })
