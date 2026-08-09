@@ -32,7 +32,7 @@ use iroh_docs::store::Query;
 use iroh_docs::DocTicket;
 // Shared with pin-core (the browser engine): both write into the SAME synced doc, so
 // the record-key spelling can't diverge — a divergence is a data bug, not untidiness.
-use pin_derive::{collection_prefix, record_key};
+use pin_derive::{collection_prefix, record_key, RecordKey};
 use tauri::{Emitter, Manager};
 
 use crate::docstore::DocEngine;
@@ -460,8 +460,15 @@ pub async fn docs_list_records(
     Ok(out)
 }
 
+/// Every record in the Curator's doc, as `{collection, rkey}` pairs.
+///
+/// Split here, by the same `pin_derive::RecordKey` the wasm engine uses, so the
+/// frontend gets one shape from either transport instead of splitting keys itself in
+/// each. Non-record keys are skipped rather than failing the listing.
 #[tauri::command]
-pub async fn docs_list_all(state: tauri::State<'_, CuratorState>) -> Result<Vec<String>, String> {
+pub async fn docs_list_all(
+    state: tauri::State<'_, CuratorState>,
+) -> Result<Vec<RecordKey>, String> {
     let engine = current_engine(&state)?;
     let mut stream = Box::pin(
         engine
@@ -473,7 +480,9 @@ pub async fn docs_list_all(state: tauri::State<'_, CuratorState>) -> Result<Vec<
     let mut out = Vec::new();
     while let Some(res) = stream.next().await {
         let entry = res.map_err(|e| format!("entry: {e}"))?;
-        out.push(String::from_utf8_lossy(entry.key()).to_string());
+        if let Some(parsed) = RecordKey::parse(&String::from_utf8_lossy(entry.key())) {
+            out.push(parsed);
+        }
     }
     Ok(out)
 }

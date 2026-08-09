@@ -13,3 +13,11 @@ rust-version = "1.82"
 [dependencies]
 hkdf = "0.12"
 sha2 = "0.10"
+# For `RecordKey` — the parsed record address both engines hand the frontend. The
+# shape crosses the seam, so it needs one definition here rather than one per engine;
+# serde builds on wasm and native alike, so the "no iroh" property above holds.
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+# Pins `RecordKey`'s serialized field names, which the frontend destructures.
+serde_json = "1"

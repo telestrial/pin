@@ -11,6 +11,10 @@
 // manifests are KB; media bytes live on Sia, never in a record). Every call rejects
 // with "Curator is not running" when the engine is down.
 
+// Type-only, so this doesn't create a runtime cycle with docs.ts (which imports this
+// module). The record-address shape is part of the doc surface, so it's declared there.
+import type { DocRecordKey } from './docs'
+
 async function call<T>(
   cmd: string,
   args?: Record<string, unknown>,
@@ -57,14 +61,10 @@ export function listRecordsNative(collection: string): Promise<string[]> {
   return call<string[]>('docs_list_records', { collection })
 }
 
-export async function listAllNative(): Promise<
-  Array<{ collection: string; rkey: string }>
-> {
-  const keys = await call<string[]>('docs_list_all')
-  return keys.map((key) => {
-    const i = key.indexOf('/')
-    return { collection: key.slice(0, i), rkey: key.slice(i + 1) }
-  })
+/** Already split by the command, into the same shape the wasm engine returns — the
+ *  key rule lives in `pin_derive`, not in each transport. */
+export function listAllNative(): Promise<DocRecordKey[]> {
+  return call<DocRecordKey[]>('docs_list_all')
 }
 
 /** The desktop analog of docs.ts `openDocs`: the native Curator opens its doc at

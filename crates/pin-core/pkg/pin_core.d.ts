@@ -198,10 +198,15 @@ export function get_record(collection: string, rkey: string): Promise<Uint8Array
 export function import_channel_doc(ticket: string, on_event: Function): Promise<string>;
 
 /**
- * List every record's full key (`collection/rkey`) across all collections.
- * Returns a JS array of strings. Used to snapshot the whole doc (docsMirror).
+ * Every record in the doc, as `{collection, rkey}` pairs (JSON). Used to snapshot the
+ * whole doc (docsMirror).
+ *
+ * The key is split HERE, by `pin_derive`'s `RecordKey`, rather than handed over raw
+ * for the frontend to split — so this engine and the desktop's decompose keys with
+ * one definition. Keys that aren't record keys are skipped: a whole-doc snapshot
+ * shouldn't fail over one stray key.
  */
-export function list_all(): Promise<any>;
+export function list_all(): Promise<string>;
 
 /**
  * List the rkeys under a collection (entries whose key starts with `collection/`).

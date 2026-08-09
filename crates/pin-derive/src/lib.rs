@@ -275,6 +275,43 @@ pub fn parse_record_key(key: &str) -> Option<(&str, &str)> {
     Some((collection, rkey))
 }
 
+/// A record's address, parsed — the owned, serializable form of what
+/// [`parse_record_key`] splits out.
+///
+/// This exists so a whole-doc listing crosses the seam ALREADY SPLIT. Both engines
+/// return it (as JSON from wasm, over IPC from the desktop command), which is what
+/// keeps the split in one place: before this, each transport did its own
+/// `key.indexOf('/')` in TypeScript, duplicating the rule above and less carefully —
+/// a key with no separator yielded a mangled collection instead of being rejected.
+///
+/// The FIELD NAMES are part of the seam, since the frontend destructures them. A test
+/// pins the exact serialized keys: a rename here is invisible to both compilers and
+/// would surface as `undefined` on one platform only, the way an upload's share URL
+/// once did.
+#[derive(serde::Serialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordKey {
+    /// The collection the record lives in.
+    pub collection: String,
+    /// The record's key within that collection.
+    pub rkey: String,
+}
+
+impl RecordKey {
+    /// Parse one key, or `None` if it isn't a record key.
+    ///
+    /// A listing SKIPS what this rejects rather than failing: `list_all` backs the
+    /// whole-doc snapshot, and one stray key shouldn't make an identity's settings
+    /// unsnapshottable.
+    pub fn parse(key: &str) -> Option<Self> {
+        let (collection, rkey) = parse_record_key(key)?;
+        Some(Self {
+            collection: collection.to_string(),
+            rkey: rkey.to_string(),
+        })
+    }
+}
+
 // --- Live-event kinds --------------------------------------------------------
 //
 // The `kind` an engine reports for an iroh-docs `LiveEvent`. Here for the same reason
@@ -424,6 +461,36 @@ mod tests {
         assert_eq!(parse_record_key(""), None);
         assert_eq!(parse_record_key("/self"), None);
         assert_eq!(parse_record_key("sub/"), None);
+    }
+
+    #[test]
+    fn record_key_serializes_under_the_names_the_frontend_destructures() {
+        // The frontend does `for (const { collection, rkey } of await listAll())`. These
+        // two names ARE the seam, and nothing type-checks across it — so assert the
+        // exact JSON rather than trusting `rename_all` to leave single-word fields be.
+        let json = serde_json::to_string(&RecordKey {
+            collection: "settings".into(),
+            rkey: "self".into(),
+        })
+        .unwrap();
+        assert_eq!(json, r#"{"collection":"settings","rkey":"self"}"#);
+    }
+
+    #[test]
+    fn record_key_parse_agrees_with_the_borrowed_split() {
+        let key = String::from_utf8(record_key("sub", "a/b")).unwrap();
+        assert_eq!(
+            RecordKey::parse(&key),
+            Some(RecordKey {
+                collection: "sub".into(),
+                rkey: "a/b".into(),
+            })
+        );
+        // What a listing skips. The TypeScript splits this replaced returned
+        // `{collection: "setting", rkey: "settings"}` for a separator-less key — a
+        // record address invented out of nothing.
+        assert_eq!(RecordKey::parse("settings"), None);
+        assert_eq!(RecordKey::parse("sub/"), None);
     }
 
     fn hex(bytes: &[u8; 32]) -> String {

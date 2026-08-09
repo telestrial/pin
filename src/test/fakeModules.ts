@@ -189,10 +189,13 @@ export function fakeDocsModule() {
       [...fakeDocStore.keys()]
         .filter((k) => k.startsWith(`${collection}/`))
         .map((k) => k.slice(collection.length + 1)),
+    // Splits — and skips what it can't split — the way `pin_derive::RecordKey` does
+    // in both real engines, so the fake can't behave better than production.
     listAll: async () =>
-      [...fakeDocStore.keys()].map((k) => {
+      [...fakeDocStore.keys()].flatMap((k) => {
         const i = k.indexOf('/')
-        return { collection: k.slice(0, i), rkey: k.slice(i + 1) }
+        if (i <= 0 || i === k.length - 1) return []
+        return [{ collection: k.slice(0, i), rkey: k.slice(i + 1) }]
       }),
     subscribeDocChanges: () => () => {},
     startPullLoop: async () => {},

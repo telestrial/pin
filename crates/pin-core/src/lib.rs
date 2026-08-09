@@ -37,8 +37,8 @@ use iroh_gossip::{net::Gossip, ALPN as GOSSIP_ALPN};
 // author (the one-root-secret move).
 use pin_derive::{
     collection_prefix, decode_app_key, decode_hex32, hkdf32, parse_record_key, record_key,
-    AUTHOR_INFO, EV_CONTENT_READY, EV_ERROR, EV_INSERT_LOCAL, EV_INSERT_REMOTE, EV_NEIGHBOR_DOWN,
-    EV_NEIGHBOR_UP, EV_PENDING_CONTENT_READY, EV_SYNC_FINISHED, NS_INFO,
+    RecordKey, AUTHOR_INFO, EV_CONTENT_READY, EV_ERROR, EV_INSERT_LOCAL, EV_INSERT_REMOTE,
+    EV_NEIGHBOR_DOWN, EV_NEIGHBOR_UP, EV_PENDING_CONTENT_READY, EV_SYNC_FINISHED, NS_INFO,
 };
 // The /hey inbox knock, the same crate the native Curator serves — one protocol, so
 // a peer knocking gets the same answer from a tab as from a desktop.
@@ -570,18 +570,25 @@ pub async fn list_records(collection: String) -> Result<JsValue, JsValue> {
     Ok(arr.into())
 }
 
-/// List every record's full key (`collection/rkey`) across all collections.
-/// Returns a JS array of strings. Used to snapshot the whole doc (docsMirror).
+/// Every record in the doc, as `{collection, rkey}` pairs (JSON). Used to snapshot the
+/// whole doc (docsMirror).
+///
+/// The key is split HERE, by `pin_derive`'s `RecordKey`, rather than handed over raw
+/// for the frontend to split — so this engine and the desktop's decompose keys with
+/// one definition. Keys that aren't record keys are skipped: a whole-doc snapshot
+/// shouldn't fail over one stray key.
 #[wasm_bindgen]
-pub async fn list_all() -> Result<JsValue, JsValue> {
+pub async fn list_all() -> Result<String, JsValue> {
     let eng = engine()?;
     let mut stream = Box::pin(eng.doc.get_many(Query::all().build()).await.map_err(je)?);
-    let arr = js_sys::Array::new();
+    let mut keys = Vec::new();
     while let Some(res) = stream.next().await {
         let entry = res.map_err(je)?;
-        arr.push(&JsValue::from_str(&String::from_utf8_lossy(entry.key())));
+        if let Some(parsed) = RecordKey::parse(&String::from_utf8_lossy(entry.key())) {
+            keys.push(parsed);
+        }
     }
-    Ok(arr.into())
+    out(&keys)
 }
 
 // ── Live sync ──────────────────────────────────────────────────────────────

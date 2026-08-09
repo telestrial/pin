@@ -133,18 +133,21 @@ export async function listRecords(collection: string): Promise<string[]> {
   return (await list_records(collection)) as string[]
 }
 
-/** Every record across all collections, as {collection, rkey} pairs. Used to
- *  snapshot the whole doc (docsMirror). */
-export async function listAll(): Promise<
-  Array<{ collection: string; rkey: string }>
-> {
+/** A record's address in the doc.
+ *
+ *  Both engines return this shape already split, by `pin_derive`'s `RecordKey` — the
+ *  same one definition that composes the key in the first place. It used to be split
+ *  here and again in the desktop transport, which duplicated the rule and got the
+ *  separator-less case wrong. */
+export type DocRecordKey = { collection: string; rkey: string }
+
+/** Every record across all collections. Used to snapshot the whole doc (docsMirror).
+ *  Keys that aren't record keys are skipped by the engine, so one stray key can't
+ *  make a snapshot unreadable. */
+export async function listAll(): Promise<DocRecordKey[]> {
   if (inTauri()) return listAllNative()
   await ensureWasm()
-  const keys = (await list_all()) as string[]
-  return keys.map((key) => {
-    const i = key.indexOf('/')
-    return { collection: key.slice(0, i), rkey: key.slice(i + 1) }
-  })
+  return JSON.parse(await list_all()) as DocRecordKey[]
 }
 
 /** Produce a shareable DocTicket for this identity's doc (write cap + relay addr).
