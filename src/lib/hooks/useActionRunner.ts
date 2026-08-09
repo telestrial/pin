@@ -117,10 +117,12 @@ export function useActionRunner() {
         store.setState(action.id, 'success', undefined)
         if (!action.silent)
           toast.addToast(`${action.successLabel} “${action.title}”`)
-        // A completed byte reclaim changed Sia storage — refresh the meter.
-        if (action.kind === 'delete-objects') {
-          usePinStore.getState().refreshAccount(client)
-        }
+        // Every action in this queue moves Sia bytes — a publish uploads them, a
+        // reclaim releases them — so every one of them changes what the meter
+        // should say. It used to refresh only after a reclaim, which meant storage
+        // went down on screen and never up: publish five photos and the meter kept
+        // reporting whatever it read before them.
+        usePinStore.getState().refreshAccount(client)
         setTimeout(() => {
           useActionStore.getState().remove(action.id)
         }, SUCCESS_AUTO_REMOVE_MS)
