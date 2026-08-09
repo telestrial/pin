@@ -14,6 +14,7 @@ import type {
 } from '../../core/types'
 import { useAuthStore } from '../../stores/auth'
 import { useCuratorStore } from '../../stores/curator'
+import { usePinStore } from '../../stores/pin'
 import { useStorageActivityStore } from '../../stores/storageActivity'
 import {
   getRecord,
@@ -184,6 +185,11 @@ export function useSettingsDocsMirror() {
         const enc = await encryptSettings(key, JSON.stringify(settings))
         await putRecord('settings', 'self', new TextEncoder().encode(enc))
         const pointer = await snapshotToSia(client, storedKeyHex)
+        // The snapshot is an upload, so the account's storage just moved. Nothing
+        // else would say so: the meter reads once at connect and then only on
+        // pin/unpin/publish, so after a reset it would sit at zero — correct at the
+        // moment it read, and stale from the second this landed.
+        usePinStore.getState().refreshAccount(client)
         // Only advance the fingerprint on full success — a failure leaves it
         // stale so the next change/boot retries (no silent loss).
         writeFingerprint(fp)

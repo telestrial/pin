@@ -82,6 +82,9 @@ export function usePinDocsMirror() {
         // paying for one when nothing changed would make every quiet pass expensive.
         if (result.written > 0 || result.deleted > 0) {
           await snapshotToSia(client, storedKeyHex)
+          // An upload moved the account's storage; the meter only re-reads on
+          // pin/unpin/publish, so say so.
+          usePinStore.getState().refreshAccount(client)
         }
       } catch (e) {
         // The next change retries. A pin that failed to record is still held locally,
