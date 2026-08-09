@@ -1129,6 +1129,25 @@ pub fn published_settings_rkey() -> String {
     pin_derive::PUBLISHED_SETTINGS_RKEY.to_string()
 }
 
+/// The collection holding what this identity keeps — one record per pin.
+#[wasm_bindgen]
+pub fn pinned_collection() -> String {
+    pin_derive::PINNED_COLLECTION.to_string()
+}
+
+/// The rkey for one pin, from the logical item it keeps. The Curator's repack reads
+/// these to learn what's in this identity's scope, so the spelling is shared.
+#[wasm_bindgen]
+pub fn pinned_rkey(channel_id: &str, published_at: &str) -> String {
+    pin_derive::pinned_rkey(channel_id, published_at)
+}
+
+/// Pin-record encryption key.
+#[wasm_bindgen]
+pub fn derive_pinned_key(app_key: &[u8]) -> Vec<u8> {
+    pin_derive::pinned_key(app_key).to_vec()
+}
+
 /// The TXT prefix the settings locator's pointer is chunked under. Read from here
 /// rather than spelled again in TypeScript, because the frontend publishes this record
 /// and the Curator republishes it — and a mismatch writes the pointer somewhere no

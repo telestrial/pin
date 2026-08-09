@@ -18,6 +18,7 @@ import { useChannelReader } from './lib/hooks/useChannelReader'
 import { useCuratorAutostart } from './lib/hooks/useCuratorAutostart'
 import { useCuratorLoops } from './lib/hooks/useCuratorLoops'
 import { useHandleFollowReconciliation } from './lib/hooks/useHandleFollowReconciliation'
+import { usePinDocsMirror } from './lib/hooks/usePinDocsMirror'
 import { useRendezvousSync } from './lib/hooks/useRendezvousSync'
 import { useRepackRunner } from './lib/hooks/useRepackRunner'
 import { useSettingsDocsMirror } from './lib/hooks/useSettingsDocsMirror'
@@ -77,6 +78,7 @@ export default function App() {
   useRepackRunner()
   useSettingsSync()
   useSettingsDocsMirror()
+  usePinDocsMirror()
   useChannelReader()
   useSubscriptionPull()
   useCuratorLoops()

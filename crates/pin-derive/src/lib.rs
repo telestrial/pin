@@ -67,6 +67,10 @@ pub const SNAPSHOT_KEY_INFO: &[u8] = b"pin:docsnapshot:v1";
 /// object's encryption key in its fragment — so these records are as secret as the
 /// content they point at, and get their own domain rather than riding the settings key.
 pub const PUBLISHED_KEY_INFO: &[u8] = b"pin:published:v1";
+/// HKDF `info` for the pin-record encryption key (AppKey-derived, never shared).
+/// Same reasoning as publish state: a pin record names its Sia object by share URL,
+/// and a share URL carries that object's decryption key in its fragment.
+pub const PINNED_KEY_INFO: &[u8] = b"pin:pinned:v1";
 /// HKDF `info` for the identity's did:dht ed25519 seed (AppKey-derived).
 pub const DID_DHT_INFO: &[u8] = b"pin:did-dht:v1";
 /// HKDF `info` for a channel's pkarr locator key — derived from K, not the AppKey,
@@ -108,6 +112,11 @@ pub fn snapshot_key(app_key: &[u8]) -> [u8; 32] {
 /// The publish-state encryption key.
 pub fn published_key(app_key: &[u8]) -> [u8; 32] {
     hkdf32(app_key, PUBLISHED_KEY_INFO)
+}
+
+/// The pin-record encryption key.
+pub fn pinned_key(app_key: &[u8]) -> [u8; 32] {
+    hkdf32(app_key, PINNED_KEY_INFO)
 }
 
 /// The identity's did:dht ed25519 seed.
@@ -186,6 +195,26 @@ pub fn decode_app_key(hex: &str) -> Option<[u8; 32]> {
 /// The collection holding publish state — what this identity last published to Sia,
 /// so the superseded object can be reclaimed and the current one kept alive.
 pub const PUBLISHED_COLLECTION: &str = "published";
+
+/// The collection holding what this identity keeps — one record per pin.
+///
+/// One record each rather than one list, for two reasons. A pin carries the item's
+/// whole `ItemRef` (a text item's body included), so a list would be a large blob
+/// rewritten on every pin. And per-pin records MERGE BY UNION across devices: pin
+/// something on a laptop and something else on a phone and both survive, where a
+/// single list record would be last-writer-wins and one of them would vanish.
+pub const PINNED_COLLECTION: &str = "pin";
+
+/// The rkey for one pin: the logical item it keeps.
+///
+/// Deliberately NOT the itemURL or the object id, both of which repack rewrites — a
+/// key that moved when bytes were repacked would orphan the record it names. This is
+/// the same `(channelID, publishedAt)` identity the rest of the app already joins on:
+/// drift detection, the pin-state hook, and `edit_item`, which preserves `publishedAt`
+/// across an edit precisely so the logical post survives its bytes changing.
+pub fn pinned_rkey(channel_id: &str, published_at: &str) -> String {
+    format!("{channel_id}:{published_at}")
+}
 
 /// The collection where each of this identity's live instances registers itself,
 /// keyed by its iroh node id.
@@ -315,6 +344,26 @@ mod tests {
     }
 
     #[test]
+    fn a_pins_key_survives_the_bytes_it_names_being_repacked() {
+        // The whole point of keying on the logical item: repack rewrites a pin's
+        // itemURL and object id, and a key built from either would leave the record
+        // pointing at a pin that no longer exists under that name.
+        let before = pinned_rkey("chan1", "2026-08-09T12:00:00.000Z");
+        let after = pinned_rkey("chan1", "2026-08-09T12:00:00.000Z");
+        assert_eq!(before, after);
+        assert_eq!(before, "chan1:2026-08-09T12:00:00.000Z");
+        // Library pins share a channelID, so the timestamp is what separates them.
+        assert_ne!(
+            pinned_rkey("library", "2026-08-09T12:00:00.000Z"),
+            pinned_rkey("library", "2026-08-09T12:00:00.001Z")
+        );
+        // And it round-trips through a record key, which is how the Curator finds it.
+        let key = record_key(PINNED_COLLECTION, &before);
+        let key = String::from_utf8(key).unwrap();
+        assert_eq!(parse_record_key(&key), Some((PINNED_COLLECTION, &*before)));
+    }
+
+    #[test]
     fn the_identity_level_publishers_cannot_be_taken_by_a_channel() {
         // A channel named "settings" must not land on the settings snapshot's record.
         // The prefix is what guarantees it, so assert the property rather than trust it.
@@ -420,6 +469,7 @@ mod tests {
             settings_key(&ikm),
             snapshot_key(&ikm),
             published_key(&ikm),
+            pinned_key(&ikm),
             did_dht_seed(&ikm),
             channel_locator_seed(&ikm),
             channel_doc_seed(&ikm, "chan"),

@@ -18,6 +18,7 @@ import {
   derive_channel_doc_ticket_seed,
   derive_channel_locator_seed,
   derive_did_dht_seed,
+  derive_pinned_key,
   derive_published_key,
   derive_rendezvous_instance_seed,
   derive_rendezvous_seed,
@@ -125,6 +126,15 @@ export async function derivePublishedKey(
 ): Promise<Uint8Array> {
   await ensureWasm()
   return derive_published_key(appKeyBytes)
+}
+
+// Pin-record key — what this identity keeps. Same reasoning as publish state: these
+// records name their Sia objects by share URL, so they're as secret as the bytes.
+export async function derivePinnedKey(
+  appKeyBytes: Uint8Array,
+): Promise<Uint8Array> {
+  await ensureWasm()
+  return derive_pinned_key(appKeyBytes)
 }
 
 // The 32-byte ed25519 seed for this identity's did:dht key — the browser's pkarr

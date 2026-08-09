@@ -125,6 +125,11 @@ export function derive_channel_locator_seed(channel_key: Uint8Array): Uint8Array
 export function derive_did_dht_seed(app_key: Uint8Array): Uint8Array;
 
 /**
+ * Pin-record encryption key.
+ */
+export function derive_pinned_key(app_key: Uint8Array): Uint8Array;
+
+/**
  * Publish-state encryption key.
  */
 export function derive_published_key(app_key: Uint8Array): Uint8Array;
@@ -266,6 +271,17 @@ export function open(app_key_hex: string): Promise<string>;
  * implementation computes it for both engines, there are no two copies to drift.
  */
 export function open_channel_doc(ns_seed_hex: string): Promise<string>;
+
+/**
+ * The collection holding what this identity keeps — one record per pin.
+ */
+export function pinned_collection(): string;
+
+/**
+ * The rkey for one pin, from the logical item it keeps. The Curator's repack reads
+ * these to learn what's in this identity's scope, so the spelling is shared.
+ */
+export function pinned_rkey(channel_id: string, published_at: string): string;
 
 /**
  * The z-base32 public key for a 32-byte seed — the key a resolver looks up.
@@ -548,6 +564,7 @@ export interface InitOutput {
     readonly derive_channel_doc_ticket_seed: (a: number, b: number) => [number, number];
     readonly derive_channel_locator_seed: (a: number, b: number) => [number, number];
     readonly derive_did_dht_seed: (a: number, b: number) => [number, number];
+    readonly derive_pinned_key: (a: number, b: number) => [number, number];
     readonly derive_published_key: (a: number, b: number) => [number, number];
     readonly derive_rendezvous_instance_seed: (a: number, b: number, c: number, d: number) => [number, number];
     readonly derive_rendezvous_seed: (a: number, b: number) => [number, number];
@@ -571,6 +588,8 @@ export interface InitOutput {
     readonly manifest_remove_attachment: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number, number, number];
     readonly open: (a: number, b: number) => any;
     readonly open_channel_doc: (a: number, b: number) => any;
+    readonly pinned_collection: () => [number, number];
+    readonly pinned_rkey: (a: number, b: number, c: number, d: number) => [number, number];
     readonly pkarr_public_key: (a: number, b: number) => [number, number, number, number];
     readonly pkarr_publish: (a: number, b: number, c: number, d: number) => any;
     readonly pkarr_resolve: (a: number, b: number) => any;
