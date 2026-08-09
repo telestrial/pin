@@ -7,6 +7,7 @@ import {
 } from '../core/profile'
 import type { SiaClient } from '../core/siaClient'
 import type {
+  ChannelVisibility,
   FollowEdge,
   OwnedChannel,
   SubscriptionRef,
@@ -99,6 +100,12 @@ type AuthState = {
   setApprovalURL: (url: string | null) => void
   addMyChannel: (channel: OwnedChannel) => void
   updateMyChannelName: (channelID: string, name: string) => void
+  // Backfill only — visibility is sticky, so this exists to record what a
+  // pre-existing channel's manifest already says, never to change it.
+  setChannelVisibility: (
+    channelID: string,
+    visibility: ChannelVisibility,
+  ) => void
   setChannelAdvertised: (channelID: string, advertised: boolean) => void
   removeMyChannel: (channelID: string) => void
   addSubscription: (sub: SubscriptionRef) => void
@@ -169,6 +176,12 @@ export const useAuthStore = create<AuthState>()(
         set((s) => ({
           myChannels: s.myChannels.map((c) =>
             c.channelID === channelID ? { ...c, name } : c,
+          ),
+        })),
+      setChannelVisibility: (channelID, visibility) =>
+        set((s) => ({
+          myChannels: s.myChannels.map((c) =>
+            c.channelID === channelID ? { ...c, visibility } : c,
           ),
         })),
       setChannelAdvertised: (channelID, advertised) =>

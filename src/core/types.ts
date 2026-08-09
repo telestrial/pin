@@ -176,6 +176,16 @@ export type OwnedChannel = {
   channelKey: string
   name: string
   createdAt: string
+  // Set at creation and sticky thereafter, like channelID and channelKey — a
+  // public channel can't be retroactively obscured, so this is a fact about the
+  // channel rather than a setting. Recorded here so the identity publisher can
+  // tell public from obscure without opening the manifest.
+  //
+  // ABSENT MEANS UNKNOWN, AND UNKNOWN MUST NOT BE ADVERTISED: channels created
+  // before this field existed carry no value, and guessing 'public' would
+  // enumerate an obscure channel in the directory — the one thing that must
+  // never happen. It backfills the next time the channel is edited.
+  visibility?: ChannelVisibility
   // Whether this public channel is advertised in your identity-doc (shows under
   // "Voices"). Undefined = advertised — the default, "claimed at birth". Set
   // false by Unclaim. Obscure channels are never advertised regardless.

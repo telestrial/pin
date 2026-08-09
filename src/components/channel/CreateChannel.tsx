@@ -111,6 +111,7 @@ export function CreateChannel({
         channelKey: result.channelKey,
         name: result.manifest.name,
         createdAt: result.manifest.publishedAt,
+        visibility,
       })
       addSubscription({
         // did:dht is the identity now; the legacy atproto handle/DID fields

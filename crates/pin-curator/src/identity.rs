@@ -108,60 +108,29 @@ struct DirectoryDoc {
     updated_at: String,
 }
 
-/// The manifest fields the directory needs from an owned channel. Nothing else is read,
-/// so a manifest that grows a field is no concern of this loop's.
-#[derive(serde::Deserialize)]
-struct ChannelView {
-    name: String,
-    #[serde(default)]
-    visibility: Option<String>,
-}
-
 /// The advertised public channels, in the order settings lists them.
 ///
 /// Advertised means: public visibility, and not explicitly unclaimed. Obscure channels
 /// are ABSENT by construction — they're reachable only through their own K-derived
-/// locator, so resolving an identity must never enumerate them.
-async fn advertised_channels(
-    ctx: &IdentityContext,
-    settings: &SettingsView,
-) -> Vec<DirectoryChannel> {
-    let mut out = Vec::new();
-    for owned in &settings.my_channels {
-        if owned.advertised == Some(false) {
-            continue;
-        }
-        let Some(k) = pin_crypto::channel_key_from_base64(&owned.channel_key) else {
-            continue;
-        };
-        let Some(view) = read_channel(ctx, &owned.channel_id, &k).await else {
-            continue;
-        };
-        if view.visibility.as_deref() != Some("public") {
-            continue;
-        }
-        out.push(DirectoryChannel {
+/// locator, so resolving an identity must never enumerate them. A channel whose
+/// visibility settings doesn't record is treated the same way: unknown is not public.
+///
+/// Everything this needs is in the settings record. It used to open each owned
+/// channel's manifest out of a `channel/<id>` doc record to read two fields, but
+/// visibility is sticky at creation and the name is kept in step by the edit path, so
+/// both are facts settings already holds — and that record existed for no other reader.
+fn advertised_channels(settings: &SettingsView) -> Vec<DirectoryChannel> {
+    settings
+        .my_channels
+        .iter()
+        .filter(|owned| owned.advertised != Some(false))
+        .filter(|owned| owned.visibility.as_deref() == Some("public"))
+        .map(|owned| DirectoryChannel {
             channel_id: owned.channel_id.clone(),
             key: owned.channel_key.clone(),
-            name: view.name,
-        });
-    }
-    out
-}
-
-/// An owned channel's manifest from the doc, opened with its K.
-async fn read_channel(
-    ctx: &IdentityContext,
-    channel_id: &str,
-    k: &[u8; 32],
-) -> Option<ChannelView> {
-    let raw = read_record(&ctx.doc, &ctx.blobs, ctx.author_id, "channel", channel_id)
-        .await
-        .ok()
-        .flatten()?;
-    let blob = String::from_utf8(raw).ok()?;
-    let json = pin_channel::open_blob(k, &blob).ok()?;
-    serde_json::from_str(&json).ok()
+            name: owned.name.clone(),
+        })
+        .collect()
 }
 
 /// A stable fingerprint of the directory's CONTENT — everything but `updatedAt`, which
@@ -198,7 +167,7 @@ pub async fn publish_identity_once(
     let doc = DirectoryDoc {
         version: DIRECTORY_DOC_VERSION,
         profile: settings.profile.clone(),
-        channels: advertised_channels(ctx, &settings).await,
+        channels: advertised_channels(&settings),
         follows: settings.follows.clone(),
         handle_follows: settings.handle_follows.clone(),
         updated_at: now_iso,
@@ -409,6 +378,35 @@ mod tests {
                 name: "n".into(),
             }]
         )));
+    }
+
+    #[test]
+    fn only_known_public_claimed_channels_are_advertised() {
+        // Parsed from JSON rather than constructed, so this also pins the settings
+        // field names the frontend writes — the class of mistake that has bitten this
+        // codebase before, and one no compiler on either side can see.
+        let settings: SettingsView = serde_json::from_str(
+            r#"{"myChannels":[
+                {"channelID":"pub","channelKey":"KP","name":"Public","visibility":"public"},
+                {"channelID":"obs","channelKey":"KO","name":"Obscure","visibility":"obscure"},
+                {"channelID":"unc","channelKey":"KU","name":"Unclaimed","visibility":"public","advertised":false},
+                {"channelID":"old","channelKey":"KL","name":"Legacy"},
+                {"channelID":"pub2","channelKey":"KP2","name":"Also public","visibility":"public"}
+            ]}"#,
+        )
+        .unwrap();
+
+        let got = advertised_channels(&settings);
+        let ids: Vec<&str> = got.iter().map(|c| c.channel_id.as_str()).collect();
+        // Order follows settings, and the name comes from settings too.
+        assert_eq!(ids, vec!["pub", "pub2"]);
+        assert_eq!(got[0].name, "Public");
+        assert_eq!(got[0].key, "KP");
+
+        // The one that matters: a channel whose visibility settings doesn't record is
+        // UNKNOWN, and unknown is not published. Guessing 'public' for "old" would
+        // enumerate a channel that may be obscure, which is the property obscurity is.
+        assert!(!ids.contains(&"old"));
     }
 
     #[test]

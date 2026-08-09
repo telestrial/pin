@@ -183,9 +183,9 @@ if (import.meta.env.DEV || inTauri()) {
     )
     return `hydrated ${n}; settings/self: ${s.myChannels?.length ?? 0} channels, ${s.subscriptions?.length ?? 0} subs, theme=${s.theme}`
   }
-  // Phase C inc.2 proof: what's in the doc after hydrating from Sia? Lists every
-  // record key (settings/self, channel/<id>, ...) — proves channels are mirrored
-  // + durable across a reload.
+  // What's in the doc after hydrating from Sia? Lists every record key
+  // (settings/self, published/<id>, ...) — the durability check for whatever the
+  // doc currently holds.
   g.__pinDocsList = async () => {
     const { client, hex } = await session()
     if (!client || !hex) return 'not signed in'

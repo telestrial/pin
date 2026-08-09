@@ -29,6 +29,7 @@ export function EditChannel({
   const client = useAuthStore((s) => s.client)
   const updateMyChannelName = useAuthStore((s) => s.updateMyChannelName)
   const updateSubscriptionName = useAuthStore((s) => s.updateSubscriptionName)
+  const setChannelVisibility = useAuthStore((s) => s.setChannelVisibility)
 
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -153,6 +154,12 @@ export function EditChannel({
         updateMyChannelName(channelID, updated.name)
         updateSubscriptionName(channelID, updated.name)
       }
+      // Backfill visibility for channels created before settings recorded it.
+      // Sticky, so this only ever writes down what the manifest already says —
+      // and until it's written, the identity publisher won't advertise the
+      // channel, because it can't tell public from obscure.
+      if (updated.visibility)
+        setChannelVisibility(channelID, updated.visibility)
       onSaved(updated.name)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to save changes')

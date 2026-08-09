@@ -137,6 +137,14 @@ pub(crate) struct OwnedChannelView {
     /// not stop a whole settings record from decoding.
     #[serde(default, rename = "channelKey")]
     pub(crate) channel_key: String,
+    /// The display name, kept in step with the manifest by the edit path.
+    #[serde(default)]
+    pub(crate) name: String,
+    /// 'public' or 'obscure', set at creation and sticky. Absent means UNKNOWN —
+    /// a channel created before settings recorded it — and unknown is never
+    /// advertised, because guessing 'public' would enumerate an obscure channel.
+    #[serde(default)]
+    pub(crate) visibility: Option<String>,
     /// Whether this public channel is advertised in the identity's directory.
     /// Absent means advertised — the default, claimed at creation.
     #[serde(default)]

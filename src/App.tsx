@@ -14,7 +14,6 @@ import {
 } from './lib/hooks/useActionRunner'
 import { useChannelDocPublish } from './lib/hooks/useChannelDocPublish'
 import { useChannelDocSync } from './lib/hooks/useChannelDocSync'
-import { useChannelDocsMirror } from './lib/hooks/useChannelDocsMirror'
 import { useChannelReader } from './lib/hooks/useChannelReader'
 import { useCuratorAutostart } from './lib/hooks/useCuratorAutostart'
 import { useCuratorLoops } from './lib/hooks/useCuratorLoops'
@@ -78,7 +77,6 @@ export default function App() {
   useRepackRunner()
   useSettingsSync()
   useSettingsDocsMirror()
-  useChannelDocsMirror()
   useChannelReader()
   useSubscriptionPull()
   useCuratorLoops()
