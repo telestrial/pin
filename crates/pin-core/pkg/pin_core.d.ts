@@ -485,6 +485,19 @@ export function start_keep_alive_loop(app_key_hex: string, cadence_secs: number,
 export function start_pull_loop(app_key_hex: string, cadence_secs: number, on_pass: Function): Promise<void>;
 
 /**
+ * Start the repack loop in this tab.
+ *
+ * The same loop the desktop Curator runs — scheduling isn't a capability boundary, so
+ * a tab that's open tidies its own storage rather than waiting for a machine that
+ * might not exist. It needs a connected Sia session, since every leg of a pass is a
+ * Sia call.
+ *
+ * `now_secs` and `now_iso` come from the caller: wasm has no system clock, and the
+ * loop is the wrong place to learn about one.
+ */
+export function start_repack_loop(app_key_hex: string, cadence_secs: number, on_pass: Function): Promise<void>;
+
+/**
  * Join the peer(s) in `ticket` and live-sync this identity's doc with them.
  * `on_event` is invoked with a short label string per `LiveEvent` (insert-local /
  * insert-remote / sync-finished / neighbor-up|down) so the UI can show the loop is
@@ -625,6 +638,7 @@ export interface InitOutput {
     readonly start_instance_loop: (a: number, b: any) => any;
     readonly start_keep_alive_loop: (a: number, b: number, c: number, d: any) => any;
     readonly start_pull_loop: (a: number, b: number, c: number, d: any) => any;
+    readonly start_repack_loop: (a: number, b: number, c: number, d: any) => any;
     readonly start_sync: (a: number, b: number, c: any) => any;
     readonly status: () => [number, number, number];
     readonly subscribe_doc_changes: (a: any) => any;

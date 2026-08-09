@@ -141,6 +141,20 @@ pub struct AccountSnapshot {
     pub fetched_at: String,
 }
 
+/// A slab's identity as a string, for grouping objects by the slab they share.
+///
+/// The encryption key IS the slab's identity here — two objects reporting the same one
+/// sit in the same slab, which is the only question repack asks of it. Hex rather than
+/// the SDK's serde form so it needs no serializer and can't change shape underneath a
+/// grouping that only ever compares it to itself.
+pub fn slab_key_string(slab: &Slab) -> String {
+    slab.encryption_key
+        .as_ref()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
 /// A pinned object reduced to the plain data its consumers actually read.
 ///
 /// `slabs` reuses the SDK's own `Slab`, whose serde already produces byte-for-byte

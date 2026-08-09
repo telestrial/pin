@@ -639,6 +639,56 @@ pub async fn curator_start_pull(
 /// that window to survive a missed pass or two. A pass re-signs one small packet per
 /// owned channel and touches no bytes, so being early costs nothing and being late
 /// costs the channel its discoverability.
+/// How often the Curator looks for slabs worth collapsing.
+///
+/// Slow on purpose. Waste accumulates a slab at a time and a pass moves real bytes
+/// over the network — the same connection publishing and reading need — so there is
+/// nothing to gain from hurrying and something to lose.
+const REPACK_CADENCE: std::time::Duration = std::time::Duration::from_secs(20 * 60);
+
+/// Start the Curator's repack loop.
+///
+/// Idempotent (the engine keeps one loop), so a remounting caller can just call it.
+#[tauri::command]
+pub async fn curator_start_repack(
+    curator: tauri::State<'_, CuratorState>,
+    sia: tauri::State<'_, crate::sia::SiaState>,
+    app_key_hex: String,
+) -> Result<(), String> {
+    let engine = current_engine(&curator)?;
+    if engine.repack_started() {
+        return Ok(());
+    }
+    let app_key = pin_derive::decode_app_key(&app_key_hex).ok_or("app key hex must be 32 bytes")?;
+    let ctx = pin_curator::RepackContext {
+        doc: engine.doc.clone(),
+        blobs: (*engine.blobs).clone(),
+        author_id: engine.author_id,
+        sia: sia.session(),
+        app_key,
+    };
+    sia.detach(async move {
+        pin_curator::run_repack_loop(
+            ctx,
+            REPACK_CADENCE,
+            || chrono::Utc::now().timestamp(),
+            || chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            |result| match result {
+                Ok(Some(o)) => println!(
+                    "curator repack: reclaimed {} slabs, moved {} objects ({} channels, {} pins)",
+                    o.reclaimed_slabs, o.moved, o.channels, o.pins
+                ),
+                // Nothing worth doing is the ordinary case; saying so every 20 minutes
+                // would bury the passes that did something.
+                Ok(None) => {}
+                Err(e) => println!("curator repack: {e}"),
+            },
+        )
+        .await
+    });
+    Ok(())
+}
+
 const KEEP_ALIVE_CADENCE: std::time::Duration = std::time::Duration::from_secs(30 * 60);
 
 /// Start the Curator's locator keep-alive loop.

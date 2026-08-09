@@ -5,6 +5,7 @@ import {
   startIdentityLoop,
   startInstanceLoop,
   startKeepAliveLoop,
+  startRepackLoop,
 } from '../docs'
 
 // Turn on the Curator's background loops, and then get out of the way.
@@ -46,6 +47,7 @@ export function useCuratorLoops() {
       if (cancelled) return
       await Promise.allSettled([
         startKeepAliveLoop(appKeyHex),
+        startRepackLoop(appKeyHex),
         startInstanceLoop(),
         startIdentityLoop(appKeyHex, namespaceId),
       ])

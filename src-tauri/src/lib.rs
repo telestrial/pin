@@ -35,6 +35,7 @@ pub fn run() {
             curator::docs_subscribe_changes,
             curator::curator_start_pull,
             curator::curator_start_keep_alive,
+            curator::curator_start_repack,
             curator::curator_start_instance,
             curator::curator_start_identity,
             curator::curator_start_sync,

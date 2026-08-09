@@ -97,6 +97,7 @@ pub struct DocEngine {
     pull_started: AtomicBool,
     /// Same, for the locator keep-alive loop.
     keep_alive_started: AtomicBool,
+    repack_started: AtomicBool,
     /// Same, for the instance-registration loop.
     instance_started: AtomicBool,
     /// Same, for the identity-publishing loop.
@@ -176,6 +177,7 @@ pub async fn open_or_create(
         changes_subscribed: AtomicBool::new(false),
         pull_started: AtomicBool::new(false),
         keep_alive_started: AtomicBool::new(false),
+        repack_started: AtomicBool::new(false),
         instance_started: AtomicBool::new(false),
         identity_started: AtomicBool::new(false),
     })
@@ -356,6 +358,10 @@ impl DocEngine {
     }
 
     /// Whether the keep-alive loop was already running; marks it started either way.
+    pub fn repack_started(&self) -> bool {
+        self.repack_started.swap(true, Ordering::SeqCst)
+    }
+
     pub fn keep_alive_started(&self) -> bool {
         self.keep_alive_started.swap(true, Ordering::SeqCst)
     }

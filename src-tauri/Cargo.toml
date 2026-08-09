@@ -61,6 +61,9 @@ pin-channel = { path = "../crates/pin-channel" }
 # pin-curator: the Curator's loops. Shared with the browser engine, which runs the same
 # ones for as long as its tab is open.
 pin-curator = { path = "../crates/pin-curator" }
+# For the repack loop's clock: it takes "now" from its caller so the loop itself stays
+# testable and wasm-safe, which makes supplying it the native side's job.
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 # The /hey wire protocol, shared with the browser instance (pin-core serves the same
 # ALPN) so the two can't drift apart.
 pin-rpc = { path = "../crates/pin-rpc" }

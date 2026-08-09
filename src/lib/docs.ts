@@ -33,6 +33,7 @@ import {
   start_instance_loop,
   start_keep_alive_loop,
   start_pull_loop,
+  start_repack_loop,
   subscribe_doc_changes,
 } from '../../crates/pin-core/pkg/pin_core.js'
 import { ensureWasm } from '../core/wasm'
@@ -57,6 +58,7 @@ import {
   startInstanceLoopNative,
   startKeepAliveLoopNative,
   startPullLoopNative,
+  startRepackLoopNative,
   startSyncNative,
   subscribeDocChangesNative,
 } from './tauriDocs'
@@ -305,6 +307,34 @@ export async function startKeepAliveLoop(
     appKeyHex,
     KEEP_ALIVE_CADENCE_SECS,
     (report: string) => onPass?.(report),
+  )
+}
+
+/** How often this instance looks for slabs worth collapsing, in seconds.
+ *
+ *  Slow on purpose. Waste accumulates a slab at a time and a pass moves real bytes
+ *  over the same Sia connection publishing and reading need, so there is nothing to
+ *  gain from hurrying. */
+const REPACK_CADENCE_SECS = 20 * 60
+
+/** Start the repack loop in this instance — collapsing under-full slabs so storage
+ *  stops costing more than it holds, and rewriting every reference that pointed at
+ *  the bytes it moved.
+ *
+ *  Runs in a tab as well as on the desktop: scheduling isn't a capability boundary,
+ *  and a tab that's open can tidy its own storage rather than waiting for a machine
+ *  that might not exist. Needs a connected Sia session — every leg of a pass is a
+ *  Sia call.
+ *
+ *  Idempotent (each engine keeps one loop). */
+export async function startRepackLoop(
+  appKeyHex: string,
+  onPass?: (report: string) => void,
+): Promise<void> {
+  if (inTauri()) return startRepackLoopNative(appKeyHex)
+  await ensureWasm()
+  await start_repack_loop(appKeyHex, REPACK_CADENCE_SECS, (report: string) =>
+    onPass?.(report),
   )
 }
 
@@ -583,7 +613,14 @@ export async function channelDocsImportTest(
 
   let value: Uint8Array | undefined
   for (let i = 0; i < 40; i++) {
-    value = await getChannelRecord(nsId, 'manifest', 'self')
+    try {
+      value = await getChannelRecord(nsId, 'manifest', 'self')
+    } catch {
+      // An entry syncs before its blob does, and reading a value whose content
+      // hasn't landed throws rather than returning nothing. That window is exactly
+      // what this loop is waiting out, so it's a reason to poll again — not a
+      // failure. Letting it escape made this test pass on timing alone.
+    }
     if (value) break
     await new Promise((r) => setTimeout(r, 500))
   }

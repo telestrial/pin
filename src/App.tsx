@@ -20,7 +20,6 @@ import { useCuratorLoops } from './lib/hooks/useCuratorLoops'
 import { useHandleFollowReconciliation } from './lib/hooks/useHandleFollowReconciliation'
 import { usePinDocsMirror } from './lib/hooks/usePinDocsMirror'
 import { useRendezvousSync } from './lib/hooks/useRendezvousSync'
-import { useRepackRunner } from './lib/hooks/useRepackRunner'
 import { useSettingsDocsMirror } from './lib/hooks/useSettingsDocsMirror'
 import { useSettingsSync } from './lib/hooks/useSettingsSync'
 import { useSubscriptionPull } from './lib/hooks/useSubscriptionPull'
@@ -75,7 +74,6 @@ export default function App() {
   useActionQueueHydration()
   useActionRunner()
   useCuratorAutostart()
-  useRepackRunner()
   useSettingsSync()
   useSettingsDocsMirror()
   usePinDocsMirror()

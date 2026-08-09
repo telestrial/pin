@@ -72,6 +72,7 @@ struct Engine {
     pull_running: Cell<bool>,
     /// Same, for the locator keep-alive loop.
     keep_alive_running: Cell<bool>,
+    repack_running: Cell<bool>,
     /// Same, for the instance-registration loop.
     instance_running: Cell<bool>,
     /// Same, for the identity-publishing loop.
@@ -149,6 +150,7 @@ pub async fn open(app_key_hex: String) -> Result<String, JsValue> {
         changes_subscribed: Cell::new(false),
         pull_running: Cell::new(false),
         keep_alive_running: Cell::new(false),
+        repack_running: Cell::new(false),
         instance_running: Cell::new(false),
         identity_running: Cell::new(false),
         _gossip: gossip,
@@ -344,6 +346,60 @@ pub async fn start_keep_alive_loop(
                         "settings": format!("{:?}", o.settings).to_lowercase(),
                     })
                     .to_string(),
+                    Err(e) => serde_json::json!({ "error": e }).to_string(),
+                };
+                let _ = on_pass.call1(&JsValue::NULL, &JsValue::from_str(&report));
+            },
+        )
+        .await
+    });
+    Ok(())
+}
+
+/// Start the repack loop in this tab.
+///
+/// The same loop the desktop Curator runs — scheduling isn't a capability boundary, so
+/// a tab that's open tidies its own storage rather than waiting for a machine that
+/// might not exist. It needs a connected Sia session, since every leg of a pass is a
+/// Sia call.
+///
+/// `now_secs` and `now_iso` come from the caller: wasm has no system clock, and the
+/// loop is the wrong place to learn about one.
+#[wasm_bindgen]
+pub async fn start_repack_loop(
+    app_key_hex: String,
+    cadence_secs: u32,
+    on_pass: js_sys::Function,
+) -> Result<(), JsValue> {
+    let eng = engine()?;
+    if eng.repack_running.replace(true) {
+        return Ok(());
+    }
+    let app_key = decode_app_key(&app_key_hex)
+        .ok_or_else(|| JsValue::from_str("app key hex must be 32 bytes (64 hex chars)"))?;
+    let ctx = pin_curator::RepackContext {
+        doc: eng.doc.clone(),
+        blobs: (*eng.blobs).clone(),
+        author_id: eng.author_id,
+        sia: sia(),
+        app_key,
+    };
+    wasm_bindgen_futures::spawn_local(async move {
+        pin_curator::run_repack_loop(
+            ctx,
+            std::time::Duration::from_secs(cadence_secs as u64),
+            || (js_sys::Date::now() / 1000.0) as i64,
+            || js_sys::Date::new_0().to_iso_string().into(),
+            |result| {
+                let report = match &result {
+                    Ok(Some(o)) => serde_json::json!({
+                        "reclaimedSlabs": o.reclaimed_slabs,
+                        "moved": o.moved,
+                        "channels": o.channels,
+                        "pins": o.pins,
+                    })
+                    .to_string(),
+                    Ok(None) => serde_json::json!({ "idle": true }).to_string(),
                     Err(e) => serde_json::json!({ "error": e }).to_string(),
                 };
                 let _ = on_pass.call1(&JsValue::NULL, &JsValue::from_str(&report));

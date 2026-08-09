@@ -171,6 +171,11 @@ export function startKeepAliveLoopNative(appKeyHex: string): Promise<void> {
   return call<void>('curator_start_keep_alive', { appKeyHex })
 }
 
+/** Start the repack loop. Idempotent — the engine keeps one. */
+export function startRepackLoopNative(appKeyHex: string): Promise<void> {
+  return call<void>('curator_start_repack', { appKeyHex })
+}
+
 /** Start this instance's registration loop. Idempotent — the engine keeps one. */
 export function startInstanceLoopNative(): Promise<void> {
   return call<void>('curator_start_instance', {})

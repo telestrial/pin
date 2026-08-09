@@ -44,6 +44,7 @@ use pin_derive::{record_key, settings_key};
 mod identity;
 mod instance;
 mod keepalive;
+mod repack;
 pub use identity::{
     publish_identity_once, run_identity_loop, IdentityContext, IdentityOutcome,
     DIRECTORY_DOC_VERSION,
@@ -54,6 +55,10 @@ pub use instance::{
 };
 pub use keepalive::{
     keep_alive_once, run_keep_alive_loop, KeepAliveContext, KeepAliveOutcome, SettingsLocator,
+};
+pub use repack::{
+    aggregate_slabs, pick_batch, repack_once, rewrite_manifest, run_repack_loop, Move, ObjectSlabs,
+    RepackContext, RepackOutcome, ScopeRef, SlabAggregate, SlabObject, SlabPiece, Source,
 };
 
 /// The collection holding cached manifests of channels the user subscribes to. Keyed
@@ -195,6 +200,48 @@ pub(crate) async fn read_record(
             Ok(Some(bytes.to_vec()))
         }
     }
+}
+
+/// Write a record into this identity's doc.
+pub(crate) async fn write_record(
+    doc: &Doc,
+    author_id: AuthorId,
+    collection: &str,
+    rkey: &str,
+    value: Vec<u8>,
+) -> Result<(), String> {
+    doc.set_bytes(author_id, record_key(collection, rkey), value)
+        .await
+        .map(|_| ())
+        .map_err(|e| format!("put {collection}/{rkey}: {e}"))
+}
+
+/// The rkeys present in one collection.
+///
+/// A full scan filtered by prefix, because that is what the store offers — fine at the
+/// scale one identity's doc reaches, and the alternative would be keeping a second
+/// index in step with the first.
+pub(crate) async fn list_rkeys(
+    doc: &Doc,
+    _author_id: AuthorId,
+    collection: &str,
+) -> Result<Vec<String>, String> {
+    use n0_future::StreamExt as _;
+
+    let prefix = pin_derive::collection_prefix(collection);
+    let stream = doc
+        .get_many(iroh_docs::store::Query::all().build())
+        .await
+        .map_err(|e| format!("list {collection}: {e}"))?;
+    let mut stream = Box::pin(stream);
+    let mut out = Vec::new();
+    while let Some(Ok(entry)) = stream.next().await {
+        let key = String::from_utf8_lossy(entry.key()).to_string();
+        if let Some(rkey) = key.strip_prefix(&prefix) {
+            out.push(rkey.to_string());
+        }
+    }
+    Ok(out)
 }
 
 /// The identity's own settings record, decrypted and decoded.

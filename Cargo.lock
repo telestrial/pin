@@ -109,6 +109,7 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 name = "app"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "futures-lite",
  "iroh",
  "iroh-blobs",
@@ -4616,12 +4617,14 @@ dependencies = [
 name = "pin-curator"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "iroh-blobs",
  "iroh-docs",
  "n0-future",
  "pin-channel",
  "pin-crypto",
  "pin-derive",
+ "pin-manifest",
  "pin-pkarr",
  "pin-sia",
  "serde",

@@ -143,20 +143,9 @@ async fn read_registrations(
     blobs: &Store,
     author_id: AuthorId,
 ) -> Vec<(String, Registration)> {
-    use n0_future::StreamExt as _;
-
-    let prefix = pin_derive::collection_prefix(INSTANCE_COLLECTION);
-    let Ok(stream) = doc.get_many(iroh_docs::store::Query::all().build()).await else {
+    let Ok(ids) = crate::list_rkeys(doc, author_id, INSTANCE_COLLECTION).await else {
         return Vec::new();
     };
-    let mut stream = Box::pin(stream);
-    let mut ids = Vec::new();
-    while let Some(Ok(entry)) = stream.next().await {
-        let key = String::from_utf8_lossy(entry.key()).to_string();
-        if let Some(rkey) = key.strip_prefix(&prefix) {
-            ids.push(rkey.to_string());
-        }
-    }
 
     let mut out = Vec::new();
     for node_id in ids {

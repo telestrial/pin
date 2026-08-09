@@ -77,6 +77,7 @@ export const start_identity_loop: (a: number, b: number, c: number, d: number, e
 export const start_instance_loop: (a: number, b: any) => any;
 export const start_keep_alive_loop: (a: number, b: number, c: number, d: any) => any;
 export const start_pull_loop: (a: number, b: number, c: number, d: any) => any;
+export const start_repack_loop: (a: number, b: number, c: number, d: any) => any;
 export const start_sync: (a: number, b: number, c: any) => any;
 export const status: () => [number, number, number];
 export const subscribe_doc_changes: (a: any) => any;
