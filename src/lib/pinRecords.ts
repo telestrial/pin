@@ -45,7 +45,7 @@ export async function pinRkey(ref: PinnedItemRef): Promise<string> {
   return pinned_rkey(ref.channel.channelID, ref.item.publishedAt)
 }
 
-async function collection(): Promise<string> {
+export async function collection(): Promise<string> {
   await ensureWasm()
   return pinned_collection()
 }
@@ -54,12 +54,19 @@ async function key(appKeyHex: string): Promise<Uint8Array> {
   return derivePinnedKey(Uint8Array.fromHex(appKeyHex))
 }
 
-/** Reconcile the doc against the pins currently held: write the ones that changed,
- *  delete the ones that are gone.
+/** Record the pins currently held, and release the ones explicitly named as released.
  *
- *  A reconcile rather than a write-per-mutation because `pinned` moves in four
- *  different places (pin, unpin, the drift swap, and repack's rewrite), and a diff
- *  covers all four — including the ones a future fifth would otherwise miss.
+ *  Additive by design: a record the local list doesn't mention is LEFT ALONE. That
+ *  distinction is the whole safety property, because two devices share this doc — if
+ *  absence meant deletion, the first device to reconcile would erase every pin the
+ *  second had just made, purely for not having heard about them yet. Deletion by
+ *  absence is the mistake this codebase has already made twice (the orphan sweep, and
+ *  settings), and the answer both times was the same: only ever release what you
+ *  positively identified as released.
+ *
+ *  So `released` is passed in, not inferred. Its caller watches the local list
+ *  TRANSITION, where an unpin is a pin that was there a moment ago and isn't now —
+ *  which is knowledge an absence can never give you.
  *
  *  Returns what it did, so a caller can decide whether anything downstream (the Sia
  *  snapshot) needs to run. Throws only on a failure that leaves the doc unreconciled;
@@ -67,34 +74,29 @@ async function key(appKeyHex: string): Promise<Uint8Array> {
 export async function syncPinRecords(
   appKeyHex: string,
   pinned: readonly PinnedItemRef[],
+  released: readonly string[] = [],
 ): Promise<{ written: number; deleted: number }> {
   await openDocs(appKeyHex)
   const coll = await collection()
   const k = await key(appKeyHex)
-
-  const wanted = new Map<string, PinnedItemRef>()
-  for (const ref of pinned) wanted.set(await pinRkey(ref), ref)
-
-  const present = new Set(await listRecords(coll))
   let written = 0
   let deleted = 0
 
-  for (const [rkey, ref] of wanted) {
+  for (const ref of pinned) {
+    const rkey = await pinRkey(ref)
     // Compare before writing: a pin's record is rewritten only when its content
     // actually moved (repack swapping an itemURL, a drift swap), so an unchanged
     // pin doesn't churn the doc — and doesn't announce a change to every instance
     // syncing it — on every reconcile.
     const serialized = JSON.stringify(ref)
-    if (present.has(rkey)) {
-      const existing = await getRecord(coll, rkey)
-      if (existing) {
-        try {
-          if ((await decryptForChannel(k, decode(existing))) === serialized) {
-            continue
-          }
-        } catch {
-          // Unreadable — rewrite it rather than leave a record we can't verify.
+    const existing = await getRecord(coll, rkey)
+    if (existing) {
+      try {
+        if ((await decryptForChannel(k, decode(existing))) === serialized) {
+          continue
         }
+      } catch {
+        // Unreadable — rewrite it rather than leave a record we can't verify.
       }
     }
     const sealed = await encryptForChannel(k, serialized)
@@ -102,8 +104,7 @@ export async function syncPinRecords(
     written++
   }
 
-  for (const rkey of present) {
-    if (wanted.has(rkey)) continue
+  for (const rkey of released) {
     await deleteRecord(coll, rkey)
     deleted++
   }

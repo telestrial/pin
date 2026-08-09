@@ -88,6 +88,9 @@ type PinState = {
       newContentHash: string
     }>,
   ) => void
+  // Replace the whole library with the doc's version. Guarded by its only caller
+  // (the pin mirror), which applies it solely when local state is already recorded.
+  adoptPinned: (pinned: PinnedItemRef[]) => void
   reset: () => void
 }
 
@@ -331,6 +334,11 @@ export const usePinStore = create<PinState>()(
           }),
         }))
       },
+      // Take the doc's version of the library as ours. Called only by the pin
+      // mirror, and only once it has established that everything held locally is
+      // already recorded — so this can't overwrite an unpushed local pin, and the
+      // deletions it carries are another device's unpins arriving.
+      adoptPinned: (pinned) => set({ pinned }),
       reset: () =>
         set({
           pinned: [],

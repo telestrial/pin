@@ -14,7 +14,7 @@ vi.mock('../lib/docs', async () =>
 )
 
 import type { ItemRef } from '../core/types'
-import { readPinRecords, syncPinRecords } from '../lib/pinRecords'
+import { pinRkey, readPinRecords, syncPinRecords } from '../lib/pinRecords'
 import type { PinnedItemRef } from '../stores/pin'
 import { fakeDocStore as docStore } from './fakeModules'
 import { FAKE_APP_KEY_HEX, resetAllStores } from './setupFakeApp'
@@ -94,11 +94,30 @@ describe('integration: pins are recorded in the doc', () => {
     })
   })
 
-  it('removes the record when the pin is released', async () => {
-    await syncPinRecords(FAKE_APP_KEY_HEX, [pin()])
-    const result = await syncPinRecords(FAKE_APP_KEY_HEX, [])
+  it('removes the record for a pin named as released', async () => {
+    const held = pin()
+    await syncPinRecords(FAKE_APP_KEY_HEX, [held])
+    const rkey = await pinRkey(held)
+    const result = await syncPinRecords(FAKE_APP_KEY_HEX, [], [rkey])
     expect(result).toEqual({ written: 0, deleted: 1 })
     expect(keysIn()).toEqual([])
+  })
+
+  it('leaves a pin this device never saw alone, instead of deleting it', async () => {
+    // The doc is shared. This device holds nothing; the other just pinned something.
+    // Inferring deletion from "not in my list" is how you erase a library — the same
+    // deny-by-absence mistake as the orphan sweep and the settings wipe.
+    const theirs = pin({
+      channel: { authorHandle: '', channelID: 'chan9', name: 'Theirs' },
+      item: item({ publishedAt: '2026-08-09T13:00:00.000Z' }),
+    })
+    await syncPinRecords(FAKE_APP_KEY_HEX, [theirs])
+
+    const result = await syncPinRecords(FAKE_APP_KEY_HEX, [])
+
+    expect(result).toEqual({ written: 0, deleted: 0 })
+    expect(keysIn()).toHaveLength(1)
+    expect(await readPinRecords(FAKE_APP_KEY_HEX)).toEqual([theirs])
   })
 
   it('separates library pins that share a channel', async () => {
