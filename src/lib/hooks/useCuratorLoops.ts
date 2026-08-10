@@ -3,6 +3,7 @@ import { useAuthStore } from '../../stores/auth'
 import {
   openDocs,
   startChannelDocLoop,
+  startChannelSyncLoop,
   startIdentityLoop,
   startInstanceLoop,
   startKeepAliveLoop,
@@ -28,6 +29,9 @@ import {
 //     for it published, so a subscriber is pushed a new post instead of waiting for
 //     the next poll. It reads the sealed manifest straight out of the doc and copies
 //     it across, which is why it needs no Sia session and never sees the content.
+//   channel-sync — the subscriber counterpart: import each subscribed channel from its
+//     author and write what arrives into `sub/<id>`, the same record the polling rung
+//     writes. So a pushed manifest and a polled one are the same thing downstream.
 //   identity — publish those coordinates: one packet under the did:dht key carrying
 //     the directory pointer, the doc namespace, and every live endpoint. This was two
 //     writers until now — the Curator at startup and a React effect seconds later,
@@ -53,6 +57,7 @@ export function useCuratorLoops() {
       await Promise.allSettled([
         startKeepAliveLoop(appKeyHex),
         startChannelDocLoop(appKeyHex),
+        startChannelSyncLoop(appKeyHex),
         startRepackLoop(appKeyHex),
         startInstanceLoop(),
         startIdentityLoop(appKeyHex, namespaceId),

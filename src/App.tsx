@@ -12,7 +12,6 @@ import {
   useActionQueueHydration,
   useActionRunner,
 } from './lib/hooks/useActionRunner'
-import { useChannelDocSync } from './lib/hooks/useChannelDocSync'
 import { useChannelReader } from './lib/hooks/useChannelReader'
 import { useCuratorAutostart } from './lib/hooks/useCuratorAutostart'
 import { useCuratorLoops } from './lib/hooks/useCuratorLoops'
@@ -82,7 +81,6 @@ export default function App() {
   // Ladder rung 1 (live-sync): the author serves each owned channel as a doc and
   // keeps a read ticket published; the subscriber imports and is pushed updates.
   // Purely additive over the rungs above — if either goes quiet, reads fall back.
-  useChannelDocSync()
   useHandleFollowReconciliation()
   useRendezvousSync()
 

@@ -68,6 +68,8 @@ if (import.meta.env.DEV || inTauri()) {
       identityPasses: () => string[]
       startChannelDocs: (hex: string) => Promise<string>
       channelDocPasses: () => string[]
+      startChannelSync: (hex: string) => Promise<string>
+      channelSyncPasses: () => string[]
     }
   }
   // Channel docs (the ladder's top rung), driven through whichever engine is active:
@@ -202,20 +204,66 @@ if (import.meta.env.DEV || inTauri()) {
     ) => {
       const hex = hexOverride ?? (await session()).hex
       if (!hex) return 'not signed in'
-      const { syncSubscribedChannelDoc } = await import('./lib/channelDoc')
-      const { useFeedStore } = await import('./stores/feed')
-      const sub = {
-        authorHandle: '',
-        authorDID: '',
-        channelID,
-        channelKey,
-        addedAt: new Date().toISOString(),
+      const { encryptSettings, deriveSettingsKey } = await import(
+        './core/crypto'
+      )
+      const { SETTINGS_VERSION } = await import('./core/settings')
+      const { openDocs, putRecord, getRecord, startChannelSyncLoop } =
+        await import('./lib/docs')
+      const { decodeChannelManifest } = await import('./lib/channelLocator')
+      const { channelKeyFromBase64 } = await import('./core/crypto')
+
+      await openDocs(hex)
+      // What a subscribe leaves behind — the loop reads this to learn who to watch.
+      const settings = {
+        version: SETTINGS_VERSION,
+        myChannels: [],
+        subscriptions: [
+          {
+            authorHandle: '',
+            authorDID: '',
+            channelID,
+            channelKey,
+            addedAt: new Date().toISOString(),
+          },
+        ],
+        updatedAt: new Date().toISOString(),
       }
-      const nsId = await syncSubscribedChannelDoc(hex, sub)
-      // applyIfChanged lands the synced manifest in the feed store — read it back to
-      // prove the whole path, not just that a sync started.
-      const name = useFeedStore.getState().manifests[channelID]?.name ?? null
-      return JSON.stringify({ nsId, name })
+      await putRecord(
+        'settings',
+        'self',
+        new TextEncoder().encode(
+          await encryptSettings(
+            await deriveSettingsKey(Uint8Array.fromHex(hex)),
+            JSON.stringify(settings),
+          ),
+        ),
+      )
+
+      const passes: string[] = []
+      await startChannelSyncLoop(hex, (report) => passes.push(report))
+
+      // The loop writes a pushed manifest to `sub/<channelID>` — the same record the
+      // polling rung writes — so that record is where the proof is. Reading it back
+      // and opening it with K shows the manifest travelled the whole way.
+      const deadline = Date.now() + 90_000
+      let name: string | null = null
+      while (Date.now() < deadline && name === null) {
+        const stored = await getRecord('sub', channelID)
+        if (stored) {
+          try {
+            const manifest = await decodeChannelManifest(
+              channelKeyFromBase64(channelKey),
+              stored,
+            )
+            name = manifest.name
+          } catch {
+            // Entry present, content not downloaded yet — look again.
+          }
+        }
+        if (name === null) await new Promise((r) => setTimeout(r, 500))
+      }
+      return JSON.stringify({ name, passes })
     },
   }
   g.__pinMirrorWrite = async (text: string) => {
@@ -389,6 +437,7 @@ if (import.meta.env.DEV || inTauri()) {
     const pullPasses: string[] = []
     const keepAlivePasses: string[] = []
     const channelDocPasses: string[] = []
+    const channelSyncPasses: string[] = []
     const instancePasses: string[] = []
     const identityPasses: string[] = []
     // A per-page-load instance id for the rendezvous directory (the app uses its own
@@ -495,6 +544,16 @@ if (import.meta.env.DEV || inTauri()) {
         return 'started'
       },
       channelDocPasses: () => channelDocPasses.slice(),
+      // And the subscriber counterpart, which reads the subscription list from the
+      // same place — so an empty doc stops it in the same spot.
+      startChannelSync: async (hex) => {
+        await (await docs()).openDocs(hex)
+        await (await docs()).startChannelSyncLoop(hex, (report) => {
+          channelSyncPasses.push(report)
+        })
+        return 'started'
+      },
+      channelSyncPasses: () => channelSyncPasses.slice(),
       // And the instance-registration loop. Unlike the other two this one SUCCEEDS on
       // an empty doc — it writes its own registration rather than reading anything —
       // so the spec can assert the real outcome instead of a reached-the-doc error.

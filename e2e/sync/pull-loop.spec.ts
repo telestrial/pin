@@ -27,6 +27,8 @@ type SyncHarness = {
   identityPasses: () => string[]
   startChannelDocs: (hex: string) => Promise<string>
   channelDocPasses: () => string[]
+  startChannelSync: (hex: string) => Promise<string>
+  channelSyncPasses: () => string[]
 }
 declare global {
   interface Window {
@@ -165,6 +167,32 @@ test('the channel-doc serve loop runs a pass in the browser and reports it', asy
   // with no executor.
   const [first] = await page.evaluate(() =>
     window.__pinSync!.channelDocPasses(),
+  )
+  expect(JSON.parse(first)).toEqual({ error: 'no settings record yet' })
+})
+
+test('the channel live-sync loop runs a pass in the browser and reports it', async ({
+  page,
+}) => {
+  const appKeyHex = Array.from(crypto.getRandomValues(new Uint8Array(32)))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('')
+
+  await harness(page)
+  await page.evaluate((hex) => window.__pinSync!.startChannelSync(hex), appKeyHex)
+
+  await expect
+    .poll(() => page.evaluate(() => window.__pinSync!.channelSyncPasses()), {
+      timeout: 60_000,
+      intervals: [250],
+    })
+    .not.toHaveLength(0)
+
+  // Importing a channel means resolving its author's ticket off the DHT, which this
+  // pass never reaches: it reads the subscription list first, and an empty doc has
+  // none. Saying so is the proof that it ran at all.
+  const [first] = await page.evaluate(() =>
+    window.__pinSync!.channelSyncPasses(),
   )
   expect(JSON.parse(first)).toEqual({ error: 'no settings record yet' })
 })

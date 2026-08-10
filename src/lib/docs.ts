@@ -30,6 +30,7 @@ import {
   put_record,
   share_channel_doc,
   start_channel_doc_loop,
+  start_channel_sync_loop,
   start_identity_loop,
   start_instance_loop,
   start_keep_alive_loop,
@@ -56,6 +57,7 @@ import {
   shareChannelNative,
   shareDocNative,
   startChannelDocLoopNative,
+  startChannelSyncLoopNative,
   startIdentityLoopNative,
   startInstanceLoopNative,
   startKeepAliveLoopNative,
@@ -341,6 +343,45 @@ export async function startChannelDocLoop(
   await start_channel_doc_loop(
     appKeyHex,
     CHANNEL_DOC_CADENCE_SECS,
+    (report: string) => onPass?.(report),
+  )
+}
+
+/** How often the live-sync loop re-checks which channels it should be watching, in
+ *  seconds.
+ *
+ *  This is the RECONCILE cadence, not the delivery one. A manifest arrives as soon as
+ *  its author writes it; this only decides who to be listening to, which changes when a
+ *  subscription does. */
+const CHANNEL_SYNC_CADENCE_SECS = 5 * 60
+
+/** How soon to look again while a subscribed channel still isn't being watched, in
+ *  seconds. An author's ticket takes a moment to become resolvable after they publish
+ *  it, and waiting out the full cadence over a few seconds of propagation would make a
+ *  fresh subscribe feel broken. */
+const CHANNEL_SYNC_RETRY_SECS = 20
+
+/** Start the channel live-sync loop in this instance — importing each subscribed
+ *  channel from its author's node so a new post arrives without waiting for the next
+ *  poll.
+ *
+ *  What arrives is written to `sub/<channelID>`, the same record the polling rung
+ *  writes, so pushed and polled manifests are indistinguishable downstream and share
+ *  one recency guard. Nothing new is needed to render them.
+ *
+ *  Needs no Sia session: a pushed manifest is already sealed and is stored as it came.
+ *
+ *  Idempotent (each engine keeps one loop). Requires an open doc ({@link openDocs}). */
+export async function startChannelSyncLoop(
+  appKeyHex: string,
+  onPass?: (report: string) => void,
+): Promise<void> {
+  if (inTauri()) return startChannelSyncLoopNative(appKeyHex)
+  await ensureWasm()
+  await start_channel_sync_loop(
+    appKeyHex,
+    CHANNEL_SYNC_CADENCE_SECS,
+    CHANNEL_SYNC_RETRY_SECS,
     (report: string) => onPass?.(report),
   )
 }

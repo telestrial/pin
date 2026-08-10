@@ -5,16 +5,19 @@
 // The difference from channel-doc.spec.ts: nothing is handed over out of band. The
 // author publishes a read ticket to a pkarr record under a K-derived key; the
 // subscriber derives the same key from K, resolves the ticket off the real Mainline
-// DHT, imports it, decrypts the synced manifest with K, and lands it via
-// `applyIfChanged` — the same fill-in the polling rung uses. Reading the name back out
-// of the feed store is what proves the whole path rather than just that a sync began.
+// DHT, imports it, and stores what arrives. Reading the manifest's name back out —
+// through K — is what proves the whole path rather than just that a sync began.
 //
-// BOTH HALVES ARE PRODUCTION CODE. The author side seeds the doc the way a commit does
-// — a sealed manifest under `channel/<id>`, plus a settings record naming the channel as
-// owned — and then starts the Curator's real serve loop and waits for it to report that
-// it advertised. A harness that served the channel itself would be a second
-// implementation of the thing under test, and would keep passing after the real one
-// broke.
+// BOTH SIDES ARE PRODUCTION CODE — the Curator's own loops, on both ends. Each side
+// seeds the doc the way the app would (the author: a sealed manifest under
+// `channel/<id>` plus a settings record naming the channel as owned; the subscriber: a
+// settings record naming it as subscribed) and then starts the real loop. A harness that
+// served or imported the channel itself would be a second implementation of the thing
+// under test, and would keep passing after the real one broke.
+//
+// The subscriber's proof is `sub/<channelID>` — the record the loop writes, and the same
+// one the polling rung writes, opened with K. Landing it in the feed from there is the
+// change feed's job and is covered separately.
 //
 // The channel key is minted fresh per run, so the DHT read is a FIRST read rather than
 // an overwrite — public relays lag badly on overwrites (CLAUDE.md 2026-07-23), and
@@ -69,16 +72,16 @@ test('a subscriber finds a channel from its key and is pushed the manifest', asy
       (hex) => window.__pinChannelDocLive!.publish('Rung One', hex),
       APP_KEY_HEX,
     ),
-  ) as { channelID: string; channelKey: string; nsId: string }
+  ) as { channelID: string; channelKey: string; nsId: string; passes: string[] }
   console.log('[rung1] published:', published)
   expect(published.nsId.length).toBeGreaterThan(0)
 
   // The subscriber gets ONLY what a real subscribe URL carries: the channel key (and
   // the channelID, itself derived from that key). It has to find the author via the
   // DHT. Poll, because a fresh pkarr publish takes seconds to become resolvable.
-  let result: { nsId: string | null; name: string | null } = {
-    nsId: null,
+  let result: { name: string | null; passes: string[] } = {
     name: null,
+    passes: [],
   }
   await expect
     .poll(
@@ -101,8 +104,6 @@ test('a subscriber finds a channel from its key and is pushed the manifest', asy
     .toBe('Rung One')
 
   console.log('[rung1] subscriber:', result)
-  // The imported namespace must be the author's channel doc, not a new one.
-  expect(result.nsId).toBe(published.nsId)
 
   await context.close()
 })
