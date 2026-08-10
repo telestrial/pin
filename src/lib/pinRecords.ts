@@ -54,19 +54,96 @@ async function key(appKeyHex: string): Promise<Uint8Array> {
   return derivePinnedKey(Uint8Array.fromHex(appKeyHex))
 }
 
-/** Record the pins currently held, and release the ones explicitly named as released.
+/** Record one pin, at the moment it is made.
  *
- *  Additive by design: a record the local list doesn't mention is LEFT ALONE. That
- *  distinction is the whole safety property, because two devices share this doc — if
- *  absence meant deletion, the first device to reconcile would erase every pin the
- *  second had just made, purely for not having heard about them yet. Deletion by
- *  absence is the mistake this codebase has already made twice (the orphan sweep, and
- *  settings), and the answer both times was the same: only ever release what you
- *  positively identified as released.
+ *  A pin is a decision, so it is written where the decision is taken rather than
+ *  inferred later by something watching the local list change. That is what lets the
+ *  release below be exact: the action that unpinned knows what it unpinned, where a
+ *  reconciler could only see an absence — and absence cannot mean deletion when two
+ *  devices share this doc.
  *
- *  So `released` is passed in, not inferred. Its caller watches the local list
- *  TRANSITION, where an unpin is a pin that was there a moment ago and isn't now —
- *  which is knowledge an absence can never give you.
+ *  A drift swap rewrites the SAME record: the rkey is `(channelID, publishedAt)`, which
+ *  an edit preserves, so updating a pin to the author's current version overwrites
+ *  rather than orphaning.
+ *
+ *  Skips the write when the record already says this, so re-pinning something unchanged
+ *  doesn't churn the doc or wake every instance syncing it. */
+export async function writePinRecord(
+  appKeyHex: string,
+  ref: PinnedItemRef,
+): Promise<void> {
+  await openDocs(appKeyHex)
+  const coll = await collection()
+  const k = await key(appKeyHex)
+  const rkey = await pinRkey(ref)
+  const serialized = JSON.stringify(ref)
+  const existing = await getRecord(coll, rkey)
+  if (existing) {
+    try {
+      if ((await decryptForChannel(k, decode(existing))) === serialized) return
+    } catch {
+      // Unreadable — rewrite it rather than leave a record we can't verify.
+    }
+  }
+  const sealed = await encryptForChannel(k, serialized)
+  await putRecord(coll, rkey, new TextEncoder().encode(sealed))
+}
+
+/** Releases whose record didn't come off, by rkey.
+ *
+ *  Held here because this is where the knowledge exists. A release is the one thing a
+ *  reconciler can never work out for itself: two devices share this doc, so a record the
+ *  local list doesn't mention might be a pin the other device just made. Only the action
+ *  that unpinned knows, so a failed delete is remembered rather than re-derived. */
+const pendingReleases = new Set<string>()
+
+/** Release one pin's record, remembering it if that fails. */
+export async function deletePinRecord(
+  appKeyHex: string,
+  ref: PinnedItemRef,
+): Promise<void> {
+  const rkey = await pinRkey(ref)
+  try {
+    await openDocs(appKeyHex)
+    await deleteRecord(await collection(), rkey)
+  } catch (e) {
+    pendingReleases.add(rkey)
+    throw e
+  }
+}
+
+/** Retry the releases that didn't land. Clears each on success; a still-failing one
+ *  stays for the next attempt, because a record that outlives its pin gets adopted
+ *  straight back by the read side. */
+export async function drainPendingReleases(appKeyHex: string): Promise<number> {
+  if (pendingReleases.size === 0) return 0
+  await openDocs(appKeyHex)
+  const coll = await collection()
+  let released = 0
+  for (const rkey of [...pendingReleases]) {
+    try {
+      await deleteRecord(coll, rkey)
+      pendingReleases.delete(rkey)
+      released++
+    } catch {
+      // Stays pending.
+    }
+  }
+  return released
+}
+
+/** Catch up: record every pin held locally that the doc doesn't already say.
+ *
+ *  ADDITIVE ONLY, and it has no release argument at all — a record the local list
+ *  doesn't mention is left alone. That is the whole safety property, because two devices
+ *  share this doc: if absence meant deletion, the first device to run this would erase
+ *  every pin the second had just made, purely for not having heard about them yet.
+ *  Deletion by absence is the mistake this codebase has already made twice (the orphan
+ *  sweep, and settings).
+ *
+ *  Releases therefore don't come through here. They're done by the unpin that made them,
+ *  and retried from what that left behind (see `drainPendingReleases`) — because only
+ *  the action that released a pin can tell a release from a stranger's new pin.
  *
  *  Returns what it did, so a caller can decide whether anything downstream (the Sia
  *  snapshot) needs to run. Throws only on a failure that leaves the doc unreconciled;
@@ -74,13 +151,11 @@ async function key(appKeyHex: string): Promise<Uint8Array> {
 export async function syncPinRecords(
   appKeyHex: string,
   pinned: readonly PinnedItemRef[],
-  released: readonly string[] = [],
-): Promise<{ written: number; deleted: number }> {
+): Promise<{ written: number }> {
   await openDocs(appKeyHex)
   const coll = await collection()
   const k = await key(appKeyHex)
   let written = 0
-  let deleted = 0
 
   for (const ref of pinned) {
     const rkey = await pinRkey(ref)
@@ -104,12 +179,7 @@ export async function syncPinRecords(
     written++
   }
 
-  for (const rkey of released) {
-    await deleteRecord(coll, rkey)
-    deleted++
-  }
-
-  return { written, deleted }
+  return { written }
 }
 
 /** Every pin recorded in the doc. Skips records that won't open rather than failing

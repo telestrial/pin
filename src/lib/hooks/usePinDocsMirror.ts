@@ -3,67 +3,53 @@ import { useAuthStore } from '../../stores/auth'
 import { usePinStore } from '../../stores/pin'
 import { isRemoteChange, subscribeDocChanges } from '../docs'
 import {
+  drainPendingReleases,
   collection as pinnedCollection,
   pinRkey,
   readPinRecords,
   syncPinRecords,
 } from '../pinRecords'
 
-// Your library, kept in the doc and kept in step with it.
+// Your library, kept in step with the doc.
 //
-// Both directions, because a pin is a decision rather than a cache: it has to survive
-// this device and show up on your others. The Zustand store stays as the local runtime
-// — it's what the UI renders, and its localStorage copy is what makes boot instant —
-// but the doc record is the durable one.
+// The WRITING is done where the deciding is: `pinStore.pin` records a pin as it makes
+// it, and `unpin` releases the record as it drops it. That is the whole reason this
+// file is small — an action knows exactly what it did, where something watching a list
+// change afterwards has to work it out, and can't ever be sure whether an absence is a
+// release or a pin another device made that hasn't reached it yet.
 //
-// WRITE side. Reconciles on a debounce, because a channel pin fans out one store
-// change per item and an N-item channel would otherwise reconcile N times against the
-// network. Crucially it reconciles ADDITIVELY, and names the pins it released rather
-// than inferring them: two devices share this doc, so "absent from my list" cannot
-// mean "delete it" — that would erase whatever the other device just pinned. The
-// transition from one local list to the next is what identifies a release.
+// What's left is the two things an action can't do for itself.
 //
-// It does NOT snapshot. Mirroring the doc to Sia is the Curator's, in one loop reading
-// the doc — this and the settings mirror each used to take their own, on separate
-// debounces, which meant two whole-doc uploads racing on one pointer whenever a pin and
-// a settings change fell in the same window.
+// CATCH-UP. A doc write that failed leaves a pin held locally but not travelling, and a
+// device that pinned while offline has a whole list in that state. So on boot, and
+// whenever the doc says something moved, anything missing is written. Additive only:
+// this never deletes, because from here an absence is unreadable. Failed releases are
+// retried separately, from the record the unpin left behind.
 //
-// READ side. Applies the doc's records back into the store, guarded the same way the
-// settings overlay is: only when our own local state is fully recorded. A local edge
-// we haven't pushed yet must not be overwritten by a doc that hasn't heard about it —
-// the mirror will push it, and then this resumes. When local IS recorded, the doc is
-// authoritative and its content wins, deletions included, which is how another
-// device's unpin reaches this one.
-
-const DEBOUNCE_MS = 1500
+// READ. Applies the doc's records back into the store, gated on our own state being
+// fully recorded — a local pin we haven't pushed must not be overwritten by a doc that
+// hasn't heard about it. When local IS recorded the doc wins, deletions included, which
+// is how another device's unpin reaches this one.
 
 export function usePinDocsMirror() {
-  const client = useAuthStore((s) => s.client)
   const storedKeyHex = useAuthStore((s) => s.storedKeyHex)
 
   useEffect(() => {
-    if (!client || !storedKeyHex) return
-
+    if (!storedKeyHex) return
     let cancelled = false
-    let saving = false
-    let pending = false
-    let timer: ReturnType<typeof setTimeout> | null = null
-    // Pins released locally since the last successful reconcile, by rkey. Held until
-    // the reconcile clears them so a failed pass retries the release rather than
-    // forgetting it — a forgotten release is a record that outlives its pin.
-    const released = new Set<string>()
-    // The rkeys currently recorded in the doc by us. `local === recorded` is the
-    // clean-state test the read side gates on.
+    let busy = false
+    // The rkeys we've confirmed are recorded. `local === recorded` is the clean-state
+    // test the read side gates on; null until the first catch-up, which is exactly the
+    // state where an unpushed pin and one the doc never held look the same.
     let recorded: string | null = null
-    // The pin collection's name, from Rust. Resolved once; until it lands the change
-    // filter lets everything through, which costs a guarded no-op re-read at worst.
+    // The pin collection's name, from Rust. Until it resolves the change filter lets
+    // everything through, which costs a guarded no-op at worst.
     let collName: string | null = null
     void pinnedCollection().then((c) => {
       collName = c
     })
-
-    // Set while the store is being updated FROM the doc, so the write side can tell
-    // "the user did this" from "we just applied what the doc said".
+    // Set while the store is being updated FROM the doc, so a change we caused doesn't
+    // read as one to catch up on.
     let applying = false
 
     const localFingerprint = async () => {
@@ -73,62 +59,27 @@ export function usePinDocsMirror() {
       return keys.sort().join('\n')
     }
 
-    const reconcile = async () => {
-      saving = true
-      const releasing = [...released]
+    const catchUp = async () => {
+      if (busy) return
+      busy = true
       try {
-        const pinned = usePinStore.getState().pinned
-        await syncPinRecords(storedKeyHex, pinned, releasing)
+        await drainPendingReleases(storedKeyHex)
+        await syncPinRecords(storedKeyHex, usePinStore.getState().pinned)
         if (cancelled) return
-        for (const r of releasing) released.delete(r)
         recorded = await localFingerprint()
       } catch (e) {
-        // The next change retries. A pin that failed to record is still held locally,
-        // so nothing is lost yet — but it hasn't travelled, so say so.
-        console.warn('pin docs-mirror failed (will retry):', e)
+        // Leaves `recorded` as it was, so the read side stays out of the way until
+        // this device's own pins have travelled.
+        console.warn('pin catch-up failed (will retry):', e)
       } finally {
-        saving = false
-        if (pending && !cancelled) {
-          pending = false
-          schedule()
-        }
+        busy = false
       }
     }
-
-    const schedule = () => {
-      if (timer) clearTimeout(timer)
-      timer = setTimeout(() => {
-        if (saving) pending = true
-        else void reconcile()
-      }, DEBOUNCE_MS)
-    }
-
-    const unsub = usePinStore.subscribe((s, p) => {
-      if (s.pinned === p.pinned) return
-      // A change WE made by adopting the doc isn't a local decision, and reading it
-      // as one would turn another device's unpin into a release of our own — a
-      // delete of a record that's already gone, and a Sia snapshot to pay for it.
-      if (applying) return
-      // Positively identify what was released: present a moment ago, gone now. This
-      // is the knowledge the reconcile cannot get from the doc, and the reason it
-      // never deletes on its own.
-      void (async () => {
-        const now = new Set(await Promise.all(s.pinned.map((x) => pinRkey(x))))
-        for (const old of p.pinned) {
-          const rkey = await pinRkey(old)
-          if (!now.has(rkey)) released.add(rkey)
-        }
-        schedule()
-      })()
-    })
 
     const applyRecords = async () => {
       if (applying) return
       applying = true
       try {
-        // Don't overwrite work we haven't recorded yet. `recorded` is null until the
-        // first successful reconcile, which is exactly the state where we can't tell
-        // an unpushed local pin from one this doc has never held.
         if (recorded === null || (await localFingerprint()) !== recorded) return
         const fromDoc = await readPinRecords(storedKeyHex)
         if (cancelled) return
@@ -151,26 +102,34 @@ export function usePinDocsMirror() {
       }
     }
 
-    // Driven by the doc's change feed, like the settings overlay: the engine says when
-    // a pin record moved. `isRemoteChange` filters our own writes, which would bounce
-    // straight back; an empty collection is a stream-level event (content finishing its
-    // download) and counts.
+    // Driven by the doc's change feed. `isRemoteChange` filters our own writes, which
+    // would bounce straight back; an empty collection is a stream-level event (content
+    // finishing its download) and counts.
     const unsubChanges = subscribeDocChanges(({ collection, kind }) => {
       if (!isRemoteChange(kind)) return
       if (collection && collName && collection !== collName) return
       void applyRecords()
     })
 
-    // Boot: record what this device holds, then read back whatever else the doc has.
+    // A local change means there may be something to catch up on — a record whose write
+    // failed, most often. Cheap when there isn't: syncPinRecords skips records that
+    // already say what they should.
+    const unsubStore = usePinStore.subscribe((s, p) => {
+      if (s.pinned === p.pinned || applying) return
+      void catchUp()
+    })
+
+    // Boot: get this device's pins recorded, then read back whatever else the doc has.
     // Push for speed, pull for truth — a pin made elsewhere while this instance was
     // closed has no event left to catch.
-    schedule()
+    void catchUp().then(() => {
+      if (!cancelled) void applyRecords()
+    })
 
     return () => {
       cancelled = true
-      if (timer) clearTimeout(timer)
       unsubChanges()
-      unsub()
+      unsubStore()
     }
-  }, [client, storedKeyHex])
+  }, [storedKeyHex])
 }

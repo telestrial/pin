@@ -6,6 +6,46 @@ import type { ItemRef } from '../core/types'
 import { APP_KEY } from '../lib/constants'
 import { useActionStore } from './actionQueue'
 
+/** The AppKey this identity's pin records are sealed under.
+ *
+ *  Resolved lazily because the auth store imports this one — a static import back would
+ *  be a cycle. Null before sign-in, which is also the only time a pin can't happen. */
+async function appKeyHex(): Promise<string | null> {
+  const { useAuthStore } = await import('./auth')
+  return useAuthStore.getState().storedKeyHex ?? null
+}
+
+/** Record a pin in the doc, so it survives this device and reaches the others.
+ *
+ *  Best-effort at the moment of the action: the pin itself already succeeded (its bytes
+ *  are mirrored and it's in the local list), so a doc write that fails costs travel
+ *  rather than the pin. `usePinDocsMirror` catches up whatever didn't land. */
+async function recordPin(ref: PinnedItemRef): Promise<void> {
+  try {
+    const hex = await appKeyHex()
+    if (!hex) return
+    const { writePinRecord } = await import('../lib/pinRecords')
+    await writePinRecord(hex, ref)
+  } catch (e) {
+    console.warn('pin record write failed (will be caught up):', e)
+  }
+}
+
+/** Release a pin's record. Best-effort for the same reason, with one asymmetry worth
+ *  naming: a release that doesn't land leaves a record for a pin that no longer exists,
+ *  and the read side would adopt it back. That is why the retry lives with the local
+ *  list rather than being inferred from the doc — see `usePinDocsMirror`. */
+async function forgetPin(ref: PinnedItemRef): Promise<void> {
+  try {
+    const hex = await appKeyHex()
+    if (!hex) return
+    const { deletePinRecord } = await import('../lib/pinRecords')
+    await deletePinRecord(hex, ref)
+  } catch (e) {
+    console.warn('pin record release failed (will be caught up):', e)
+  }
+}
+
 // At-most-one-in-flight account refresh. Coalesces bursts (e.g.
 // loop-until-clean repack with N batches, each calling refreshAccount)
 // into at most one follow-up round-trip after the current one settles —
@@ -209,6 +249,7 @@ export const usePinStore = create<PinState>()(
               : [...s.pinned, ref],
             pinning: next,
           }))
+          void recordPin(ref)
           get().refreshAccount(client)
         } catch (e) {
           const next = new Set(get().pinning)
@@ -239,6 +280,7 @@ export const usePinStore = create<PinState>()(
           objectIDs: toDelete,
           label: `Reclaiming “${ref.item.title || 'item'}”`,
         })
+        void forgetPin(ref)
         get().refreshAccount(client)
       },
       pinChannel: async (client, items, channel) => {

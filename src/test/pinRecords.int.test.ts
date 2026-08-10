@@ -14,7 +14,11 @@ vi.mock('../lib/docs', async () =>
 )
 
 import type { ItemRef } from '../core/types'
-import { pinRkey, readPinRecords, syncPinRecords } from '../lib/pinRecords'
+import {
+  deletePinRecord,
+  readPinRecords,
+  syncPinRecords,
+} from '../lib/pinRecords'
 import type { PinnedItemRef } from '../stores/pin'
 import { fakeDocStore as docStore } from './fakeModules'
 import { FAKE_APP_KEY_HEX, resetAllStores } from './setupFakeApp'
@@ -77,7 +81,7 @@ describe('integration: pins are recorded in the doc', () => {
     })
     const result = await syncPinRecords(FAKE_APP_KEY_HEX, [after])
 
-    expect(result).toEqual({ written: 1, deleted: 0 })
+    expect(result).toEqual({ written: 1 })
     expect(keysIn()).toHaveLength(1)
     const [recorded] = await readPinRecords(FAKE_APP_KEY_HEX)
     expect(recorded.objectID).toBe('obj-2')
@@ -90,16 +94,19 @@ describe('integration: pins are recorded in the doc', () => {
     // every instance syncing this doc.
     expect(await syncPinRecords(FAKE_APP_KEY_HEX, [held])).toEqual({
       written: 0,
-      deleted: 0,
     })
   })
 
-  it('removes the record for a pin named as released', async () => {
+  it('removes the record for the pin an unpin names', async () => {
+    // The release is done by the action that made it, not inferred by the catch-up —
+    // which is why the catch-up below can leave a stranger's pin alone without having
+    // to tell the two cases apart.
     const held = pin()
     await syncPinRecords(FAKE_APP_KEY_HEX, [held])
-    const rkey = await pinRkey(held)
-    const result = await syncPinRecords(FAKE_APP_KEY_HEX, [], [rkey])
-    expect(result).toEqual({ written: 0, deleted: 1 })
+    expect(keysIn()).toHaveLength(1)
+
+    await deletePinRecord(FAKE_APP_KEY_HEX, held)
+
     expect(keysIn()).toEqual([])
   })
 
@@ -115,7 +122,7 @@ describe('integration: pins are recorded in the doc', () => {
 
     const result = await syncPinRecords(FAKE_APP_KEY_HEX, [])
 
-    expect(result).toEqual({ written: 0, deleted: 0 })
+    expect(result).toEqual({ written: 0 })
     expect(keysIn()).toHaveLength(1)
     expect(await readPinRecords(FAKE_APP_KEY_HEX)).toEqual([theirs])
   })
