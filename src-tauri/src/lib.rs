@@ -41,6 +41,7 @@ pub fn run() {
             curator::curator_start_repack,
             curator::curator_reset,
             curator::curator_start_instance,
+            curator::curator_start_rendezvous,
             curator::curator_start_identity,
             curator::curator_start_sync,
             sia::sia_connect,

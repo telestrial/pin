@@ -1009,6 +1009,63 @@ pub async fn curator_start_instance(
     Ok(())
 }
 
+/// How often this instance refreshes its rendezvous entry once it has a peer. Well under
+/// `ENTRY_TTL_SECS`, and it also re-mints the ticket — the first one a fresh node makes
+/// carries no relay address at all, so re-minting is what makes it dialable.
+const RENDEZVOUS_CADENCE: std::time::Duration = std::time::Duration::from_secs(4 * 60);
+/// How often to look again while there is nobody to sync with, so a device that comes
+/// online seconds after this one isn't waited out for the full cadence.
+const RENDEZVOUS_RETRY: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Start the instance rendezvous loop — advertise where this desktop can be reached, and
+/// sync with the identity's other instances.
+///
+/// Marks itself `durable`, the same way the registration loop does: a peer picking among
+/// its own endpoints should reach for the one that stays up.
+///
+/// Idempotent (the engine keeps one loop), so a remounting caller can just call it.
+#[tauri::command]
+pub async fn curator_start_rendezvous(
+    curator: tauri::State<'_, CuratorState>,
+    sia: tauri::State<'_, crate::sia::SiaState>,
+    app_key_hex: String,
+) -> Result<(), String> {
+    let engine = current_engine(&curator)?;
+    if engine.rendezvous_started() {
+        return Ok(());
+    }
+    let app_key = pin_derive::decode_app_key(&app_key_hex).ok_or("app key hex must be 32 bytes")?;
+    let ctx = pin_curator::RendezvousContext {
+        doc: engine.doc.clone(),
+        app_key,
+        instance_id: engine.node_id.clone(),
+        durable: true,
+    };
+    let loop_handle = sia.detach(async move {
+        pin_curator::run_rendezvous_loop(
+            ctx,
+            RENDEZVOUS_CADENCE,
+            RENDEZVOUS_RETRY,
+            now_secs,
+            |result| match result {
+                Ok(o) => {
+                    // Quiet in the steady state: advertised, peers reached, nothing new.
+                    if o.reached > 0 || o.unreachable > 0 || !o.advertised {
+                        println!(
+                            "curator rendezvous: advertised {} peers {} reached {} syncing {} unreachable {}",
+                            o.advertised, o.peers, o.reached, o.syncing, o.unreachable
+                        );
+                    }
+                }
+                Err(e) => println!("curator rendezvous: {e}"),
+            },
+        )
+        .await
+    });
+    curator.0.lock().unwrap().loops.push(loop_handle);
+    Ok(())
+}
+
 /// How often the identity's coordinates are republished. Same reasoning as the locator
 /// keep-alive: a pkarr record ages off Mainline in a couple of hours, and an identity
 /// nobody republishes stops resolving.

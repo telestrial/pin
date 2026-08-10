@@ -509,6 +509,17 @@ export function start_keep_alive_loop(app_key_hex: string, cadence_secs: number,
 export function start_pull_loop(app_key_hex: string, cadence_secs: number, on_pass: Function): Promise<void>;
 
 /**
+ * Start the instance rendezvous loop in this tab — advertise where this tab can be
+ * reached, and sync with the identity's other instances.
+ *
+ * A tab is a full peer here, not a client: it publishes its own ticket and can be
+ * synced FROM as well as syncing TO. It advertises as not-durable, which is the honest
+ * difference — a peer choosing among endpoints should know which one will still be
+ * there in an hour.
+ */
+export function start_rendezvous_loop(app_key_hex: string, cadence_secs: number, retry_secs: number, on_pass: Function): Promise<void>;
+
+/**
  * Start the repack loop in this tab.
  *
  * The same loop the desktop Curator runs — scheduling isn't a capability boundary, so
@@ -673,6 +684,7 @@ export interface InitOutput {
     readonly start_instance_loop: (a: number, b: any) => any;
     readonly start_keep_alive_loop: (a: number, b: number, c: number, d: any) => any;
     readonly start_pull_loop: (a: number, b: number, c: number, d: any) => any;
+    readonly start_rendezvous_loop: (a: number, b: number, c: number, d: number, e: any) => any;
     readonly start_repack_loop: (a: number, b: number, c: number, d: any) => any;
     readonly start_snapshot_loop: (a: number, b: number, c: number, d: number, e: any) => any;
     readonly start_sync: (a: number, b: number, c: any) => any;

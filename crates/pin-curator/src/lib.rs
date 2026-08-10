@@ -1,18 +1,30 @@
 // The Curator's loops — the work that has to keep happening whether or not anyone is
 // watching, which is what distinguishes the Curator from the UI in front of it.
 //
-// Three of them so far. The PULL loop keeps the subscribed channels' manifests current in
-// the doc, so a reader lands on a cached copy instead of waiting on the DHT. The
-// KEEP-ALIVE loop (see `keepalive`) republishes the owned channels' locators so they
-// don't age off the DHT and take those channels' discoverability with them. The
-// INSTANCE loop (see `instance`) records where THIS instance can be dialed, so the
-// identity's published coordinates are the set of its live endpoints rather than
-// whichever one wrote last.
+// Each has its own module, and each is one job:
 //
-// Both read the identity's settings record to learn what it subscribes to and owns, and
-// both are returned rather than spawned so the caller can place them on the executor it
-// has. Neither touches the feed: a pass announces itself by writing a record, and the
-// doc's change feed carries that to whatever is rendering.
+//   PULL        keeps the subscribed channels' manifests current in the doc, so a reader
+//               lands on a cached copy instead of waiting on the DHT.
+//   KEEP-ALIVE  republishes the owned channels' locators (and the settings locator) so
+//               they don't age off the DHT and take discoverability with them.
+//   CHANNELDOC  serves each owned channel as a live replica and advertises a read ticket
+//               for it — the author half of the ladder's top rung.
+//   CHANNELSYNC imports the subscribed channels' replicas, so their authors' writes are
+//               pushed here rather than polled for.
+//   INSTANCE    records where THIS instance can be dialed, so the identity's published
+//               coordinates are the set of its live endpoints rather than whichever one
+//               wrote last.
+//   IDENTITY    publishes that whole set, plus the directory pointer, as one packet from
+//               one writer.
+//   RENDEZVOUS  finds the identity's OTHER instances and syncs this replica with them.
+//   SNAPSHOT    mirrors the doc to Sia, so a device with no peer can still recover it.
+//   REPACK      consolidates sub-full slabs so storage stops creeping.
+//
+// Most start by reading the identity's settings record, which is where the doc says what
+// this identity subscribes to and owns. All of them are returned rather than spawned, so
+// the caller places them on the executor it has. None touches the feed: a pass announces
+// itself by writing a record, and the doc's change feed carries that to whatever is
+// rendering.
 //
 // The pull loop, specifically:
 //
@@ -46,6 +58,7 @@ mod channelsync;
 mod identity;
 mod instance;
 mod keepalive;
+mod rendezvous;
 mod repack;
 mod snapshot;
 pub use channeldoc::{
@@ -62,6 +75,10 @@ pub use instance::{
 };
 pub use keepalive::{
     keep_alive_once, run_keep_alive_loop, KeepAliveContext, KeepAliveOutcome, SettingsLocator,
+};
+pub use rendezvous::{
+    merge_directory, pick_peers, rendezvous_once, run_rendezvous_loop, Entry, RendezvousContext,
+    RendezvousOutcome, ENTRY_TTL_SECS,
 };
 pub use repack::{
     aggregate_slabs, pick_batch, repack_once, rewrite_manifest, run_repack_loop, Move, ObjectSlabs,

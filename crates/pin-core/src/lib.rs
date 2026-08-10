@@ -83,6 +83,8 @@ struct Engine {
     channel_sync_running: Cell<bool>,
     /// Doc-to-Sia snapshot loop guard (see `start_snapshot_loop`).
     snapshot_running: Cell<bool>,
+    /// Instance rendezvous loop guard (see `start_rendezvous_loop`).
+    rendezvous_running: Cell<bool>,
     _gossip: Gossip,
     docs: Docs,
     _router: Router,
@@ -162,6 +164,7 @@ pub async fn open(app_key_hex: String) -> Result<String, JsValue> {
         channel_doc_running: Cell::new(false),
         channel_sync_running: Cell::new(false),
         snapshot_running: Cell::new(false),
+        rendezvous_running: Cell::new(false),
         _gossip: gossip,
         docs,
         _router: router,
@@ -600,6 +603,59 @@ pub async fn start_instance_loop(
             |result| {
                 let report = match &result {
                     Ok(o) => serde_json::json!({ "live": o.live, "pruned": o.pruned }).to_string(),
+                    Err(e) => serde_json::json!({ "error": e }).to_string(),
+                };
+                let _ = on_pass.call1(&JsValue::NULL, &JsValue::from_str(&report));
+            },
+        )
+        .await
+    });
+    Ok(())
+}
+
+/// Start the instance rendezvous loop in this tab — advertise where this tab can be
+/// reached, and sync with the identity's other instances.
+///
+/// A tab is a full peer here, not a client: it publishes its own ticket and can be
+/// synced FROM as well as syncing TO. It advertises as not-durable, which is the honest
+/// difference — a peer choosing among endpoints should know which one will still be
+/// there in an hour.
+#[wasm_bindgen]
+pub async fn start_rendezvous_loop(
+    app_key_hex: String,
+    cadence_secs: u32,
+    retry_secs: u32,
+    on_pass: js_sys::Function,
+) -> Result<(), JsValue> {
+    let eng = engine()?;
+    if eng.rendezvous_running.replace(true) {
+        return Ok(());
+    }
+    let app_key = decode_app_key(&app_key_hex)
+        .ok_or_else(|| JsValue::from_str("app key hex must be 32 bytes (64 hex chars)"))?;
+    let ctx = pin_curator::RendezvousContext {
+        doc: eng.doc.clone(),
+        app_key,
+        instance_id: eng.endpoint.id().to_string(),
+        durable: false,
+    };
+    wasm_bindgen_futures::spawn_local(async move {
+        pin_curator::run_rendezvous_loop(
+            ctx,
+            std::time::Duration::from_secs(cadence_secs as u64),
+            std::time::Duration::from_secs(retry_secs as u64),
+            // js_sys::Date rather than SystemTime, which panics on this target.
+            || (js_sys::Date::now() / 1000.0) as u64,
+            |result| {
+                let report = match &result {
+                    Ok(o) => serde_json::json!({
+                        "advertised": o.advertised,
+                        "peers": o.peers,
+                        "reached": o.reached,
+                        "syncing": o.syncing,
+                        "unreachable": o.unreachable,
+                    })
+                    .to_string(),
                     Err(e) => serde_json::json!({ "error": e }).to_string(),
                 };
                 let _ = on_pass.call1(&JsValue::NULL, &JsValue::from_str(&report));

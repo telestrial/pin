@@ -108,6 +108,8 @@ pub struct DocEngine {
     channel_sync_started: AtomicBool,
     /// Doc-to-Sia snapshot loop guard (see `curator_start_snapshot`).
     snapshot_started: AtomicBool,
+    /// Instance rendezvous loop guard (see `curator_start_rendezvous`).
+    rendezvous_started: AtomicBool,
 }
 
 /// Bring up (or reopen) the Curator's persistent iroh-docs engine on `endpoint`,
@@ -189,6 +191,7 @@ pub async fn open_or_create(
         channel_doc_started: AtomicBool::new(false),
         channel_sync_started: AtomicBool::new(false),
         snapshot_started: AtomicBool::new(false),
+        rendezvous_started: AtomicBool::new(false),
     })
 }
 
@@ -388,6 +391,11 @@ impl DocEngine {
     /// Whether the doc-to-Sia snapshot loop was already running; marks it started.
     pub fn snapshot_started(&self) -> bool {
         self.snapshot_started.swap(true, Ordering::SeqCst)
+    }
+
+    /// Whether the instance rendezvous loop was already running; marks it started.
+    pub fn rendezvous_started(&self) -> bool {
+        self.rendezvous_started.swap(true, Ordering::SeqCst)
     }
 
     /// Whether the instance-registration loop was already running; marks it started.
