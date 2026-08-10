@@ -171,6 +171,11 @@ export function startKeepAliveLoopNative(appKeyHex: string): Promise<void> {
   return call<void>('curator_start_keep_alive', { appKeyHex })
 }
 
+/** Start the channel-doc serve loop. Idempotent — the engine keeps one. */
+export function startChannelDocLoopNative(appKeyHex: string): Promise<void> {
+  return call<void>('curator_start_channel_docs', { appKeyHex })
+}
+
 /** Start the repack loop. Idempotent — the engine keeps one. */
 export function startRepackLoopNative(appKeyHex: string): Promise<void> {
   return call<void>('curator_start_repack', { appKeyHex })

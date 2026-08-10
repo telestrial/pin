@@ -29,6 +29,7 @@ import {
   put_channel_record,
   put_record,
   share_channel_doc,
+  start_channel_doc_loop,
   start_identity_loop,
   start_instance_loop,
   start_keep_alive_loop,
@@ -54,6 +55,7 @@ import {
   putRecordNative,
   shareChannelNative,
   shareDocNative,
+  startChannelDocLoopNative,
   startIdentityLoopNative,
   startInstanceLoopNative,
   startKeepAliveLoopNative,
@@ -309,6 +311,36 @@ export async function startKeepAliveLoop(
   await start_keep_alive_loop(
     appKeyHex,
     KEEP_ALIVE_CADENCE_SECS,
+    (report: string) => onPass?.(report),
+  )
+}
+
+/** How often each owned channel's manifest is copied into its doc and its ticket
+ *  re-minted, in seconds.
+ *
+ *  Fast relative to the other loops because the ticket is perishable: it freezes the
+ *  addresses known when it was minted (the first one a fresh instance mints carries no
+ *  relay address at all, so it is undialable), and pkarr records age off the DHT. The
+ *  copy alongside it is a no-op when the manifest hasn't moved. */
+const CHANNEL_DOC_CADENCE_SECS = 4 * 60
+
+/** Start the channel-doc serve loop in this instance — serving each owned channel as a
+ *  live replica and keeping a read ticket for it published, so a subscriber is pushed
+ *  new posts instead of polling for them.
+ *
+ *  Needs no Sia session: the sealed manifest is copied out of the main doc verbatim, so
+ *  the loop never resolves anything and never sees a channel's content.
+ *
+ *  Idempotent (each engine keeps one loop). Requires an open doc ({@link openDocs}). */
+export async function startChannelDocLoop(
+  appKeyHex: string,
+  onPass?: (report: string) => void,
+): Promise<void> {
+  if (inTauri()) return startChannelDocLoopNative(appKeyHex)
+  await ensureWasm()
+  await start_channel_doc_loop(
+    appKeyHex,
+    CHANNEL_DOC_CADENCE_SECS,
     (report: string) => onPass?.(report),
   )
 }

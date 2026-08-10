@@ -9,6 +9,13 @@
 // `applyIfChanged` — the same fill-in the polling rung uses. Reading the name back out
 // of the feed store is what proves the whole path rather than just that a sync began.
 //
+// BOTH HALVES ARE PRODUCTION CODE. The author side seeds the doc the way a commit does
+// — a sealed manifest under `channel/<id>`, plus a settings record naming the channel as
+// owned — and then starts the Curator's real serve loop and waits for it to report that
+// it advertised. A harness that served the channel itself would be a second
+// implementation of the thing under test, and would keep passing after the real one
+// broke.
+//
 // The channel key is minted fresh per run, so the DHT read is a FIRST read rather than
 // an overwrite — public relays lag badly on overwrites (CLAUDE.md 2026-07-23), and
 // that lag is a property of the relays, not something a client can beat.

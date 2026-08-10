@@ -25,6 +25,8 @@ type SyncHarness = {
   instancePasses: () => string[]
   startIdentity: (hex: string) => Promise<string>
   identityPasses: () => string[]
+  startChannelDocs: (hex: string) => Promise<string>
+  channelDocPasses: () => string[]
 }
 declare global {
   interface Window {
@@ -133,5 +135,36 @@ test('the identity loop runs a pass in the browser and reports it', async ({
   // for — so the reachable proof is the same one the other reading loops give: it got
   // to the doc, found no settings, and said so instead of hanging.
   const [first] = await page.evaluate(() => window.__pinSync!.identityPasses())
+  expect(JSON.parse(first)).toEqual({ error: 'no settings record yet' })
+})
+
+test('the channel-doc serve loop runs a pass in the browser and reports it', async ({
+  page,
+}) => {
+  const appKeyHex = Array.from(crypto.getRandomValues(new Uint8Array(32)))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('')
+
+  await harness(page)
+  await page.evaluate(
+    (hex) => window.__pinSync!.startChannelDocs(hex),
+    appKeyHex,
+  )
+
+  await expect
+    .poll(() => page.evaluate(() => window.__pinSync!.channelDocPasses()), {
+      timeout: 60_000,
+      intervals: [250],
+    })
+    .not.toHaveLength(0)
+
+  // Serving a channel means opening a second replica, minting a ticket and publishing
+  // it to the DHT — none of which this pass reaches, because it reads the identity's
+  // settings first to learn which channels are its own. Stopping there and saying so
+  // is the evidence: the loop ran on the wasm target rather than hanging in a task
+  // with no executor.
+  const [first] = await page.evaluate(() =>
+    window.__pinSync!.channelDocPasses(),
+  )
   expect(JSON.parse(first)).toEqual({ error: 'no settings record yet' })
 })

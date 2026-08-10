@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import { useAuthStore } from '../../stores/auth'
 import {
   openDocs,
+  startChannelDocLoop,
   startIdentityLoop,
   startInstanceLoop,
   startKeepAliveLoop,
@@ -23,6 +24,10 @@ import {
 //   instance — record that this node id is a live endpoint of this identity, so the
 //     identity's published coordinates can be the SET of live endpoints rather than
 //     whichever instance wrote last.
+//   channel-docs — serve each owned channel as a live replica and keep a read ticket
+//     for it published, so a subscriber is pushed a new post instead of waiting for
+//     the next poll. It reads the sealed manifest straight out of the doc and copies
+//     it across, which is why it needs no Sia session and never sees the content.
 //   identity — publish those coordinates: one packet under the did:dht key carrying
 //     the directory pointer, the doc namespace, and every live endpoint. This was two
 //     writers until now — the Curator at startup and a React effect seconds later,
@@ -47,6 +52,7 @@ export function useCuratorLoops() {
       if (cancelled) return
       await Promise.allSettled([
         startKeepAliveLoop(appKeyHex),
+        startChannelDocLoop(appKeyHex),
         startRepackLoop(appKeyHex),
         startInstanceLoop(),
         startIdentityLoop(appKeyHex, namespaceId),

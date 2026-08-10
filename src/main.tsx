@@ -66,6 +66,8 @@ if (import.meta.env.DEV || inTauri()) {
       instancePasses: () => string[]
       startIdentity: (hex: string) => Promise<string>
       identityPasses: () => string[]
+      startChannelDocs: (hex: string) => Promise<string>
+      channelDocPasses: () => string[]
     }
   }
   // Channel docs (the ladder's top rung), driven through whichever engine is active:
@@ -88,20 +90,36 @@ if (import.meta.env.DEV || inTauri()) {
       return channelDocsImportTest(hex, ticket)
     },
   }
-  // Ladder rung 1 end to end: an author publishes a channel doc + a read ticket to
-  // the DHT, and a subscriber resolves that ticket from K alone (nothing handed over
-  // out of band) and live-syncs the manifest into its feed. `channelKey` is fresh per
-  // run so the pkarr read is a first read, not an overwrite — public relays lag on
+  // Ladder rung 1 end to end: an author serves a channel through the Curator's real
+  // channel-doc loop, and a subscriber resolves the ticket from K alone (nothing handed
+  // over out of band) and live-syncs the manifest into its feed. `channelKey` is fresh
+  // per run so the pkarr read is a first read, not an overwrite — public relays lag on
   // overwrites (see CLAUDE.md 2026-07-23).
+  //
+  // The author side seeds the doc the way a real publish would — a sealed manifest under
+  // `channel/<id>`, and a settings record naming the channel as owned — and then starts
+  // the loop and waits for it to advertise. That's deliberate: serving a channel is the
+  // Curator's job, so a harness that served one itself would be a second implementation
+  // of the thing under test, and it would keep passing after the real one broke.
   g.__pinChannelDocLive = {
     publish: async (name: string, hexOverride?: string) => {
       const hex = hexOverride ?? (await session()).hex
       if (!hex) return 'not signed in'
-      const { generateChannelKey, channelKeyToBase64, deriveChannelID } =
-        await import('./core/crypto')
+      const {
+        generateChannelKey,
+        channelKeyToBase64,
+        deriveChannelID,
+        encryptForChannel,
+        encryptSettings,
+        deriveSettingsKey,
+        deriveChannelDocSeed,
+      } = await import('./core/crypto')
       const { CHANNEL_MANIFEST_VERSION } = await import('./core/types')
+      const { SETTINGS_VERSION } = await import('./core/settings')
       type Manifest = import('./core/types').ChannelManifest
-      const { publishChannelDoc } = await import('./lib/channelDoc')
+      const { openDocs, openChannelDoc, putRecord, startChannelDocLoop } =
+        await import('./lib/docs')
+
       const k = await generateChannelKey()
       const channelKey = channelKeyToBase64(k)
       const channelID = await deriveChannelID(k)
@@ -113,13 +131,69 @@ if (import.meta.env.DEV || inTauri()) {
         publishedAt: new Date().toISOString(),
         items: [],
       }
-      const { nsId } = await publishChannelDoc(
-        hex,
+
+      await openDocs(hex)
+      const appKey = Uint8Array.fromHex(hex)
+      const enc = new TextEncoder()
+
+      // What a commit leaves behind: the manifest sealed under K, under the channel's id.
+      await putRecord(
+        'channel',
         channelID,
-        channelKey,
-        manifest,
+        enc.encode(await encryptForChannel(k, JSON.stringify(manifest))),
       )
-      return JSON.stringify({ channelID, channelKey, nsId })
+      // And what tells the loop this channel is ours to serve.
+      const settings = {
+        version: SETTINGS_VERSION,
+        myChannels: [
+          {
+            channelID,
+            channelKey,
+            name,
+            visibility: 'public',
+            createdAt: new Date().toISOString(),
+          },
+        ],
+        subscriptions: [],
+        updatedAt: new Date().toISOString(),
+      }
+      await putRecord(
+        'settings',
+        'self',
+        enc.encode(
+          await encryptSettings(
+            await deriveSettingsKey(appKey),
+            JSON.stringify(settings),
+          ),
+        ),
+      )
+
+      // The namespace the loop will serve this channel under, so the subscriber's
+      // import can be checked against it. Opening is idempotent — the loop imports the
+      // same namespace from the same derived seed.
+      const seed = await deriveChannelDocSeed(appKey, channelID)
+      const nsId = await openChannelDoc(
+        Array.from(seed)
+          .map((b) => b.toString(16).padStart(2, '0'))
+          .join(''),
+      )
+
+      // Now let the real loop do the work, and wait until it says it advertised.
+      const passes: string[] = []
+      await startChannelDocLoop(hex, (report) => passes.push(report))
+      const deadline = Date.now() + 60_000
+      while (Date.now() < deadline) {
+        const advertised = passes.some((p) => {
+          try {
+            return (JSON.parse(p) as { advertised?: number }).advertised
+          } catch {
+            return false
+          }
+        })
+        if (advertised) break
+        await new Promise((r) => setTimeout(r, 250))
+      }
+      return JSON.stringify({ channelID, channelKey, nsId, passes })
     },
     subscribe: async (
       channelID: string,
@@ -314,6 +388,7 @@ if (import.meta.env.DEV || inTauri()) {
     }> = []
     const pullPasses: string[] = []
     const keepAlivePasses: string[] = []
+    const channelDocPasses: string[] = []
     const instancePasses: string[] = []
     const identityPasses: string[] = []
     // A per-page-load instance id for the rendezvous directory (the app uses its own
@@ -410,6 +485,16 @@ if (import.meta.env.DEV || inTauri()) {
         return 'started'
       },
       keepAlivePasses: () => keepAlivePasses.slice(),
+      // Same, for the channel-doc serve loop. It reads what this identity owns, so an
+      // empty doc stops it at the same place the other reading loops stop.
+      startChannelDocs: async (hex) => {
+        await (await docs()).openDocs(hex)
+        await (await docs()).startChannelDocLoop(hex, (report) => {
+          channelDocPasses.push(report)
+        })
+        return 'started'
+      },
+      channelDocPasses: () => channelDocPasses.slice(),
       // And the instance-registration loop. Unlike the other two this one SUCCEEDS on
       // an empty doc — it writes its own registration rather than reading anything —
       // so the spec can assert the real outcome instead of a reached-the-doc error.
