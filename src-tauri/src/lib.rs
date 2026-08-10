@@ -7,8 +7,56 @@ mod rpc;
 mod sia;
 mod tray;
 
+/// A second (third, …) desktop instance on one machine, for testing anything that
+/// needs two dialable peers — engagement over `/hey`, cross-instance sync, two
+/// identities talking to each other. A browser tab can't stand in: it has no
+/// listening socket, so it can never *receive* a knock.
+///
+/// One env var does the whole job because Tauri resolves the identifier at RUNTIME,
+/// not at build time — `app_local_data_dir()` is `data_local_dir().join(identifier)`,
+/// and the Windows webview's forced user-data dir resolves the same value. So
+/// suffixing it here relocates every store this app has at once: the WebView2
+/// profile (localStorage, hence the Sia AppKey, hence the identity), the Curator's
+/// dir (node key, docs.redb, blobs, publish state) and the logs. Nothing downstream
+/// needs to know — `curator.rs` keeps asking for `app_local_data_dir()` and lands
+/// somewhere else, `curator_reset` included.
+///
+/// Unset means today's state, so the account already on this machine is the primary
+/// instance and nothing has to migrate.
+///
+/// Debug-only: the identifier decides where a shipped app keeps a user's data, and a
+/// stray env var must not be able to move it.
+fn apply_instance_suffix(config: &mut tauri::utils::config::Config) {
+    if !cfg!(debug_assertions) {
+        return;
+    }
+    let Ok(raw) = std::env::var("PIN_INSTANCE") else {
+        return;
+    };
+    // The identifier becomes a path component, so keep it to characters that are
+    // one everywhere. An empty result (all punctuation, say) means no suffix.
+    let name: String = raw
+        .to_lowercase()
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
+        .take(16)
+        .collect();
+    if name.is_empty() {
+        return;
+    }
+    config.identifier = format!("{}.{name}", config.identifier);
+    // Two windows called "Pin" are indistinguishable in the taskbar, and the tray
+    // reads its tooltip off this too.
+    for window in &mut config.app.windows {
+        window.title = format!("{} ({name})", window.title);
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let mut context = tauri::generate_context!();
+    apply_instance_suffix(context.config_mut());
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(curator::CuratorState::default())
@@ -75,6 +123,6 @@ pub fn run() {
             tray::init(app.handle())?;
             Ok(())
         })
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("error while running tauri application");
 }

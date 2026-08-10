@@ -7,6 +7,7 @@
     "dev": "vite",
     "dev:lan": "PIN_LAN=1 vite",
     "dev:desktop": "bun run build && tauri dev",
+    "dev:desktop:pair": "bash scripts/dev-desktop.sh",
     "build": "tsc -b && vite build",
     "wasm": "bash scripts/build-wasm.sh",
     "preview": "vite preview",

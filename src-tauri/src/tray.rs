@@ -51,7 +51,16 @@ pub fn init(app: &AppHandle) -> tauri::Result<()> {
                 .cloned()
                 .expect("bundled window icon"),
         )
-        .tooltip("Pin")
+        // Read off the window title so a PIN_INSTANCE run gets a distinguishable
+        // tray icon too, without this file learning about the env var.
+        .tooltip(
+            app.config()
+                .app
+                .windows
+                .first()
+                .map(|w| w.title.as_str())
+                .unwrap_or("Pin"),
+        )
         .menu(&menu)
         // Left-click is the "give me the window back" gesture; right-click is the
         // menu. Don't pop the menu on both.
