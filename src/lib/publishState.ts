@@ -56,7 +56,7 @@ export async function settingsPublishKey(): Promise<string> {
   return published_settings_rkey()
 }
 
-async function collection(): Promise<string> {
+export async function collection(): Promise<string> {
   await ensureWasm()
   return published_collection()
 }

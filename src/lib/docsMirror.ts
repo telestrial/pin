@@ -1,5 +1,11 @@
-// Option B web durability: snapshot the (ephemeral) browser iroh-docs doc to Sia
-// and re-hydrate it on load. The browser has no persistent iroh-docs store
+// Web durability, READ side: re-hydrate the (ephemeral) browser iroh-docs doc from its
+// Sia snapshot on load.
+//
+// TAKING the snapshot is the Curator's (crates/pin-curator/src/snapshot.rs) — one
+// writer, reading the doc. What lives here is everything needed to get it back: find
+// the pointer, download, decrypt, put the records into a fresh doc.
+//
+// Originally: The browser has no persistent iroh-docs store
 // (MemStore only), so the doc's contents are mirrored to Sia (durable) and put
 // back into a fresh doc when the app boots. All in TS over the Sia SDK the app
 // already has — no Rust Curator / did:dht needed (that's Phase D).
@@ -17,18 +23,12 @@ import {
   decryptForChannel,
   deriveSettingsLocatorSeed,
   deriveSnapshotKey,
-  encryptForChannel,
 } from '../core/crypto'
 import type { SiaClient } from '../core/siaClient'
 import { ensureWasm } from '../core/wasm'
-import { getRecord, listAll, putRecord } from './docs'
-import { chunkForTxt, identityFromSeed, reassembleTxt } from './pkarr'
+import { putRecord } from './docs'
+import { identityFromSeed, reassembleTxt } from './pkarr'
 import { pkarrTransport } from './pkarrTransport'
-import {
-  readPublished,
-  settingsPublishKey,
-  writePublished,
-} from './publishState'
 
 const POINTER_KEY = 'pin:docsnapshot:pointer'
 
@@ -61,34 +61,11 @@ function writePointer(p: Pointer): void {
   }
 }
 
-function b64encode(bytes: Uint8Array): string {
-  let s = ''
-  for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i])
-  return btoa(s)
-}
-
 function b64decode(b64: string): Uint8Array {
   const s = atob(b64)
   const out = new Uint8Array(s.length)
   for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i)
   return out
-}
-
-// Publish the durable settings pointer: a pkarr record (AppKey-keyed) naming the
-// current Sia snapshot URL. This is what lets a fresh device recover settings from
-// the recovery phrase alone (phrase → AppKey → locator key → DHT → Sia URL) — the
-// localStorage pointer is only a fast cache in front of it. Routed through the
-// pkarrTransport seam, so desktop publishes over the direct Mainline DHT (no relay
-// lag) and web over the relays, same as channel locators.
-async function publishSettingsLocator(
-  appKeyBytes: Uint8Array,
-  url: string,
-): Promise<void> {
-  const seed = await deriveSettingsLocatorSeed(appKeyBytes)
-  await (await pkarrTransport()).publish(
-    seed,
-    chunkForTxt(await pointerPrefix(), url),
-  )
 }
 
 // Resolve the durable settings pointer off the DHT → the current Sia snapshot URL.
@@ -103,63 +80,17 @@ async function resolveSettingsPointer(
   return reassembleTxt(records, await pointerPrefix()) || null
 }
 
-/** Snapshot the whole doc to Sia (encrypted), record the pointer, publish the
- *  durable pkarr locator, prune the previous snapshot. Call (debounced) after
- *  writes. */
-export async function snapshotToSia(
-  client: SiaClient,
-  appKeyHex: string,
-): Promise<Pointer> {
-  const appKeyBytes = Uint8Array.fromHex(appKeyHex)
-  const key = await deriveSnapshotKey(appKeyBytes)
-  const entries: SnapshotEntry[] = []
-  for (const { collection, rkey } of await listAll()) {
-    const value = await getRecord(collection, rkey)
-    if (value) entries.push({ c: collection, k: rkey, v: b64encode(value) })
-  }
-  const ciphertext = await encryptForChannel(key, JSON.stringify(entries))
-  const uploaded = await client.uploadItem(new TextEncoder().encode(ciphertext))
-
-  // What we're superseding. Publish state first — it's the record, and it's the one
-  // that travels — falling back to the local cache for identities whose publish state
-  // predates this, so their last snapshot object still gets reclaimed rather than
-  // stranded.
-  const rkey = await settingsPublishKey()
-  const prev = (await readPublished(appKeyHex, rkey)) ?? readPointer()
-
-  await writePublished(appKeyHex, rkey, {
-    id: uploaded.id,
-    url: uploaded.itemURL,
-  })
-  writePointer({ id: uploaded.id, url: uploaded.itemURL })
-
-  // Publish the durable DHT pointer (best-effort — the local pointer above already
-  // made this snapshot readable on THIS device, and the Curator's keep-alive
-  // republishes from the publish state either way, so a failed publish here costs
-  // freshness rather than the pointer).
-  await publishSettingsLocator(appKeyBytes, uploaded.itemURL).catch((e) =>
-    console.warn('settings locator publish failed (will retry):', e),
-  )
-
-  // Best-effort prune of the superseded snapshot object (the new one is already
-  // pointed at, so a failed prune only leaves a reclaimable orphan). Guard on a
-  // non-empty id: a pointer recovered from the DHT locator carries only the URL
-  // (id ''), which can't be pruned — that object is left for the sweep.
-  if (prev?.id && prev.id !== uploaded.id) {
-    await client
-      .deleteObject(prev.id)
-      .then(() => client.pruneSlabs())
-      .catch(() => {})
-  }
-  return { id: uploaded.id, url: uploaded.itemURL }
+/** Point the boot cache at a snapshot the Curator took.
+ *
+ *  The Curator owns the snapshot now, and it has no localStorage to write this to — but
+ *  the cache can't simply go away: on web the doc is in memory, so at boot there is no
+ *  doc to read a pointer out of, which is the circularity this cache exists to break.
+ *  So the pointer is projected back out of the doc while the app runs (see
+ *  `useSnapshotPointer`) and read from here at boot. */
+export function cacheSnapshotPointer(p: Pointer): void {
+  writePointer(p)
 }
 
-// Download + decrypt the latest Sia snapshot into its entries — WITHOUT the
-// pin-core engine. The snapshot is a self-contained durable copy, so a plain Sia
-// download + decrypt is enough. localStorage pointer first (fast, warm device);
-// when it's absent AND recovery is allowed (a restore / wiped-pointer boot, never a
-// brand-new account), fall back to resolving the durable DHT locator, and cache the
-// recovered URL so subsequent reads this session skip the resolve. [] when there's
 // no pointer and recovery is off or finds nothing.
 async function fetchSnapshotEntries(
   client: SiaClient,

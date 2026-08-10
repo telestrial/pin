@@ -2,7 +2,6 @@ import { useEffect } from 'react'
 import { useAuthStore } from '../../stores/auth'
 import { usePinStore } from '../../stores/pin'
 import { isRemoteChange, subscribeDocChanges } from '../docs'
-import { snapshotToSia } from '../docsMirror'
 import {
   collection as pinnedCollection,
   pinRkey,
@@ -23,6 +22,11 @@ import {
 // than inferring them: two devices share this doc, so "absent from my list" cannot
 // mean "delete it" — that would erase whatever the other device just pinned. The
 // transition from one local list to the next is what identifies a release.
+//
+// It does NOT snapshot. Mirroring the doc to Sia is the Curator's, in one loop reading
+// the doc — this and the settings mirror each used to take their own, on separate
+// debounces, which meant two whole-doc uploads racing on one pointer whenever a pin and
+// a settings change fell in the same window.
 //
 // READ side. Applies the doc's records back into the store, guarded the same way the
 // settings overlay is: only when our own local state is fully recorded. A local edge
@@ -74,18 +78,10 @@ export function usePinDocsMirror() {
       const releasing = [...released]
       try {
         const pinned = usePinStore.getState().pinned
-        const result = await syncPinRecords(storedKeyHex, pinned, releasing)
+        await syncPinRecords(storedKeyHex, pinned, releasing)
         if (cancelled) return
         for (const r of releasing) released.delete(r)
         recorded = await localFingerprint()
-        // Only snapshot when the doc actually moved. The snapshot is a Sia upload;
-        // paying for one when nothing changed would make every quiet pass expensive.
-        if (result.written > 0 || result.deleted > 0) {
-          await snapshotToSia(client, storedKeyHex)
-          // An upload moved the account's storage; the meter only re-reads on
-          // pin/unpin/publish, so say so.
-          usePinStore.getState().refreshAccount(client)
-        }
       } catch (e) {
         // The next change retries. A pin that failed to record is still held locally,
         // so nothing is lost yet — but it hasn't travelled, so say so.

@@ -13,8 +13,6 @@ import type {
   ThemeMode,
 } from '../../core/types'
 import { useAuthStore } from '../../stores/auth'
-import { useCuratorStore } from '../../stores/curator'
-import { usePinStore } from '../../stores/pin'
 import { useStorageActivityStore } from '../../stores/storageActivity'
 import {
   getRecord,
@@ -23,7 +21,6 @@ import {
   putRecord,
   subscribeDocChanges,
 } from '../docs'
-import { snapshotToSia } from '../docsMirror'
 
 // The user's settings mirrored into iroh-docs + Sia — the CANONICAL settings
 // write (Phase C step 4b dropped the atproto settings record). Everything the
@@ -184,28 +181,11 @@ export function useSettingsDocsMirror() {
         const key = await deriveSettingsKey(appKeyBytes)
         const enc = await encryptSettings(key, JSON.stringify(settings))
         await putRecord('settings', 'self', new TextEncoder().encode(enc))
-        const pointer = await snapshotToSia(client, storedKeyHex)
-        // The snapshot is an upload, so the account's storage just moved. Nothing
-        // else would say so: the meter reads once at connect and then only on
-        // pin/unpin/publish, so after a reset it would sit at zero — correct at the
-        // moment it read, and stale from the second this landed.
-        usePinStore.getState().refreshAccount(client)
         // Only advance the fingerprint on full success — a failure leaves it
         // stale so the next change/boot retries (no silent loss).
         writeFingerprint(fp)
-        // Report to the Curate page. This snapshot IS the doc's Sia mirror on both
-        // platforms — it took over the job the Curator's repo-CAR mirror had before
-        // the iroh-docs cutover, and added the pkarr locator that one never had.
-        useCuratorStore.getState().set({
-          mirrorState: 'pushed',
-          mirrorUrl: pointer.url,
-          mirrorError: null,
-        })
       } catch (e) {
         console.warn('settings mirror failed (will retry):', e)
-        useCuratorStore
-          .getState()
-          .set({ mirrorState: 'error', mirrorError: String(e) })
       } finally {
         saving = false
         useStorageActivityStore.getState().setSavingSettings(false)

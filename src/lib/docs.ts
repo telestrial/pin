@@ -36,6 +36,7 @@ import {
   start_keep_alive_loop,
   start_pull_loop,
   start_repack_loop,
+  start_snapshot_loop,
   subscribe_doc_changes,
 } from '../../crates/pin-core/pkg/pin_core.js'
 import { ensureWasm } from '../core/wasm'
@@ -63,6 +64,7 @@ import {
   startKeepAliveLoopNative,
   startPullLoopNative,
   startRepackLoopNative,
+  startSnapshotLoopNative,
   startSyncNative,
   subscribeDocChangesNative,
 } from './tauriDocs'
@@ -382,6 +384,39 @@ export async function startChannelSyncLoop(
     appKeyHex,
     CHANNEL_SYNC_CADENCE_SECS,
     CHANNEL_SYNC_RETRY_SECS,
+    (report: string) => onPass?.(report),
+  )
+}
+
+/** The snapshot's backstop cadence, in seconds. The doc's own change stream is what
+ *  normally wakes it; this only covers a signal that never arrived. */
+const SNAPSHOT_CADENCE_SECS = 10 * 60
+
+/** How long to let writes settle before mirroring, in seconds. A channel pin fans out
+ *  one write per item, and each upload supersedes the last, so acting on the first
+ *  would pay for a snapshot per item and reclaim them all again. */
+const SNAPSHOT_SETTLE_SECS = 3
+
+/** Start the doc-to-Sia snapshot loop in this instance — the identity's durability
+ *  floor.
+ *
+ *  Whatever is in the doc, mirrored to Sia and named by a published locator. ONE
+ *  writer, reading the doc: it replaces a snapshot that the settings mirror and the pin
+ *  mirror each took on their own debounce, which meant two concurrent whole-doc uploads
+ *  racing on one pointer whenever a settings change and a pin fell in the same window.
+ *
+ *  Idempotent (each engine keeps one loop). Requires an open doc ({@link openDocs}) and
+ *  a connected Sia session. */
+export async function startSnapshotLoop(
+  appKeyHex: string,
+  onPass?: (report: string) => void,
+): Promise<void> {
+  if (inTauri()) return startSnapshotLoopNative(appKeyHex)
+  await ensureWasm()
+  await start_snapshot_loop(
+    appKeyHex,
+    SNAPSHOT_CADENCE_SECS,
+    SNAPSHOT_SETTLE_SECS,
     (report: string) => onPass?.(report),
   )
 }

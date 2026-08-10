@@ -181,6 +181,11 @@ export function startChannelSyncLoopNative(appKeyHex: string): Promise<void> {
   return call<void>('curator_start_channel_sync', { appKeyHex })
 }
 
+/** Start the doc-to-Sia snapshot loop. Idempotent — the engine keeps one. */
+export function startSnapshotLoopNative(appKeyHex: string): Promise<void> {
+  return call<void>('curator_start_snapshot', { appKeyHex })
+}
+
 /** Start the repack loop. Idempotent — the engine keeps one. */
 export function startRepackLoopNative(appKeyHex: string): Promise<void> {
   return call<void>('curator_start_repack', { appKeyHex })

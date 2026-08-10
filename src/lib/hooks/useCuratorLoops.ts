@@ -8,6 +8,7 @@ import {
   startInstanceLoop,
   startKeepAliveLoop,
   startRepackLoop,
+  startSnapshotLoop,
 } from '../docs'
 
 // Turn on the Curator's background loops, and then get out of the way.
@@ -32,6 +33,10 @@ import {
 //   channel-sync — the subscriber counterpart: import each subscribed channel from its
 //     author and write what arrives into `sub/<id>`, the same record the polling rung
 //     writes. So a pushed manifest and a polled one are the same thing downstream.
+//   snapshot — mirror the whole doc to Sia and publish the pointer to it. The identity's
+//     durability floor, and until now a side effect of two separate React effects, each
+//     debouncing independently — so a settings change and a pin in the same window meant
+//     two whole-doc uploads racing on one pointer.
 //   identity — publish those coordinates: one packet under the did:dht key carrying
 //     the directory pointer, the doc namespace, and every live endpoint. This was two
 //     writers until now — the Curator at startup and a React effect seconds later,
@@ -58,6 +63,7 @@ export function useCuratorLoops() {
         startKeepAliveLoop(appKeyHex),
         startChannelDocLoop(appKeyHex),
         startChannelSyncLoop(appKeyHex),
+        startSnapshotLoop(appKeyHex),
         startRepackLoop(appKeyHex),
         startInstanceLoop(),
         startIdentityLoop(appKeyHex, namespaceId),

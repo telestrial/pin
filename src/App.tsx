@@ -20,6 +20,7 @@ import { usePinDocsMirror } from './lib/hooks/usePinDocsMirror'
 import { useRendezvousSync } from './lib/hooks/useRendezvousSync'
 import { useSettingsDocsMirror } from './lib/hooks/useSettingsDocsMirror'
 import { useSettingsSync } from './lib/hooks/useSettingsSync'
+import { useSnapshotPointer } from './lib/hooks/useSnapshotPointer'
 import { useSubscriptionPull } from './lib/hooks/useSubscriptionPull'
 import { useAuthStore } from './stores/auth'
 import { useComposeStore } from './stores/compose'
@@ -75,6 +76,7 @@ export default function App() {
   useSettingsSync()
   useSettingsDocsMirror()
   usePinDocsMirror()
+  useSnapshotPointer()
   useChannelReader()
   useSubscriptionPull()
   useCuratorLoops()

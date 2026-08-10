@@ -266,15 +266,16 @@ if (import.meta.env.DEV || inTauri()) {
       return JSON.stringify({ name, passes })
     },
   }
+  // Write a probe record and wait for the Curator to mirror it. Taking the snapshot
+  // here would make this a second writer of the one artifact the whole account rests
+  // on, which is precisely what moving it into the Curator removed.
   g.__pinMirrorWrite = async (text: string) => {
-    const { client, hex } = await session()
-    if (!client || !hex) return 'not signed in'
+    const { hex } = await session()
+    if (!hex) return 'not signed in'
     const { openDocs, putRecord } = await import('./lib/docs')
-    const { snapshotToSia } = await import('./lib/docsMirror')
     await openDocs(hex)
     await putRecord('probe', 'persist', new TextEncoder().encode(text))
-    const p = await snapshotToSia(client, hex)
-    return `snapshotted (${p.url.slice(0, 48)}...)`
+    return 'written; the Curator mirrors it on its next pass'
   }
   g.__pinMirrorRead = async () => {
     const { client, hex } = await session()
