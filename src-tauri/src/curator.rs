@@ -803,6 +803,57 @@ pub async fn curator_start_keep_alive(
     Ok(())
 }
 
+/// How often each owned channel's manifest is copied into its doc and its ticket
+/// re-minted. Matches the frontend cadence it replaces — the ticket is the perishable
+/// half (addresses drift, records age off), and the copy is a no-op when nothing moved.
+const CHANNEL_DOC_CADENCE: std::time::Duration = std::time::Duration::from_secs(4 * 60);
+
+/// Start the channel-doc serve loop — serve each owned channel as a live replica and
+/// keep a read ticket for it published, so subscribers are pushed new posts.
+///
+/// Needs no Sia session: the manifest is copied out of the main doc as sealed bytes,
+/// so the loop never resolves anything and never sees a channel's content.
+///
+/// Idempotent (the engine keeps one loop), so a remounting caller can just call it.
+#[tauri::command]
+pub async fn curator_start_channel_docs(
+    curator: tauri::State<'_, CuratorState>,
+    sia: tauri::State<'_, crate::sia::SiaState>,
+    app_key_hex: String,
+) -> Result<(), String> {
+    let engine = current_engine(&curator)?;
+    if engine.channel_doc_started() {
+        return Ok(());
+    }
+    let app_key = pin_derive::decode_app_key(&app_key_hex).ok_or("app key hex must be 32 bytes")?;
+    let ctx = pin_curator::ChannelDocContext {
+        doc: engine.doc.clone(),
+        blobs: (*engine.blobs).clone(),
+        author_id: engine.author_id,
+        docs: engine.docs.api().clone(),
+        app_key,
+    };
+    let loop_handle = sia.detach(async move {
+        pin_curator::run_channel_doc_loop(ctx, CHANNEL_DOC_CADENCE, |result| match result {
+            Ok(o) => {
+                // Quiet once every channel is served and unchanged — the steady state,
+                // which happens every four minutes and is not news.
+                if o.copied > 0 || o.failed > 0 || o.unpublished > 0 {
+                    println!(
+                        "curator channel docs: copied {} unchanged {} advertised {} unpublished {} failed {}",
+                        o.copied, o.unchanged, o.advertised, o.unpublished, o.failed
+                    );
+                }
+            }
+            // Expected while the engine warms up (no settings record yet).
+            Err(e) => println!("curator channel docs: {e}"),
+        })
+        .await
+    });
+    curator.0.lock().unwrap().loops.push(loop_handle);
+    Ok(())
+}
+
 /// How often this instance re-registers its dial coordinates. Well under
 /// `INSTANCE_TTL_SECS`, so a missed pass doesn't drop a running instance out of the
 /// identity's published endpoints.

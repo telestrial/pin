@@ -41,10 +41,14 @@ use iroh_blobs::api::Store;
 use iroh_docs::{api::Doc, AuthorId};
 use pin_derive::{record_key, settings_key};
 
+mod channeldoc;
 mod identity;
 mod instance;
 mod keepalive;
 mod repack;
+pub use channeldoc::{
+    channel_docs_once, run_channel_doc_loop, ChannelDocContext, ChannelDocOutcome,
+};
 pub use identity::{
     publish_identity_once, run_identity_loop, IdentityContext, IdentityOutcome,
     DIRECTORY_DOC_VERSION,

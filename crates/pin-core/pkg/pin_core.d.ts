@@ -442,6 +442,16 @@ export function sia_wait_for_approval(): Promise<void>;
 export function start(): void;
 
 /**
+ * Start the channel-doc serve loop in this tab.
+ *
+ * Serves each owned channel as a live replica and keeps a read ticket published, so a
+ * subscriber is pushed new posts rather than polling for them. It copies the sealed
+ * manifest out of the main doc verbatim, so it needs no Sia session and never sees a
+ * channel's content.
+ */
+export function start_channel_doc_loop(app_key_hex: string, cadence_secs: number, on_pass: Function): Promise<void>;
+
+/**
  * Start the identity-publishing loop in this tab — one packet under the did:dht key
  * carrying the directory pointer, the doc namespace, and every live endpoint.
  *
@@ -639,6 +649,7 @@ export interface InitOutput {
     readonly sia_upload_items_packed: (a: any, b: number) => any;
     readonly sia_validate_recovery_phrase: (a: number, b: number) => [number, number];
     readonly sia_wait_for_approval: () => any;
+    readonly start_channel_doc_loop: (a: number, b: number, c: number, d: any) => any;
     readonly start_identity_loop: (a: number, b: number, c: number, d: number, e: number, f: any) => any;
     readonly start_instance_loop: (a: number, b: any) => any;
     readonly start_keep_alive_loop: (a: number, b: number, c: number, d: any) => any;
