@@ -17,18 +17,13 @@ import {
   openDocs,
   putRecord,
   shareDoc,
+  startRendezvousLoop,
   startSync,
 } from '../../lib/docs'
-import { advertiseInstance, autoConnectRendezvous } from '../../lib/rendezvous'
 
 // Any 32 bytes; openDocs is pure HKDF. The same value on both devices => the same
 // namespace + author => two replicas of one identity.
 const DEFAULT_HEX = '5eed'.repeat(16)
-
-// A per-device instance id for the additive rendezvous directory.
-const RZ_INSTANCE = Array.from(crypto.getRandomValues(new Uint8Array(8)))
-  .map((b) => b.toString(16).padStart(2, '0'))
-  .join('')
 
 export function SyncTestPanel() {
   const [hex, setHex] = useState(DEFAULT_HEX)
@@ -79,28 +74,17 @@ export function SyncTestPanel() {
       say(`open failed: ${e}`)
     }
   }
-  const [rzBusy, setRzBusy] = useState(false)
-  const doRzPublish = async () => {
+  // The real loop the app runs, driven with this panel's key — so what a manual
+  // cross-device check exercises is the production path, not a panel-shaped copy of
+  // it. Symmetric: press it on both devices, each advertises and connects.
+  const [rzStarted, setRzStarted] = useState(false)
+  const doRendezvous = async () => {
     try {
-      await advertiseInstance(hex, RZ_INSTANCE, false)
-      say(
-        'advertised to the rendezvous — the other device can auto-connect now',
-      )
+      await startRendezvousLoop(hex, (report) => say(`rendezvous ${report}`))
+      setRzStarted(true)
+      say('rendezvous loop started — it advertises and connects on its own')
     } catch (e) {
-      say(`rendezvous advertise failed: ${e}`)
-    }
-  }
-  const doRzConnect = async () => {
-    setRzBusy(true)
-    try {
-      await autoConnectRendezvous(hex, RZ_INSTANCE, (l) =>
-        setEvents((ev) => [l, ...ev].slice(0, 50)),
-      )
-      say('auto-connected via rendezvous — no ticket copied')
-    } catch (e) {
-      say(`auto-connect failed: ${e}`)
-    } finally {
-      setRzBusy(false)
+      say(`rendezvous failed to start: ${e}`)
     }
   }
   const doShare = async () => {
@@ -193,28 +177,18 @@ export function SyncTestPanel() {
             2 · Auto-connect (rendezvous) — no ticket
           </div>
           <div className="text-xs text-neutral-500">
-            One device Publishes its coords to the shared rendezvous record; the
-            other Auto-connects — resolves it and syncs, no copy. Same key ⇒
-            same rendezvous record.
+            Start it on BOTH devices. Each publishes where it can be reached to
+            the shared rendezvous record and connects to whoever it finds — no
+            copy. Same key ⇒ same rendezvous record. Watch the Log for passes.
           </div>
-          <div className="flex gap-2">
-            <button
-              type="button"
-              className={btn}
-              onClick={doRzPublish}
-              disabled={!namespace}
-            >
-              Publish rendezvous
-            </button>
-            <button
-              type="button"
-              className={btn}
-              onClick={doRzConnect}
-              disabled={!namespace || rzBusy}
-            >
-              {rzBusy ? 'Connecting…' : 'Auto-connect'}
-            </button>
-          </div>
+          <button
+            type="button"
+            className={btn}
+            onClick={doRendezvous}
+            disabled={!namespace || rzStarted}
+          >
+            {rzStarted ? 'Rendezvous running' : 'Start rendezvous'}
+          </button>
         </section>
 
         <section className={card}>

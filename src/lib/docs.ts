@@ -35,6 +35,7 @@ import {
   start_instance_loop,
   start_keep_alive_loop,
   start_pull_loop,
+  start_rendezvous_loop,
   start_repack_loop,
   start_snapshot_loop,
   subscribe_doc_changes,
@@ -63,6 +64,7 @@ import {
   startInstanceLoopNative,
   startKeepAliveLoopNative,
   startPullLoopNative,
+  startRendezvousLoopNative,
   startRepackLoopNative,
   startSnapshotLoopNative,
   startSyncNative,
@@ -469,6 +471,49 @@ export async function startInstanceLoop(
   await ensureWasm()
   await start_instance_loop(INSTANCE_CADENCE_SECS, (report: string) =>
     onPass?.(report),
+  )
+}
+
+/** How often this instance refreshes its rendezvous entry once it has a peer, and how
+ *  often it looks again while it doesn't. The refresh is well under the entry TTL, and
+ *  it re-mints the ticket too — the first ticket a fresh node makes carries no relay
+ *  address at all, so re-minting is what makes it dialable. */
+const RENDEZVOUS_CADENCE_SECS = 4 * 60
+const RENDEZVOUS_RETRY_SECS = 30
+
+/** What one rendezvous pass did — the status behind "are my devices in parity". */
+export type RendezvousReport = {
+  advertised?: boolean
+  peers?: number
+  reached?: number
+  syncing?: number
+  unreachable?: number
+  error?: string
+}
+
+/** Start the instance rendezvous loop — advertise where THIS instance can be reached,
+ *  and live-sync this identity's doc with the other instances it finds.
+ *
+ *  Symmetric: every open instance advertises and connects, so a tab can be synced FROM
+ *  as readily as it syncs TO. The only asymmetry is physics, carried as a `durable` flag
+ *  on the directory entry so a peer can prefer the always-on endpoint.
+ *
+ *  This is what makes first contact possible at all: reading the doc's instance registry
+ *  needs the doc, and getting the doc needs a peer — so the meeting point has to be
+ *  outside both, and it's a pkarr record under an AppKey-derived (hence private) key.
+ *
+ *  Idempotent (each engine keeps one loop). Requires an open doc ({@link openDocs}). */
+export async function startRendezvousLoop(
+  appKeyHex: string,
+  onPass?: (report: string) => void,
+): Promise<void> {
+  if (inTauri()) return startRendezvousLoopNative(appKeyHex)
+  await ensureWasm()
+  await start_rendezvous_loop(
+    appKeyHex,
+    RENDEZVOUS_CADENCE_SECS,
+    RENDEZVOUS_RETRY_SECS,
+    (report: string) => onPass?.(report),
   )
 }
 

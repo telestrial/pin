@@ -51,8 +51,6 @@ if (import.meta.env.DEV || inTauri()) {
       openSession: () => Promise<string>
       share: () => Promise<string>
       sync: (ticket: string) => Promise<void>
-      rendezvousPublish: (hex: string) => Promise<string>
-      rendezvousConnect: (hex: string) => Promise<string>
       put: (collection: string, rkey: string, value: string) => Promise<void>
       get: (collection: string, rkey: string) => Promise<string | null>
       events: () => string[]
@@ -70,6 +68,8 @@ if (import.meta.env.DEV || inTauri()) {
       channelDocPasses: () => string[]
       startChannelSync: (hex: string) => Promise<string>
       channelSyncPasses: () => string[]
+      startRendezvous: (hex: string) => Promise<string>
+      rendezvousPasses: () => string[]
     }
   }
   // Channel docs (the ladder's top rung), driven through whichever engine is active:
@@ -441,11 +441,7 @@ if (import.meta.env.DEV || inTauri()) {
     const channelSyncPasses: string[] = []
     const instancePasses: string[] = []
     const identityPasses: string[] = []
-    // A per-page-load instance id for the rendezvous directory (the app uses its own
-    // in useRendezvousSync; this is the harness's).
-    const RZ_INSTANCE = Array.from(crypto.getRandomValues(new Uint8Array(8)))
-      .map((b) => b.toString(16).padStart(2, '0'))
-      .join('')
+    const rendezvousPasses: string[] = []
     const docs = () => import('./lib/docs')
     g.__pinSync = {
       open: async (hex) => (await docs()).openDocs(hex),
@@ -466,25 +462,18 @@ if (import.meta.env.DEV || inTauri()) {
         (await docs()).startSync(ticket, (l) => {
           syncEvents.push(l)
         }),
-      // Rendezvous auto-discovery: one instance advertises its coords in the
-      // additive directory (per this page's instance id); another discovers + resolves
-      // + startSyncs, no manual copy. Each page (context) gets its own RZ_INSTANCE.
-      rendezvousPublish: async (hex) => {
-        await (await import('./lib/rendezvous')).advertiseInstance(
-          hex,
-          RZ_INSTANCE,
-          false,
-        )
-        return 'advertised'
+      // The Curator's rendezvous loop, running in this tab — the real one the app
+      // starts, not a harness reimplementation of it. Symmetric, so both sides call
+      // this: each advertises where it can be reached and connects to whoever it
+      // finds, and no ticket is copied by hand.
+      startRendezvous: async (hex) => {
+        await (await docs()).openDocs(hex)
+        await (await docs()).startRendezvousLoop(hex, (report) => {
+          rendezvousPasses.push(report)
+        })
+        return 'started'
       },
-      rendezvousConnect: async (hex) =>
-        (await import('./lib/rendezvous')).autoConnectRendezvous(
-          hex,
-          RZ_INSTANCE,
-          (l) => {
-            syncEvents.push(l)
-          },
-        ),
+      rendezvousPasses: () => rendezvousPasses.slice(),
       put: async (collection, rkey, value) =>
         (await docs()).putRecord(
           collection,

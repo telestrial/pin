@@ -20,8 +20,6 @@ import {
   derive_did_dht_seed,
   derive_pinned_key,
   derive_published_key,
-  derive_rendezvous_instance_seed,
-  derive_rendezvous_seed,
   derive_settings_key,
   derive_settings_locator_seed,
   derive_snapshot_key,
@@ -208,34 +206,9 @@ export async function deriveSettingsLocatorSeed(
   return derive_settings_locator_seed(appKeyBytes)
 }
 
-// The 32-byte ed25519 seed for your instance-RENDEZVOUS pkarr key — where an instance
-// of this identity publishes its current iroh DocTicket (node id + relay addr; an
-// address is REQUIRED, a bare node id doesn't resolve in the browser — CLAUDE.md
-// 2026-07-25) so ANOTHER instance of the same identity resolves it and dials in, with
-// no manual ticket copy. AppKey-derived, so it's private to your instances (only you
-// can compute the key → only your instances publish/resolve it) and domain-separated
-// from the public did:dht identity. The auto-discovery substrate for instance sync.
-export async function deriveRendezvousSeed(
-  appKeyBytes: Uint8Array,
-): Promise<Uint8Array> {
-  await ensureWasm()
-  return derive_rendezvous_seed(appKeyBytes)
-}
-
-// Per-instance rendezvous key. The multi-instance rendezvous is a small DIRECTORY
-// record (under the rendezvous key) listing each live instance, plus each instance's
-// full iroh DocTicket published under its OWN key derived here — because one pkarr
-// packet (~1000 B) can't hold several full tickets. Derived from the RENDEZVOUS seed
-// (not the AppKey) so it stays private to your instances; the instanceId is a public
-// per-session salt, so both the advertiser and any resolver holding the rendezvous
-// seed can derive the same per-instance key from a directory entry's id.
-export async function deriveRendezvousInstanceSeed(
-  rendezvousSeed: Uint8Array,
-  instanceId: string,
-): Promise<Uint8Array> {
-  await ensureWasm()
-  return derive_rendezvous_instance_seed(rendezvousSeed, instanceId)
-}
+// The rendezvous keys (where an instance publishes its DocTicket for the identity's
+// other instances to find) have no binding here: the loop that uses them is Rust, and
+// it calls pin_derive directly. See crates/pin-curator/src/rendezvous.rs.
 
 export async function encryptSettings(
   key: Uint8Array,

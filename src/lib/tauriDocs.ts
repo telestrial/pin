@@ -196,6 +196,11 @@ export function startInstanceLoopNative(): Promise<void> {
   return call<void>('curator_start_instance', {})
 }
 
+/** Start the instance rendezvous loop. Idempotent — the engine keeps one. */
+export function startRendezvousLoopNative(appKeyHex: string): Promise<void> {
+  return call<void>('curator_start_rendezvous', { appKeyHex })
+}
+
 /** Start the identity-publishing loop. Idempotent — the engine keeps one. */
 export function startIdentityLoopNative(appKeyHex: string): Promise<void> {
   return call<void>('curator_start_identity', { appKeyHex })
