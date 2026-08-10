@@ -217,9 +217,11 @@ pub async fn publish_identity_once(
     pin_pkarr::publish(&seed, &records).await?;
     outcome.published = true;
 
-    write_published(
-        ctx,
+    crate::write_published(
+        &ctx.doc,
+        ctx.author_id,
         &published_key,
+        DIRECTORY_RKEY,
         &PublishedState {
             id: object_id,
             url: Some(item_url),
@@ -252,25 +254,6 @@ async fn read_published(ctx: &IdentityContext, key: &[u8; 32]) -> Option<Publish
     let blob = String::from_utf8(raw).ok()?;
     let json = pin_crypto::decrypt(key, &blob).ok()?;
     serde_json::from_slice(&json).ok()
-}
-
-/// Best-effort, and noisy on failure: losing this record means the blob we just
-/// superseded has nothing left that knows to reclaim it.
-async fn write_published(ctx: &IdentityContext, key: &[u8; 32], state: &PublishedState) {
-    let Ok(json) = serde_json::to_vec(state) else {
-        return;
-    };
-    let Ok(sealed) = pin_crypto::encrypt(key, &json) else {
-        return;
-    };
-    let _ = ctx
-        .doc
-        .set_bytes(
-            ctx.author_id,
-            pin_derive::record_key(PUBLISHED_COLLECTION, DIRECTORY_RKEY),
-            sealed.into_bytes(),
-        )
-        .await;
 }
 
 /// Publish, wait, repeat — forever. Clocks come from the caller, since neither

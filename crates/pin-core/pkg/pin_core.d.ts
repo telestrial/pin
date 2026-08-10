@@ -522,6 +522,15 @@ export function start_pull_loop(app_key_hex: string, cadence_secs: number, on_pa
 export function start_repack_loop(app_key_hex: string, cadence_secs: number, on_pass: Function): Promise<void>;
 
 /**
+ * Start the doc-to-Sia snapshot loop in this tab.
+ *
+ * The identity's durability floor: whatever is in the doc, mirrored to Sia and named
+ * by a published locator. One writer, reading the doc — it replaces a snapshot that
+ * two React effects each took on their own debounce, racing on one pointer.
+ */
+export function start_snapshot_loop(app_key_hex: string, cadence_secs: number, settle_secs: number, on_pass: Function): Promise<void>;
+
+/**
  * Join the peer(s) in `ticket` and live-sync this identity's doc with them.
  * `on_event` is invoked with a short label string per `LiveEvent` (insert-local /
  * insert-remote / sync-finished / neighbor-up|down) so the UI can show the loop is
@@ -665,6 +674,7 @@ export interface InitOutput {
     readonly start_keep_alive_loop: (a: number, b: number, c: number, d: any) => any;
     readonly start_pull_loop: (a: number, b: number, c: number, d: any) => any;
     readonly start_repack_loop: (a: number, b: number, c: number, d: any) => any;
+    readonly start_snapshot_loop: (a: number, b: number, c: number, d: number, e: any) => any;
     readonly start_sync: (a: number, b: number, c: any) => any;
     readonly status: () => [number, number, number];
     readonly subscribe_doc_changes: (a: any) => any;

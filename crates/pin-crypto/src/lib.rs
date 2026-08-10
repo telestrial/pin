@@ -88,6 +88,22 @@ pub fn channel_id(channel_key: &[u8; 32]) -> String {
     base32_encode(&digest[..CHANNEL_ID_HASH_BYTES])
 }
 
+/// Base64 (standard alphabet, padded) — the encoding used wherever bytes have to
+/// travel through JSON that both implementations read.
+///
+/// Here rather than at each call site because it is a wire concern: the Curator writes
+/// the doc snapshot and the frontend reads it, so an alphabet or padding disagreement
+/// would be a data bug rather than an untidiness. Standard-and-padded is what
+/// JavaScript's `btoa` produces, which is what the frontend has always written.
+pub fn b64_encode(bytes: &[u8]) -> String {
+    B64.encode(bytes)
+}
+
+/// The inverse. `None` on anything that isn't valid base64.
+pub fn b64_decode(s: &str) -> Option<Vec<u8>> {
+    B64.decode(s).ok()
+}
+
 /// Read a channel key from the base64 form the settings record stores it in.
 ///
 /// `None` covers both "not base64" and "not 32 bytes". The length check is the part

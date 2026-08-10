@@ -913,6 +913,58 @@ pub async fn curator_start_channel_sync(
     Ok(())
 }
 
+/// The snapshot's backstop cadence — the doc's own change stream is what normally
+/// wakes it, so this only covers a signal that never arrived.
+const SNAPSHOT_CADENCE: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
+/// How long to let writes settle before mirroring. A channel pin fans out one write per
+/// item, and each upload supersedes the last, so acting on the first would pay for a
+/// snapshot per item and reclaim them all again.
+const SNAPSHOT_SETTLE: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// Start the doc-to-Sia snapshot loop — the identity's durability floor, and the one
+/// artifact standing between a recovery phrase and an account.
+///
+/// Idempotent (the engine keeps one loop), so a remounting caller can just call it.
+#[tauri::command]
+pub async fn curator_start_snapshot(
+    curator: tauri::State<'_, CuratorState>,
+    sia: tauri::State<'_, crate::sia::SiaState>,
+    app_key_hex: String,
+) -> Result<(), String> {
+    let engine = current_engine(&curator)?;
+    if engine.snapshot_started() {
+        return Ok(());
+    }
+    let app_key = pin_derive::decode_app_key(&app_key_hex).ok_or("app key hex must be 32 bytes")?;
+    let ctx = pin_curator::SnapshotContext {
+        doc: engine.doc.clone(),
+        blobs: (*engine.blobs).clone(),
+        author_id: engine.author_id,
+        sia: sia.session(),
+        app_key,
+    };
+    let loop_handle =
+        sia.detach(async move {
+            pin_curator::run_snapshot_loop(ctx, SNAPSHOT_CADENCE, SNAPSHOT_SETTLE, |result| {
+                match result {
+                    Ok(o) => {
+                        if !o.unchanged {
+                            println!(
+                                "curator snapshot: {} records mirrored (published {} pruned {})",
+                                o.records, o.published, o.pruned
+                            );
+                        }
+                    }
+                    Err(e) => println!("curator snapshot: {e}"),
+                }
+            })
+            .await
+        });
+    curator.0.lock().unwrap().loops.push(loop_handle);
+    Ok(())
+}
+
 /// How often this instance re-registers its dial coordinates. Well under
 /// `INSTANCE_TTL_SECS`, so a missed pass doesn't drop a running instance out of the
 /// identity's published endpoints.

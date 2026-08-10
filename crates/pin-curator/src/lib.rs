@@ -47,6 +47,7 @@ mod identity;
 mod instance;
 mod keepalive;
 mod repack;
+mod snapshot;
 pub use channeldoc::{
     channel_docs_once, run_channel_doc_loop, ChannelDocContext, ChannelDocOutcome,
 };
@@ -66,6 +67,7 @@ pub use repack::{
     aggregate_slabs, pick_batch, repack_once, rewrite_manifest, run_repack_loop, Move, ObjectSlabs,
     RepackContext, RepackOutcome, ScopeRef, SlabAggregate, SlabObject, SlabPiece, Source,
 };
+pub use snapshot::{run_snapshot_loop, snapshot_once, SnapshotContext, SnapshotOutcome};
 
 /// The collection holding cached manifests of channels the user subscribes to. Keyed
 /// by channelID; the value is the sealed blob, byte-identical to Sia's copy.
@@ -179,6 +181,36 @@ pub(crate) struct PublishedState {
     pub(crate) older_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) fp: Option<String>,
+}
+
+/// Record what was just published under `rkey`.
+///
+/// Best-effort, and quietly so: losing this record means the blob it supersedes has
+/// nothing left that knows to reclaim it, which is waste rather than breakage.
+///
+/// Takes the pieces rather than a context for the same reason `read_record` does — the
+/// directory publisher and the snapshot loop both write these, and they differ only in
+/// what else they hold.
+pub(crate) async fn write_published(
+    doc: &Doc,
+    author_id: AuthorId,
+    published_key: &[u8; 32],
+    rkey: &str,
+    state: &PublishedState,
+) {
+    let Ok(json) = serde_json::to_vec(state) else {
+        return;
+    };
+    let Ok(sealed) = pin_crypto::encrypt(published_key, &json) else {
+        return;
+    };
+    let _ = doc
+        .set_bytes(
+            author_id,
+            record_key(pin_derive::PUBLISHED_COLLECTION, rkey),
+            sealed.into_bytes(),
+        )
+        .await;
 }
 
 /// Read a record's bytes out of the doc, or `None` when it isn't there.

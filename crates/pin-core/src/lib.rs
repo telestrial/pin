@@ -81,6 +81,8 @@ struct Engine {
     channel_doc_running: Cell<bool>,
     /// Channel live-sync loop guard (see `start_channel_sync_loop`).
     channel_sync_running: Cell<bool>,
+    /// Doc-to-Sia snapshot loop guard (see `start_snapshot_loop`).
+    snapshot_running: Cell<bool>,
     _gossip: Gossip,
     docs: Docs,
     _router: Router,
@@ -159,6 +161,7 @@ pub async fn open(app_key_hex: String) -> Result<String, JsValue> {
         identity_running: Cell::new(false),
         channel_doc_running: Cell::new(false),
         channel_sync_running: Cell::new(false),
+        snapshot_running: Cell::new(false),
         _gossip: gossip,
         docs,
         _router: router,
@@ -450,6 +453,56 @@ pub async fn start_channel_sync_loop(
                         "failed": o.failed,
                         "pushed": o.pushed,
                         "stale": o.stale,
+                    })
+                    .to_string(),
+                    Err(e) => serde_json::json!({ "error": e }).to_string(),
+                };
+                let _ = on_pass.call1(&JsValue::NULL, &JsValue::from_str(&report));
+            },
+        )
+        .await
+    });
+    Ok(())
+}
+
+/// Start the doc-to-Sia snapshot loop in this tab.
+///
+/// The identity's durability floor: whatever is in the doc, mirrored to Sia and named
+/// by a published locator. One writer, reading the doc — it replaces a snapshot that
+/// two React effects each took on their own debounce, racing on one pointer.
+#[wasm_bindgen]
+pub async fn start_snapshot_loop(
+    app_key_hex: String,
+    cadence_secs: u32,
+    settle_secs: u32,
+    on_pass: js_sys::Function,
+) -> Result<(), JsValue> {
+    let eng = engine()?;
+    if eng.snapshot_running.replace(true) {
+        return Ok(());
+    }
+    let app_key = decode_app_key(&app_key_hex)
+        .ok_or_else(|| JsValue::from_str("app key hex must be 32 bytes (64 hex chars)"))?;
+    let ctx = pin_curator::SnapshotContext {
+        doc: eng.doc.clone(),
+        blobs: (*eng.blobs).clone(),
+        author_id: eng.author_id,
+        sia: sia(),
+        app_key,
+    };
+    wasm_bindgen_futures::spawn_local(async move {
+        pin_curator::run_snapshot_loop(
+            ctx,
+            std::time::Duration::from_secs(cadence_secs as u64),
+            std::time::Duration::from_secs(settle_secs as u64),
+            |result| {
+                let report = match &result {
+                    Ok(o) => serde_json::json!({
+                        "unchanged": o.unchanged,
+                        "records": o.records,
+                        "url": o.url,
+                        "published": o.published,
+                        "pruned": o.pruned,
                     })
                     .to_string(),
                     Err(e) => serde_json::json!({ "error": e }).to_string(),
