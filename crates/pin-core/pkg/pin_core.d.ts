@@ -452,6 +452,15 @@ export function start(): void;
 export function start_channel_doc_loop(app_key_hex: string, cadence_secs: number, on_pass: Function): Promise<void>;
 
 /**
+ * Start the channel live-sync loop in this tab.
+ *
+ * Imports each subscribed channel's doc from its author and writes what arrives into
+ * `sub/<channelID>` — the same record the polling rung writes, so whatever renders is
+ * already watching it.
+ */
+export function start_channel_sync_loop(app_key_hex: string, cadence_secs: number, retry_secs: number, on_pass: Function): Promise<void>;
+
+/**
  * Start the identity-publishing loop in this tab — one packet under the did:dht key
  * carrying the directory pointer, the doc namespace, and every live endpoint.
  *
@@ -650,6 +659,7 @@ export interface InitOutput {
     readonly sia_validate_recovery_phrase: (a: number, b: number) => [number, number];
     readonly sia_wait_for_approval: () => any;
     readonly start_channel_doc_loop: (a: number, b: number, c: number, d: any) => any;
+    readonly start_channel_sync_loop: (a: number, b: number, c: number, d: number, e: any) => any;
     readonly start_identity_loop: (a: number, b: number, c: number, d: number, e: number, f: any) => any;
     readonly start_instance_loop: (a: number, b: any) => any;
     readonly start_keep_alive_loop: (a: number, b: number, c: number, d: any) => any;

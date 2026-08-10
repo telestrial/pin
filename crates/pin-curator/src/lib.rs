@@ -42,6 +42,7 @@ use iroh_docs::{api::Doc, AuthorId};
 use pin_derive::{record_key, settings_key};
 
 mod channeldoc;
+mod channelsync;
 mod identity;
 mod instance;
 mod keepalive;
@@ -49,6 +50,7 @@ mod repack;
 pub use channeldoc::{
     channel_docs_once, run_channel_doc_loop, ChannelDocContext, ChannelDocOutcome,
 };
+pub use channelsync::{run_channel_sync_loop, ChannelSyncContext, ChannelSyncOutcome};
 pub use identity::{
     publish_identity_once, run_identity_loop, IdentityContext, IdentityOutcome,
     DIRECTORY_DOC_VERSION,
@@ -311,7 +313,7 @@ fn published_at(manifest_json: &str) -> Option<String> {
 /// Anything unreadable — no cache, a blob that won't open, a manifest without the
 /// field — answers "not older", so the write proceeds. A guard that can't compare
 /// should get out of the way rather than block a channel forever.
-fn is_older_than_cached(
+pub(crate) fn is_older_than_cached(
     channel_key: &[u8; 32],
     resolved_json: &str,
     cached_blob: Option<&[u8]>,

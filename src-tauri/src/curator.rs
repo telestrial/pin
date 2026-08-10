@@ -854,6 +854,65 @@ pub async fn curator_start_channel_docs(
     Ok(())
 }
 
+/// How often the live-sync loop re-checks which channels it should be watching. Slow
+/// on purpose: this is the RECONCILE cadence, not the delivery one — a manifest arrives
+/// as soon as the author writes it, and this only decides who to be listening to.
+const CHANNEL_SYNC_CADENCE: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+
+/// How soon to look again while a subscribed channel still isn't being watched — an
+/// author's ticket takes a moment to become resolvable after they publish it.
+const CHANNEL_SYNC_RETRY: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// Start the channel live-sync loop — import each subscribed channel from its author's
+/// node and write what arrives into `sub/<channelID>`.
+///
+/// Needs no Sia session: a pushed manifest arrives already sealed and is stored as it
+/// came, so nothing here resolves anything.
+///
+/// Idempotent (the engine keeps one loop), so a remounting caller can just call it.
+#[tauri::command]
+pub async fn curator_start_channel_sync(
+    curator: tauri::State<'_, CuratorState>,
+    sia: tauri::State<'_, crate::sia::SiaState>,
+    app_key_hex: String,
+) -> Result<(), String> {
+    let engine = current_engine(&curator)?;
+    if engine.channel_sync_started() {
+        return Ok(());
+    }
+    let app_key = pin_derive::decode_app_key(&app_key_hex).ok_or("app key hex must be 32 bytes")?;
+    let ctx = pin_curator::ChannelSyncContext {
+        doc: engine.doc.clone(),
+        blobs: (*engine.blobs).clone(),
+        author_id: engine.author_id,
+        docs: engine.docs.api().clone(),
+        app_key,
+    };
+    let loop_handle = sia.detach(async move {
+        pin_curator::run_channel_sync_loop(
+            ctx,
+            CHANNEL_SYNC_CADENCE,
+            CHANNEL_SYNC_RETRY,
+            |result| match result {
+            Ok(o) => {
+                // Quiet when nothing changed and nothing arrived — the steady state of a
+                // subscriber whose authors are idle.
+                if o.imported > 0 || o.pushed > 0 || o.failed > 0 || o.stale > 0 {
+                    println!(
+                        "curator channel sync: imported {} watching {} unavailable {} failed {} pushed {} stale {}",
+                        o.imported, o.watching, o.unavailable, o.failed, o.pushed, o.stale
+                    );
+                }
+            }
+            // Expected while the engine warms up (no settings record yet).
+            Err(e) => println!("curator channel sync: {e}"),
+        })
+        .await
+    });
+    curator.0.lock().unwrap().loops.push(loop_handle);
+    Ok(())
+}
+
 /// How often this instance re-registers its dial coordinates. Well under
 /// `INSTANCE_TTL_SECS`, so a missed pass doesn't drop a running instance out of the
 /// identity's published endpoints.

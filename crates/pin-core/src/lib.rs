@@ -79,6 +79,8 @@ struct Engine {
     identity_running: Cell<bool>,
     /// Channel-doc serve loop guard (see `start_channel_doc_loop`).
     channel_doc_running: Cell<bool>,
+    /// Channel live-sync loop guard (see `start_channel_sync_loop`).
+    channel_sync_running: Cell<bool>,
     _gossip: Gossip,
     docs: Docs,
     _router: Router,
@@ -156,6 +158,7 @@ pub async fn open(app_key_hex: String) -> Result<String, JsValue> {
         instance_running: Cell::new(false),
         identity_running: Cell::new(false),
         channel_doc_running: Cell::new(false),
+        channel_sync_running: Cell::new(false),
         _gossip: gossip,
         docs,
         _router: router,
@@ -396,6 +399,57 @@ pub async fn start_channel_doc_loop(
                         "advertised": o.advertised,
                         "unpublished": o.unpublished,
                         "failed": o.failed,
+                    })
+                    .to_string(),
+                    Err(e) => serde_json::json!({ "error": e }).to_string(),
+                };
+                let _ = on_pass.call1(&JsValue::NULL, &JsValue::from_str(&report));
+            },
+        )
+        .await
+    });
+    Ok(())
+}
+
+/// Start the channel live-sync loop in this tab.
+///
+/// Imports each subscribed channel's doc from its author and writes what arrives into
+/// `sub/<channelID>` — the same record the polling rung writes, so whatever renders is
+/// already watching it.
+#[wasm_bindgen]
+pub async fn start_channel_sync_loop(
+    app_key_hex: String,
+    cadence_secs: u32,
+    retry_secs: u32,
+    on_pass: js_sys::Function,
+) -> Result<(), JsValue> {
+    let eng = engine()?;
+    if eng.channel_sync_running.replace(true) {
+        return Ok(());
+    }
+    let app_key = decode_app_key(&app_key_hex)
+        .ok_or_else(|| JsValue::from_str("app key hex must be 32 bytes (64 hex chars)"))?;
+    let ctx = pin_curator::ChannelSyncContext {
+        doc: eng.doc.clone(),
+        blobs: (*eng.blobs).clone(),
+        author_id: eng.author_id,
+        docs: eng.docs.api().clone(),
+        app_key,
+    };
+    wasm_bindgen_futures::spawn_local(async move {
+        pin_curator::run_channel_sync_loop(
+            ctx,
+            std::time::Duration::from_secs(cadence_secs as u64),
+            std::time::Duration::from_secs(retry_secs as u64),
+            |result| {
+                let report = match &result {
+                    Ok(o) => serde_json::json!({
+                        "imported": o.imported,
+                        "watching": o.watching,
+                        "unavailable": o.unavailable,
+                        "failed": o.failed,
+                        "pushed": o.pushed,
+                        "stale": o.stale,
                     })
                     .to_string(),
                     Err(e) => serde_json::json!({ "error": e }).to_string(),

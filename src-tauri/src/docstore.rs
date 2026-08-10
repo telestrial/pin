@@ -104,6 +104,8 @@ pub struct DocEngine {
     identity_started: AtomicBool,
     /// Channel-doc serve loop guard (see `curator_start_channel_docs`).
     channel_doc_started: AtomicBool,
+    /// Channel live-sync loop guard (see `curator_start_channel_sync`).
+    channel_sync_started: AtomicBool,
 }
 
 /// Bring up (or reopen) the Curator's persistent iroh-docs engine on `endpoint`,
@@ -183,6 +185,7 @@ pub async fn open_or_create(
         instance_started: AtomicBool::new(false),
         identity_started: AtomicBool::new(false),
         channel_doc_started: AtomicBool::new(false),
+        channel_sync_started: AtomicBool::new(false),
     })
 }
 
@@ -372,6 +375,11 @@ impl DocEngine {
     /// Whether the channel-doc serve loop was already running; marks it started.
     pub fn channel_doc_started(&self) -> bool {
         self.channel_doc_started.swap(true, Ordering::SeqCst)
+    }
+
+    /// Whether the channel live-sync loop was already running; marks it started.
+    pub fn channel_sync_started(&self) -> bool {
+        self.channel_sync_started.swap(true, Ordering::SeqCst)
     }
 
     /// Whether the instance-registration loop was already running; marks it started.

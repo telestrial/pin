@@ -4618,6 +4618,7 @@ name = "pin-curator"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "iroh",
  "iroh-blobs",
  "iroh-docs",
  "n0-future",

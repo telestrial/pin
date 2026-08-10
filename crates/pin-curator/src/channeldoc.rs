@@ -49,14 +49,14 @@ use crate::{read_record, read_settings};
 
 /// Where a manifest lives inside a channel's own doc. One record per doc — the doc IS
 /// the channel, so it needs no further keyspace.
-const MANIFEST_COLLECTION: &str = "manifest";
-const MANIFEST_RKEY: &str = "self";
+pub(crate) const MANIFEST_COLLECTION: &str = "manifest";
+pub(crate) const MANIFEST_RKEY: &str = "self";
 
 /// The main doc's collection of owned channels' manifests — this loop's source.
 const OWN_COLLECTION: &str = "channel";
 
 /// TXT record name prefix for the chunked read ticket.
-const TICKET_PREFIX: &str = "_d";
+pub(crate) const TICKET_PREFIX: &str = "_d";
 
 /// Everything a pass needs, gathered by whichever engine is running it.
 ///
@@ -238,7 +238,7 @@ async fn holds_manifest(doc: &Doc) -> Result<bool, String> {
     Ok(entry.content_len() > 0)
 }
 
-fn manifest_key() -> Vec<u8> {
+pub(crate) fn manifest_key() -> Vec<u8> {
     pin_derive::record_key(MANIFEST_COLLECTION, MANIFEST_RKEY)
 }
 
