@@ -1399,6 +1399,90 @@ pub fn published_channel_rkey(channel_id: &str) -> String {
     pin_derive::published_channel_rkey(channel_id)
 }
 
+// --- engagement -----------------------------------------------------------------
+//
+// All three of these are PURE — no session, no network — so this is the wasm engine on
+// both platforms, the same way `core/crypto.ts` derives through it on desktop. Nothing
+// forks, because nothing about signing a record differs by device.
+
+/// The collection this identity's own endorsements live in.
+#[wasm_bindgen]
+pub fn endorse_collection() -> String {
+    pin_derive::ENDORSE_COLLECTION.to_string()
+}
+
+/// The subject an endorsement of this item names — the hash a count is keyed by, so a
+/// reader can find the aggregate for something it is displaying.
+#[wasm_bindgen]
+pub fn engagement_subject(channel_id: &str, published_at: &str) -> String {
+    pin_crypto::engagement_subject(channel_id, published_at)
+}
+
+/// Whether an endorsement holds up: signed by the identity it claims, and consistent
+/// with any coordinates it carries.
+///
+/// Exposed so nothing verifies a record twice. Anything that displays a count from
+/// records it did not write is asserting they are real, and a second implementation of
+/// that check is a second chance to accept a forgery.
+#[wasm_bindgen]
+pub fn endorsement_verify(record_json: &str) -> Result<(), JsValue> {
+    let record: pin_engagement::Endorsement = serde_json::from_str(record_json)
+        .map_err(|e| JsValue::from_str(&format!("decode endorsement: {e}")))?;
+    record.verify().map_err(|e| JsValue::from_str(&e))
+}
+
+/// Where one endorsement lives. Needed on its own as well as from `sign_endorsement`,
+/// because withdrawing one addresses the record without producing another.
+#[wasm_bindgen]
+pub fn endorse_rkey(kind: &str, channel_id: &str, published_at: &str) -> String {
+    pin_derive::endorse_rkey(
+        kind,
+        &pin_crypto::engagement_subject(channel_id, published_at),
+    )
+}
+
+/// Sign one endorsement, returning the record as the exact JSON to store.
+///
+/// Serialized here rather than returned as an object to stringify on the far side, so
+/// the bytes that land in the doc are the ones Rust produced and the fold reads them
+/// back with the same serde definition. Nothing in the path re-encodes.
+///
+/// `reference_did_dht` is what chooses the visibility tier. Passing the channel author's
+/// did:dht makes the record navigable and is correct ONLY for a public subject; passing
+/// nothing publishes the subject hash alone, which is the answer for an unlisted or
+/// private one — where a reference would give away the channel, and that it exists.
+///
+/// `now` comes from the caller: `SystemTime::now()` panics on wasm32, and this is the
+/// same reason the manifest transforms take their timestamp as an argument.
+#[wasm_bindgen]
+pub fn sign_endorsement(
+    app_key_hex: &str,
+    kind: &str,
+    channel_id: &str,
+    published_at: &str,
+    version: &str,
+    reference_did_dht: Option<String>,
+    now: &str,
+) -> Result<String, JsValue> {
+    let app_key = decode_app_key(app_key_hex)
+        .ok_or_else(|| JsValue::from_str("app key must be 32 bytes of hex"))?;
+    let reference = reference_did_dht.map(|did_dht| pin_engagement::SubjectRef {
+        did_dht,
+        channel_id: channel_id.to_string(),
+        published_at: published_at.to_string(),
+    });
+    let record = pin_engagement::Endorsement::sign(
+        &pin_derive::did_dht_seed(&app_key),
+        kind,
+        &pin_crypto::engagement_subject(channel_id, published_at),
+        version,
+        now,
+        reference,
+    )
+    .map_err(|e| JsValue::from_str(&e))?;
+    out(&record)
+}
+
 /// The rkey for the settings snapshot's publish state. Same contract as above: the
 /// frontend writes it when it snapshots, the keep-alive loop reads it to know which
 /// pointer to republish.

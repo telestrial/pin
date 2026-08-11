@@ -4593,6 +4593,7 @@ dependencies = [
  "pin-crypto",
  "pin-curator",
  "pin-derive",
+ "pin-engagement",
  "pin-manifest",
  "pin-pkarr",
  "pin-rpc",

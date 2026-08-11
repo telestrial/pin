@@ -170,6 +170,33 @@ export function encrypt_for_channel(key: Uint8Array, plaintext: string): string;
 export function encrypt_settings(key: Uint8Array, plaintext: string): string;
 
 /**
+ * The collection this identity's own endorsements live in.
+ */
+export function endorse_collection(): string;
+
+/**
+ * Where one endorsement lives. Needed on its own as well as from `sign_endorsement`,
+ * because withdrawing one addresses the record without producing another.
+ */
+export function endorse_rkey(kind: string, channel_id: string, published_at: string): string;
+
+/**
+ * Whether an endorsement holds up: signed by the identity it claims, and consistent
+ * with any coordinates it carries.
+ *
+ * Exposed so nothing verifies a record twice. Anything that displays a count from
+ * records it did not write is asserting they are real, and a second implementation of
+ * that check is a second chance to accept a forgery.
+ */
+export function endorsement_verify(record_json: string): void;
+
+/**
+ * The subject an endorsement of this item names — the hash a count is keyed by, so a
+ * reader can find the aggregate for something it is displaying.
+ */
+export function engagement_subject(channel_id: string, published_at: string): string;
+
+/**
  * Read a record from a channel doc, or `undefined` if absent.
  *
  * Author-AGNOSTIC (`single_latest_per_key`, no author filter) — deliberately. On the
@@ -439,6 +466,23 @@ export function sia_validate_recovery_phrase(phrase: string): void;
  */
 export function sia_wait_for_approval(): Promise<void>;
 
+/**
+ * Sign one endorsement, returning the record as the exact JSON to store.
+ *
+ * Serialized here rather than returned as an object to stringify on the far side, so
+ * the bytes that land in the doc are the ones Rust produced and the fold reads them
+ * back with the same serde definition. Nothing in the path re-encodes.
+ *
+ * `reference_did_dht` is what chooses the visibility tier. Passing the channel author's
+ * did:dht makes the record navigable and is correct ONLY for a public subject; passing
+ * nothing publishes the subject hash alone, which is the answer for an unlisted or
+ * private one — where a reference would give away the channel, and that it exists.
+ *
+ * `now` comes from the caller: `SystemTime::now()` panics on wasm32, and this is the
+ * same reason the manifest transforms take their timestamp as an argument.
+ */
+export function sign_endorsement(app_key_hex: string, kind: string, channel_id: string, published_at: string, version: string, reference_did_dht: string | null | undefined, now: string): string;
+
 export function start(): void;
 
 /**
@@ -630,6 +674,10 @@ export interface InitOutput {
     readonly derive_snapshot_key: (a: number, b: number) => [number, number];
     readonly encrypt_for_channel: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly encrypt_settings: (a: number, b: number, c: number, d: number) => [number, number, number, number];
+    readonly endorse_collection: () => [number, number];
+    readonly endorse_rkey: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];
+    readonly endorsement_verify: (a: number, b: number) => [number, number];
+    readonly engagement_subject: (a: number, b: number, c: number, d: number) => [number, number];
     readonly get_channel_record: (a: number, b: number, c: number, d: number, e: number, f: number) => any;
     readonly get_record: (a: number, b: number, c: number, d: number) => any;
     readonly import_channel_doc: (a: number, b: number, c: any) => any;
@@ -678,6 +726,7 @@ export interface InitOutput {
     readonly sia_upload_items_packed: (a: any, b: number) => any;
     readonly sia_validate_recovery_phrase: (a: number, b: number) => [number, number];
     readonly sia_wait_for_approval: () => any;
+    readonly sign_endorsement: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number) => [number, number, number, number];
     readonly start_channel_doc_loop: (a: number, b: number, c: number, d: any) => any;
     readonly start_channel_sync_loop: (a: number, b: number, c: number, d: number, e: any) => any;
     readonly start_identity_loop: (a: number, b: number, c: number, d: number, e: number, f: any) => any;
