@@ -216,6 +216,30 @@ pub fn pinned_rkey(channel_id: &str, published_at: &str) -> String {
     format!("{channel_id}:{published_at}")
 }
 
+/// The collection holding the endorsements this identity has made — one signed record
+/// each, which the identity loop folds into the public directory.
+///
+/// Its own collection rather than a field in settings, for two reasons that both bite.
+/// Settings is the 128 KiB fixed-pad record, so a few hundred endorsements would hit a
+/// ceiling that errors loudly by design. And settings is the one record that exists to
+/// be private, where these are published.
+///
+/// Per-record for the same reason pins are: they merge by UNION across this identity's
+/// devices, where a single list would be last-writer-wins and one device's endorsements
+/// would vanish.
+pub const ENDORSE_COLLECTION: &str = "endorse";
+
+/// The rkey for one endorsement: its kind, then the subject it is about.
+///
+/// The kind is IN the key because both gestures are available on the same post — you can
+/// heart something and also pin it — so keying on the subject alone would make one
+/// overwrite the other. Kind first so a prefix scan can list one gesture at a time.
+///
+/// The subject is already a hash, so this leaks nothing beyond what the record does.
+pub fn endorse_rkey(kind: &str, subject: &str) -> String {
+    format!("{kind}:{subject}")
+}
+
 /// The collection where each of this identity's live instances registers itself,
 /// keyed by its iroh node id.
 ///

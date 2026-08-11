@@ -1,0 +1,32 @@
+# The engagement record: the signed, countable fact behind a displayed number.
+#
+# A shared crate because both engines handle these and the record's shape is a contract
+# with the whole network, not just with the other half of this codebase. An author's
+# Curator verifies records a stranger's instance wrote, so a disagreement about the
+# signed byte layout, the field names, or how a subject is matched would not be
+# untidiness — it would be one implementation unable to count what another endorsed, or
+# worse, unable to tell a forgery from a fact.
+#
+# Pure: the record, what it signs, and whether it holds up. Where records live and how
+# they are addressed belongs to pin-derive; who fetches them belongs to pin-curator.
+[package]
+name = "pin-engagement"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+# The subject derivation, so a reference can be checked against the subject it claims.
+pin-crypto = { path = "../pin-crypto" }
+# The identity keypair and the signature over it. Depended on deliberately rather than
+# leaving verification to the caller: this crate offers one `verify` that does the whole
+# job, because a half-done check here means accepting forged engagement, and an API that
+# can be misused in that direction is the wrong API. It costs nothing at link time —
+# every consumer already has pin-pkarr in its tree.
+pin-pkarr = { path = "../pin-pkarr" }
+
+[dev-dependencies]
+# Only the tests serialize — they assert the exact wire field names, which is the one
+# part of this record no compiler on either side of the boundary can check.
+serde_json = "1"

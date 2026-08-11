@@ -88,6 +88,40 @@ pub fn channel_id(channel_key: &[u8; 32]) -> String {
     base32_encode(&digest[..CHANNEL_ID_HASH_BYTES])
 }
 
+// --- the subject an engagement record names --------------------------------------
+
+/// The separator between the two fields a subject is hashed from. Free and explicit:
+/// a channel identifier is always sixteen characters today, so concatenation happens
+/// to be unambiguous, but that is a property of the current width rather than of the
+/// format.
+const SUBJECT_SEPARATOR: u8 = 0x00;
+
+/// The subject an engagement record names: a hash of the logical item, never the item's
+/// coordinates.
+///
+/// Hashed rather than plain because the same subject has to work at every visibility
+/// tier. For an unlisted channel the hash reveals nothing — a stranger sees that some
+/// identity endorsed *something* — while the author, who holds K, can compute it and
+/// match. So an unlisted channel gets an exact count with no leak of its existence, and
+/// a public one carries plaintext coordinates alongside the hash instead of in place
+/// of it.
+///
+/// Hashed over `(channelID, publishedAt)`, which is Pin's logical-post identity — the
+/// pair drift detection, pins and repack already key on, deliberately preserved across
+/// edits and across a repack that rewrote every URL. So an endorsement survives the
+/// author fixing a typo, and *which version* it was made against is carried separately
+/// by the record's `version` field.
+///
+/// The full digest, not the ten bytes `channel_id` keeps: nobody reads a subject, and a
+/// collision here would silently merge two posts' counts.
+pub fn engagement_subject(channel_id: &str, published_at: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(channel_id.as_bytes());
+    hasher.update([SUBJECT_SEPARATOR]);
+    hasher.update(published_at.as_bytes());
+    base32_encode(&hasher.finalize())
+}
+
 /// Base64 (standard alphabet, padded) — the encoding used wherever bytes have to
 /// travel through JSON that both implementations read.
 ///
@@ -313,6 +347,66 @@ mod tests {
         // would otherwise fail later, inside a cipher or a seed derivation.
         assert_eq!(channel_key_from_base64(&B64.encode([0u8; 16])), None);
         assert_eq!(channel_key_from_base64("not base64!!"), None);
+    }
+
+    // --- the engagement subject ------------------------------------------------
+
+    // Cross-checked against an independent implementation (`hashlib.sha256` +
+    // `base64.b32encode`, lowercased and unpadded) rather than against our own output.
+    // There is no predecessor to capture from here, so an outside computation is the
+    // nearest equivalent: it pins the separator, the digest width, and the alphabet, all
+    // of which a reimplementation could get plausibly wrong while round-tripping itself.
+    #[test]
+    fn an_engagement_subject_matches_an_independently_computed_digest() {
+        assert_eq!(
+            engagement_subject("chan-one", "2026-08-11T12:00:00.000Z"),
+            "f4xlljzqxtqpv7ul6ngkyeafusdwqrirpmhochqyjz2hgz3djo6a"
+        );
+        assert_eq!(
+            engagement_subject("", ""),
+            "ny2axhh7wn5jrhffittlw6akfr4jahj7wm3tq5ufcgrqmf5puaoq"
+        );
+    }
+
+    #[test]
+    fn an_engagement_subject_is_the_full_digest_in_the_same_alphabet() {
+        // 52 characters, not the sixteen `channel_id` keeps: nobody reads a subject, and
+        // a collision would merge two posts' counts.
+        let s = engagement_subject("chan-one", "2026-08-11T12:00:00.000Z");
+        assert_eq!(s.len(), 52);
+        assert!(s
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || ('2'..='7').contains(&c)));
+    }
+
+    #[test]
+    fn an_engagement_subject_distinguishes_both_of_its_fields() {
+        let base = engagement_subject("chan-one", "2026-08-11T12:00:00.000Z");
+        assert_eq!(
+            engagement_subject("chan-two", "2026-08-11T12:00:00.000Z"),
+            "gerhv5blqo6fvptvj76cefxofiogc4o6i4afobp4lltjyr2z6wja"
+        );
+        assert_ne!(
+            base,
+            engagement_subject("chan-two", "2026-08-11T12:00:00.000Z")
+        );
+        // A millisecond apart is two different posts — the pair is the logical identity,
+        // so the timestamp is as load-bearing as the channel.
+        assert_ne!(
+            base,
+            engagement_subject("chan-one", "2026-08-11T12:00:00.001Z")
+        );
+    }
+
+    #[test]
+    fn the_subject_separator_keeps_the_fields_apart() {
+        // Without a separator these two would hash the same bytes and collide, which is
+        // the whole reason for it — the current sixteen-character channel width makes
+        // that impossible today, but the width is not the format.
+        assert_ne!(
+            engagement_subject("ab", "cd"),
+            engagement_subject("abc", "d")
+        );
     }
 
     // 0x00..0x1f — the key the vectors below were captured under.

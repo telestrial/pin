@@ -4644,6 +4644,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "pin-engagement"
+version = "0.1.0"
+dependencies = [
+ "pin-crypto",
+ "pin-pkarr",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "pin-manifest"
 version = "0.1.0"
 dependencies = [
@@ -4655,8 +4665,10 @@ dependencies = [
 name = "pin-pkarr"
 version = "0.1.0"
 dependencies = [
+ "ed25519-dalek 2.2.0",
  "futures-buffered",
  "gloo-timers",
+ "pin-crypto",
  "pkarr",
  "serde",
  "tokio",

@@ -29,6 +29,13 @@ pkarr = { version = "3", default-features = false, features = [
   "signed_packet",
 ] }
 serde = { version = "1", features = ["derive"] }
+# `PublicKey::verify` takes a dalek `Signature`, and nothing in pkarr's public surface
+# builds one from raw bytes — so the type has to come from the same crate pkarr uses.
+# Version tracks pkarr's own (2.x): a mismatch would mean two incompatible `Signature`
+# types rather than a build error, since iroh independently pulls 3.x into the tree.
+ed25519-dalek = "2"
+# The base64 a signature travels in, shared with every other bytes-in-JSON field.
+pin-crypto = { path = "../pin-crypto" }
 
 # Retries need to wait, and the timer is the other thing that differs by target.
 [target.'cfg(target_arch = "wasm32")'.dependencies]

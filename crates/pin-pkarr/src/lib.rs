@@ -130,6 +130,42 @@ pub fn keypair_from_seed(seed: &[u8]) -> Result<Keypair, String> {
     Ok(Keypair::from_secret_key(&seed32))
 }
 
+/// Sign arbitrary bytes with the identity keypair a seed implies.
+///
+/// Here rather than in a crate of its own because this crate already owns the
+/// relationship between a seed and the identity key it produces, and the string that
+/// names it. Signing something OTHER than a pkarr packet with that key is still the same
+/// question — what can this identity assert — so keeping one home for it means no second
+/// place can disagree about which key an identity signs with.
+///
+/// The signature comes back base64 (standard, padded), matching every other place bytes
+/// travel through JSON both implementations read.
+///
+/// CALLERS MUST DOMAIN-SEPARATE. This key also signs pkarr packets, so a message with no
+/// distinguishing prefix could in principle be a valid signature for something in
+/// another protocol. Each caller prefixes its own constant; see `pin_engagement`.
+pub fn sign_detached(seed: &[u8], message: &[u8]) -> Result<String, String> {
+    let sig = keypair_from_seed(seed)?.sign(message);
+    Ok(pin_crypto::b64_encode(&sig.to_bytes()))
+}
+
+/// Verify a detached signature against the key embedded in a `did:dht:` string.
+///
+/// NO NETWORK. A did:dht identifier IS its ed25519 public key in z-base32, so verifying
+/// anyone's signature needs nothing but their identifier — the self-certifying property
+/// that made did:dht worth choosing. Which is why an engagement count can be verified
+/// on arrival from a stranger we have never resolved and will never fetch.
+pub fn verify_detached(did_or_key: &str, message: &[u8], sig_b64: &str) -> Result<(), String> {
+    let public_key = parse_key(did_or_key)?;
+    let bytes = pin_crypto::b64_decode(sig_b64).ok_or("signature is not base64")?;
+    let bytes: [u8; 64] = bytes
+        .try_into()
+        .map_err(|_| "signature must be 64 bytes".to_string())?;
+    public_key
+        .verify(message, &ed25519_dalek::Signature::from_bytes(&bytes))
+        .map_err(|_| "signature does not verify for this identity".to_string())
+}
+
 /// The z-base32 public-key string for a seed — the key a resolver looks up.
 pub fn public_key_from_seed(seed: &[u8]) -> Result<String, String> {
     Ok(keypair_from_seed(seed)?.public_key().to_string())
