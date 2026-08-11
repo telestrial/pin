@@ -70,6 +70,14 @@ pub struct SubjectRef {
     pub channel_id: String,
     #[serde(rename = "publishedAt")]
     pub published_at: String,
+    /// Set when the subject is one ATTACHMENT of that post rather than the post: the
+    /// attachment's content hash, which is what names it. Absent means the post itself.
+    ///
+    /// Part of the self-check, so it cannot be added or removed to make a record point at
+    /// something else — the two subject derivations are different functions, and only one
+    /// of them reproduces the subject the record carries.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attachment: Option<String>,
 }
 
 /// One signed endorsement, as it travels in a directory blob or a knock.
@@ -170,7 +178,10 @@ impl Endorsement {
     pub fn verify(&self) -> Result<(), String> {
         pin_pkarr::verify_detached(&self.actor, &self.signing_bytes(), &self.sig)?;
         if let Some(r) = &self.reference {
-            let expected = pin_crypto::engagement_subject(&r.channel_id, &r.published_at);
+            let expected = match &r.attachment {
+                Some(hash) => pin_crypto::attachment_subject(&r.channel_id, &r.published_at, hash),
+                None => pin_crypto::engagement_subject(&r.channel_id, &r.published_at),
+            };
             if expected != self.subject {
                 return Err("reference does not hash to the subject it claims".into());
             }
@@ -335,6 +346,7 @@ mod tests {
             did_dht: "did:dht:someone".into(),
             channel_id: "chan-one".into(),
             published_at: WHEN.into(),
+            attachment: None,
         };
         let e =
             Endorsement::sign(&SEED, KIND_LIKE, &subject, VERSION, WHEN, Some(reference)).unwrap();
@@ -347,6 +359,32 @@ mod tests {
         let mut swapped = e.clone();
         swapped.reference.as_mut().unwrap().channel_id = "chan-two".into();
         assert!(swapped.verify().is_err());
+    }
+
+    #[test]
+    fn an_attachment_reference_is_checked_against_the_attachment_subject() {
+        let hash = "bafkreiattachment";
+        let subject = pin_crypto::attachment_subject("chan-one", WHEN, hash);
+        let reference = SubjectRef {
+            did_dht: "did:dht:someone".into(),
+            channel_id: "chan-one".into(),
+            published_at: WHEN.into(),
+            attachment: Some(hash.into()),
+        };
+        let e = Endorsement::sign(&SEED, KIND_PIN, &subject, hash, WHEN, Some(reference)).unwrap();
+        assert!(e.verify().is_ok());
+
+        // Dropping the attachment field would reinterpret a file's endorsement as the
+        // whole post's — the count that must never be overstated. The two derivations are
+        // different functions, so only one of them reproduces the subject on the record.
+        let mut as_post = e.clone();
+        as_post.reference.as_mut().unwrap().attachment = None;
+        assert!(as_post.verify().is_err());
+
+        // And naming a different attachment fails the same way.
+        let mut other = e.clone();
+        other.reference.as_mut().unwrap().attachment = Some("bafkreiother".into());
+        assert!(other.verify().is_err());
     }
 
     #[test]
@@ -385,6 +423,7 @@ mod tests {
                 did_dht: "did:dht:someone".into(),
                 channel_id: "chan-one".into(),
                 published_at: WHEN.into(),
+                attachment: None,
             }),
         )
         .unwrap();

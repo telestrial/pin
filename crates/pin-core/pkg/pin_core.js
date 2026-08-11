@@ -585,11 +585,12 @@ export function endorse_collection() {
  * @param {string} kind
  * @param {string} channel_id
  * @param {string} published_at
+ * @param {string | null} [attachment]
  * @returns {string}
  */
-export function endorse_rkey(kind, channel_id, published_at) {
-    let deferred4_0;
-    let deferred4_1;
+export function endorse_rkey(kind, channel_id, published_at, attachment) {
+    let deferred5_0;
+    let deferred5_1;
     try {
         const ptr0 = passStringToWasm0(kind, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
@@ -597,12 +598,14 @@ export function endorse_rkey(kind, channel_id, published_at) {
         const len1 = WASM_VECTOR_LEN;
         const ptr2 = passStringToWasm0(published_at, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len2 = WASM_VECTOR_LEN;
-        const ret = wasm.endorse_rkey(ptr0, len0, ptr1, len1, ptr2, len2);
-        deferred4_0 = ret[0];
-        deferred4_1 = ret[1];
+        var ptr3 = isLikeNone(attachment) ? 0 : passStringToWasm0(attachment, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        var len3 = WASM_VECTOR_LEN;
+        const ret = wasm.endorse_rkey(ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3);
+        deferred5_0 = ret[0];
+        deferred5_1 = ret[1];
         return getStringFromWasm0(ret[0], ret[1]);
     } finally {
-        wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
+        wasm.__wbindgen_free(deferred5_0, deferred5_1, 1);
     }
 }
 
@@ -627,24 +630,32 @@ export function endorsement_verify(record_json) {
 /**
  * The subject an endorsement of this item names — the hash a count is keyed by, so a
  * reader can find the aggregate for something it is displaying.
+ *
+ * `attachment` names one of the post's attachments by its content hash, in which case
+ * the subject is that FILE's rather than the post's. Its count is separate on purpose:
+ * keeping an attachment alive is not keeping the post alive, and counting a partial
+ * custodian as a full one would overstate the redundancy the number reports.
  * @param {string} channel_id
  * @param {string} published_at
+ * @param {string | null} [attachment]
  * @returns {string}
  */
-export function engagement_subject(channel_id, published_at) {
-    let deferred3_0;
-    let deferred3_1;
+export function engagement_subject(channel_id, published_at, attachment) {
+    let deferred4_0;
+    let deferred4_1;
     try {
         const ptr0 = passStringToWasm0(channel_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ptr1 = passStringToWasm0(published_at, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len1 = WASM_VECTOR_LEN;
-        const ret = wasm.engagement_subject(ptr0, len0, ptr1, len1);
-        deferred3_0 = ret[0];
-        deferred3_1 = ret[1];
+        var ptr2 = isLikeNone(attachment) ? 0 : passStringToWasm0(attachment, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        var len2 = WASM_VECTOR_LEN;
+        const ret = wasm.engagement_subject(ptr0, len0, ptr1, len1, ptr2, len2);
+        deferred4_0 = ret[0];
+        deferred4_1 = ret[1];
         return getStringFromWasm0(ret[0], ret[1]);
     } finally {
-        wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+        wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
     }
 }
 
@@ -1529,6 +1540,11 @@ export function sia_wait_for_approval() {
  * the bytes that land in the doc are the ones Rust produced and the fold reads them
  * back with the same serde definition. Nothing in the path re-encodes.
  *
+ * `attachment` endorses one FILE of the post rather than the post, named by its content
+ * hash. It goes into the reference too when there is one, so the self-check reproduces
+ * the right subject — a record whose attachment field was dropped would otherwise read as
+ * an endorsement of the whole post.
+ *
  * `reference_did_dht` is what chooses the visibility tier. Passing the channel author's
  * did:dht makes the record navigable and is correct ONLY for a public subject; passing
  * nothing publishes the subject hash alone, which is the answer for an unlisted or
@@ -1542,12 +1558,13 @@ export function sia_wait_for_approval() {
  * @param {string} published_at
  * @param {string} version
  * @param {string | null | undefined} reference_did_dht
+ * @param {string | null | undefined} attachment
  * @param {string} now
  * @returns {string}
  */
-export function sign_endorsement(app_key_hex, kind, channel_id, published_at, version, reference_did_dht, now) {
-    let deferred9_0;
-    let deferred9_1;
+export function sign_endorsement(app_key_hex, kind, channel_id, published_at, version, reference_did_dht, attachment, now) {
+    let deferred10_0;
+    let deferred10_1;
     try {
         const ptr0 = passStringToWasm0(app_key_hex, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
@@ -1561,20 +1578,22 @@ export function sign_endorsement(app_key_hex, kind, channel_id, published_at, ve
         const len4 = WASM_VECTOR_LEN;
         var ptr5 = isLikeNone(reference_did_dht) ? 0 : passStringToWasm0(reference_did_dht, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         var len5 = WASM_VECTOR_LEN;
-        const ptr6 = passStringToWasm0(now, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len6 = WASM_VECTOR_LEN;
-        const ret = wasm.sign_endorsement(ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4, ptr5, len5, ptr6, len6);
-        var ptr8 = ret[0];
-        var len8 = ret[1];
+        var ptr6 = isLikeNone(attachment) ? 0 : passStringToWasm0(attachment, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        var len6 = WASM_VECTOR_LEN;
+        const ptr7 = passStringToWasm0(now, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len7 = WASM_VECTOR_LEN;
+        const ret = wasm.sign_endorsement(ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4, ptr5, len5, ptr6, len6, ptr7, len7);
+        var ptr9 = ret[0];
+        var len9 = ret[1];
         if (ret[3]) {
-            ptr8 = 0; len8 = 0;
+            ptr9 = 0; len9 = 0;
             throw takeFromExternrefTable0(ret[2]);
         }
-        deferred9_0 = ptr8;
-        deferred9_1 = len8;
-        return getStringFromWasm0(ptr8, len8);
+        deferred10_0 = ptr9;
+        deferred10_1 = len9;
+        return getStringFromWasm0(ptr9, len9);
     } finally {
-        wasm.__wbindgen_free(deferred9_0, deferred9_1, 1);
+        wasm.__wbindgen_free(deferred10_0, deferred10_1, 1);
     }
 }
 

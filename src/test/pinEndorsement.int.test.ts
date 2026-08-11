@@ -213,11 +213,39 @@ describe('integration: a pin is recorded as an endorsement too', () => {
     expect(endorsements()).toEqual([])
   })
 
-  it('does not endorse a library pin yet', async () => {
-    // A file uploaded straight to the library was never published, so nothing another
-    // party could identify. An attachment lifted out of someone's post is the case that
-    // changes: it gets its OWN subject and count rather than a share of the post's, since
-    // keeping one file alive is not keeping the post alive.
+  it('endorses a pinned attachment under its own subject, not the post’s', async () => {
+    const { alice, channel } = await author()
+    const item = await post(alice, channel)
+    await settle(() => endorsements().length > 0)
+    docStore.clear()
+
+    // What FilePinButton does: mirror one file into the library, remembering the post it
+    // came from so the file's own custody can be reported.
+    const fileHash = 'bafkreitheattachment'
+    await usePinStore.getState().pin(alice.client, {
+      item: { ...item, contentHash: fileHash },
+      channel: { authorHandle: '', channelID: 'library', name: 'Library' },
+      origin: { channelID: channel.channelID, publishedAt: item.publishedAt },
+    })
+
+    const fileSubject = engagement_subject(
+      channel.channelID,
+      item.publishedAt,
+      fileHash,
+    )
+    await settle(() => docStore.has(`endorse/pin:${fileSubject}`))
+    // Its own subject: keeping the file alive is not keeping the post alive, so the post's
+    // redundancy figure must not count this.
+    expect(endorsements()).toEqual([`pin:${fileSubject}`])
+    expect(fileSubject).not.toBe(
+      engagement_subject(channel.channelID, item.publishedAt),
+    )
+  })
+
+  it('does not endorse a library pin without an origin', async () => {
+    // A file uploaded straight to the library was never published, so there is nothing
+    // another party could identify — and no origin recorded, which is how the two library
+    // cases are told apart.
     expect(
       endorsedItemFor({
         item: { publishedAt: '2026-08-11T12:00:00.000Z' },
@@ -235,6 +263,24 @@ describe('integration: a pin is recorded as an endorsement too', () => {
       channelID: 'chan1',
       publishedAt: '2026-08-11T12:00:00.000Z',
       contentHash: 'bafy',
+    })
+    // With an origin it names the FILE: the post's coordinates plus the attachment's own
+    // hash, which for a library item is what the item is.
+    expect(
+      endorsedItemFor({
+        item: {
+          publishedAt: '2026-08-11T18:00:00.000Z',
+          contentHash: 'bafyfile',
+        },
+        channel: { channelID: 'library' },
+        origin: { channelID: 'chan1', publishedAt: '2026-08-11T12:00:00.000Z' },
+        // biome-ignore lint/suspicious/noExplicitAny: as above
+      } as any),
+    ).toEqual({
+      channelID: 'chan1',
+      publishedAt: '2026-08-11T12:00:00.000Z',
+      contentHash: 'bafyfile',
+      attachment: 'bafyfile',
     })
   })
 })

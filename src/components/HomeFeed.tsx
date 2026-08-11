@@ -215,6 +215,7 @@ function PostBody({
           attachments={item.attachments}
           channelID={channelID}
           itemID={item.id}
+          publishedAt={item.publishedAt}
         />
       )}
     </>

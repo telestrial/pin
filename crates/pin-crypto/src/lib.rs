@@ -122,6 +122,34 @@ pub fn engagement_subject(channel_id: &str, published_at: &str) -> String {
     base32_encode(&hasher.finalize())
 }
 
+/// The subject one ATTACHMENT of a post names — its own, not a share of the post's.
+///
+/// Separate because keeping an attachment alive is not keeping the post alive: the body
+/// still dies with the author. Counting a partial custodian toward the post would
+/// overstate the redundancy the number exists to report, so the file gets its own figure.
+///
+/// Scoped to the post, not to the bytes. Hashing the attachment's content hash ALONE
+/// would name the bytes globally, so the same file attached to a public post and to an
+/// unlisted one would share a subject — and since anyone holding those bytes can compute
+/// it, a count on the public side would reveal the unlisted post's existence. Including
+/// `channelID`, which derives from K, keeps it unmatchable without K exactly like a post
+/// subject.
+///
+/// Identified by the attachment's content hash rather than its position or URL: removing
+/// an attachment shifts every later index, and repack rewrites URLs, so either would
+/// migrate a count onto the wrong file. The content hash is of the plaintext and survives
+/// both. An attachment written before that field existed has none, and gets no subject —
+/// better than a wrong one.
+pub fn attachment_subject(channel_id: &str, published_at: &str, content_hash: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(channel_id.as_bytes());
+    hasher.update([SUBJECT_SEPARATOR]);
+    hasher.update(published_at.as_bytes());
+    hasher.update([SUBJECT_SEPARATOR]);
+    hasher.update(content_hash.as_bytes());
+    base32_encode(&hasher.finalize())
+}
+
 /// Base64 (standard alphabet, padded) — the encoding used wherever bytes have to
 /// travel through JSON that both implementations read.
 ///
@@ -395,6 +423,47 @@ mod tests {
         assert_ne!(
             base,
             engagement_subject("chan-one", "2026-08-11T12:00:00.001Z")
+        );
+    }
+
+    #[test]
+    fn an_attachment_subject_matches_an_independently_computed_digest() {
+        assert_eq!(
+            attachment_subject("chan-one", "2026-08-11T12:00:00.000Z", "bafkreiattachment"),
+            "wdrovjo2vqkdq5ntast2mcw6ttbobvsseua7knpjgk5phrielhiq"
+        );
+    }
+
+    #[test]
+    fn an_attachment_never_shares_its_posts_subject() {
+        // The load-bearing separation: a file's count is its own. If these collided, a
+        // partial custodian would be counted as a full one and the post's redundancy
+        // figure would be an overstatement.
+        let post = engagement_subject("chan-one", "2026-08-11T12:00:00.000Z");
+        assert_ne!(
+            post,
+            attachment_subject("chan-one", "2026-08-11T12:00:00.000Z", "bafkreiattachment")
+        );
+        // Including the degenerate case: an empty hash still isn't the post, because the
+        // separator is there either way. Callers skip an attachment with no content hash
+        // rather than relying on this, but a collision here would be silent.
+        assert_ne!(
+            post,
+            attachment_subject("chan-one", "2026-08-11T12:00:00.000Z", "")
+        );
+    }
+
+    #[test]
+    fn attachments_of_one_post_are_distinct_and_scoped_to_it() {
+        let a = attachment_subject("chan-one", "2026-08-11T12:00:00.000Z", "bafkreione");
+        let b = attachment_subject("chan-one", "2026-08-11T12:00:00.000Z", "bafkreitwo");
+        assert_ne!(a, b);
+        // Post-scoped, not byte-scoped. The same file attached to a different channel is a
+        // different subject — which is what stops a public count revealing that the same
+        // attachment exists in an unlisted channel.
+        assert_ne!(
+            a,
+            attachment_subject("chan-two", "2026-08-11T12:00:00.000Z", "bafkreione")
         );
     }
 

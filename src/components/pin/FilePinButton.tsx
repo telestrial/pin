@@ -30,10 +30,14 @@ export function FilePinButton({
   attachment,
   channelID,
   itemID,
+  publishedAt,
 }: {
   attachment: AttachmentRef
   channelID: string
   itemID: string
+  // The post's publish time. Not for display — it is half of the post's identity, and a
+  // library pin needs it to say which post's attachment it is keeping alive.
+  publishedAt: string
 }) {
   const client = useAuthStore((s) => s.client)
   const ownedChannel = useAuthStore((s) =>
@@ -98,6 +102,10 @@ export function FilePinButton({
         await pin(client, {
           item: itemRefFromAttachment(attachment),
           channel: LIBRARY_CHANNEL,
+          // Where it came from, so this file's own pin count can be reported to the
+          // post's author. A library pin stamps `publishedAt` at the moment of pinning,
+          // so without this nothing in the record says what it is a copy of.
+          origin: { channelID, publishedAt },
         })
         addToast('File pinned to your library')
       }

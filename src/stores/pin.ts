@@ -31,23 +31,39 @@ async function recordPin(ref: PinnedItemRef): Promise<void> {
   }
 }
 
-/** What a pin is about, for the endorsement side. Null for a library pin, for now.
+/** What a pin is about, for the endorsement side.
  *
- *  A file you uploaded yourself was never published, so there is nothing another party
- *  could identify — that one stays null. An attachment lifted out of someone's post is
- *  different: there IS a post behind it, and keeping one file alive is worth reporting.
- *  It has no subject yet only because a library pin doesn't remember where it came from,
- *  and its `publishedAt` is the moment you clicked rather than the post's identity.
+ *  Three cases. A pin of a post is the post's subject. A library pin that came from a
+ *  post's attachment gets that FILE's own subject — its own count, not a share of the
+ *  post's, because keeping one attachment alive is not keeping the post alive and
+ *  counting a partial custodian as a full one would overstate the redundancy the number
+ *  reports. A file uploaded straight to the library is null: nothing was ever published,
+ *  so there is nothing another party could identify.
  *
- *  When it lands it gets its OWN subject and its own count, not a share of the post's:
- *  keeping an attachment alive is not keeping the post alive, and counting a partial
- *  custodian as a full one would overstate the redundancy the number exists to report. */
-export function endorsedItemFor(ref: PinnedItemRef) {
-  if (ref.channel.channelID === 'library') return null
+ *  The attachment's identity is the library item's own `contentHash`, which for a file
+ *  IS the file. Without one — a legacy attachment written before the field existed —
+ *  there is no subject, and no count is better than a wrong one. */
+export function endorsedItemFor(ref: PinnedItemRef): {
+  channelID: string
+  publishedAt: string
+  contentHash?: string
+  attachment?: string
+} | null {
+  if (ref.channel.channelID !== 'library') {
+    return {
+      channelID: ref.channel.channelID,
+      publishedAt: ref.item.publishedAt,
+      contentHash: ref.item.contentHash,
+    }
+  }
+  if (!ref.origin || !ref.item.contentHash) return null
   return {
-    channelID: ref.channel.channelID,
-    publishedAt: ref.item.publishedAt,
+    channelID: ref.origin.channelID,
+    publishedAt: ref.origin.publishedAt,
+    // For an attachment the version and the identity are the same hash: change the bytes
+    // and it is a different file, so there is no drift to record separately.
     contentHash: ref.item.contentHash,
+    attachment: ref.item.contentHash,
   }
 }
 
@@ -143,6 +159,16 @@ export type PinnedItemRef = {
   // the whole post. Legacy persisted entries predate this field — readers
   // default to []. Optional so PinInput callers don't construct it.
   attachmentObjectIDs?: string[]
+  // Where a LIBRARY pin came from, when it came from somewhere: the post whose
+  // attachment this file is. Set only by the per-file pin, because that is the only
+  // library pin with a post behind it — a file uploaded straight to the library has
+  // none.
+  //
+  // Needed because a library pin is stored under the 'library' sentinel with
+  // `publishedAt` stamped at the moment of pinning, so nothing else in the record can
+  // say what it is a copy of. The attachment's own identity is `item.contentHash`,
+  // which for a library item IS the file's hash.
+  origin?: { channelID: string; publishedAt: string }
   pinnedAt: string
 }
 

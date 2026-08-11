@@ -158,10 +158,12 @@ function AttachmentTile({
   attachment,
   channelID,
   itemID,
+  publishedAt,
 }: {
   attachment: AttachmentRef
   channelID: string
   itemID: string
+  publishedAt: string
 }) {
   const kind = kindForMime(attachment.mimeType)
   return (
@@ -175,6 +177,7 @@ function AttachmentTile({
         attachment={attachment}
         channelID={channelID}
         itemID={itemID}
+        publishedAt={publishedAt}
       />
     </div>
   )
@@ -186,6 +189,7 @@ export function AttachmentGrid({
   attachments,
   channelID,
   itemID,
+  publishedAt,
 }: {
   attachments: AttachmentRef[]
   // Channel + item the attachments belong to — lets each tile's FilePinButton
@@ -193,6 +197,9 @@ export function AttachmentGrid({
   // right manifest entry on retract.
   channelID: string
   itemID: string
+  // The post's publish time: half of its identity, which a per-file pin needs to name
+  // the post whose attachment it is keeping.
+  publishedAt: string
 }) {
   // Drop malformed entries — pre-AttachmentRef-schema posts (slice 1's URL-only
   // shape) would arrive as bare strings here. Render nothing rather than crash;
@@ -215,6 +222,7 @@ export function AttachmentGrid({
           attachment={a}
           channelID={channelID}
           itemID={itemID}
+          publishedAt={publishedAt}
         />
       ))}
       {overflow > 0 && (

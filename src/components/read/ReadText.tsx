@@ -185,6 +185,7 @@ export function ReadText({
               attachments={displayItem.attachments}
               channelID={channelID}
               itemID={item.id}
+              publishedAt={item.publishedAt}
             />
           )}
 

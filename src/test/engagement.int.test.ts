@@ -160,6 +160,65 @@ describe('integration: endorsements are recorded in the doc', () => {
     expect(rkeys()).toEqual([`pin:${subject}`])
   })
 
+  it('gives an attachment its own subject, distinct from its post’s', async () => {
+    // Keeping one file alive is not keeping the post alive, so the file gets its own
+    // figure. If these collided, a partial custodian would be counted as a full one and
+    // the post's redundancy number would be an overstatement.
+    const attachment = 'bafkreitheattachment'
+    await writeEndorsement(FAKE_APP_KEY_HEX, 'pin', POST, null)
+    await writeEndorsement(
+      FAKE_APP_KEY_HEX,
+      'pin',
+      { ...POST, contentHash: attachment, attachment },
+      null,
+    )
+
+    const postSubject = engagement_subject(POST.channelID, POST.publishedAt)
+    const fileSubject = engagement_subject(
+      POST.channelID,
+      POST.publishedAt,
+      attachment,
+    )
+    expect(fileSubject).not.toBe(postSubject)
+    expect(rkeys()).toEqual([`pin:${postSubject}`, `pin:${fileSubject}`].sort())
+  })
+
+  it('checks an attachment reference against the attachment subject', async () => {
+    const attachment = 'bafkreitheattachment'
+    await writeEndorsement(
+      FAKE_APP_KEY_HEX,
+      'pin',
+      { ...POST, contentHash: attachment, attachment },
+      AUTHOR,
+    )
+    const held = stored(rkeys()[0])
+    expect(held.ref.attachment).toBe(attachment)
+    expect(() => endorsement_verify(JSON.stringify(held))).not.toThrow()
+
+    // Dropping the field would reinterpret a file's endorsement as the whole post's.
+    const asPost = { ...held, ref: { ...held.ref, attachment: undefined } }
+    expect(() => endorsement_verify(JSON.stringify(asPost))).toThrow()
+  })
+
+  it('does not rewrite a hash-only attachment record on every pass', async () => {
+    // The trap: with no reference there is no field to hold the attachment, so comparing
+    // one unconditionally reports a difference forever — and every catch-up would rewrite
+    // the record and announce a change to every instance syncing the doc.
+    const attachment = 'bafkreitheattachment'
+    const item = { ...POST, contentHash: attachment, attachment }
+    expect(await writeEndorsement(FAKE_APP_KEY_HEX, 'pin', item, null)).toBe(
+      true,
+    )
+    expect(await writeEndorsement(FAKE_APP_KEY_HEX, 'pin', item, null)).toBe(
+      false,
+    )
+    expect(
+      await syncEndorsements(FAKE_APP_KEY_HEX, [
+        { kind: 'pin', item, referenceAuthor: null },
+      ]),
+    ).toEqual({ written: 0 })
+  })
+
   it('catches up what is missing and never removes what it does not recognize', async () => {
     // A record from another of this identity's devices, which this pass knows nothing
     // about. Deleting it would be deletion by absence — the mistake already made twice

@@ -47,6 +47,10 @@ export type EndorsedItem = {
   channelID: string
   publishedAt: string
   contentHash?: string
+  // Set to endorse one ATTACHMENT of that post rather than the post, named by its content
+  // hash. Its count is separate on purpose: keeping a file alive is not keeping the post
+  // alive, so a partial custodian must not be counted as a full one.
+  attachment?: string
 }
 
 /** Who to name as the channel's author in the record's reference, or null for none.
@@ -69,7 +73,7 @@ export async function endorsementRkey(
   item: EndorsedItem,
 ): Promise<string> {
   await ensureWasm()
-  return endorse_rkey(kind, item.channelID, item.publishedAt)
+  return endorse_rkey(kind, item.channelID, item.publishedAt, item.attachment)
 }
 
 /** Sign and store one endorsement.
@@ -105,6 +109,7 @@ export async function writeEndorsement(
     item.publishedAt,
     item.contentHash ?? '',
     referenceAuthor ?? undefined,
+    item.attachment,
     now,
   )
   await putRecord(coll, rkey, new TextEncoder().encode(record))
@@ -122,10 +127,16 @@ function differs(
 ): boolean {
   try {
     const held = JSON.parse(new TextDecoder().decode(stored))
-    return (
-      held.version !== (item.contentHash ?? '') ||
-      (held.ref?.didDht ?? null) !== referenceAuthor
-    )
+    if (held.version !== (item.contentHash ?? '')) return true
+    if ((held.ref?.didDht ?? null) !== referenceAuthor) return true
+    // Only meaningful when there IS a reference to compare. Checking it unconditionally
+    // would report a difference forever for a hash-only attachment endorsement — no ref
+    // to carry the field, an attachment to compare it against — and every catch-up would
+    // rewrite the record and wake every instance syncing the doc.
+    if (referenceAuthor !== null) {
+      return (held.ref?.attachment ?? undefined) !== item.attachment
+    }
+    return false
   } catch {
     return true
   }

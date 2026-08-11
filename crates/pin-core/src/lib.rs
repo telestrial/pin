@@ -1413,9 +1413,25 @@ pub fn endorse_collection() -> String {
 
 /// The subject an endorsement of this item names — the hash a count is keyed by, so a
 /// reader can find the aggregate for something it is displaying.
+///
+/// `attachment` names one of the post's attachments by its content hash, in which case
+/// the subject is that FILE's rather than the post's. Its count is separate on purpose:
+/// keeping an attachment alive is not keeping the post alive, and counting a partial
+/// custodian as a full one would overstate the redundancy the number reports.
 #[wasm_bindgen]
-pub fn engagement_subject(channel_id: &str, published_at: &str) -> String {
-    pin_crypto::engagement_subject(channel_id, published_at)
+pub fn engagement_subject(
+    channel_id: &str,
+    published_at: &str,
+    attachment: Option<String>,
+) -> String {
+    subject_for(channel_id, published_at, attachment.as_deref())
+}
+
+fn subject_for(channel_id: &str, published_at: &str, attachment: Option<&str>) -> String {
+    match attachment {
+        Some(hash) => pin_crypto::attachment_subject(channel_id, published_at, hash),
+        None => pin_crypto::engagement_subject(channel_id, published_at),
+    }
 }
 
 /// Whether an endorsement holds up: signed by the identity it claims, and consistent
@@ -1434,10 +1450,15 @@ pub fn endorsement_verify(record_json: &str) -> Result<(), JsValue> {
 /// Where one endorsement lives. Needed on its own as well as from `sign_endorsement`,
 /// because withdrawing one addresses the record without producing another.
 #[wasm_bindgen]
-pub fn endorse_rkey(kind: &str, channel_id: &str, published_at: &str) -> String {
+pub fn endorse_rkey(
+    kind: &str,
+    channel_id: &str,
+    published_at: &str,
+    attachment: Option<String>,
+) -> String {
     pin_derive::endorse_rkey(
         kind,
-        &pin_crypto::engagement_subject(channel_id, published_at),
+        &subject_for(channel_id, published_at, attachment.as_deref()),
     )
 }
 
@@ -1446,6 +1467,11 @@ pub fn endorse_rkey(kind: &str, channel_id: &str, published_at: &str) -> String 
 /// Serialized here rather than returned as an object to stringify on the far side, so
 /// the bytes that land in the doc are the ones Rust produced and the fold reads them
 /// back with the same serde definition. Nothing in the path re-encodes.
+///
+/// `attachment` endorses one FILE of the post rather than the post, named by its content
+/// hash. It goes into the reference too when there is one, so the self-check reproduces
+/// the right subject — a record whose attachment field was dropped would otherwise read as
+/// an endorsement of the whole post.
 ///
 /// `reference_did_dht` is what chooses the visibility tier. Passing the channel author's
 /// did:dht makes the record navigable and is correct ONLY for a public subject; passing
@@ -1462,6 +1488,7 @@ pub fn sign_endorsement(
     published_at: &str,
     version: &str,
     reference_did_dht: Option<String>,
+    attachment: Option<String>,
     now: &str,
 ) -> Result<String, JsValue> {
     let app_key = decode_app_key(app_key_hex)
@@ -1470,11 +1497,12 @@ pub fn sign_endorsement(
         did_dht,
         channel_id: channel_id.to_string(),
         published_at: published_at.to_string(),
+        attachment: attachment.clone(),
     });
     let record = pin_engagement::Endorsement::sign(
         &pin_derive::did_dht_seed(&app_key),
         kind,
-        &pin_crypto::engagement_subject(channel_id, published_at),
+        &subject_for(channel_id, published_at, attachment.as_deref()),
         version,
         now,
         reference,

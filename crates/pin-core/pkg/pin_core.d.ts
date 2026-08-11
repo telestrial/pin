@@ -178,7 +178,7 @@ export function endorse_collection(): string;
  * Where one endorsement lives. Needed on its own as well as from `sign_endorsement`,
  * because withdrawing one addresses the record without producing another.
  */
-export function endorse_rkey(kind: string, channel_id: string, published_at: string): string;
+export function endorse_rkey(kind: string, channel_id: string, published_at: string, attachment?: string | null): string;
 
 /**
  * Whether an endorsement holds up: signed by the identity it claims, and consistent
@@ -193,8 +193,13 @@ export function endorsement_verify(record_json: string): void;
 /**
  * The subject an endorsement of this item names — the hash a count is keyed by, so a
  * reader can find the aggregate for something it is displaying.
+ *
+ * `attachment` names one of the post's attachments by its content hash, in which case
+ * the subject is that FILE's rather than the post's. Its count is separate on purpose:
+ * keeping an attachment alive is not keeping the post alive, and counting a partial
+ * custodian as a full one would overstate the redundancy the number reports.
  */
-export function engagement_subject(channel_id: string, published_at: string): string;
+export function engagement_subject(channel_id: string, published_at: string, attachment?: string | null): string;
 
 /**
  * Read a record from a channel doc, or `undefined` if absent.
@@ -473,6 +478,11 @@ export function sia_wait_for_approval(): Promise<void>;
  * the bytes that land in the doc are the ones Rust produced and the fold reads them
  * back with the same serde definition. Nothing in the path re-encodes.
  *
+ * `attachment` endorses one FILE of the post rather than the post, named by its content
+ * hash. It goes into the reference too when there is one, so the self-check reproduces
+ * the right subject — a record whose attachment field was dropped would otherwise read as
+ * an endorsement of the whole post.
+ *
  * `reference_did_dht` is what chooses the visibility tier. Passing the channel author's
  * did:dht makes the record navigable and is correct ONLY for a public subject; passing
  * nothing publishes the subject hash alone, which is the answer for an unlisted or
@@ -481,7 +491,7 @@ export function sia_wait_for_approval(): Promise<void>;
  * `now` comes from the caller: `SystemTime::now()` panics on wasm32, and this is the
  * same reason the manifest transforms take their timestamp as an argument.
  */
-export function sign_endorsement(app_key_hex: string, kind: string, channel_id: string, published_at: string, version: string, reference_did_dht: string | null | undefined, now: string): string;
+export function sign_endorsement(app_key_hex: string, kind: string, channel_id: string, published_at: string, version: string, reference_did_dht: string | null | undefined, attachment: string | null | undefined, now: string): string;
 
 export function start(): void;
 
@@ -675,9 +685,9 @@ export interface InitOutput {
     readonly encrypt_for_channel: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly encrypt_settings: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly endorse_collection: () => [number, number];
-    readonly endorse_rkey: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];
+    readonly endorse_rkey: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number];
     readonly endorsement_verify: (a: number, b: number) => [number, number];
-    readonly engagement_subject: (a: number, b: number, c: number, d: number) => [number, number];
+    readonly engagement_subject: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];
     readonly get_channel_record: (a: number, b: number, c: number, d: number, e: number, f: number) => any;
     readonly get_record: (a: number, b: number, c: number, d: number) => any;
     readonly import_channel_doc: (a: number, b: number, c: any) => any;
@@ -726,7 +736,7 @@ export interface InitOutput {
     readonly sia_upload_items_packed: (a: any, b: number) => any;
     readonly sia_validate_recovery_phrase: (a: number, b: number) => [number, number];
     readonly sia_wait_for_approval: () => any;
-    readonly sign_endorsement: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number) => [number, number, number, number];
+    readonly sign_endorsement: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number) => [number, number, number, number];
     readonly start_channel_doc_loop: (a: number, b: number, c: number, d: any) => any;
     readonly start_channel_sync_loop: (a: number, b: number, c: number, d: number, e: any) => any;
     readonly start_identity_loop: (a: number, b: number, c: number, d: number, e: number, f: any) => any;
