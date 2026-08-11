@@ -46,6 +46,66 @@ function appKey(): string {
   return hex
 }
 
+// Who to name in an endorsement's reference for one of this identity's own channels, or
+// null for none. Public channels are navigable; an unlisted one publishes the subject
+// hash alone, because a reference would give away both the channel and its existence.
+function referenceAuthor(manifest: ChannelManifest): string | null {
+  return manifest.visibility === 'public' && manifest.authorDidDht
+    ? manifest.authorDidDht
+    : null
+}
+
+// The author's own pin endorsement for one of their items.
+//
+// Publishing already put the bytes in this identity's Sia scope, so the author IS pin
+// #1: a fresh post reads 1 rather than 0, because exactly one party is paying to keep it
+// alive. Every pin after that is another party who would keep it alive if the author
+// retracted — which is what makes the number a redundancy count rather than a popularity
+// one, and why it starts at 1.
+//
+// Best-effort, and after the commit rather than inside it. The publish is already done —
+// bytes and pointer both live — so a doc write that fails costs a count, never the post.
+// The catch-up in `usePinDocsMirror` is not this one's backstop, so an author's own
+// endorsement is retried by the next commit touching the same item.
+async function endorseOwn(
+  channelID: string,
+  manifest: ChannelManifest,
+  item: ItemRef,
+) {
+  try {
+    const { writeEndorsement } = await import('./engagement')
+    await writeEndorsement(
+      appKey(),
+      'pin',
+      {
+        channelID,
+        publishedAt: item.publishedAt,
+        contentHash: item.contentHash,
+      },
+      referenceAuthor(manifest),
+    )
+  } catch (e) {
+    console.warn('own endorsement write failed:', e)
+  }
+}
+
+// Withdraw the author's own endorsements for items that are gone.
+//
+// The count then falls to whoever is still paying — a post at 2 that its author retracts
+// becomes 1, and it survives BECAUSE of that 1. That is the custody model stated as a
+// number: a subscriber's pinned copy is independent of the author's manifest.
+async function unendorseOwn(channelID: string, publishedAt: readonly string[]) {
+  if (publishedAt.length === 0) return
+  try {
+    const { deleteEndorsement } = await import('./engagement')
+    for (const at of publishedAt) {
+      await deleteEndorsement(appKey(), 'pin', { channelID, publishedAt: at })
+    }
+  } catch (e) {
+    console.warn('own endorsement release failed (will retry):', e)
+  }
+}
+
 // The channel's current manifest: the author's local copy (feedStore) is
 // authoritative for single-device authoring and avoids a DHT round-trip; fall
 // back to resolving the locator when it's not cached (cold start / new device).
@@ -121,6 +181,7 @@ export async function publishItemToChannel(
     manifest,
   )
   reflectInFeed(channel.channelID, manifest)
+  await endorseOwn(channel.channelID, manifest, itemRef)
   return manifest
 }
 
@@ -150,6 +211,9 @@ export async function editPublishedItem(
     result.manifest,
   )
   reflectInFeed(channel.channelID, result.manifest)
+  // An edit keeps the item's `publishedAt`, so the endorsement's subject is unchanged and
+  // the same record is rewritten with the version it now stands against.
+  await endorseOwn(channel.channelID, result.manifest, result.item)
   return result
 }
 
@@ -160,6 +224,9 @@ export async function deleteItemFromChannel(
   protectedObjectIDs?: ReadonlySet<string>,
 ): Promise<{ manifest: ChannelManifest; orphanedObjectIDs: string[] }> {
   const current = await loadCurrentManifest(channel)
+  // Read before the transform: the subject is derived from `publishedAt`, which is only
+  // available while the item is still in the manifest.
+  const retracted = current.items.find((i) => i.id === itemID)?.publishedAt
   const result = await deletePublishedItem(current, itemID, protectedObjectIDs)
   await commitChannelManifest(
     client,
@@ -169,6 +236,7 @@ export async function deleteItemFromChannel(
     result.manifest,
   )
   reflectInFeed(channel.channelID, result.manifest)
+  await unendorseOwn(channel.channelID, retracted ? [retracted] : [])
   return result
 }
 
@@ -231,6 +299,12 @@ export async function retractChannel(
   await clearPublished(appKey(), rkey)
   // And the doc's copy of the manifest, so the record doesn't outlive its channel.
   await forgetOwnManifest(appKey(), channel.channelID)
+  // Every item's endorsement goes with it. Each count falls to the subscribers still
+  // holding a copy, which is exactly who is keeping it alive now.
+  await unendorseOwn(
+    channel.channelID,
+    (current?.items ?? []).map((i) => i.publishedAt),
+  )
 
   useFeedStore.getState().removeChannel(channel.channelID)
   return { objectIDs, urls }

@@ -31,6 +31,35 @@ import {
 // hasn't heard about it. When local IS recorded the doc wins, deletions included, which
 // is how another device's unpin reaches this one.
 
+// The public half of the same gesture: every pin should also have a signed endorsement,
+// so it can be counted. Additive, like the pin catch-up and for the identical reason —
+// a record this pass doesn't recognize belongs to another device, and deleting it would
+// be deletion by absence.
+//
+// It also UPGRADES: a pin made before its channel's manifest had loaded was endorsed
+// without a reference, and this fills one in once the manifest is there. That works
+// without re-signing because the reference sits outside the signature.
+async function catchUpEndorsements(appKeyHex: string): Promise<void> {
+  const { endorsedItemFor } = await import('../../stores/pin')
+  const { syncEndorsements, drainPendingReleases: drainEndorsements } =
+    await import('../engagement')
+  const { useFeedStore } = await import('../../stores/feed')
+  const manifests = useFeedStore.getState().manifests
+
+  await drainEndorsements(appKeyHex)
+  const wanted = usePinStore.getState().pinned.flatMap((p) => {
+    const item = endorsedItemFor(p)
+    if (!item) return []
+    const manifest = manifests[item.channelID]
+    const referenceAuthor =
+      manifest?.visibility === 'public' && manifest.authorDidDht
+        ? manifest.authorDidDht
+        : null
+    return [{ kind: 'pin' as const, item, referenceAuthor }]
+  })
+  await syncEndorsements(appKeyHex, wanted)
+}
+
 export function usePinDocsMirror() {
   const storedKeyHex = useAuthStore((s) => s.storedKeyHex)
 
@@ -67,6 +96,12 @@ export function usePinDocsMirror() {
         await syncPinRecords(storedKeyHex, usePinStore.getState().pinned)
         if (cancelled) return
         recorded = await localFingerprint()
+        // The endorsement half of the same gesture, from the same list and on the same
+        // trigger — so it rides here rather than mounting a second hook that would
+        // subscribe to the doc again to learn the same thing. After the pin records, and
+        // outside what `recorded` gates: the read side's clean-state test is about pins,
+        // and an endorsement that hasn't travelled must not hold a pin back.
+        await catchUpEndorsements(storedKeyHex)
       } catch (e) {
         // Leaves `recorded` as it was, so the read side stays out of the way until
         // this device's own pins have travelled.

@@ -31,6 +31,84 @@ async function recordPin(ref: PinnedItemRef): Promise<void> {
   }
 }
 
+/** What a pin is about, for the endorsement side. Null for a library pin, for now.
+ *
+ *  A file you uploaded yourself was never published, so there is nothing another party
+ *  could identify — that one stays null. An attachment lifted out of someone's post is
+ *  different: there IS a post behind it, and keeping one file alive is worth reporting.
+ *  It has no subject yet only because a library pin doesn't remember where it came from,
+ *  and its `publishedAt` is the moment you clicked rather than the post's identity.
+ *
+ *  When it lands it gets its OWN subject and its own count, not a share of the post's:
+ *  keeping an attachment alive is not keeping the post alive, and counting a partial
+ *  custodian as a full one would overstate the redundancy the number exists to report. */
+export function endorsedItemFor(ref: PinnedItemRef) {
+  if (ref.channel.channelID === 'library') return null
+  return {
+    channelID: ref.channel.channelID,
+    publishedAt: ref.item.publishedAt,
+    contentHash: ref.item.contentHash,
+  }
+}
+
+/** Who to name in the endorsement's reference for a channel this identity doesn't own.
+ *
+ *  Read from the manifest we already hold. Absent — a pin made before the channel loaded
+ *  — resolves to null, which publishes the subject hash alone; the catch-up fills the
+ *  reference in later, since it sits outside the signature. Null is the safe direction:
+ *  less is revealed, never more. */
+async function referenceAuthorFor(channelID: string): Promise<string | null> {
+  const { useFeedStore } = await import('./feed')
+  const manifest = useFeedStore.getState().manifests[channelID]
+  return manifest?.visibility === 'public' && manifest.authorDidDht
+    ? manifest.authorDidDht
+    : null
+}
+
+/** Publish the pin as an endorsement too, so it can be counted.
+ *
+ *  A pin is a mixed gesture: it mirrors bytes into this identity's Sia scope (private, in
+ *  the pin record above) AND it says the thing was worth keeping (public, here). Those
+ *  are two records because they are two facts with two audiences — nobody but you needs
+ *  the share URL, and a count needs a signed public claim.
+ *
+ *  Best-effort at the moment of the action, like the pin record: the bytes are already
+ *  mirrored, so a failed write costs a count rather than the pin, and the catch-up in
+ *  `usePinDocsMirror` picks up whatever didn't land. */
+async function endorsePin(ref: PinnedItemRef): Promise<void> {
+  const item = endorsedItemFor(ref)
+  if (!item) return
+  try {
+    const hex = await appKeyHex()
+    if (!hex) return
+    const { writeEndorsement } = await import('../lib/engagement')
+    await writeEndorsement(
+      hex,
+      'pin',
+      item,
+      await referenceAuthorFor(item.channelID),
+    )
+  } catch (e) {
+    console.warn('endorsement write failed (will be caught up):', e)
+  }
+}
+
+/** Withdraw the endorsement. Kept exact by being done where the unpinning is: a leftover
+ *  record is an over-count nothing else would correct, and a reconciler can never tell a
+ *  withdrawal from an endorsement another device just made. */
+async function unendorsePin(ref: PinnedItemRef): Promise<void> {
+  const item = endorsedItemFor(ref)
+  if (!item) return
+  try {
+    const hex = await appKeyHex()
+    if (!hex) return
+    const { deleteEndorsement } = await import('../lib/engagement')
+    await deleteEndorsement(hex, 'pin', item)
+  } catch (e) {
+    console.warn('endorsement release failed (will be retried):', e)
+  }
+}
+
 /** Release a pin's record. Best-effort for the same reason, with one asymmetry worth
  *  naming: a release that doesn't land leaves a record for a pin that no longer exists,
  *  and the read side would adopt it back. That is why the retry lives with the local
@@ -250,6 +328,7 @@ export const usePinStore = create<PinState>()(
             pinning: next,
           }))
           void recordPin(ref)
+          void endorsePin(ref)
           get().refreshAccount(client)
         } catch (e) {
           const next = new Set(get().pinning)
@@ -281,6 +360,7 @@ export const usePinStore = create<PinState>()(
           label: `Reclaiming “${ref.item.title || 'item'}”`,
         })
         void forgetPin(ref)
+        void unendorsePin(ref)
         get().refreshAccount(client)
       },
       pinChannel: async (client, items, channel) => {
