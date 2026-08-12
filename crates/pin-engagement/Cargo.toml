@@ -17,8 +17,11 @@ rust-version = "1.82"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
-# The subject derivation, so a reference can be checked against the subject it claims.
+# The subject derivation, so a reference can be checked against the subject it claims,
+# and the base64 a signature travels in.
 pin-crypto = { path = "../pin-crypto" }
+# The set commitment's hashing. Already in the tree via pin-crypto.
+sha2 = "0.10"
 # The identity keypair and the signature over it. Depended on deliberately rather than
 # leaving verification to the caller: this crate offers one `verify` that does the whole
 # job, because a half-done check here means accepting forged engagement, and an API that

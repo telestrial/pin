@@ -199,6 +199,252 @@ impl Endorsement {
     pub fn supersedes(&self, held_created_at: &str) -> bool {
         self.created_at.as_str() > held_created_at
     }
+
+    /// This record's leaf in the set commitment.
+    ///
+    /// The SIGNATURE is what makes two records distinct, and it has to be in here for
+    /// that reason. The signed bytes alone cover kind, subject, version and timestamp —
+    /// all of which two identities endorsing the same subject in the same millisecond
+    /// share — so a set of two would commit as a set of one and a count could be quietly
+    /// halved. Signatures are per-key and deterministic, so including it separates them.
+    ///
+    /// The actor is deliberately NOT in here, and it would be redundant if it were:
+    /// `verify` binds the actor string to the key that signed, so among verified records
+    /// the signature already determines who. Leaving it out also keeps the leaf free of
+    /// the `did:dht:x`-versus-bare-`x` normalization question that the signature itself
+    /// avoids.
+    ///
+    /// Errors only on a signature that isn't base64 — records reaching here are verified,
+    /// so this is a guard rather than a path.
+    pub fn leaf(&self) -> Result<[u8; 32], String> {
+        let sig = pin_crypto::b64_decode(&self.sig).ok_or("signature is not base64")?;
+        let mut buf = vec![LEAF_TAG];
+        buf.extend_from_slice(&self.signing_bytes());
+        buf.extend_from_slice(&sig);
+        Ok(sha256(&buf))
+    }
+}
+
+// --- committing to the set a count is made of -----------------------------------
+//
+// A count is only a claim; what makes it checkable is that the set behind it is
+// COMMITTED. Without that, an author asked to justify "12" hands over whichever twelve
+// records they like, and sampling proves nothing because they chose the sample. With a
+// published root they can't: the root is in the aggregate every subscriber syncs, an
+// auditor asks for arbitrary members, and each answer comes with a proof that verifies in
+// O(log n) — so a spot check of a hundred records says something about a set of millions.
+//
+// Certificate Transparency's construction. Leaf and interior hashes are tagged
+// differently so an interior node can never be presented as a leaf, and an odd node is
+// PROMOTED rather than duplicated — duplicating it (Bitcoin's approach) lets two different
+// sets share a root.
+
+const LEAF_TAG: u8 = 0x00;
+const NODE_TAG: u8 = 0x01;
+
+fn sha256(bytes: &[u8]) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes).into()
+}
+
+/// The root of an empty set. A named constant rather than zeroes, so "no endorsements"
+/// is a value nobody can arrive at by accident or forge by truncation.
+pub fn empty_root() -> [u8; 32] {
+    sha256(b"pin.engagement.empty.v1")
+}
+
+fn parent(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
+    let mut buf = Vec::with_capacity(65);
+    buf.push(NODE_TAG);
+    buf.extend_from_slice(left);
+    buf.extend_from_slice(right);
+    sha256(&buf)
+}
+
+/// The commitment over a set of leaves, in the order given.
+///
+/// Order is the caller's and must be deterministic — the fold sorts by actor, which is
+/// unique per subject and kind — because a root that depended on iteration order would
+/// change on every pass and mean nothing.
+pub fn merkle_root(leaves: &[[u8; 32]]) -> [u8; 32] {
+    if leaves.is_empty() {
+        return empty_root();
+    }
+    let mut level: Vec<[u8; 32]> = leaves.to_vec();
+    while level.len() > 1 {
+        let mut next = Vec::with_capacity((level.len() + 1) / 2);
+        let mut i = 0;
+        while i + 1 < level.len() {
+            next.push(parent(&level[i], &level[i + 1]));
+            i += 2;
+        }
+        if i < level.len() {
+            // Promoted unchanged. Duplicating it instead would make a set of three and a
+            // set of four with a repeated last element commit identically.
+            next.push(level[i]);
+        }
+        level = next;
+    }
+    level[0]
+}
+
+/// The sibling hashes proving one leaf's membership, bottom-up. `None` when the index is
+/// out of range.
+pub fn inclusion_proof(leaves: &[[u8; 32]], index: usize) -> Option<Vec<[u8; 32]>> {
+    if index >= leaves.len() {
+        return None;
+    }
+    let mut proof = Vec::new();
+    let mut level: Vec<[u8; 32]> = leaves.to_vec();
+    let mut idx = index;
+    while level.len() > 1 {
+        let sibling = if idx % 2 == 0 { idx + 1 } else { idx - 1 };
+        // A promoted odd node has no sibling at this level and contributes nothing.
+        if sibling < level.len() {
+            proof.push(level[sibling]);
+        }
+        let mut next = Vec::with_capacity((level.len() + 1) / 2);
+        let mut i = 0;
+        while i + 1 < level.len() {
+            next.push(parent(&level[i], &level[i + 1]));
+            i += 2;
+        }
+        if i < level.len() {
+            next.push(level[i]);
+        }
+        level = next;
+        idx /= 2;
+    }
+    Some(proof)
+}
+
+/// Whether a leaf is in the set a root commits to.
+///
+/// `total` is the set's size, which the aggregate publishes as its count — needed because
+/// the shape of the tree (and so where a promoted node sits) depends on it. That is also
+/// what stops a count being inflated past the set: claiming a larger total changes the
+/// tree, and the proofs stop verifying.
+pub fn verify_inclusion(
+    root: &[u8; 32],
+    leaf: &[u8; 32],
+    index: usize,
+    total: usize,
+    proof: &[[u8; 32]],
+) -> bool {
+    if total == 0 || index >= total {
+        return false;
+    }
+    let mut hash = *leaf;
+    let mut idx = index;
+    let mut level_size = total;
+    let mut fed = 0;
+    while level_size > 1 {
+        let sibling = if idx % 2 == 0 { idx + 1 } else { idx - 1 };
+        if sibling < level_size {
+            let Some(s) = proof.get(fed) else {
+                return false;
+            };
+            fed += 1;
+            hash = if idx % 2 == 0 {
+                parent(&hash, s)
+            } else {
+                parent(s, &hash)
+            };
+        }
+        idx /= 2;
+        level_size = (level_size + 1) / 2;
+    }
+    // A proof carrying more hashes than the tree needs is rejected rather than ignored:
+    // trailing junk that verified would be a second valid proof for one leaf.
+    fed == proof.len() && hash == *root
+}
+
+// --- the aggregate a channel publishes ------------------------------------------
+
+/// How many actors an aggregate names inline, so a reader can show a few faces without
+/// opening the log. Taken in the set's own sort order rather than by recency, so the
+/// record doesn't churn — and every write announces a change to each subscriber syncing
+/// the channel doc.
+pub const SAMPLE_ACTORS: usize = 5;
+
+/// One kind's tally for one subject.
+///
+/// `count` is always the size of the set, never a running total. A stored number is fine —
+/// this IS stored — but it is a CACHE of a fold, re-derivable from the log at any time,
+/// which is what makes an unlike need no decrement message and a duplicate knock harmless.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct KindTally {
+    pub count: usize,
+    /// Hex commitment over the backing set. Published so an auditor can ask for arbitrary
+    /// members: without it, the holder chooses the sample and a spot check proves nothing.
+    #[serde(rename = "setRoot")]
+    pub set_root: String,
+    #[serde(rename = "sampleActors")]
+    pub sample_actors: Vec<String>,
+    /// When this identity last re-read the actors' own records to confirm the endorsements
+    /// still stand. Published rather than hidden: retention is the one thing a holder
+    /// can't prove by holding a signature, so how stale the check is belongs in the open.
+    /// Absent means never — a set built from records that arrived by delivery and have not
+    /// been re-checked at source.
+    #[serde(rename = "retentionCheckedAt", skip_serializing_if = "Option::is_none")]
+    pub retention_checked_at: Option<String>,
+}
+
+/// Everything published about one subject: a tally per kind, so rendering a row is one
+/// read rather than a scan. Kinds are open, and a reader ignores what it doesn't know.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct Aggregate {
+    pub kinds: std::collections::BTreeMap<String, KindTally>,
+    #[serde(rename = "updatedAt")]
+    pub updated_at: String,
+}
+
+/// Fold a set of VERIFIED records for one subject into its published tally.
+///
+/// Verification is the caller's — it happens once, when a record arrives — and this must
+/// only ever be handed records that passed, since a count is an assertion that its
+/// backing set is real.
+///
+/// Sorted by actor before committing: one record per actor per kind (the address enforces
+/// it), so this is a total order, and a deterministic one is what lets a root mean
+/// anything across two instances of the same identity.
+pub fn fold(
+    records: &[Endorsement],
+    retention_checked_at: Option<String>,
+    now: String,
+) -> Result<Aggregate, String> {
+    let mut by_kind: std::collections::BTreeMap<String, Vec<&Endorsement>> = Default::default();
+    for r in records {
+        by_kind.entry(r.kind.clone()).or_default().push(r);
+    }
+
+    let mut kinds = std::collections::BTreeMap::new();
+    for (kind, mut group) in by_kind {
+        group.sort_by(|a, b| a.actor.cmp(&b.actor));
+        let leaves: Vec<[u8; 32]> = group.iter().map(|r| r.leaf()).collect::<Result<_, _>>()?;
+        kinds.insert(
+            kind,
+            KindTally {
+                count: group.len(),
+                set_root: hex(&merkle_root(&leaves)),
+                sample_actors: group
+                    .iter()
+                    .take(SAMPLE_ACTORS)
+                    .map(|r| r.actor.clone())
+                    .collect(),
+                retention_checked_at: retention_checked_at.clone(),
+            },
+        );
+    }
+    Ok(Aggregate {
+        kinds,
+        updated_at: now,
+    })
+}
+
+/// Lowercase hex. Roots travel as text in a JSON record both implementations read.
+pub fn hex(bytes: &[u8; 32]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 #[cfg(test)]
@@ -458,6 +704,208 @@ mod tests {
             .collect();
         ref_keys.sort_unstable();
         assert_eq!(ref_keys, vec!["channelID", "didDht", "publishedAt"]);
+    }
+
+    // --- the set commitment ----------------------------------------------------
+
+    /// N distinct actors endorsing one subject. Seeds differ, so the actors do.
+    fn set(n: usize, kind: &str) -> Vec<Endorsement> {
+        (0..n)
+            .map(|i| {
+                Endorsement::sign(&[i as u8 + 1; 32], kind, SUBJECT, VERSION, WHEN, None).unwrap()
+            })
+            .collect()
+    }
+
+    fn leaves_of(records: &[Endorsement]) -> Vec<[u8; 32]> {
+        let mut sorted: Vec<&Endorsement> = records.iter().collect();
+        sorted.sort_by(|a, b| a.actor.cmp(&b.actor));
+        sorted.iter().map(|r| r.leaf().unwrap()).collect()
+    }
+
+    #[test]
+    fn two_actors_endorsing_at_the_same_instant_are_two_leaves() {
+        // The reason the signature is in the leaf. These two records agree on every signed
+        // field — kind, subject, version, timestamp — so without it a set of two would
+        // commit as a set of one and a count could be quietly halved.
+        let s = set(2, KIND_LIKE);
+        assert_eq!(s[0].created_at, s[1].created_at);
+        assert_eq!(s[0].signing_bytes(), s[1].signing_bytes());
+        assert_ne!(s[0].actor, s[1].actor);
+        assert_ne!(s[0].leaf().unwrap(), s[1].leaf().unwrap());
+    }
+
+    #[test]
+    fn every_member_of_a_set_can_prove_it_belongs() {
+        // Every size up to a few, because the promoted-odd-node case only appears at some
+        // of them and an off-by-one there would pass at the sizes a single example covers.
+        for n in 1..=9 {
+            let leaves = leaves_of(&set(n, KIND_LIKE));
+            let root = merkle_root(&leaves);
+            for (i, leaf) in leaves.iter().enumerate() {
+                let proof = inclusion_proof(&leaves, i).expect("in range");
+                assert!(
+                    verify_inclusion(&root, leaf, i, n, &proof),
+                    "n={n} i={i} should verify"
+                );
+            }
+            assert!(inclusion_proof(&leaves, n).is_none());
+        }
+    }
+
+    #[test]
+    fn a_leaf_that_is_not_in_the_set_cannot_prove_it_is() {
+        // The forgery that matters: padding a count with records you don't hold. Every
+        // slot is tried, since a proof for the wrong position is the plausible attempt.
+        let leaves = leaves_of(&set(5, KIND_LIKE));
+        let root = merkle_root(&leaves);
+        let outsider = set(1, KIND_PIN)[0].leaf().unwrap();
+        for i in 0..5 {
+            let proof = inclusion_proof(&leaves, i).unwrap();
+            assert!(!verify_inclusion(&root, &outsider, i, 5, &proof));
+        }
+    }
+
+    #[test]
+    fn a_count_cannot_be_inflated_past_the_set_it_commits_to() {
+        // Claiming a bigger total changes the tree's shape, so the proofs stop verifying —
+        // which is what makes the published count auditable rather than decorative.
+        let leaves = leaves_of(&set(4, KIND_LIKE));
+        let root = merkle_root(&leaves);
+        let proof = inclusion_proof(&leaves, 0).unwrap();
+        assert!(verify_inclusion(&root, &leaves[0], 0, 4, &proof));
+        assert!(!verify_inclusion(&root, &leaves[0], 0, 5, &proof));
+        assert!(!verify_inclusion(&root, &leaves[0], 0, 8, &proof));
+    }
+
+    #[test]
+    fn a_promoted_odd_node_is_not_a_duplicated_one() {
+        // Duplicating the odd leaf instead of promoting it (Bitcoin's construction) makes
+        // a set of three and a set of four whose last element repeats commit identically,
+        // so one root would stand for two different sets.
+        let three = leaves_of(&set(3, KIND_LIKE));
+        let mut four = three.clone();
+        four.push(three[2]);
+        assert_ne!(merkle_root(&three), merkle_root(&four));
+    }
+
+    #[test]
+    fn a_proof_with_extra_hashes_is_rejected() {
+        // Trailing junk that verified would be a second valid proof for one leaf.
+        let leaves = leaves_of(&set(4, KIND_LIKE));
+        let root = merkle_root(&leaves);
+        let mut proof = inclusion_proof(&leaves, 1).unwrap();
+        proof.push([9u8; 32]);
+        assert!(!verify_inclusion(&root, &leaves[1], 1, 4, &proof));
+    }
+
+    #[test]
+    fn an_empty_set_has_a_named_root_that_nothing_belongs_to() {
+        assert_eq!(merkle_root(&[]), empty_root());
+        assert!(!verify_inclusion(&empty_root(), &[0u8; 32], 0, 0, &[]));
+    }
+
+    #[test]
+    fn a_root_does_not_depend_on_the_order_records_arrived_in() {
+        // Two instances of one identity fold the same set in whatever order their crawls
+        // happened to run. A root that moved would churn the record and mean nothing.
+        let records = set(6, KIND_LIKE);
+        let mut shuffled = records.clone();
+        shuffled.reverse();
+        let a = fold(&records, None, WHEN.into()).unwrap();
+        let b = fold(&shuffled, None, WHEN.into()).unwrap();
+        assert_eq!(a, b);
+    }
+
+    // --- the aggregate ---------------------------------------------------------
+
+    #[test]
+    fn a_fold_tallies_each_kind_separately() {
+        let mut records = set(3, KIND_LIKE);
+        records.extend(set(2, KIND_PIN));
+        let agg = fold(&records, Some(WHEN.into()), WHEN.into()).unwrap();
+
+        assert_eq!(agg.kinds[KIND_LIKE].count, 3);
+        assert_eq!(agg.kinds[KIND_PIN].count, 2);
+        // Different sets, so different commitments — a shared root would mean one tally
+        // could be audited with the other's records.
+        assert_ne!(agg.kinds[KIND_LIKE].set_root, agg.kinds[KIND_PIN].set_root);
+        assert_eq!(
+            agg.kinds[KIND_LIKE].retention_checked_at,
+            Some(WHEN.to_string())
+        );
+    }
+
+    #[test]
+    fn a_tallys_root_is_the_commitment_over_its_own_records() {
+        // The count and the root have to describe the SAME set, or an auditor's proofs
+        // would fail against an honest holder.
+        let records = set(4, KIND_PIN);
+        let agg = fold(&records, None, WHEN.into()).unwrap();
+        let tally = &agg.kinds[KIND_PIN];
+        assert_eq!(tally.count, 4);
+        assert_eq!(tally.set_root, hex(&merkle_root(&leaves_of(&records))));
+
+        let leaves = leaves_of(&records);
+        let proof = inclusion_proof(&leaves, 2).unwrap();
+        let root: [u8; 32] = {
+            let mut r = [0u8; 32];
+            for (i, b) in r.iter_mut().enumerate() {
+                *b = u8::from_str_radix(&tally.set_root[i * 2..i * 2 + 2], 16).unwrap();
+            }
+            r
+        };
+        assert!(verify_inclusion(&root, &leaves[2], 2, tally.count, &proof));
+    }
+
+    #[test]
+    fn a_sample_is_bounded_and_stable() {
+        let agg = fold(&set(20, KIND_LIKE), None, WHEN.into()).unwrap();
+        let sample = &agg.kinds[KIND_LIKE].sample_actors;
+        assert_eq!(sample.len(), SAMPLE_ACTORS);
+        // In the set's own order, not by arrival — so a pass that changed nothing rewrites
+        // nothing, and every write here wakes each subscriber syncing the channel doc.
+        let mut expected: Vec<String> =
+            set(20, KIND_LIKE).iter().map(|r| r.actor.clone()).collect();
+        expected.sort();
+        assert_eq!(sample, &expected[..SAMPLE_ACTORS]);
+    }
+
+    #[test]
+    fn an_aggregate_uses_the_field_names_a_reader_expects() {
+        // Nothing type-checks across the JSON boundary, and every one of these is an
+        // acronym-or-camelCase case that a derived rename gets wrong.
+        let agg = fold(&set(1, KIND_LIKE), Some(WHEN.into()), WHEN.into()).unwrap();
+        let json: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&agg).unwrap()).unwrap();
+
+        let mut top: Vec<&str> = json
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        top.sort_unstable();
+        assert_eq!(top, vec!["kinds", "updatedAt"]);
+
+        let mut tally: Vec<&str> = json["kinds"][KIND_LIKE]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        tally.sort_unstable();
+        assert_eq!(
+            tally,
+            vec!["count", "retentionCheckedAt", "sampleActors", "setRoot"]
+        );
+    }
+
+    #[test]
+    fn a_never_checked_tally_omits_the_retention_field_rather_than_claiming_a_time() {
+        let agg = fold(&set(1, KIND_LIKE), None, WHEN.into()).unwrap();
+        let wire = serde_json::to_string(&agg).unwrap();
+        assert!(!wire.contains("retentionCheckedAt"), "{wire}");
     }
 
     #[test]

@@ -240,6 +240,38 @@ pub fn endorse_rkey(kind: &str, subject: &str) -> String {
     format!("{kind}:{subject}")
 }
 
+/// The collection holding what OTHERS have endorsed about this identity's items — the
+/// signed records a published count is folded from.
+///
+/// Lives in this identity's own doc and is never served to subscribers, unlike the tally
+/// derived from it. The distinction is the point: the tally is one small entry per subject
+/// that syncs to everyone reading a channel, while the set behind it grows with reality
+/// and would otherwise be replicated in full to every reader. It is produced on demand
+/// instead — the receipts, not the poster.
+///
+/// A rebuildable cache, not authored truth: every record in here came from its actor's own
+/// directory and can be re-read from there. Losing it costs a crawl, not a fact.
+pub const ENGAGEMENT_LOG_COLLECTION: &str = "engagement-log";
+
+/// One held record: the subject, then who asserted it.
+///
+/// Subject first so a prefix scan gathers everything about one item — which is how a
+/// tally is folded. One record per actor per subject and kind, so a re-arriving
+/// endorsement overwrites rather than accumulating; the kind rides inside the record
+/// because the fold reads them all and groups.
+pub fn engagement_log_rkey(subject: &str, actor: &str) -> String {
+    format!("{subject}:{actor}")
+}
+
+/// The collection holding the published tally for each subject, in the CHANNEL's doc.
+///
+/// There rather than here because that doc is the one subscribers already sync, and its
+/// namespace derives from the author's AppKey — so the author writes and a subscriber
+/// holds a read capability, which is the substrate enforcing "the engager owns their act,
+/// the publisher owns their surface". A count arrives live over the same rung that
+/// delivers a new post.
+pub const ENGAGEMENT_COLLECTION: &str = "engagement";
+
 /// The collection where each of this identity's live instances registers itself,
 /// keyed by its iroh node id.
 ///
@@ -422,6 +454,28 @@ mod tests {
         let key = record_key(PINNED_COLLECTION, &before);
         let key = String::from_utf8(key).unwrap();
         assert_eq!(parse_record_key(&key), Some((PINNED_COLLECTION, &*before)));
+    }
+
+    #[test]
+    fn an_engagement_log_key_gathers_one_subject_and_separates_its_actors() {
+        let subject = "f4xlljzqxtqpv7ul6ngkyeafusdwqrirpmhochqyjz2hgz3djo6a";
+        // Subject first, because folding a tally means scanning everything about one item.
+        assert!(engagement_log_rkey(subject, "did:dht:alice").starts_with(subject));
+        // And one record per actor: two people endorsing the same thing must not collide,
+        // or a count would be short by however many shared a key.
+        assert_ne!(
+            engagement_log_rkey(subject, "did:dht:alice"),
+            engagement_log_rkey(subject, "did:dht:bob")
+        );
+        // The same actor re-endorsing overwrites, which is what makes a repeated knock
+        // harmless rather than double-counted.
+        assert_eq!(
+            engagement_log_rkey(subject, "did:dht:alice"),
+            engagement_log_rkey(subject, "did:dht:alice")
+        );
+        // The private log and the published tally are different collections — one is held,
+        // the other is served to every subscriber.
+        assert_ne!(ENGAGEMENT_LOG_COLLECTION, ENGAGEMENT_COLLECTION);
     }
 
     #[test]

@@ -10,7 +10,7 @@ import type { FollowEdge } from './types'
 // public — 06-02). Obscure channels are deliberately ABSENT — they're only reachable
 // via their own K-derived locator, so resolving an identity never enumerates them.
 
-export const DIRECTORY_DOC_VERSION = 2
+export const DIRECTORY_DOC_VERSION = 3
 
 // One advertised public channel: enough for a resolver to read it — the channelID +
 // its key K (public channels' K is shareable by definition) → derive the channel's
@@ -35,5 +35,17 @@ export type DirectoryDoc = {
   // (their channels auto-Watched + tracked). Replaces the dev.sia.pin.handlefollow
   // records.
   handleFollows: string[]
+  // What this identity has endorsed — signed records, verbatim, each one verifiable on
+  // its own. World-readable because auditability needs it to be: a third party can't check
+  // a count whose backing records they can't read.
+  //
+  // Here rather than in an object of their own because a crawl fetches this blob anyway,
+  // so endorsements cost no extra round trip. CURRENT endorsements only — withdrawing
+  // removes the record instead of appending a tombstone, which keeps a blob that gets
+  // fetched to draw a display name from carrying somebody's lifetime history.
+  //
+  // Opaque here on purpose: the shape is pin-engagement's, and a reader that needs to
+  // interpret one verifies it through pin-core rather than trusting this type.
+  endorsements?: unknown[]
   updatedAt: string
 }

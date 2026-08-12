@@ -79,14 +79,21 @@ export async function endorsementRkey(
 /** Sign and store one endorsement.
  *
  *  Skips the write when the record already says exactly this, so re-making a gesture
- *  doesn't churn the doc or wake every instance syncing it. The comparison can't be on
- *  the whole record — a fresh signature over a fresh `createdAt` differs every time — so
- *  it is on the parts that carry meaning. An existing record therefore keeps its original
- *  timestamp, which is right: the endorsement was made when it was made.
+ *  doesn't churn the doc or wake every instance syncing it. The comparison is on the parts
+ *  that carry meaning rather than on the whole record.
  *
- *  A reference can be ADDED to an existing record without re-signing, because it sits
- *  outside the signature. That is what lets a catch-up upgrade a record it first wrote
- *  before the channel's manifest had loaded. */
+ *  AN ENDORSEMENT KEEPS THE MOMENT IT WAS MADE. When a record already exists, its
+ *  `createdAt` is reused rather than restamped, and only a genuinely new one takes `now`.
+ *  Two consequences, both wanted: a rewrite that only changed the reference produces the
+ *  IDENTICAL signature — ed25519 is deterministic and the reference sits outside the
+ *  signed bytes — so a catch-up can fill in a reference it didn't know at first without
+ *  re-signing anything. And a rewrite that followed the author's edit re-signs, correctly,
+ *  while still saying the endorsement was made when it was made rather than when we
+ *  noticed the edit.
+ *
+ *  Restamping instead would also make a retraction's recency guard meaningless: a
+ *  withdrawal is honoured only if it is newer than the endorsement it withdraws, and an
+ *  endorsement whose time crept forward on every pass could outrun one. */
 export async function writeEndorsement(
   appKeyHex: string,
   kind: EndorsementKind,
@@ -99,8 +106,8 @@ export async function writeEndorsement(
   const coll = await collection()
   const rkey = await endorsementRkey(kind, item)
 
-  const existing = await getRecord(coll, rkey)
-  if (existing && !differs(existing, item, referenceAuthor)) return false
+  const held = decodeHeld(await getRecord(coll, rkey))
+  if (held && !differs(held, item, referenceAuthor)) return false
 
   const record = sign_endorsement(
     appKeyHex,
@@ -110,36 +117,44 @@ export async function writeEndorsement(
     item.contentHash ?? '',
     referenceAuthor ?? undefined,
     item.attachment,
-    now,
+    typeof held?.createdAt === 'string' ? held.createdAt : now,
   )
   await putRecord(coll, rkey, new TextEncoder().encode(record))
   return true
 }
 
-/** Whether a stored record disagrees with what we would write now.
- *
- *  Unreadable counts as different: better to rewrite a record we can't verify than to
- *  leave one we can't account for in a count. */
+/** A stored record, or null when there is none or it won't parse. Unreadable counts as
+ *  absent: better to rewrite a record we can't verify than to leave one we can't account
+ *  for in a count. */
+function decodeHeld(
+  stored: Uint8Array | undefined,
+  // biome-ignore lint/suspicious/noExplicitAny: a stored record is untrusted JSON
+): any | null {
+  if (!stored) return null
+  try {
+    return JSON.parse(new TextDecoder().decode(stored))
+  } catch {
+    return null
+  }
+}
+
+/** Whether a stored record disagrees with what we would write now. */
 function differs(
-  stored: Uint8Array,
+  // biome-ignore lint/suspicious/noExplicitAny: as above
+  held: any,
   item: EndorsedItem,
   referenceAuthor: ReferenceAuthor,
 ): boolean {
-  try {
-    const held = JSON.parse(new TextDecoder().decode(stored))
-    if (held.version !== (item.contentHash ?? '')) return true
-    if ((held.ref?.didDht ?? null) !== referenceAuthor) return true
-    // Only meaningful when there IS a reference to compare. Checking it unconditionally
-    // would report a difference forever for a hash-only attachment endorsement — no ref
-    // to carry the field, an attachment to compare it against — and every catch-up would
-    // rewrite the record and wake every instance syncing the doc.
-    if (referenceAuthor !== null) {
-      return (held.ref?.attachment ?? undefined) !== item.attachment
-    }
-    return false
-  } catch {
-    return true
+  if (held.version !== (item.contentHash ?? '')) return true
+  if ((held.ref?.didDht ?? null) !== referenceAuthor) return true
+  // Only meaningful when there IS a reference to compare. Checking it unconditionally
+  // would report a difference forever for a hash-only attachment endorsement — no ref
+  // to carry the field, an attachment to compare it against — and every catch-up would
+  // rewrite the record and wake every instance syncing the doc.
+  if (referenceAuthor !== null) {
+    return (held.ref?.attachment ?? undefined) !== item.attachment
   }
+  return false
 }
 
 /** Releases whose record didn't come off, by rkey.

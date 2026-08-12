@@ -33,6 +33,10 @@ const POST: EndorsedItem = {
   contentHash: 'bafkreibm6jg3ux5qumhcn2b3flc3tyu6dmlb4xa7u5bf44yegnrjhc4yeq',
 }
 const AUTHOR = 'did:dht:iyypk375c71qwjem5isiramudutoogo1t9gogz8f587sfkt9db4o'
+// Explicit clocks, so anything asserting that a record kept the moment it was made can't
+// pass by two writes happening to land in the same millisecond.
+const WHEN = '2026-08-11T12:00:00.000Z'
+const LATER = '2026-09-01T09:30:00.000Z'
 
 const stored = (rkey: string) =>
   JSON.parse(new TextDecoder().decode(docStore.get(`endorse/${rkey}`)!))
@@ -123,32 +127,43 @@ describe('integration: endorsements are recorded in the doc', () => {
     // The case a catch-up hits: the record was first written before the channel's
     // manifest had loaded, so nothing was known to reference. The reference sits outside
     // the signature precisely so it can be added later.
-    await writeEndorsement(FAKE_APP_KEY_HEX, 'pin', POST, null)
+    await writeEndorsement(FAKE_APP_KEY_HEX, 'pin', POST, null, WHEN)
     const bare = stored(rkeys()[0])
 
-    expect(await writeEndorsement(FAKE_APP_KEY_HEX, 'pin', POST, AUTHOR)).toBe(
-      true,
-    )
+    // A distinctly later clock, so the assertions below can't pass merely because two
+    // writes landed in the same millisecond.
+    expect(
+      await writeEndorsement(FAKE_APP_KEY_HEX, 'pin', POST, AUTHOR, LATER),
+    ).toBe(true)
     const upgraded = stored(rkeys()[0])
     expect(upgraded.ref.didDht).toBe(AUTHOR)
+    // The IDENTICAL signature, and identically timed. The reference is outside the signed
+    // bytes and the record keeps the moment it was made, so an upgrade re-signs the same
+    // content and ed25519 is deterministic. Restamping instead would produce a new
+    // signature on every pass, and this assertion would only pass when two writes happened
+    // to land in the same millisecond.
     expect(upgraded.sig).toBe(bare.sig)
+    expect(upgraded.createdAt).toBe(bare.createdAt)
     expect(() => endorsement_verify(JSON.stringify(upgraded))).not.toThrow()
   })
 
   it('rewrites a record whose version moved', async () => {
-    await writeEndorsement(FAKE_APP_KEY_HEX, 'like', POST, null)
+    await writeEndorsement(FAKE_APP_KEY_HEX, 'like', POST, null, WHEN)
     const before = stored(rkeys()[0])
 
     const edited = { ...POST, contentHash: 'bafkreidifferentversion' }
-    expect(await writeEndorsement(FAKE_APP_KEY_HEX, 'like', edited, null)).toBe(
-      true,
-    )
+    expect(
+      await writeEndorsement(FAKE_APP_KEY_HEX, 'like', edited, null, LATER),
+    ).toBe(true)
     const after = stored(rkeys()[0])
     // Same record — the subject survives an edit deliberately — carrying the version it
     // is now made against.
     expect(rkeys()).toHaveLength(1)
     expect(after.version).toBe('bafkreidifferentversion')
+    // Re-signed, because the signed content genuinely moved — but still claiming the
+    // moment the endorsement was made, not the moment we noticed the author's edit.
     expect(after.sig).not.toBe(before.sig)
+    expect(after.createdAt).toBe(before.createdAt)
   })
 
   it('withdraws a record and leaves the other kind alone', async () => {

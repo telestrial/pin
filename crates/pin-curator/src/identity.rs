@@ -32,7 +32,11 @@ use crate::{live_instances, read_record, read_settings, PublishedState, Settings
 
 /// The directory document's schema version. Must match `DIRECTORY_DOC_VERSION` in
 /// `src/core/identityDoc.ts` — a reader checks it and rejects anything else.
-pub const DIRECTORY_DOC_VERSION: u32 = 2;
+///
+/// 3 added `endorsements`. A reader is strict about this, so old published directories
+/// stop resolving until their author republishes — which every identity's own loop does
+/// within one cadence.
+pub const DIRECTORY_DOC_VERSION: u32 = 3;
 
 /// TXT prefixes in the published packet.
 const DIR_PREFIX: &str = "_dir";
@@ -104,6 +108,21 @@ struct DirectoryDoc {
     follows: Vec<serde_json::Value>,
     #[serde(rename = "handleFollows")]
     handle_follows: Vec<String>,
+    /// What this identity has endorsed — one signed record each, verbatim.
+    ///
+    /// World-readable, which auditability requires rather than merely permits: a third
+    /// party cannot check a count whose backing records they are not allowed to read. And
+    /// it rides in the directory because a crawl fetches that blob anyway, so endorsements
+    /// cost no extra round trip; a separate object would double the crawl's Sia reads,
+    /// which are the slow part.
+    ///
+    /// CURRENT endorsements only. Withdrawing removes the record rather than appending a
+    /// tombstone, so this stays bounded — a lifetime's history would sit in a blob that
+    /// gets fetched to draw a display name in a feed row. The cost is that the backing set
+    /// is provably the live one and never the historical one, which is what a count shows
+    /// anyway.
+    #[serde(default)]
+    endorsements: Vec<serde_json::Value>,
     #[serde(rename = "updatedAt")]
     updated_at: String,
 }
@@ -133,6 +152,43 @@ fn advertised_channels(settings: &SettingsView) -> Vec<DirectoryChannel> {
         .collect()
 }
 
+/// This identity's own endorsement records, as published.
+///
+/// Read as opaque JSON and passed through untouched. The Curator does not need to parse an
+/// endorsement to publish one, and not parsing it is what makes it unable to corrupt one —
+/// the same posture it takes with the profile. Each record is independently signed, so a
+/// reader verifies them one at a time and a partial or reordered read is still trustworthy.
+///
+/// Sorted by record key so the fingerprint below is stable: unordered iteration would make
+/// every pass look like a change and re-upload the blob.
+async fn own_endorsements(ctx: &IdentityContext) -> Vec<serde_json::Value> {
+    let mut rkeys = crate::list_rkeys(&ctx.doc, ctx.author_id, pin_derive::ENDORSE_COLLECTION)
+        .await
+        .unwrap_or_default();
+    rkeys.sort();
+
+    let mut out = Vec::with_capacity(rkeys.len());
+    for rkey in rkeys {
+        let Ok(Some(raw)) = read_record(
+            &ctx.doc,
+            &ctx.blobs,
+            ctx.author_id,
+            pin_derive::ENDORSE_COLLECTION,
+            &rkey,
+        )
+        .await
+        else {
+            continue;
+        };
+        // Skip anything unreadable rather than failing the publish: one bad record must not
+        // cost an identity its whole directory.
+        if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&raw) {
+            out.push(value);
+        }
+    }
+    out
+}
+
 /// A stable fingerprint of the directory's CONTENT — everything but `updatedAt`, which
 /// moves on every pass and would otherwise make every pass look like a change.
 fn fingerprint(doc: &DirectoryDoc) -> String {
@@ -151,6 +207,9 @@ fn has_anything(doc: &DirectoryDoc) -> bool {
         || !doc.channels.is_empty()
         || !doc.follows.is_empty()
         || !doc.handle_follows.is_empty()
+        // An identity that has only ever endorsed things still has something to publish:
+        // without it, nobody could ever count what they endorsed.
+        || !doc.endorsements.is_empty()
 }
 
 /// One pass: assemble, upload if the content moved, and publish the packet.
@@ -170,6 +229,7 @@ pub async fn publish_identity_once(
         channels: advertised_channels(&settings),
         follows: settings.follows.clone(),
         handle_follows: settings.handle_follows.clone(),
+        endorsements: own_endorsements(ctx).await,
         updated_at: now_iso,
     };
 
@@ -282,6 +342,7 @@ mod tests {
             channels,
             follows: Vec::new(),
             handle_follows: Vec::new(),
+            endorsements: Vec::new(),
             updated_at: "2026-08-06T12:00:00.000Z".into(),
         }
     }
@@ -289,8 +350,8 @@ mod tests {
     // Captured from the TypeScript implementation this replaces, before it was
     // changed. Round-tripping our own output would pass while disagreeing with every
     // reader in the network about what a directory document looks like.
-    const FULL: &str = r#"{"version":2,"profile":{"$type":"dev.sia.pin.profile","username":"john","displayName":"John Williams","bio":"builds things","avatarURL":"sia://avatar#encryption_key=a","coverURL":"sia://cover#encryption_key=b","updatedAt":"2026-08-06T12:00:00.000Z"},"channels":[{"channelID":"chan-one","key":"AAAA","name":"First"},{"channelID":"chan-two","key":"BBBB","name":"Second"}],"follows":[{"didDht":"did:dht:aaa","channelID":"c1","name":"Theirs"},{"didDht":"did:dht:bbb","channelID":"c2"}],"handleFollows":["did:dht:ccc","did:dht:ddd"],"updatedAt":"2026-08-06T12:00:00.000Z"}"#;
-    const EMPTY_PROFILE: &str = r#"{"version":2,"profile":null,"channels":[],"follows":[],"handleFollows":[],"updatedAt":"2026-08-06T12:00:00.000Z"}"#;
+    const FULL: &str = r#"{"version":3,"profile":{"$type":"dev.sia.pin.profile","username":"john","displayName":"John Williams","bio":"builds things","avatarURL":"sia://avatar#encryption_key=a","coverURL":"sia://cover#encryption_key=b","updatedAt":"2026-08-06T12:00:00.000Z"},"channels":[{"channelID":"chan-one","key":"AAAA","name":"First"},{"channelID":"chan-two","key":"BBBB","name":"Second"}],"follows":[{"didDht":"did:dht:aaa","channelID":"c1","name":"Theirs"},{"didDht":"did:dht:bbb","channelID":"c2"}],"handleFollows":["did:dht:ccc","did:dht:ddd"],"endorsements":[],"updatedAt":"2026-08-06T12:00:00.000Z"}"#;
+    const EMPTY_PROFILE: &str = r#"{"version":3,"profile":null,"channels":[],"follows":[],"handleFollows":[],"endorsements":[],"updatedAt":"2026-08-06T12:00:00.000Z"}"#;
 
     #[test]
     fn a_full_directory_serializes_exactly_as_the_frontend_did() {
@@ -320,6 +381,7 @@ mod tests {
                 serde_json::from_str(r#"{"didDht":"did:dht:bbb","channelID":"c2"}"#).unwrap(),
             ],
             handle_follows: vec!["did:dht:ccc".into(), "did:dht:ddd".into()],
+            endorsements: Vec::new(),
             updated_at: "2026-08-06T12:00:00.000Z".into(),
         };
         // Compared as parsed values, not as bytes. A directory document is PARSED by
@@ -345,6 +407,31 @@ mod tests {
             serde_json::to_string(&doc(None, Vec::new())).unwrap(),
             EMPTY_PROFILE
         );
+    }
+
+    #[test]
+    fn an_endorsement_travels_in_the_directory_verbatim() {
+        // The published record has to be byte-for-byte what its signer wrote, because a
+        // reader verifies the signature over it. Re-serializing through a type of our own
+        // would risk changing what is verified — so it is carried as opaque JSON, and this
+        // pins that it survives the round trip.
+        let record = serde_json::json!({
+            "kind": "pin",
+            "actor": "did:dht:someone",
+            "subject": "f4xlljzqxtqpv7ul6ngkyeafusdwqrirpmhochqyjz2hgz3djo6a",
+            "version": "bafkreisomething",
+            "createdAt": "2026-08-11T12:00:00.000Z",
+            "sig": "Zm9vYmFy",
+        });
+        let mut d = doc(None, Vec::new());
+        d.endorsements = vec![record.clone()];
+
+        let wire: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&d).unwrap()).unwrap();
+        assert_eq!(wire["endorsements"][0], record);
+        // And an identity that has only ever endorsed things still publishes: without
+        // this, nobody could count what they endorsed.
+        assert!(has_anything(&d));
     }
 
     #[test]
