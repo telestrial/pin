@@ -1405,6 +1405,31 @@ pub fn published_channel_rkey(channel_id: &str) -> String {
 // both platforms, the same way `core/crypto.ts` derives through it on desktop. Nothing
 // forks, because nothing about signing a record differs by device.
 
+// --- the chunked-TXT convention -------------------------------------------------
+//
+// A pointer longer than one TXT character-string is split across indexed records and
+// rejoined on the way back. Exposed here because the convention CROSSES: the Curator's
+// loops publish `_dir`, `_s` and the channel locators in Rust, and the frontend reads
+// them — so a reader that could not rejoin what a writer split would be a silent data
+// failure, not an untidiness. There was a second implementation in TypeScript and a third
+// in the integration fake; this is the one both now call.
+
+/// Split a value into indexed TXT records under a prefix.
+#[wasm_bindgen]
+pub fn pkarr_chunk_txt(prefix: &str, value: &str) -> Result<String, JsValue> {
+    out(&pin_pkarr::chunk_txt(prefix, value))
+}
+
+/// Rejoin a value split under a prefix. Records arrive in any order and with
+/// fully-qualified names (`_c0.<pubkey>`), which is how a resolve returns them. Anything
+/// not matching the prefix is ignored, so an empty string means "nothing published here".
+#[wasm_bindgen]
+pub fn pkarr_rejoin_txt(records_json: &str, prefix: &str) -> Result<String, JsValue> {
+    let records: Vec<pin_pkarr::TxtRecord> = serde_json::from_str(records_json)
+        .map_err(|e| JsValue::from_str(&format!("decode records: {e}")))?;
+    Ok(pin_pkarr::rejoin_txt(&records, prefix))
+}
+
 /// The collection this identity's own endorsements live in.
 #[wasm_bindgen]
 pub fn endorse_collection() -> String {

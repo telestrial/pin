@@ -14,8 +14,10 @@
 // the network without touching the transport seam.
 
 import {
+  pkarr_chunk_txt,
   pkarr_public_key,
   pkarr_publish,
+  pkarr_rejoin_txt,
   pkarr_resolve,
 } from '../../crates/pin-core/pkg/pin_core.js'
 import { deriveDidDhtSeed } from '../core/crypto'
@@ -57,36 +59,38 @@ export async function deriveDidDht(
 }
 
 // Max bytes in a single TXT character-string. A longer value is split across indexed
-// records `<prefix>0`, `<prefix>1`, … and reassembled by the resolver's callers.
+// records `<prefix>0`, `<prefix>1`, … and rejoined by the resolver's callers.
 //
-// Worth knowing: the Rust client no longer *enforces* this (the JS client it replaced
+// Worth knowing: the DNS layer no longer *enforces* the cap (the JS client this replaced
 // threw past 255 — simple_dns instead splits into several character-strings and rejoins
 // them transparently). Chunking is still mandatory, because it's the convention every
 // already-published record uses, and because the ~1000-byte ceiling on the whole packet
 // is a separate constraint that chunking doesn't lift.
-const TXT_MAX = 255
+//
+// FROM RUST, both directions, because the convention CROSSES: the Curator's loops publish
+// `_dir`, `_s` and the channel locators, and this side reads them. A reader that couldn't
+// rejoin what a writer split would be a silent data failure — an identity that simply
+// stops resolving — so there is one implementation and these are bindings to it. There
+// used to be three: here, in Rust, and a hand-copy in the integration fake.
 
-/** Split a value into indexed TXT records (`<prefix>0`, `<prefix>1`, …) so a long
- *  pointer (e.g. a Sia share URL) fits under the per-string cap. */
-export function chunkForTxt(prefix: string, value: string): PkarrTxt[] {
-  const out: PkarrTxt[] = []
-  for (let i = 0, n = 0; i < value.length; i += TXT_MAX, n++) {
-    out.push({ name: `${prefix}${n}`, value: value.slice(i, i + TXT_MAX) })
-  }
-  return out
+/** Split a value into indexed TXT records so a long pointer fits under the per-string
+ *  cap. */
+export async function chunkForTxt(
+  prefix: string,
+  value: string,
+): Promise<PkarrTxt[]> {
+  await ensureWasm()
+  return JSON.parse(pkarr_chunk_txt(prefix, value)) as PkarrTxt[]
 }
 
-/** Reassemble a value split by `chunkForTxt`. Records' `name` is fully-qualified
- *  (`<prefix><n>.<pubkey>`); sort by the numeric index and concatenate. Returns ''
- *  when no matching records are present. */
-export function reassembleTxt(records: PkarrTxt[], prefix: string): string {
-  const re = new RegExp(`^${prefix}(\\d+)(?:\\.|$)`)
-  return records
-    .map((r) => ({ m: r.name.match(re), value: r.value }))
-    .filter((x): x is { m: RegExpMatchArray; value: string } => x.m !== null)
-    .sort((a, b) => Number(a.m[1]) - Number(b.m[1]))
-    .map((x) => x.value)
-    .join('')
+/** Rejoin a value split by `chunkForTxt`. Records' `name` comes back fully-qualified
+ *  (`<prefix><n>.<pubkey>`) and in no particular order; '' when nothing matches. */
+export async function reassembleTxt(
+  records: PkarrTxt[],
+  prefix: string,
+): Promise<string> {
+  await ensureWasm()
+  return pkarr_rejoin_txt(JSON.stringify(records), prefix)
 }
 
 /** Publish a set of TXT records under the key derived from `seed`, replacing whatever

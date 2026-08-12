@@ -27,7 +27,7 @@ export async function resolveIdentityDoc(
   didDht: string,
 ): Promise<DirectoryDoc | null> {
   const records = await (await pkarrTransport()).resolve(didDht)
-  const url = reassembleTxt(records, POINTER_PREFIX)
+  const url = await reassembleTxt(records, POINTER_PREFIX)
   if (!url) return null
 
   const bytes = await client.downloadItem(url)

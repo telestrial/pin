@@ -444,6 +444,23 @@ mod tests {
     }
 
     #[test]
+    fn a_short_value_is_one_indexed_record() {
+        // Most published pointers fit in one string, so this is the common case — and it
+        // has to carry an index. `rejoin_txt` deliberately refuses a bare prefix, so a
+        // chunker that named a single record `_c` instead of `_c0` would write pointers
+        // that nothing could read back.
+        let records = chunk_txt("_c", "short");
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].name, "_c0");
+        assert_eq!(rejoin_txt(&records, "_c"), "short");
+
+        // And an empty value yields nothing rather than panicking or emitting an empty
+        // record. Rejoining nothing is '', which every caller already reads as "absent".
+        assert!(chunk_txt("_c", "").is_empty());
+        assert_eq!(rejoin_txt(&chunk_txt("_c", ""), "_c"), "");
+    }
+
+    #[test]
     fn rejoins_regardless_of_order_and_qualified_names() {
         // What a resolver actually returns: fully-qualified names, arbitrary order.
         let records = vec![

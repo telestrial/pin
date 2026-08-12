@@ -321,6 +321,11 @@ export function pinned_collection(): string;
 export function pinned_rkey(channel_id: string, published_at: string): string;
 
 /**
+ * Split a value into indexed TXT records under a prefix.
+ */
+export function pkarr_chunk_txt(prefix: string, value: string): string;
+
+/**
  * The z-base32 public key for a 32-byte seed — the key a resolver looks up.
  */
 export function pkarr_public_key(seed: Uint8Array): string;
@@ -330,6 +335,13 @@ export function pkarr_public_key(seed: Uint8Array): string;
  * key previously pointed at. Takes seconds (DHT store latency); call in the background.
  */
 export function pkarr_publish(seed: Uint8Array, records_json: string): Promise<void>;
+
+/**
+ * Rejoin a value split under a prefix. Records arrive in any order and with
+ * fully-qualified names (`_c0.<pubkey>`), which is how a resolve returns them. Anything
+ * not matching the prefix is ignored, so an empty string means "nothing published here".
+ */
+export function pkarr_rejoin_txt(records_json: string, prefix: string): string;
 
 /**
  * Resolve a `did:dht:<key>` (or bare key) to its current TXT records, as JSON. An
@@ -705,8 +717,10 @@ export interface InitOutput {
     readonly open_channel_doc: (a: number, b: number) => any;
     readonly pinned_collection: () => [number, number];
     readonly pinned_rkey: (a: number, b: number, c: number, d: number) => [number, number];
+    readonly pkarr_chunk_txt: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly pkarr_public_key: (a: number, b: number) => [number, number, number, number];
     readonly pkarr_publish: (a: number, b: number, c: number, d: number) => any;
+    readonly pkarr_rejoin_txt: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly pkarr_resolve: (a: number, b: number) => any;
     readonly published_channel_rkey: (a: number, b: number) => [number, number];
     readonly published_collection: () => [number, number];

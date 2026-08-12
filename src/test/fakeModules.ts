@@ -20,7 +20,10 @@
 import {
   decrypt_for_channel,
   encrypt_for_channel,
+  pkarr_chunk_txt,
+  pkarr_rejoin_txt,
 } from '../../crates/pin-core/pkg/pin_core.js'
+import { ensureWasm } from '../core/wasm'
 import type { FakeWorld } from './fakeSia'
 
 let currentWorld: FakeWorld | null = null
@@ -46,7 +49,6 @@ export function getCurrentWorld(): FakeWorld {
 // key". Same seed (K-derived locator seed, or AppKey-derived did:dht seed) →
 // same key, so channelLocator publish/resolve round-trip through world.pkarr.
 type FakeTxt = { name: string; value: string }
-const TXT_MAX = 255
 
 function fakePublicKey(seed: Uint8Array): string {
   return Array.from(seed)
@@ -117,21 +119,22 @@ export function fakeChannelLocatorNativeModule() {
 }
 
 export function fakePkarrModule() {
-  const chunkForTxt = (prefix: string, value: string): FakeTxt[] => {
-    const out: FakeTxt[] = []
-    for (let i = 0, n = 0; i < value.length; i += TXT_MAX, n++) {
-      out.push({ name: `${prefix}${n}`, value: value.slice(i, i + TXT_MAX) })
-    }
-    return out
+  // The REAL chunking, from Rust, not a copy. What's faked here is the network; the
+  // record format is a contract with whatever published it, and a fake that split or
+  // rejoined differently would let a test pass over data no production reader could read.
+  const chunkForTxt = async (
+    prefix: string,
+    value: string,
+  ): Promise<FakeTxt[]> => {
+    await ensureWasm()
+    return JSON.parse(pkarr_chunk_txt(prefix, value)) as FakeTxt[]
   }
-  const reassembleTxt = (records: FakeTxt[], prefix: string): string => {
-    const re = new RegExp(`^${prefix}(\\d+)(?:\\.|$)`)
-    return records
-      .map((r) => ({ m: r.name.match(re), value: r.value }))
-      .filter((x): x is { m: RegExpMatchArray; value: string } => x.m !== null)
-      .sort((a, b) => Number(a.m[1]) - Number(b.m[1]))
-      .map((x) => x.value)
-      .join('')
+  const reassembleTxt = async (
+    records: FakeTxt[],
+    prefix: string,
+  ): Promise<string> => {
+    await ensureWasm()
+    return pkarr_rejoin_txt(JSON.stringify(records), prefix)
   }
   const identityFromSeed = async (seed: Uint8Array) => ({
     publicKey: fakePublicKey(seed),

@@ -77,7 +77,7 @@ async function resolveSettingsPointer(
   const seed = await deriveSettingsLocatorSeed(appKeyBytes)
   const { publicKey } = await identityFromSeed(seed)
   const records = await (await pkarrTransport()).resolve(publicKey)
-  return reassembleTxt(records, await pointerPrefix()) || null
+  return (await reassembleTxt(records, await pointerPrefix())) || null
 }
 
 /** Point the boot cache at a snapshot the Curator took.

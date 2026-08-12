@@ -76,7 +76,7 @@ describe('integration: settings recovery via pkarr locator', () => {
     const seed = await deriveSettingsLocatorSeed(appKey)
     await (await pkarrTransport()).publish(
       seed,
-      chunkForTxt(SETTINGS_POINTER_PREFIX, uploaded.itemURL),
+      await chunkForTxt(SETTINGS_POINTER_PREFIX, uploaded.itemURL),
     )
 
     // Simulate a device with no local pointer (fresh device / wipe).
