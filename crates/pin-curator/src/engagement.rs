@@ -14,10 +14,16 @@
 //! holder cannot prove by holding a signature is that an endorsement still STANDS.
 //!
 //! **Which makes retention the honest thing to publish.** A record is withdrawn by being
-//! removed from its actor's directory, so noticing means re-reading that directory. This
+//! removed from its actor's directory, so noticing means re-checking that directory. This
 //! loop does exactly that every pass, and stamps a subject's tally with the time only when
 //! EVERY actor behind it was reached — so a stale check reads as stale instead of being
 //! quietly presented as fresh.
+//!
+//! Re-checking is usually not re-reading. Sia is content-addressed, so an actor's directory
+//! pointer is an exact validator: unchanged means byte-identical, which proves their
+//! endorsements still stand without downloading anything. In steady state a pass is one DHT
+//! resolve per actor and no Sia reads at all, and retention — the reason it repeats — turns
+//! out to be the cheap part rather than the expensive one.
 //!
 //! **An absence only means withdrawal when we actually looked.** An actor we couldn't
 //! reach keeps their records: treating unreachable as withdrawn would empty a count on a
@@ -59,8 +65,12 @@ pub struct EngagementContext {
 /// nothing" are different states and an instance that can't tell you which is not much use.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct EngagementOutcome {
-    /// Actors whose endorsements were read this pass.
+    /// Actors whose endorsements were read this pass — by download, or by confirming their
+    /// directory pointer hadn't moved.
     pub reached: usize,
+    /// Of those, the ones confirmed by pointer alone, with no download. The number this
+    /// loop most wants to be large: it is the whole graph in steady state.
+    pub skipped: usize,
     /// Actors in the graph we couldn't read. Their held records stay.
     pub unreachable: usize,
     /// Records newly held, or updated because their content moved.
@@ -167,21 +177,117 @@ fn graph_actors(settings: &SettingsView) -> BTreeSet<String> {
     actors
 }
 
-/// One actor's current endorsements, read from their published directory.
+/// What the crawl last read to completion for one actor.
 ///
-/// Errors mean "couldn't read", which is what keeps their held records alive. An actor who
-/// has published a directory with no endorsements returns an empty list — a real answer,
-/// and the one that withdraws.
-async fn fetch_endorsements(
-    ctx: &EngagementContext,
-    did: &str,
-) -> Result<Vec<Endorsement>, String> {
+/// Only ever written after a directory was downloaded AND parsed. Recording a pointer we
+/// merely SAW would skip that actor forever on the strength of a download that failed —
+/// the same "advance only on success" rule the settings mirror's fingerprint follows.
+#[derive(serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+struct CrawlMark {
+    url: String,
+    epoch: u32,
+}
+
+/// Bumped when what we EXTRACT from a directory changes — a new endorsement kind, a schema
+/// move, a fix to the parse.
+///
+/// An unchanged pointer proves the bytes are identical; it says nothing about whether our
+/// reading of them is still current. Without this, changing the parse would skip every
+/// actor indefinitely and the change would never take effect on anyone already crawled.
+const CRAWL_EPOCH: u32 = 1;
+
+/// Whether an actor's directory can be answered from the log instead of downloaded.
+///
+/// Named rather than inlined because skipping is the dangerous direction: a wrong "no"
+/// costs one download, a wrong "yes" means never reading that actor again. Both reasons to
+/// say no — no mark at all, and a mark from an older parse — are easy to lose in a `==`.
+fn may_skip(held: Option<&CrawlMark>, current: &CrawlMark) -> bool {
+    held == Some(current)
+}
+
+/// Where an actor's directory currently is, or an error meaning we couldn't find out.
+async fn resolve_directory_url(did: &str) -> Result<String, String> {
     let records = pin_pkarr::resolve(did).await?;
     let url = pin_pkarr::rejoin_txt(&records, crate::identity::DIR_PREFIX);
     if url.is_empty() {
         return Err(format!("{did}: no directory published"));
     }
-    let bytes = ctx.sia.download_item(&url).await?;
+    Ok(url)
+}
+
+/// The mark held for an actor, or None if we've never read them to completion.
+async fn read_crawl_mark(ctx: &EngagementContext, did: &str) -> Option<CrawlMark> {
+    let raw = read_record(
+        &ctx.doc,
+        &ctx.blobs,
+        ctx.author_id,
+        pin_derive::CRAWL_COLLECTION,
+        did,
+    )
+    .await
+    .ok()??;
+    serde_json::from_slice(&raw).ok()
+}
+
+/// Record that this actor's directory was read to completion at this pointer.
+///
+/// Skipped when it would write what is already there: every write to this doc is a change
+/// announced to every instance syncing it, and a pass that changed nothing should be silent.
+async fn write_crawl_mark(ctx: &EngagementContext, did: &str, mark: &CrawlMark) {
+    if read_crawl_mark(ctx, did).await.as_ref() == Some(mark) {
+        return;
+    }
+    let Ok(bytes) = serde_json::to_vec(mark) else {
+        return;
+    };
+    let _ = crate::write_record(
+        &ctx.doc,
+        ctx.author_id,
+        pin_derive::CRAWL_COLLECTION,
+        did,
+        bytes,
+    )
+    .await;
+}
+
+/// The endorsements this identity already holds from one actor, read back out of the log.
+///
+/// What a skipped download would have produced, and exactly equivalent to it: the log holds
+/// what we extracted from that same blob last time, and the blob is byte-identical. Only the
+/// subjects we publish are in there, so an actor's endorsements of OTHER people's posts —
+/// discarded on a real read anyway — simply don't appear.
+async fn held_endorsements(ctx: &EngagementContext, rkeys: &[String]) -> Vec<Endorsement> {
+    let mut out = Vec::new();
+    for rkey in rkeys {
+        let Ok(Some(raw)) = read_record(
+            &ctx.doc,
+            &ctx.blobs,
+            ctx.author_id,
+            pin_derive::ENGAGEMENT_LOG_COLLECTION,
+            rkey,
+        )
+        .await
+        else {
+            continue;
+        };
+        if let Ok(record) = serde_json::from_slice::<Endorsement>(&raw) {
+            out.push(record);
+        }
+    }
+    out
+}
+
+/// One actor's current endorsements, downloaded from their published directory.
+///
+/// Errors mean "couldn't read", which is what keeps their held records alive. An actor who
+/// has published a directory with no endorsements returns an empty list — a real answer,
+/// and the one that withdraws.
+async fn download_endorsements(
+    ctx: &EngagementContext,
+    did: &str,
+    url: &str,
+) -> Result<Vec<Endorsement>, String> {
+    let bytes = ctx.sia.download_item(url).await?;
     let doc: serde_json::Value =
         serde_json::from_slice(&bytes).map_err(|e| format!("{did}: directory: {e}"))?;
 
@@ -251,12 +357,55 @@ pub async fn engagement_once(
     reached.insert(own_did.to_string());
     let mut all = vec![(own_did.to_string(), own_endorsements(ctx).await)];
 
+    // Listed before the crawl rather than after, because an actor whose pointer hasn't
+    // moved is answered from here instead of over the network.
+    let held = crate::list_rkeys(
+        &ctx.doc,
+        ctx.author_id,
+        pin_derive::ENGAGEMENT_LOG_COLLECTION,
+    )
+    .await
+    .unwrap_or_default();
+    let mut held_by_actor: HashMap<&str, Vec<String>> = HashMap::new();
+    for rkey in &held {
+        if let Some((_, actor)) = pin_derive::parse_engagement_log_rkey(rkey) {
+            held_by_actor.entry(actor).or_default().push(rkey.clone());
+        }
+    }
+
     for did in graph_actors(&settings) {
         if did == own_did {
             continue;
         }
-        match fetch_endorsements(ctx, &did).await {
+        let url = match resolve_directory_url(&did).await {
+            Ok(url) => url,
+            Err(_) => {
+                outcome.unreachable += 1;
+                continue;
+            }
+        };
+
+        // An unchanged pointer means byte-identical bytes, so what we extracted last time
+        // IS what we would extract now. Answering from the log skips the download — the
+        // heavy half, and the flaky one, since it is the QUIC path.
+        let mark = CrawlMark {
+            url,
+            epoch: CRAWL_EPOCH,
+        };
+        if may_skip(read_crawl_mark(ctx, &did).await.as_ref(), &mark) {
+            let rkeys = held_by_actor.get(did.as_str()).cloned().unwrap_or_default();
+            let records = held_endorsements(ctx, &rkeys).await;
+            reached.insert(did.clone());
+            outcome.skipped += 1;
+            all.push((did, records));
+            continue;
+        }
+
+        match download_endorsements(ctx, &did, &mark.url).await {
             Ok(records) => {
+                // After the parse, never before: a mark written on a failed read would skip
+                // this actor forever with nothing in hand.
+                write_crawl_mark(ctx, &did, &mark).await;
                 reached.insert(did.clone());
                 all.push((did, records));
             }
@@ -285,16 +434,9 @@ pub async fn engagement_once(
         }
     }
 
-    // Reconcile the held log against what this pass saw.
+    // Reconcile the held log against what this pass saw. `held` was listed before the
+    // crawl, and nothing has written to that collection since.
     let mut touched: BTreeSet<String> = found.keys().map(|(subject, _)| subject.clone()).collect();
-    let held = crate::list_rkeys(
-        &ctx.doc,
-        ctx.author_id,
-        pin_derive::ENGAGEMENT_LOG_COLLECTION,
-    )
-    .await
-    .unwrap_or_default();
-
     let found_keys: BTreeSet<(String, String)> = found.keys().cloned().collect();
     for rkey in &held {
         let Some(subject) = withdrawal(rkey, &found_keys, &reached) else {
@@ -368,6 +510,11 @@ pub async fn engagement_once(
         // Stamped as retention-checked only when EVERY actor behind this subject was read
         // this pass. Otherwise the previous stamp is carried forward, so a stale check
         // reads as stale rather than being presented as fresh.
+        //
+        // An actor confirmed by pointer counts as read, and that is the point rather than a
+        // shortcut: byte-identical bytes are a STRONGER proof their endorsements still stand
+        // than downloading and re-parsing would be. So retention stops being the thing that
+        // makes a pass expensive.
         let all_reached = records.iter().all(|r| reached.contains(&r.actor));
         let retention = if all_reached {
             Some(now_iso.clone())
@@ -570,5 +717,43 @@ mod tests {
         )
         .unwrap();
         assert_eq!(graph_actors(&settings).len(), 1);
+    }
+
+    fn mark(url: &str, epoch: u32) -> CrawlMark {
+        CrawlMark {
+            url: url.to_string(),
+            epoch,
+        }
+    }
+
+    #[test]
+    fn an_actor_we_have_never_read_is_downloaded() {
+        // No mark means nothing in the log to answer from, so there is nothing to skip TO.
+        assert!(!may_skip(None, &mark("sia://a", CRAWL_EPOCH)));
+    }
+
+    #[test]
+    fn an_unchanged_pointer_is_answered_without_a_download() {
+        // The whole point: content-addressing makes an identical URL a proof of identical
+        // bytes, so last pass's extraction is this pass's answer.
+        let held = mark("sia://a", CRAWL_EPOCH);
+        assert!(may_skip(Some(&held), &mark("sia://a", CRAWL_EPOCH)));
+    }
+
+    #[test]
+    fn a_moved_pointer_is_downloaded_again() {
+        // A new URL is new bytes — an endorsement added, or withdrawn.
+        let held = mark("sia://a", CRAWL_EPOCH);
+        assert!(!may_skip(Some(&held), &mark("sia://b", CRAWL_EPOCH)));
+    }
+
+    #[test]
+    fn a_pointer_read_by_an_older_parse_is_downloaded_again() {
+        // The guard that keeps this from being a one-way door. An unchanged pointer proves
+        // the BYTES are the same; it says nothing about whether our reading of them is
+        // current. Drop the epoch and a new endorsement kind would never reach anyone
+        // already crawled — silently, since every pass would report a clean skip.
+        let held = mark("sia://a", CRAWL_EPOCH - 1);
+        assert!(!may_skip(Some(&held), &mark("sia://a", CRAWL_EPOCH)));
     }
 }

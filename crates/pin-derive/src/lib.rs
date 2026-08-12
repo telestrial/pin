@@ -286,6 +286,19 @@ pub fn parse_engagement_log_rkey(rkey: &str) -> Option<(&str, &str)> {
 /// delivers a new post.
 pub const ENGAGEMENT_COLLECTION: &str = "engagement";
 
+/// The collection recording, per actor, the directory pointer the crawl last read to
+/// completion. Keyed by that actor's `did:dht`.
+///
+/// Sia is content-addressed, so an unchanged share URL is not a hint that the content
+/// probably hasn't moved — it is proof that the bytes are identical. That makes the
+/// pointer an exact cache validator, and lets a pass confirm an actor's endorsements
+/// without downloading their directory again.
+///
+/// In the doc rather than in loop memory for two reasons: a restart would otherwise
+/// re-download the whole graph, and it syncs, so a second device inherits what the first
+/// already read instead of repeating it.
+pub const CRAWL_COLLECTION: &str = "crawl";
+
 /// The collection where each of this identity's live instances registers itself,
 /// keyed by its iroh node id.
 ///
@@ -490,6 +503,11 @@ mod tests {
         // The private log and the published tally are different collections — one is held,
         // the other is served to every subscriber.
         assert_ne!(ENGAGEMENT_LOG_COLLECTION, ENGAGEMENT_COLLECTION);
+        // And the crawl's cache is a third thing again: what we last READ, versus what we
+        // hold and what we publish. Sharing a name with either would make a prefix scan
+        // for one return the others.
+        assert_ne!(CRAWL_COLLECTION, ENGAGEMENT_LOG_COLLECTION);
+        assert_ne!(CRAWL_COLLECTION, ENGAGEMENT_COLLECTION);
     }
 
     #[test]
