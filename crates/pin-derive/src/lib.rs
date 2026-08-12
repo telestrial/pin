@@ -263,6 +263,20 @@ pub fn engagement_log_rkey(subject: &str, actor: &str) -> String {
     format!("{subject}:{actor}")
 }
 
+/// Split a held record's key back into its subject and actor.
+///
+/// At the FIRST separator, because an actor is a `did:dht:…` string and carries colons of
+/// its own while a subject is base32 and carries none. Here beside the builder so the two
+/// can't disagree — the crawl writes with one and decides what to withdraw with the other,
+/// and a mismatch would make it drop records it should keep.
+pub fn parse_engagement_log_rkey(rkey: &str) -> Option<(&str, &str)> {
+    let (subject, actor) = rkey.split_once(':')?;
+    if subject.is_empty() || actor.is_empty() {
+        return None;
+    }
+    Some((subject, actor))
+}
+
 /// The collection holding the published tally for each subject, in the CHANNEL's doc.
 ///
 /// There rather than here because that doc is the one subscribers already sync, and its
@@ -476,6 +490,21 @@ mod tests {
         // The private log and the published tally are different collections — one is held,
         // the other is served to every subscriber.
         assert_ne!(ENGAGEMENT_LOG_COLLECTION, ENGAGEMENT_COLLECTION);
+    }
+
+    #[test]
+    fn an_engagement_log_key_round_trips_an_actor_that_contains_colons() {
+        // The case that makes the split direction load-bearing: a did:dht actor carries
+        // colons, and splitting at the LAST one would cut the DID in half. The crawl
+        // decides what to withdraw from this, so getting it wrong drops live records.
+        let subject = "f4xlljzqxtqpv7ul6ngkyeafusdwqrirpmhochqyjz2hgz3djo6a";
+        let actor = "did:dht:iyypk375c71qwjem5isiramudutoogo1t9gogz8f587sfkt9db4o";
+        let rkey = engagement_log_rkey(subject, actor);
+        assert_eq!(parse_engagement_log_rkey(&rkey), Some((subject, actor)));
+        // And nonsense is rejected rather than half-read.
+        assert_eq!(parse_engagement_log_rkey("nocolon"), None);
+        assert_eq!(parse_engagement_log_rkey(":actor"), None);
+        assert_eq!(parse_engagement_log_rkey("subject:"), None);
     }
 
     #[test]

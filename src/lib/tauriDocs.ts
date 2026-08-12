@@ -206,6 +206,10 @@ export function startIdentityLoopNative(appKeyHex: string): Promise<void> {
   return call<void>('curator_start_identity', { appKeyHex })
 }
 
+export function startEngagementLoopNative(appKeyHex: string): Promise<void> {
+  return call<void>('curator_start_engagement', { appKeyHex })
+}
+
 export function openChannelNative(nsSeedHex: string): Promise<string> {
   return call<string>('docs_open_channel', { nsSeedHex })
 }

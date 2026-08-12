@@ -196,3 +196,34 @@ test('the channel live-sync loop runs a pass in the browser and reports it', asy
   )
   expect(JSON.parse(first)).toEqual({ error: 'no settings record yet' })
 })
+
+test('the engagement loop runs a pass in the browser and reports it', async ({
+  page,
+}) => {
+  const appKeyHex = Array.from(crypto.getRandomValues(new Uint8Array(32)))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('')
+
+  await harness(page)
+  await page.evaluate(
+    (hex) => window.__pinSync!.startEngagement(hex),
+    appKeyHex,
+  )
+
+  await expect
+    .poll(() => page.evaluate(() => window.__pinSync!.engagementPasses()), {
+      timeout: 60_000,
+      intervals: [250],
+    })
+    .not.toHaveLength(0)
+
+  // A real pass resolves the graph's did:dhts and downloads their directory blobs from
+  // Sia, which this tier has no credentials for. So the reachable proof is the same one
+  // the other reading loops give: it got to the doc, found no settings, and said so
+  // rather than hanging in a task with no executor — which is the failure a crate that
+  // merely COMPILES for wasm still has.
+  const [first] = await page.evaluate(() =>
+    window.__pinSync!.engagementPasses(),
+  )
+  expect(JSON.parse(first)).toEqual({ error: 'no settings record yet' })
+})

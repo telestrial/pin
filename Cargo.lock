@@ -4626,6 +4626,7 @@ dependencies = [
  "pin-channel",
  "pin-crypto",
  "pin-derive",
+ "pin-engagement",
  "pin-manifest",
  "pin-pkarr",
  "pin-sia",

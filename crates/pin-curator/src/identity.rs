@@ -39,7 +39,7 @@ use crate::{live_instances, read_record, read_settings, PublishedState, Settings
 pub const DIRECTORY_DOC_VERSION: u32 = 3;
 
 /// TXT prefixes in the published packet.
-const DIR_PREFIX: &str = "_dir";
+pub(crate) const DIR_PREFIX: &str = "_dir";
 const NS_PREFIX: &str = "_ns";
 const IROH_PREFIX: &str = "_iroh";
 

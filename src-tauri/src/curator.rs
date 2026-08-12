@@ -1066,6 +1066,66 @@ pub async fn curator_start_rendezvous(
     Ok(())
 }
 
+/// How often the engagement crawl runs.
+///
+/// Slower than the loops that keep this identity reachable, because it is reading OTHER
+/// people's directories: every pass costs a DHT resolve and a Sia download per actor in the
+/// graph, and a count being a few minutes behind is not a problem the way an expired
+/// locator is. It doubles as the retention check, which is the other reason it repeats at
+/// all rather than running once.
+const ENGAGEMENT_CADENCE: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
+/// Start the engagement loop — read what the graph has endorsed, hold what verifies, and
+/// publish a tally per subject into the channel that owns it.
+///
+/// Idempotent (the engine keeps one loop), so a remounting caller can just call it.
+#[tauri::command]
+pub async fn curator_start_engagement(
+    curator: tauri::State<'_, CuratorState>,
+    sia: tauri::State<'_, crate::sia::SiaState>,
+    app_key_hex: String,
+) -> Result<(), String> {
+    let engine = current_engine(&curator)?;
+    if engine.engagement_started() {
+        return Ok(());
+    }
+    let app_key = pin_derive::decode_app_key(&app_key_hex).ok_or("app key hex must be 32 bytes")?;
+    // This identity's own did:dht, so the loop can include its own endorsements without
+    // resolving itself over the network — a published copy lags local edits, and an author
+    // is pin #1 on their own post, so leaving them out would make a fresh post read zero.
+    let own_did = crate::identity::did_dht(&crate::identity::derive_identity(&app_key)?);
+    let ctx = pin_curator::EngagementContext {
+        doc: engine.doc.clone(),
+        blobs: (*engine.blobs).clone(),
+        author_id: engine.author_id,
+        docs: engine.docs.api().clone(),
+        sia: sia.session(),
+        app_key,
+    };
+    let loop_handle = sia.detach(async move {
+        pin_curator::run_engagement_loop(ctx, own_did, ENGAGEMENT_CADENCE, now_iso, |result| {
+            match result {
+                Ok(o) => {
+                    // Quiet when a pass found nothing new. Reported when anything moved, or
+                    // when something was unreachable or rejected — both of which say
+                    // something about the count's honesty.
+                    if o.added > 0 || o.withdrawn > 0 || o.unreachable > 0 || o.rejected > 0 {
+                        println!(
+                            "curator engagement: reached {} unreachable {} added {} withdrawn {} tallies {} cleared {} rejected {} not-ours {}",
+                            o.reached, o.unreachable, o.added, o.withdrawn, o.tallies, o.cleared,
+                            o.rejected, o.not_ours
+                        );
+                    }
+                }
+                Err(e) => println!("curator engagement: {e}"),
+            }
+        })
+        .await
+    });
+    curator.0.lock().unwrap().loops.push(loop_handle);
+    Ok(())
+}
+
 /// How often the identity's coordinates are republished. Same reasoning as the locator
 /// keep-alive: a pkarr record ages off Mainline in a couple of hours, and an identity
 /// nobody republishes stops resolving.

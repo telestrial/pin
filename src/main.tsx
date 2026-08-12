@@ -64,6 +64,8 @@ if (import.meta.env.DEV || inTauri()) {
       instancePasses: () => string[]
       startIdentity: (hex: string) => Promise<string>
       identityPasses: () => string[]
+      startEngagement: (hex: string) => Promise<string>
+      engagementPasses: () => string[]
       startChannelDocs: (hex: string) => Promise<string>
       channelDocPasses: () => string[]
       startChannelSync: (hex: string) => Promise<string>
@@ -441,6 +443,7 @@ if (import.meta.env.DEV || inTauri()) {
     const channelSyncPasses: string[] = []
     const instancePasses: string[] = []
     const identityPasses: string[] = []
+    const engagementPasses: string[] = []
     const rendezvousPasses: string[] = []
     const docs = () => import('./lib/docs')
     g.__pinSync = {
@@ -565,6 +568,17 @@ if (import.meta.env.DEV || inTauri()) {
         return 'started'
       },
       identityPasses: () => identityPasses.slice(),
+      // And the engagement crawl. Reads the identity's settings first to learn what it
+      // publishes, so an empty doc stops it there — which is the proof available without
+      // credentials, since a real pass downloads other people's directories from Sia.
+      startEngagement: async (hex) => {
+        await (await docs()).openDocs(hex)
+        await (await docs()).startEngagementLoop(hex, (report) => {
+          engagementPasses.push(report)
+        })
+        return 'started'
+      },
+      engagementPasses: () => engagementPasses.slice(),
     }
   }
 }

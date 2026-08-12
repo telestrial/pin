@@ -55,6 +55,7 @@ use pin_derive::{record_key, settings_key};
 
 mod channeldoc;
 mod channelsync;
+mod engagement;
 mod identity;
 mod instance;
 mod keepalive;
@@ -65,6 +66,7 @@ pub use channeldoc::{
     channel_docs_once, run_channel_doc_loop, ChannelDocContext, ChannelDocOutcome,
 };
 pub use channelsync::{run_channel_sync_loop, ChannelSyncContext, ChannelSyncOutcome};
+pub use engagement::{engagement_once, run_engagement_loop, EngagementContext, EngagementOutcome};
 pub use identity::{
     publish_identity_once, run_identity_loop, IdentityContext, IdentityOutcome,
     DIRECTORY_DOC_VERSION,
@@ -137,7 +139,7 @@ pub struct PullOutcome {
 #[derive(serde::Deserialize)]
 pub(crate) struct SettingsView {
     #[serde(default)]
-    subscriptions: Vec<SubscriptionView>,
+    pub(crate) subscriptions: Vec<SubscriptionView>,
     #[serde(default, rename = "myChannels")]
     pub(crate) my_channels: Vec<OwnedChannelView>,
     /// Copied into the published directory untouched — the Curator publishes a
@@ -153,11 +155,15 @@ pub(crate) struct SettingsView {
 }
 
 #[derive(serde::Deserialize)]
-struct SubscriptionView {
+pub(crate) struct SubscriptionView {
     #[serde(rename = "channelID")]
     channel_id: String,
     #[serde(rename = "channelKey")]
     channel_key: String,
+    /// The author's did:dht. Absent on a subscription made from a legacy handle URL, which
+    /// simply means the crawl has no identity to read their endorsements from.
+    #[serde(default, rename = "didDht")]
+    pub(crate) did_dht: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -269,6 +275,19 @@ pub(crate) async fn write_record(
         .await
         .map(|_| ())
         .map_err(|e| format!("put {collection}/{rkey}: {e}"))
+}
+
+/// Remove a record from this identity's doc.
+pub(crate) async fn delete_record(
+    doc: &Doc,
+    author_id: AuthorId,
+    collection: &str,
+    rkey: &str,
+) -> Result<(), String> {
+    doc.del(author_id, record_key(collection, rkey))
+        .await
+        .map(|_| ())
+        .map_err(|e| format!("del {collection}/{rkey}: {e}"))
 }
 
 /// The rkeys present in one collection.

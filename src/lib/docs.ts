@@ -31,6 +31,7 @@ import {
   share_channel_doc,
   start_channel_doc_loop,
   start_channel_sync_loop,
+  start_engagement_loop,
   start_identity_loop,
   start_instance_loop,
   start_keep_alive_loop,
@@ -60,6 +61,7 @@ import {
   shareDocNative,
   startChannelDocLoopNative,
   startChannelSyncLoopNative,
+  startEngagementLoopNative,
   startIdentityLoopNative,
   startInstanceLoopNative,
   startKeepAliveLoopNative,
@@ -542,6 +544,35 @@ export async function startIdentityLoop(
     appKeyHex,
     namespaceId,
     IDENTITY_CADENCE_SECS,
+    (report: string) => onPass?.(report),
+  )
+}
+
+/** How often the engagement crawl runs.
+ *
+ *  Slower than the loops that keep this identity reachable, because it reads OTHER people's
+ *  directories: a DHT resolve and a Sia download per actor in the graph, every pass. A count
+ *  a few minutes behind is not the problem an expired locator is. It doubles as the
+ *  retention check, which is why it repeats at all rather than running once. */
+const ENGAGEMENT_CADENCE_SECS = 10 * 60
+
+/** Start the engagement loop — read what the graph has endorsed, hold what verifies, and
+ *  publish a tally per subject into the channel that owns it.
+ *
+ *  The same loop on both platforms. A tab reaches the network exactly as well while it is
+ *  open, so nothing about crawling differs by device; what differs is how long it stays open
+ *  to keep doing it.
+ *
+ *  Idempotent (each engine keeps one loop). Requires an open doc ({@link openDocs}). */
+export async function startEngagementLoop(
+  appKeyHex: string,
+  onPass?: (report: string) => void,
+): Promise<void> {
+  if (inTauri()) return startEngagementLoopNative(appKeyHex)
+  await ensureWasm()
+  await start_engagement_loop(
+    appKeyHex,
+    ENGAGEMENT_CADENCE_SECS,
     (report: string) => onPass?.(report),
   )
 }

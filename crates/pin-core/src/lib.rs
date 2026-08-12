@@ -85,6 +85,8 @@ struct Engine {
     snapshot_running: Cell<bool>,
     /// Instance rendezvous loop guard (see `start_rendezvous_loop`).
     rendezvous_running: Cell<bool>,
+    /// Same, for the engagement crawl/fold loop.
+    engagement_running: Cell<bool>,
     _gossip: Gossip,
     docs: Docs,
     _router: Router,
@@ -165,6 +167,7 @@ pub async fn open(app_key_hex: String) -> Result<String, JsValue> {
         channel_sync_running: Cell::new(false),
         snapshot_running: Cell::new(false),
         rendezvous_running: Cell::new(false),
+        engagement_running: Cell::new(false),
         _gossip: gossip,
         docs,
         _router: router,
@@ -654,6 +657,67 @@ pub async fn start_rendezvous_loop(
                         "reached": o.reached,
                         "syncing": o.syncing,
                         "unreachable": o.unreachable,
+                    })
+                    .to_string(),
+                    Err(e) => serde_json::json!({ "error": e }).to_string(),
+                };
+                let _ = on_pass.call1(&JsValue::NULL, &JsValue::from_str(&report));
+            },
+        )
+        .await
+    });
+    Ok(())
+}
+
+/// Start the engagement loop in this tab — read what the graph endorsed, hold what
+/// verifies, publish a tally per subject.
+///
+/// The same loop a desktop runs, from the same crate. A tab reaches the network exactly as
+/// well while it is open, so there is nothing about crawling that differs by device; what
+/// differs is only how long it stays open to keep doing it.
+#[wasm_bindgen]
+pub async fn start_engagement_loop(
+    app_key_hex: String,
+    cadence_secs: u32,
+    on_pass: js_sys::Function,
+) -> Result<(), JsValue> {
+    let eng = engine()?;
+    if eng.engagement_running.replace(true) {
+        return Ok(());
+    }
+    let app_key = decode_app_key(&app_key_hex)
+        .ok_or_else(|| JsValue::from_str("app key hex must be 32 bytes (64 hex chars)"))?;
+    let own_did = format!(
+        "did:dht:{}",
+        pin_pkarr::public_key_from_seed(&pin_derive::did_dht_seed(&app_key))
+            .map_err(|e| JsValue::from_str(&e))?
+    );
+    let ctx = pin_curator::EngagementContext {
+        doc: eng.doc.clone(),
+        blobs: (*eng.blobs).clone(),
+        author_id: eng.author_id,
+        docs: eng.docs.api().clone(),
+        sia: sia(),
+        app_key,
+    };
+    wasm_bindgen_futures::spawn_local(async move {
+        pin_curator::run_engagement_loop(
+            ctx,
+            own_did,
+            std::time::Duration::from_secs(cadence_secs as u64),
+            // From JS: neither SystemTime nor a date formatter is available on this target.
+            || js_sys::Date::new_0().to_iso_string().into(),
+            |result| {
+                let report = match &result {
+                    Ok(o) => serde_json::json!({
+                        "reached": o.reached,
+                        "unreachable": o.unreachable,
+                        "added": o.added,
+                        "withdrawn": o.withdrawn,
+                        "tallies": o.tallies,
+                        "cleared": o.cleared,
+                        "rejected": o.rejected,
+                        "notOurs": o.not_ours,
                     })
                     .to_string(),
                     Err(e) => serde_json::json!({ "error": e }).to_string(),

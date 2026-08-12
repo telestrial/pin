@@ -31,6 +31,10 @@ pin-derive = { path = "../pin-derive" }
 # Opening the settings blob to read the subscription list, and decoding the channel
 # keys it holds — the same encoding the frontend writes them in.
 pin-crypto = { path = "../pin-crypto" }
+# The engagement record, its verification, and the fold that turns a set into a tally.
+# Shared because an author verifies records a stranger's instance wrote: the signed byte
+# layout is a contract with the whole network, not just with the other half of this repo.
+pin-engagement = { path = "../pin-engagement" }
 pin-pkarr = { path = "../pin-pkarr" }
 # The session a resolve needs; passed in already connected.
 pin-sia = { path = "../pin-sia" }

@@ -110,6 +110,8 @@ pub struct DocEngine {
     snapshot_started: AtomicBool,
     /// Instance rendezvous loop guard (see `curator_start_rendezvous`).
     rendezvous_started: AtomicBool,
+    /// Engagement crawl/fold loop guard (see `curator_start_engagement`).
+    engagement_started: AtomicBool,
 }
 
 /// Bring up (or reopen) the Curator's persistent iroh-docs engine on `endpoint`,
@@ -192,6 +194,7 @@ pub async fn open_or_create(
         channel_sync_started: AtomicBool::new(false),
         snapshot_started: AtomicBool::new(false),
         rendezvous_started: AtomicBool::new(false),
+        engagement_started: AtomicBool::new(false),
     })
 }
 
@@ -406,6 +409,11 @@ impl DocEngine {
     /// Whether the identity-publishing loop was already running; marks it started.
     pub fn identity_started(&self) -> bool {
         self.identity_started.swap(true, Ordering::SeqCst)
+    }
+
+    /// Whether the engagement loop was already running; marks it started.
+    pub fn engagement_started(&self) -> bool {
+        self.engagement_started.swap(true, Ordering::SeqCst)
     }
 
     /// The namespace ids of every channel doc currently open.

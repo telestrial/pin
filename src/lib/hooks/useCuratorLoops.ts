@@ -4,6 +4,7 @@ import {
   openDocs,
   startChannelDocLoop,
   startChannelSyncLoop,
+  startEngagementLoop,
   startIdentityLoop,
   startInstanceLoop,
   startKeepAliveLoop,
@@ -41,6 +42,10 @@ import {
 //     the directory pointer, the doc namespace, and every live endpoint. This was two
 //     writers until now — the Curator at startup and a React effect seconds later,
 //     each publishing a whole packet over the other's half.
+//   engagement — read what the graph has endorsed, verify it, hold it, and publish a
+//     tally per subject. The author's half of engagement, and why there is no AppView:
+//     nobody writes into anyone else's repo, so the person whose surface it is assembles
+//     the count themselves. Doubles as the retention check.
 //
 // Started independently: one loop failing to start must not keep the other off.
 
@@ -67,6 +72,7 @@ export function useCuratorLoops() {
         startRepackLoop(appKeyHex),
         startInstanceLoop(),
         startIdentityLoop(appKeyHex, namespaceId),
+        startEngagementLoop(appKeyHex),
       ])
     })()
 

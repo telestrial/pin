@@ -527,6 +527,16 @@ export function start_channel_doc_loop(app_key_hex: string, cadence_secs: number
 export function start_channel_sync_loop(app_key_hex: string, cadence_secs: number, retry_secs: number, on_pass: Function): Promise<void>;
 
 /**
+ * Start the engagement loop in this tab — read what the graph endorsed, hold what
+ * verifies, publish a tally per subject.
+ *
+ * The same loop a desktop runs, from the same crate. A tab reaches the network exactly as
+ * well while it is open, so there is nothing about crawling that differs by device; what
+ * differs is only how long it stays open to keep doing it.
+ */
+export function start_engagement_loop(app_key_hex: string, cadence_secs: number, on_pass: Function): Promise<void>;
+
+/**
  * Start the identity-publishing loop in this tab — one packet under the did:dht key
  * carrying the directory pointer, the doc namespace, and every live endpoint.
  *
@@ -753,6 +763,7 @@ export interface InitOutput {
     readonly sign_endorsement: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number) => [number, number, number, number];
     readonly start_channel_doc_loop: (a: number, b: number, c: number, d: any) => any;
     readonly start_channel_sync_loop: (a: number, b: number, c: number, d: number, e: any) => any;
+    readonly start_engagement_loop: (a: number, b: number, c: number, d: any) => any;
     readonly start_identity_loop: (a: number, b: number, c: number, d: number, e: number, f: any) => any;
     readonly start_instance_loop: (a: number, b: any) => any;
     readonly start_keep_alive_loop: (a: number, b: number, c: number, d: any) => any;
