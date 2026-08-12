@@ -299,6 +299,16 @@ pub const ENGAGEMENT_COLLECTION: &str = "engagement";
 /// already read instead of repeating it.
 pub const CRAWL_COLLECTION: &str = "crawl";
 
+/// The collection recording, per subscribed channel, the manifest pointer the pull loop
+/// last cached AND the cached record it produced. Keyed by channel id.
+///
+/// Both halves, unlike the crawl's mark. The crawl's log has one writer, so an unchanged
+/// pointer settles it; a cached manifest has three — this loop, the live-sync rung, and a
+/// peer instance's copy of the same record — so the pointer says the SOURCE hasn't moved
+/// and the cached hash says nothing has overwritten the result. Skipping on the pointer
+/// alone would leave a clobbered cache stale until the author happened to republish.
+pub const PULL_COLLECTION: &str = "pull";
+
 /// The collection where each of this identity's live instances registers itself,
 /// keyed by its iroh node id.
 ///

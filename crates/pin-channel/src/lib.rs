@@ -97,6 +97,19 @@ pub async fn resolve(
     sia: &pin_sia::Session,
     channel_key: &[u8; 32],
 ) -> Result<Option<Resolved>, String> {
+    let Some(item_url) = resolve_url(channel_key).await? else {
+        return Ok(None);
+    };
+    fetch(sia, channel_key, &item_url).await.map(Some)
+}
+
+/// Where a channel's manifest currently is, without fetching it.
+///
+/// Split out because the URL is a content address, so a caller holding the one it last
+/// fetched can tell from this alone that nothing has moved — and skip the download, which
+/// is the heavy half and the flaky one. `resolve` is the two composed, for callers with
+/// nothing to compare against.
+pub async fn resolve_url(channel_key: &[u8; 32]) -> Result<Option<String>, String> {
     let seed = pin_derive::channel_locator_seed(channel_key);
     let locator_key = pin_pkarr::public_key_from_seed(&seed)?;
     let records = pin_pkarr::resolve(&locator_key).await?;
@@ -105,13 +118,21 @@ pub async fn resolve(
     if item_url.is_empty() {
         return Ok(None);
     }
+    Ok(Some(item_url))
+}
 
-    let ciphertext = sia.download_item(&item_url).await?;
+/// Download and open the manifest at a URL already resolved for this channel.
+pub async fn fetch(
+    sia: &pin_sia::Session,
+    channel_key: &[u8; 32],
+    item_url: &str,
+) -> Result<Resolved, String> {
+    let ciphertext = sia.download_item(item_url).await?;
     let blob = String::from_utf8(ciphertext).map_err(|_| "manifest blob is not UTF-8")?;
-    Ok(Some(Resolved {
+    Ok(Resolved {
         manifest_json: open_blob(channel_key, &blob)?,
         blob,
-    }))
+    })
 }
 
 /// Open a sealed manifest blob with K, returning its JSON.

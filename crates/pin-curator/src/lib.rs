@@ -42,6 +42,12 @@
 // (see `is_older_than_cached`); it holds `K` for these channels anyway, and moving a
 // channel backwards is the failure this exists to prevent.
 //
+// Most passes download nothing. A manifest's pointer is a Sia URL, so it is a content
+// address: unchanged means the bytes behind it are the ones already cached. A pass
+// resolves the pointer, and fetches only when either it or the cached record has moved
+// (see `may_skip_pull`) — so the steady-state cost of watching a channel is one DHT
+// resolve, and the Sia read happens when there is actually something new to read.
+//
 // It does NOT touch the feed. A pass announces itself by writing a record, and the
 // doc's change feed carries that to whatever is rendering; the loop has no opinion
 // about whether anything is.
@@ -129,6 +135,81 @@ pub struct PullOutcome {
     /// Channels whose resolve came back OLDER than what's already cached, so the
     /// write was skipped. Expected on a browser, whose relay transport lags the DHT.
     pub stale: usize,
+    /// Channels left alone because neither the pointer nor the cached record had moved
+    /// since the last pass — so no download at all. The steady state.
+    pub skipped: usize,
+}
+
+/// What the pull loop last cached for one channel: where it came from, and what it wrote.
+///
+/// Both, because a cached manifest has three writers — this loop, the live-sync rung, and
+/// a peer instance syncing the same record. The pointer says the source hasn't moved; the
+/// cached hash says nothing has since overwritten the result. Either alone would let a
+/// clobbered cache sit stale until the author next published.
+#[derive(serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+struct PullMark {
+    url: String,
+    cached: String,
+}
+
+/// Whether a channel can be left alone without downloading its manifest.
+///
+/// Named rather than inlined for the same reason the crawl's is: a wrong "no" costs one
+/// download, a wrong "yes" leaves a subscriber reading a stale channel indefinitely.
+fn may_skip_pull(held: Option<&PullMark>, current: &PullMark) -> bool {
+    held == Some(current)
+}
+
+/// The mark held for a channel, or None if this loop has never cached it.
+async fn read_pull_mark(ctx: &PullContext, channel_id: &str) -> Option<PullMark> {
+    let raw = read_record(
+        &ctx.doc,
+        &ctx.blobs,
+        ctx.author_id,
+        pin_derive::PULL_COLLECTION,
+        channel_id,
+    )
+    .await
+    .ok()??;
+    serde_json::from_slice(&raw).ok()
+}
+
+/// Record what this pass cached for a channel, unless it would write what's already there.
+///
+/// Best-effort: losing a mark costs one download next pass, which is the state this loop
+/// was in before marks existed.
+async fn write_pull_mark(ctx: &PullContext, channel_id: &str, mark: &PullMark) {
+    if read_pull_mark(ctx, channel_id).await.as_ref() == Some(mark) {
+        return;
+    }
+    let Ok(bytes) = serde_json::to_vec(mark) else {
+        return;
+    };
+    let _ = write_record(
+        &ctx.doc,
+        ctx.author_id,
+        pin_derive::PULL_COLLECTION,
+        channel_id,
+        bytes,
+    )
+    .await;
+}
+
+/// The content hash of a record, without fetching its bytes.
+///
+/// Entry metadata only — enough to tell whether a cached blob is still the one we put
+/// there, which is all the skip needs.
+async fn record_content_hash(
+    doc: &Doc,
+    author_id: AuthorId,
+    collection: &str,
+    rkey: &str,
+) -> Option<String> {
+    let entry = doc
+        .get_exact(author_id, record_key(collection, rkey), false)
+        .await
+        .ok()??;
+    Some(entry.content_hash().to_string())
 }
 
 /// The subscription list, as much of it as a pass needs.
@@ -421,8 +502,36 @@ pub async fn pull_once(ctx: &PullContext) -> Result<PullOutcome, String> {
             // make the next pass retry something that cannot succeed.
             continue;
         };
-        match pin_channel::resolve(&ctx.sia, &k).await {
-            Ok(Some(resolved)) => {
+        let item_url = match pin_channel::resolve_url(&k).await {
+            Ok(Some(url)) => url,
+            Ok(None) => {
+                outcome.unresolved += 1;
+                continue;
+            }
+            Err(_) => {
+                outcome.failed += 1;
+                continue;
+            }
+        };
+
+        // Sia is content-addressed, so an unchanged pointer means byte-identical bytes:
+        // downloading would reproduce exactly what is already cached. Confirmed against
+        // the cache too, because this record has other writers.
+        let cached_hash =
+            record_content_hash(&ctx.doc, ctx.author_id, SUB_COLLECTION, channel_id).await;
+        let mark = PullMark {
+            url: item_url,
+            cached: cached_hash.unwrap_or_default(),
+        };
+        if !mark.cached.is_empty()
+            && may_skip_pull(read_pull_mark(ctx, channel_id).await.as_ref(), &mark)
+        {
+            outcome.skipped += 1;
+            continue;
+        }
+
+        match pin_channel::fetch(&ctx.sia, &k, &mark.url).await {
+            Ok(resolved) => {
                 // What's already cached may be NEWER than what we just resolved. A
                 // browser resolves through pkarr relays that lag minutes behind the
                 // DHT a desktop reads directly, so a tab syncing with a desktop
@@ -452,11 +561,30 @@ pub async fn pull_once(ctx: &PullContext) -> Result<PullOutcome, String> {
                     )
                     .await
                 {
-                    Ok(_) => outcome.cached += 1,
+                    Ok(_) => {
+                        outcome.cached += 1;
+                        // After the write, never before: a mark recorded on a cache that
+                        // didn't land would skip this channel until the author republished.
+                        // Re-read rather than reusing the hash from above, because what we
+                        // just wrote is what a later pass has to match.
+                        if let Some(cached) =
+                            record_content_hash(&ctx.doc, ctx.author_id, SUB_COLLECTION, channel_id)
+                                .await
+                        {
+                            write_pull_mark(
+                                ctx,
+                                channel_id,
+                                &PullMark {
+                                    url: mark.url,
+                                    cached,
+                                },
+                            )
+                            .await;
+                        }
+                    }
                     Err(_) => outcome.failed += 1,
                 }
             }
-            Ok(None) => outcome.unresolved += 1,
             Err(_) => outcome.failed += 1,
         }
     }
@@ -644,4 +772,40 @@ mod tests {
 
     // Channel-key decoding is pin-crypto's now, and tested there — one home for the
     // encoding both the frontend and this loop have to agree on.
+
+    fn pull_mark(url: &str, cached: &str) -> PullMark {
+        PullMark {
+            url: url.to_string(),
+            cached: cached.to_string(),
+        }
+    }
+
+    #[test]
+    fn a_channel_never_pulled_is_downloaded() {
+        assert!(!may_skip_pull(None, &pull_mark("sia://a", "h1")));
+    }
+
+    #[test]
+    fn an_unchanged_pointer_over_an_untouched_cache_is_left_alone() {
+        // The steady state, and the whole saving: the pointer proves the bytes behind it
+        // are the ones already cached, so the download would reproduce the cache exactly.
+        let held = pull_mark("sia://a", "h1");
+        assert!(may_skip_pull(Some(&held), &pull_mark("sia://a", "h1")));
+    }
+
+    #[test]
+    fn a_moved_pointer_is_downloaded_again() {
+        let held = pull_mark("sia://a", "h1");
+        assert!(!may_skip_pull(Some(&held), &pull_mark("sia://b", "h1")));
+    }
+
+    #[test]
+    fn a_cache_something_else_overwrote_is_downloaded_again() {
+        // The term the crawl's mark doesn't need. This record has three writers — this
+        // loop, the live-sync rung, and a peer instance's copy — so an unchanged pointer
+        // only says the SOURCE is unmoved. Skip on that alone and a cache clobbered by
+        // anything else stays wrong until the author happens to publish again.
+        let held = pull_mark("sia://a", "h1");
+        assert!(!may_skip_pull(Some(&held), &pull_mark("sia://a", "h2")));
+    }
 }
