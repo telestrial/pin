@@ -28,8 +28,7 @@ use iroh_blobs::api::Store;
 use iroh_docs::{api::Doc, store::Query, AuthorId};
 use n0_future::StreamExt as _;
 use pin_derive::{
-    published_channel_rkey, RecordKey, PUBLISHED_COLLECTION, PUBLISHED_SETTINGS_RKEY,
-    SETTINGS_POINTER_PREFIX,
+    published_channel_rkey, RecordKey, PUBLISHED_SETTINGS_RKEY, SETTINGS_POINTER_PREFIX,
 };
 
 use crate::{read_record, write_published, PublishedState};
@@ -89,7 +88,9 @@ pub async fn snapshot_once(ctx: &SnapshotContext) -> Result<SnapshotOutcome, Str
     let fingerprint = pin_crypto::content_hash(json.as_bytes());
 
     let rkey = published_channel_rkey(PUBLISHED_SETTINGS_RKEY);
-    let previous = read_published(ctx, &rkey).await;
+    let published_key = pin_derive::published_key(&ctx.app_key);
+    let previous =
+        crate::read_published(&ctx.doc, &ctx.blobs, ctx.author_id, &published_key, &rkey).await;
     if already_mirrored(
         previous.as_ref().and_then(|p| p.fp.as_deref()),
         &fingerprint,
@@ -116,7 +117,7 @@ pub async fn snapshot_once(ctx: &SnapshotContext) -> Result<SnapshotOutcome, Str
     write_published(
         &ctx.doc,
         ctx.author_id,
-        &pin_derive::published_key(&ctx.app_key),
+        &published_key,
         &rkey,
         &PublishedState {
             id: uploaded.id.clone(),
@@ -200,24 +201,6 @@ async fn read_all(ctx: &SnapshotContext) -> Result<Vec<SnapshotEntry>, String> {
         });
     }
     Ok(entries)
-}
-
-/// The publish state for the snapshot pointer, or `None` when there isn't one yet.
-async fn read_published(ctx: &SnapshotContext, rkey: &str) -> Option<PublishedState> {
-    let raw = read_record(
-        &ctx.doc,
-        &ctx.blobs,
-        ctx.author_id,
-        PUBLISHED_COLLECTION,
-        rkey,
-    )
-    .await
-    .ok()
-    .flatten()?;
-    let blob = String::from_utf8(raw).ok()?;
-    let key = pin_derive::published_key(&ctx.app_key);
-    let json = pin_crypto::decrypt(&key, &blob).ok()?;
-    serde_json::from_slice(&json).ok()
 }
 
 /// Snapshot when the doc moves, and on a cadence regardless — forever.

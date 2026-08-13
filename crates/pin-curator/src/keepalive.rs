@@ -31,11 +31,9 @@ use std::time::Duration;
 
 use iroh_blobs::api::Store;
 use iroh_docs::{api::Doc, AuthorId};
-use pin_derive::{
-    published_channel_rkey, PUBLISHED_COLLECTION, PUBLISHED_SETTINGS_RKEY, SETTINGS_POINTER_PREFIX,
-};
+use pin_derive::{published_channel_rkey, PUBLISHED_SETTINGS_RKEY, SETTINGS_POINTER_PREFIX};
 
-use crate::{read_record, read_settings};
+use crate::read_settings;
 
 /// Everything a pass needs, gathered by whichever engine is running it.
 pub struct KeepAliveContext {
@@ -74,18 +72,6 @@ pub enum SettingsLocator {
     Unknown,
     Refreshed,
     Failed,
-}
-
-/// One channel's publish state, as the frontend writes it.
-///
-/// Field names are asserted rather than derived: `rename_all = "camelCase"` gets
-/// acronyms wrong, and this repo has already shipped a descriptor whose URL arrived
-/// under a name nothing read. A mismatch here wouldn't error — the record would simply
-/// never be found, and the locator would age off in silence.
-#[derive(serde::Deserialize)]
-struct PublishedView {
-    #[serde(default)]
-    url: Option<String>,
 }
 
 /// One pass: republish the current pointer for every owned channel we know one for.
@@ -128,28 +114,17 @@ pub async fn keep_alive_once(ctx: &KeepAliveContext) -> Result<KeepAliveOutcome,
     Ok(outcome)
 }
 
-/// The Sia URL this channel's locator currently names, or `None` when we don't know —
-/// no record, or one we can't open. Not knowing is survivable (skip this channel);
-/// guessing would not be.
+/// The Sia URL a pointer currently names, or `None` when we don't know — no record, or
+/// one we can't open. Not knowing is survivable (skip this pointer); guessing would not
+/// be.
 async fn read_published_url(
     ctx: &KeepAliveContext,
     published_key: &[u8; 32],
     rkey: &str,
 ) -> Option<String> {
-    let raw = read_record(
-        &ctx.doc,
-        &ctx.blobs,
-        ctx.author_id,
-        PUBLISHED_COLLECTION,
-        rkey,
-    )
-    .await
-    .ok()
-    .flatten()?;
-    let blob = String::from_utf8(raw).ok()?;
-    let json = pin_crypto::decrypt(published_key, &blob).ok()?;
-    let view: PublishedView = serde_json::from_slice(&json).ok()?;
-    view.url
+    crate::read_published(&ctx.doc, &ctx.blobs, ctx.author_id, published_key, rkey)
+        .await
+        .and_then(|p| p.url)
 }
 
 /// Pass, wait, repeat — forever. Returned rather than spawned, for the same reason the
@@ -167,24 +142,5 @@ pub async fn run_keep_alive_loop(
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn publish_state_decodes_what_the_frontend_writes() {
-        // Verbatim from `lib/publishState.ts`'s `PublishedObject`. If this stops
-        // matching, the loop finds no pointer and republishes nothing — silently.
-        let written = r#"{"id":"obj-2","url":"sia://obj-2#encryption_key=k","olderId":"obj-1"}"#;
-        let view: PublishedView = serde_json::from_str(written).unwrap();
-        assert_eq!(view.url.as_deref(), Some("sia://obj-2#encryption_key=k"));
-    }
-
-    #[test]
-    fn a_record_without_a_url_is_not_a_pointer() {
-        // `url` is optional on the frontend's type, and a record without one names
-        // nothing to republish — the channel counts as unknown, not as a failure.
-        let view: PublishedView = serde_json::from_str(r#"{"id":"obj-1"}"#).unwrap();
-        assert!(view.url.is_none());
-    }
-}
+// The publish-state record's contract with the frontend is tested beside the type it
+// decodes into, in lib.rs.

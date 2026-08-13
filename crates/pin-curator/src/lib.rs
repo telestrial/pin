@@ -317,6 +317,44 @@ pub(crate) async fn write_published(
         .await;
 }
 
+/// What was last published under `rkey`, or `None` when there's no record, or one this
+/// identity can't open.
+///
+/// Not knowing is survivable at every call site — skip the channel, skip the reclaim,
+/// mirror again — so this reports absence rather than an error. Guessing would not be
+/// survivable: a wrong object id here is a reclaim of bytes something still points at.
+///
+/// One reader for all of them. Three loops read these records and the frontend writes
+/// the per-channel ones, so a second view of the same shape is the drift this crate
+/// exists to prevent — and its failure would be silent, since a field read under the
+/// wrong name simply comes back absent.
+///
+/// Note `id` is the one field with no default, so a record missing it reads as absent
+/// rather than as a partial answer. Both writers always emit it — it's required on the
+/// frontend's `PublishedObject` too — and a record naming no object has nothing to
+/// keep alive and nothing to reclaim, so refusing it is the honest reading.
+pub(crate) async fn read_published(
+    doc: &Doc,
+    blobs: &Store,
+    author_id: AuthorId,
+    published_key: &[u8; 32],
+    rkey: &str,
+) -> Option<PublishedState> {
+    let raw = read_record(
+        doc,
+        blobs,
+        author_id,
+        pin_derive::PUBLISHED_COLLECTION,
+        rkey,
+    )
+    .await
+    .ok()
+    .flatten()?;
+    let blob = String::from_utf8(raw).ok()?;
+    let json = pin_crypto::decrypt(published_key, &blob).ok()?;
+    serde_json::from_slice(&json).ok()
+}
+
 /// Read a record's bytes out of the doc, or `None` when it isn't there.
 ///
 /// Takes the pieces rather than a context so every loop in this crate can use it —
@@ -676,6 +714,47 @@ mod tests {
         pin_crypto::encrypt(k, published(iso).as_bytes())
             .unwrap()
             .into_bytes()
+    }
+
+    #[test]
+    fn publish_state_decodes_what_the_frontend_writes() {
+        // Verbatim from `lib/publishState.ts`'s `PublishedObject`. Field names are
+        // asserted rather than trusted: this repo has shipped a descriptor whose URL
+        // arrived under a name nothing read, and a mismatch here wouldn't error — the
+        // field would simply come back absent, and a locator nobody republishes ages
+        // off the DHT until the channel stops resolving.
+        let written = r#"{"id":"obj-2","url":"sia://obj-2#encryption_key=k","olderId":"obj-1"}"#;
+        let state: PublishedState = serde_json::from_str(written).unwrap();
+        assert_eq!(state.id, "obj-2");
+        assert_eq!(state.url.as_deref(), Some("sia://obj-2#encryption_key=k"));
+        // `olderId` is the one whose silent absence costs bytes rather than
+        // discoverability: it names the generation a publish is due to reclaim, so a
+        // field read under the wrong name leaks a superseded object forever.
+        assert_eq!(state.older_id.as_deref(), Some("obj-1"));
+    }
+
+    #[test]
+    fn a_record_without_a_url_is_not_a_pointer() {
+        // `url` is optional on the frontend's type, and a record without one names
+        // nothing to republish — the channel counts as unknown, not as a failure.
+        let state: PublishedState = serde_json::from_str(r#"{"id":"obj-1"}"#).unwrap();
+        assert!(state.url.is_none());
+        assert!(state.older_id.is_none());
+        assert!(state.fp.is_none());
+    }
+
+    #[test]
+    fn publish_state_round_trips_through_what_it_writes() {
+        // The Curator writes these too, and the frontend reads them. Absent fields
+        // must stay absent rather than serializing as null, which is what the
+        // `skip_serializing_if` attributes are for.
+        let state = PublishedState {
+            id: "obj-1".into(),
+            url: None,
+            older_id: None,
+            fp: None,
+        };
+        assert_eq!(serde_json::to_string(&state).unwrap(), r#"{"id":"obj-1"}"#);
     }
 
     #[test]
