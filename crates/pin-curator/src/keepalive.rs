@@ -56,6 +56,10 @@ pub struct KeepAliveOutcome {
     /// Channels whose republish failed. The next pass retries — which is the point of
     /// there being a next pass.
     pub failed: usize,
+    /// Channels whose TALLIES pointer was re-signed — the floor copy of their counts.
+    pub tallies_refreshed: usize,
+    /// Channels whose tallies republish failed. Retried next pass, like the rest.
+    pub tallies_failed: usize,
     /// What happened to the settings locator, reported separately from the channel
     /// counts: "3 refreshed" would otherwise say nothing about whether the one pointer
     /// that recovers a whole account is still alive.
@@ -86,17 +90,34 @@ pub async fn keep_alive_once(ctx: &KeepAliveContext) -> Result<KeepAliveOutcome,
 
     for owned in &settings.my_channels {
         let Some(k) = pin_crypto::channel_key_from_base64(&owned.channel_key) else {
-            // A key we can't decode can't derive the locator it would republish to.
+            // A key we can't decode can't derive the locators it would republish to.
             continue;
         };
+
+        // The manifest pointer. Losing this one is the loud failure: the channel stops
+        // resolving at all.
         let rkey = published_channel_rkey(&owned.channel_id);
-        let Some(url) = read_published_url(ctx, &published_key, &rkey).await else {
-            outcome.unknown += 1;
-            continue;
-        };
-        match pin_channel::republish_pointer(&k, &url).await {
-            Ok(()) => outcome.refreshed += 1,
-            Err(_) => outcome.failed += 1,
+        match read_published_url(ctx, &published_key, &rkey).await {
+            None => outcome.unknown += 1,
+            Some(url) => match pin_channel::republish_pointer(&k, &url).await {
+                Ok(()) => outcome.refreshed += 1,
+                Err(_) => outcome.failed += 1,
+            },
+        }
+
+        // The tallies pointer, handled independently of the manifest's rather than
+        // after it: a channel can have published one and not the other, and skipping
+        // this because the manifest pointer is missing would let counts age off for a
+        // reason that has nothing to do with them. Losing it is the quiet failure —
+        // the channel still resolves, it just stops showing counts to anyone reading
+        // from the floor. Most channels have no tallies at all, which is why there is
+        // no "unknown" tally: nothing to keep alive is the common case, not a gap.
+        let tallies_rkey = pin_derive::published_engagement_rkey(&owned.channel_id);
+        if let Some(url) = read_published_url(ctx, &published_key, &tallies_rkey).await {
+            match pin_channel::republish_tallies_pointer(&k, &url).await {
+                Ok(()) => outcome.tallies_refreshed += 1,
+                Err(_) => outcome.tallies_failed += 1,
+            }
         }
     }
 

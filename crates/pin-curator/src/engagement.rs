@@ -87,6 +87,13 @@ pub struct EngagementOutcome {
     /// Records that failed verification. Not an error — a forgery failing is the system
     /// working — but worth counting, because a number that climbs is worth knowing about.
     pub rejected: usize,
+    /// Channels whose tallies were republished to Sia and the DHT — the floor rung, and
+    /// the only copy a reader without a live replica ever sees. Zero on a quiet pass:
+    /// the publish is fingerprinted on the counts themselves.
+    pub published: usize,
+    /// Channels whose floor publish failed. Retried next pass, and it will be: the
+    /// fingerprint doesn't advance until one succeeds.
+    pub publish_failed: usize,
 }
 
 /// Where a subject lives, so its tally reaches the right channel's doc.
@@ -531,6 +538,22 @@ pub async fn engagement_once(
         outcome.tallies += 1;
     }
 
+    // Then the floor, for every owned channel rather than only the ones that moved.
+    // Each call is a local read and a fingerprint compare, and doing it unconditionally
+    // is what makes a failed upload self-healing: the fingerprint doesn't advance until
+    // a publish lands, so the next pass retries on its own rather than waiting for some
+    // unrelated endorsement to mark the channel dirty again.
+    for owned in &settings.my_channels {
+        let Some(k) = pin_crypto::channel_key_from_base64(&owned.channel_key) else {
+            continue;
+        };
+        match publish_channel_tallies(ctx, &owned.channel_id, &k).await {
+            Ok(true) => outcome.published += 1,
+            Ok(false) => {}
+            Err(_) => outcome.publish_failed += 1,
+        }
+    }
+
     Ok(outcome)
 }
 
@@ -555,25 +578,163 @@ fn withdrawal(
     Some(subject.to_string())
 }
 
-/// The retention time a subject's published tally already claims, if any.
+/// One subject's published tally, or `None` when it publishes none.
 ///
 /// Read author-agnostically, the way a subscriber reads a channel doc: only the author can
 /// write to that namespace, so any entry at this key is ours.
-async fn held_retention(
+async fn read_tally(
     ctx: &EngagementContext,
     channel_doc: &Doc,
     subject: &str,
-) -> Option<String> {
+) -> Option<Aggregate> {
     let entry = channel_doc
         .get_one(iroh_docs::store::Query::single_latest_per_key().key_exact(tally_key(subject)))
         .await
         .ok()??;
     let bytes = ctx.blobs.get_bytes(entry.content_hash()).await.ok()?;
-    let held: Aggregate = serde_json::from_slice(&bytes).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+/// The retention time a subject's published tally already claims, if any.
+async fn held_retention(
+    ctx: &EngagementContext,
+    channel_doc: &Doc,
+    subject: &str,
+) -> Option<String> {
     // Any kind's stamp will do: they are written together, so they agree.
-    held.kinds
+    read_tally(ctx, channel_doc, subject)
+        .await?
+        .kinds
         .values()
         .find_map(|t| t.retention_checked_at.clone())
+}
+
+// --- the floor rung ---------------------------------------------------------------
+
+/// Every tally a channel currently publishes, read back out of its own replica.
+///
+/// Read from the doc rather than re-folded from this pass's records, and the difference
+/// bites: an actor we couldn't reach contributes nothing to `found`, so folding from it
+/// would under-count for the duration of an outage — the very failure the withdrawal
+/// guard exists to prevent. The doc holds what was last written for EVERY subject,
+/// including ones this pass never touched, so the floor and the replica say the same
+/// thing by construction rather than by two folds agreeing.
+async fn read_tallies(
+    ctx: &EngagementContext,
+    channel_doc: &Doc,
+) -> Result<BTreeMap<String, Aggregate>, String> {
+    let subjects = crate::list_rkeys(
+        channel_doc,
+        ctx.author_id,
+        pin_derive::ENGAGEMENT_COLLECTION,
+    )
+    .await?;
+    let mut map = BTreeMap::new();
+    for subject in subjects {
+        if let Some(tally) = read_tally(ctx, channel_doc, &subject).await {
+            map.insert(subject, tally);
+        }
+    }
+    Ok(map)
+}
+
+/// A fingerprint of what a channel's tallies actually assert, with the volatile parts
+/// stripped out.
+///
+/// `updatedAt` and `retentionCheckedAt` move on every pass whether or not a single
+/// endorsement did, so fingerprinting the map verbatim would mint a fresh Sia object
+/// every cadence for every channel anyone has ever endorsed. A set root is a commitment
+/// over the exact backing set, so a subject whose roots and counts are unchanged has
+/// genuinely not moved — and `sampleActors` is drawn from that same set in its own sort
+/// order, so it is covered too.
+fn substance(map: &BTreeMap<String, Aggregate>) -> Result<String, String> {
+    let stripped: BTreeMap<&str, BTreeMap<&str, (usize, &str)>> = map
+        .iter()
+        .map(|(subject, aggregate)| {
+            (
+                subject.as_str(),
+                aggregate
+                    .kinds
+                    .iter()
+                    .map(|(kind, tally)| (kind.as_str(), (tally.count, tally.set_root.as_str())))
+                    .collect(),
+            )
+        })
+        .collect();
+    let json = serde_json::to_string(&stripped).map_err(|e| format!("fingerprint: {e}"))?;
+    Ok(pin_crypto::content_hash(json.as_bytes()))
+}
+
+/// Publish one channel's tallies where anyone holding its key can read them.
+///
+/// This is engagement's floor. A tally also lives in the channel's iroh-docs replica and
+/// arrives there within seconds — but that reaches only live subscribers, and everyone
+/// who can read a channel holds K while most of them hold no replica: someone opening a
+/// pasted subscribe URL, someone browsing a public channel from a directory, a
+/// subscriber whose author is asleep. Derived state has to travel the same road as
+/// authored state or it reaches a fraction of its audience.
+///
+/// Public and self-gating on purpose. A knock landing between passes should be able to
+/// push the floor forward without waiting for the next crawl, and calling this when
+/// nothing moved costs one local read.
+///
+/// Returns whether anything was uploaded.
+pub async fn publish_channel_tallies(
+    ctx: &EngagementContext,
+    channel_id: &str,
+    channel_key: &[u8; 32],
+) -> Result<bool, String> {
+    let channel_doc = open_channel_doc(ctx, channel_id).await?;
+    let map = read_tallies(ctx, &channel_doc).await?;
+    let fingerprint = substance(&map)?;
+
+    let rkey = pin_derive::published_engagement_rkey(channel_id);
+    let published_key = pin_derive::published_key(&ctx.app_key);
+    let previous =
+        crate::read_published(&ctx.doc, &ctx.blobs, ctx.author_id, &published_key, &rkey).await;
+    if previous.as_ref().and_then(|p| p.fp.as_deref()) == Some(fingerprint.as_str()) {
+        return Ok(false);
+    }
+
+    let json = serde_json::to_string(&map).map_err(|e| format!("encode tallies: {e}"))?;
+    let published = pin_channel::publish_tallies(&ctx.sia, channel_key, &json).await?;
+
+    // Record before reclaiming, and keep the generation just superseded alive: a pointer
+    // takes seconds to propagate, so a reader can still be resolving the object it
+    // replaces. Same keep-2 rule the manifest publish follows — the object reclaimed is
+    // the one from two publishes ago, which nothing can still be pointed at.
+    crate::write_published(
+        &ctx.doc,
+        ctx.author_id,
+        &published_key,
+        &rkey,
+        &crate::PublishedState {
+            id: published.object_id.clone(),
+            url: Some(published.item_url),
+            older_id: previous.as_ref().map(|p| p.id.clone()),
+            fp: Some(fingerprint),
+        },
+    )
+    .await;
+
+    if let Some(stale) = reclaimable(previous.as_ref(), &published.object_id) {
+        let _ = ctx.sia.delete_object(&stale).await;
+    }
+    Ok(true)
+}
+
+/// The object a publish may now reclaim: the one from two generations back.
+///
+/// Never the generation just superseded — that is the grace copy a reader mid-resolve
+/// still needs — and never one that is somehow current again, which a republish of
+/// identical bytes would produce.
+fn reclaimable(previous: Option<&crate::PublishedState>, current: &str) -> Option<String> {
+    let previous = previous?;
+    let stale = previous.older_id.as_deref()?;
+    if stale.is_empty() || stale == current || stale == previous.id {
+        return None;
+    }
+    Some(stale.to_string())
 }
 
 fn tally_key(subject: &str) -> Vec<u8> {
@@ -717,6 +878,124 @@ mod tests {
         )
         .unwrap();
         assert_eq!(graph_actors(&settings).len(), 1);
+    }
+
+    fn tallies(
+        count: usize,
+        root: &str,
+        updated: &str,
+        retention: Option<&str>,
+    ) -> BTreeMap<String, Aggregate> {
+        let mut kinds = BTreeMap::new();
+        kinds.insert(
+            pin_engagement::KIND_LIKE.to_string(),
+            pin_engagement::KindTally {
+                count,
+                set_root: root.to_string(),
+                sample_actors: vec![ALICE.to_string()],
+                retention_checked_at: retention.map(str::to_string),
+            },
+        );
+        let mut map = BTreeMap::new();
+        map.insert(
+            SUBJECT.to_string(),
+            Aggregate {
+                kinds,
+                updated_at: updated.to_string(),
+            },
+        );
+        map
+    }
+
+    #[test]
+    fn a_pass_that_only_moved_the_clock_does_not_republish() {
+        // THE guard that makes the floor affordable. Every pass restamps `updatedAt`,
+        // and every successful retention check restamps `retentionCheckedAt` — so a
+        // fingerprint taken over the published map verbatim would mint a fresh Sia
+        // object every cadence, for every channel anyone has ever endorsed, forever.
+        let before = substance(&tallies(3, "root-a", "2026-08-12T10:00:00.000Z", None)).unwrap();
+        let after = substance(&tallies(
+            3,
+            "root-a",
+            "2026-08-12T10:10:00.000Z",
+            Some("2026-08-12T10:10:00.000Z"),
+        ))
+        .unwrap();
+        assert_eq!(before, after);
+    }
+
+    #[test]
+    fn a_count_that_moved_republishes() {
+        let before = substance(&tallies(3, "root-a", "2026-08-12T10:00:00.000Z", None)).unwrap();
+        let after = substance(&tallies(4, "root-b", "2026-08-12T10:00:00.000Z", None)).unwrap();
+        assert_ne!(before, after);
+    }
+
+    #[test]
+    fn the_same_count_over_a_different_set_republishes() {
+        // One actor withdrawing as another arrives leaves the count identical and the
+        // set entirely different. The root is a commitment over the set, which is why
+        // it is fingerprinted rather than the number in front of it.
+        let before = substance(&tallies(3, "root-a", "2026-08-12T10:00:00.000Z", None)).unwrap();
+        let after = substance(&tallies(3, "root-b", "2026-08-12T10:00:00.000Z", None)).unwrap();
+        assert_ne!(before, after);
+    }
+
+    #[test]
+    fn a_channels_first_endorsement_republishes() {
+        // An empty map has to fingerprint differently from a populated one, or a
+        // channel's counts would never reach the floor at all.
+        let empty = substance(&BTreeMap::new()).unwrap();
+        let one = substance(&tallies(1, "root-a", "2026-08-12T10:00:00.000Z", None)).unwrap();
+        assert_ne!(empty, one);
+    }
+
+    fn state(id: &str, older: Option<&str>) -> crate::PublishedState {
+        crate::PublishedState {
+            id: id.to_string(),
+            url: None,
+            older_id: older.map(str::to_string),
+            fp: None,
+        }
+    }
+
+    #[test]
+    fn the_generation_just_superseded_is_left_alive() {
+        // The keep-2 rule, and the reason it exists: a pointer takes seconds to
+        // propagate, so a reader can still be resolving the object this publish
+        // replaces. Reclaiming it turns "slightly stale counts" into "object not
+        // found" for everyone mid-read.
+        assert_eq!(reclaimable(Some(&state("gen-2", None)), "gen-3"), None);
+    }
+
+    #[test]
+    fn the_generation_before_that_is_reclaimed() {
+        assert_eq!(
+            reclaimable(Some(&state("gen-2", Some("gen-1"))), "gen-3"),
+            Some("gen-1".to_string())
+        );
+    }
+
+    #[test]
+    fn a_first_publish_reclaims_nothing() {
+        assert_eq!(reclaimable(None, "gen-1"), None);
+    }
+
+    #[test]
+    fn an_object_that_is_current_again_is_never_reclaimed() {
+        // Belt and braces against deleting live bytes: neither the object this publish
+        // just wrote nor the one it is keeping as grace can be the reclaim target,
+        // however the publish state got into that shape.
+        assert_eq!(
+            reclaimable(Some(&state("gen-1", Some("gen-1"))), "gen-2"),
+            None
+        );
+        assert_eq!(
+            reclaimable(Some(&state("gen-2", Some("gen-3"))), "gen-3"),
+            None
+        );
+        // And an empty id names nothing, so it is not a reclaim target either.
+        assert_eq!(reclaimable(Some(&state("gen-2", Some(""))), "gen-3"), None);
     }
 
     fn mark(url: &str, epoch: u32) -> CrawlMark {

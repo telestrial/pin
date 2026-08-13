@@ -358,6 +358,8 @@ pub async fn start_keep_alive_loop(
                         "refreshed": o.refreshed,
                         "unknown": o.unknown,
                         "failed": o.failed,
+                        "talliesRefreshed": o.tallies_refreshed,
+                        "talliesFailed": o.tallies_failed,
                         "settings": format!("{:?}", o.settings).to_lowercase(),
                     })
                     .to_string(),
@@ -718,6 +720,8 @@ pub async fn start_engagement_loop(
                         "cleared": o.cleared,
                         "rejected": o.rejected,
                         "notOurs": o.not_ours,
+                        "published": o.published,
+                        "publishFailed": o.publish_failed,
                     })
                     .to_string(),
                     Err(e) => serde_json::json!({ "error": e }).to_string(),

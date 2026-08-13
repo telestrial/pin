@@ -786,11 +786,18 @@ pub async fn curator_start_keep_alive(
             Ok(o) => {
                 let quiet = o.refreshed == 0
                     && o.failed == 0
+                    && o.tallies_refreshed == 0
+                    && o.tallies_failed == 0
                     && o.settings == pin_curator::SettingsLocator::Unknown;
                 if !quiet {
                     println!(
-                        "curator keep-alive: refreshed {} unknown {} failed {} settings {:?}",
-                        o.refreshed, o.unknown, o.failed, o.settings
+                        "curator keep-alive: refreshed {} unknown {} failed {} tallies {} tallies-failed {} settings {:?}",
+                        o.refreshed,
+                        o.unknown,
+                        o.failed,
+                        o.tallies_refreshed,
+                        o.tallies_failed,
+                        o.settings
                     );
                 }
             }
@@ -1109,11 +1116,17 @@ pub async fn curator_start_engagement(
                     // Quiet when a pass found nothing new. Reported when anything moved, or
                     // when something was unreachable or rejected — both of which say
                     // something about the count's honesty.
-                    if o.added > 0 || o.withdrawn > 0 || o.unreachable > 0 || o.rejected > 0 {
+                    if o.added > 0
+                        || o.withdrawn > 0
+                        || o.unreachable > 0
+                        || o.rejected > 0
+                        || o.published > 0
+                        || o.publish_failed > 0
+                    {
                         println!(
-                            "curator engagement: reached {} unreachable {} added {} withdrawn {} tallies {} cleared {} rejected {} not-ours {}",
+                            "curator engagement: reached {} unreachable {} added {} withdrawn {} tallies {} cleared {} rejected {} not-ours {} published {} publish-failed {}",
                             o.reached, o.unreachable, o.added, o.withdrawn, o.tallies, o.cleared,
-                            o.rejected, o.not_ours
+                            o.rejected, o.not_ours, o.published, o.publish_failed
                         );
                     }
                 }
