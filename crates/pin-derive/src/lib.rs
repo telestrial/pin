@@ -302,6 +302,36 @@ pub fn parse_engagement_log_rkey(rkey: &str) -> Option<(&str, &str)> {
 /// delivers a new post.
 pub const ENGAGEMENT_COLLECTION: &str = "engagement";
 
+/// The collection where a tally is cached for READING, in this identity's own doc.
+///
+/// The published tally lives in the channel's doc ([`ENGAGEMENT_COLLECTION`]) and, for
+/// anyone without that replica, in the channel's tallies object on Sia. Neither is
+/// somewhere a screen can read directly: a subscriber only learns a channel doc's
+/// namespace by importing its ticket, and the Sia object is a per-channel map behind a
+/// DHT resolve and a download. So both rungs land at this one address, and a row reads
+/// that — the same arrangement `sub/<channelID>` gives a manifest.
+///
+/// Plaintext, like the endorsements it counts. The published copy is plaintext in a doc
+/// every subscriber holds, so sealing a private cache of it would protect nothing.
+pub const TALLY_COLLECTION: &str = "tally";
+
+/// The rkey for one cached tally: the channel, then the subject it is about.
+///
+/// Qualified by channel although the subject is already unique — it is a hash over
+/// `(channel, item)` — so that unsubscribing can drop a channel's cached tallies by
+/// prefix, the way the manifest cache is dropped by channel id. Nothing is given away
+/// by naming the channel here that `sub/<channelID>` in the same doc does not already
+/// name; the concealment that matters is on the PUBLISHED record, which carries the
+/// subject hash alone.
+pub fn tally_rkey(channel_id: &str, subject: &str) -> String {
+    format!("{channel_id}:{subject}")
+}
+
+/// The channel a cached tally belongs to, for dropping a channel's cache wholesale.
+pub fn tally_rkey_channel(rkey: &str) -> Option<&str> {
+    rkey.split_once(':').map(|(channel_id, _)| channel_id)
+}
+
 /// The collection recording, per actor, the directory pointer the crawl last read to
 /// completion. Keyed by that actor's `did:dht`.
 ///
@@ -570,6 +600,34 @@ mod tests {
         // for one return the others.
         assert_ne!(CRAWL_COLLECTION, ENGAGEMENT_LOG_COLLECTION);
         assert_ne!(CRAWL_COLLECTION, ENGAGEMENT_COLLECTION);
+    }
+
+    #[test]
+    fn a_cached_tally_key_names_one_item_and_groups_by_channel() {
+        let subject = "f4xlljzqxtqpv7ul6ngkyeafusdwqrirpmhochqyjz2hgz3djo6a";
+        let other = "aaxlljzqxtqpv7ul6ngkyeafusdwqrirpmhochqyjz2hgz3djo6a";
+
+        // Channel first: unsubscribing drops a channel's cached tallies by prefix, which
+        // only works if every one of them starts with the channel.
+        assert!(tally_rkey("chan1", subject).starts_with("chan1:"));
+        assert_eq!(
+            tally_rkey_channel(&tally_rkey("chan1", subject)),
+            Some("chan1")
+        );
+
+        // Two items in one channel are two records — a shared key would mean one item's
+        // count standing in for another's.
+        assert_ne!(tally_rkey("chan1", subject), tally_rkey("chan1", other));
+
+        // The cache is its own collection. Sharing a name with the published tally would
+        // make a prefix scan for one return the other, and they are not the same thing:
+        // one is served to every subscriber, this one is only ever read here.
+        assert_ne!(TALLY_COLLECTION, ENGAGEMENT_COLLECTION);
+        assert_ne!(TALLY_COLLECTION, ENGAGEMENT_LOG_COLLECTION);
+
+        // A key with no channel is malformed rather than a channel-less tally, so a
+        // caller drops it instead of treating the whole thing as a channel id.
+        assert_eq!(tally_rkey_channel(subject), None);
     }
 
     #[test]
