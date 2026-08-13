@@ -219,6 +219,17 @@ export type DocChange = {
 const docChangeHandlers = new Set<(change: DocChange) => void>()
 let docChangeStarted: Promise<void> | null = null
 
+/** How long to keep trying to attach the feed, and how often.
+ *
+ *  Attaching can legitimately fail for a while: on desktop the feed is served by the
+ *  Curator's engine, which takes seconds to bind iroh and open its store. A single
+ *  attempt that lands in that window fails, and the failure is SILENT and permanent —
+ *  which is exactly how a subscriber can keep its cache warm while the screen never
+ *  hears about it. Retrying costs one IPC call per attempt and removes a whole class
+ *  of "worked on restart, never again". */
+const FEED_RETRY_MS = 2_000
+const FEED_RETRY_WINDOW_MS = 60_000
+
 function startDocChangeFeed(): Promise<void> {
   if (!docChangeStarted) {
     const fanOut = (change: DocChange) => {
@@ -230,7 +241,7 @@ function startDocChangeFeed(): Promise<void> {
         }
       }
     }
-    docChangeStarted = (async () => {
+    const attach = async () => {
       if (inTauri()) return subscribeDocChangesNative(fanOut)
       await ensureWasm()
       // wasm-bindgen types the callback as a bare `Function`, so annotate what
@@ -239,8 +250,23 @@ function startDocChangeFeed(): Promise<void> {
         (collection: string, rkey: string, kind: string) =>
           fanOut({ collection, rkey, kind }),
       )
+    }
+    docChangeStarted = (async () => {
+      const deadline = Date.now() + FEED_RETRY_WINDOW_MS
+      for (;;) {
+        try {
+          return await attach()
+        } catch (err) {
+          // Giving up entirely is the dangerous outcome, so only do it once the
+          // window is genuinely spent — and even then, leave the door open below.
+          if (Date.now() >= deadline) throw err
+          await new Promise((r) => setTimeout(r, FEED_RETRY_MS))
+        }
+      }
     })().catch((err) => {
-      // Let a later caller retry rather than wedging the feed off permanently.
+      // Let a later caller start from scratch rather than wedging the feed off for
+      // the rest of the session. A consumer whose effect re-runs (curation toggled
+      // back on, say) is the case this covers.
       docChangeStarted = null
       throw err
     })
