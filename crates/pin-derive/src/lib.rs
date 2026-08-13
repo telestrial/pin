@@ -84,6 +84,17 @@ pub const CHANNEL_DOC_NS_INFO_PREFIX: &str = "pin:channel-doc-ns:v1:";
 /// subscriber can find it — kept separate from the locator so a stale ticket can never
 /// disturb the durable pointer).
 pub const CHANNEL_DOC_TICKET_INFO: &[u8] = b"pin:channel-doc:v1";
+/// HKDF `info` for the pkarr key carrying a channel's published tallies (K-derived,
+/// like the locator, so the audience for a count is exactly the audience for the
+/// channel — anyone who can open the manifest can find the counts, and anyone who
+/// can't, can't. That is what keeps an unlisted channel's engagement unlisted too.)
+///
+/// Its own record rather than riding the locator's packet, for two reasons. A BEP44
+/// packet is ~1000 bytes and one chunked Sia URL already costs 250-320 of them, so two
+/// would sit uncomfortably close to the ceiling. And the keep-alive re-signs the
+/// locator: sharing one record would mean every tally publish rewrote the manifest
+/// pointer, and every keep-alive rewrote the tally pointer.
+pub const ENGAGEMENT_LOCATOR_INFO: &[u8] = b"pin:engagement:v1";
 /// HKDF `info` for the pkarr key holding the pointer to your settings snapshot.
 pub const SETTINGS_LOCATOR_INFO: &[u8] = b"pin:settings-locator:v1";
 /// The TXT-record prefix the settings locator's pointer is chunked under. Here rather
@@ -140,6 +151,11 @@ pub fn channel_doc_seed(app_key: &[u8], channel_id: &str) -> [u8; 32] {
 /// The pkarr seed for a channel's read-DocTicket record, from its channel key K.
 pub fn channel_doc_ticket_seed(channel_key: &[u8]) -> [u8; 32] {
     hkdf32(channel_key, CHANNEL_DOC_TICKET_INFO)
+}
+
+/// The pkarr seed for a channel's published tallies, from its channel key K.
+pub fn engagement_locator_seed(channel_key: &[u8]) -> [u8; 32] {
+    hkdf32(channel_key, ENGAGEMENT_LOCATOR_INFO)
 }
 
 /// The pkarr seed for your settings-snapshot pointer.
@@ -329,6 +345,17 @@ pub fn published_channel_rkey(channel_id: &str) -> String {
     format!("channel:{channel_id}")
 }
 
+/// The rkey for one channel's TALLY publish state — which Sia object the engagement
+/// locator names, and the generation before it.
+///
+/// Distinct from [`published_channel_rkey`] because a channel now has two published
+/// artifacts, each with its own pointer and its own superseded object to reclaim.
+/// Sharing one record would make each publish overwrite the other's grace generation,
+/// so the object reclaimed would be one a reader could still be resolving.
+pub fn published_engagement_rkey(channel_id: &str) -> String {
+    format!("engagement:{channel_id}")
+}
+
 /// The rkey for the settings snapshot's publish state — which Sia object the settings
 /// locator currently names, and the generation before it.
 ///
@@ -470,6 +497,31 @@ mod tests {
         assert_eq!(
             parse_record_key(&key),
             Some((PUBLISHED_COLLECTION, "channel:abc"))
+        );
+    }
+
+    #[test]
+    fn a_channels_two_published_artifacts_do_not_share_publish_state() {
+        // A channel publishes a manifest AND a tally, each pointing at its own Sia
+        // object and each holding its own grace generation. One shared record would
+        // mean a tally publish overwrote the manifest's `olderId`, and the object
+        // reclaimed next time would be one a reader was still resolving.
+        assert_ne!(
+            published_channel_rkey("abc"),
+            published_engagement_rkey("abc")
+        );
+        assert_eq!(published_engagement_rkey("abc"), "engagement:abc");
+        // Prefixed for the same reason the manifest's is: a channel whose id reads
+        // like an identity-level publisher's rkey must not take its record.
+        assert_ne!(
+            published_engagement_rkey("settings"),
+            PUBLISHED_SETTINGS_RKEY
+        );
+        let key = record_key(PUBLISHED_COLLECTION, &published_engagement_rkey("abc"));
+        let key = String::from_utf8(key).unwrap();
+        assert_eq!(
+            parse_record_key(&key),
+            Some((PUBLISHED_COLLECTION, "engagement:abc"))
         );
     }
 
@@ -676,6 +728,7 @@ mod tests {
             channel_locator_seed(&ikm),
             channel_doc_seed(&ikm, "chan"),
             channel_doc_ticket_seed(&ikm),
+            engagement_locator_seed(&ikm),
             settings_locator_seed(&ikm),
             rendezvous_seed(&ikm),
             rendezvous_instance_seed(&ikm, "inst"),
