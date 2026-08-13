@@ -296,22 +296,32 @@ export function useSettingsDocsMirror() {
     // writes (which would bounce straight back out); an empty collection is a
     // stream-level event (notably content-ready, whose value may be the settings blob
     // finishing its download) so it counts too.
-    const unsubChanges = subscribeDocChanges(({ collection, kind }) => {
-      if (!isRemoteChange(kind)) return
-      if (collection && collection !== 'settings') return
+    let unsubChanges: (() => void) | null = null
+    void (async () => {
+      // After the doc is open: on desktop the feed is served by the Curator's engine,
+      // and attaching before it exists fails silently for the whole session — which
+      // would leave this overlay reading only on mount, so a peer's settings change
+      // would land on the next launch and never while running.
+      await openDocs(storedKeyHex)
+      if (cancelled) return
+      unsubChanges = subscribeDocChanges(({ collection, kind }) => {
+        if (!isRemoteChange(kind)) return
+        if (collection && collection !== 'settings') return
+        void applyPeerSettingsIfNewer()
+      })
+      // Push for speed, pull for truth: read once on mount. A change that landed while
+      // this instance was closed (or, on desktop, while the window was hidden to tray
+      // and the event went to nobody) has no event left to catch — the read is what
+      // makes the overlay correct rather than merely live. After the subscribe, so a
+      // change arriving between the two isn't lost.
       void applyPeerSettingsIfNewer()
-    })
-    // Push for speed, pull for truth: read once on mount. A change that landed while
-    // this instance was closed (or, on desktop, while the window was hidden to tray
-    // and the event went to nobody) has no event left to catch — the read is what
-    // makes the overlay correct rather than merely live.
-    void applyPeerSettingsIfNewer()
+    })()
 
     return () => {
       cancelled = true
       activeMirrorFlush = null
       if (timer) clearTimeout(timer)
-      unsubChanges()
+      unsubChanges?.()
       unsub()
     }
   }, [client, storedKeyHex])

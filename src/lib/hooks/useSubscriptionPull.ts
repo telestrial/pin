@@ -51,24 +51,34 @@ export function useSubscriptionPull() {
       }
     }
 
-    const unsubChanges = subscribeDocChanges(({ collection, rkey }) => {
-      // NOT filtered to remote changes, unlike the settings overlay. Most `sub/`
-      // writes here are LOCAL — this instance's own loop made them — and those are
-      // exactly the ones the feed is waiting for. A remote one (a peer device's loop,
-      // synced in) is just as welcome.
-      if (collection === SUB_COLLECTION) {
-        void applyCached(rkey)
-        return
-      }
-      // A stream-level event names no record. It's the signal that content finished
-      // downloading, which is precisely when an earlier read may have come up empty,
-      // so re-check the set. Bounded by the subscription count.
-      if (collection === '') applyAllCached()
-    })
+    let unsubChanges: (() => void) | null = null
 
     void (async () => {
+      // Subscribing needs an OPEN doc, and on desktop that is what waits for the
+      // Curator's engine. Subscribing first looked harmless and wasn't: the attach
+      // failed against an engine that didn't exist yet, silently and for the whole
+      // session, so this loop kept the cache warm while the screen never heard about
+      // it — updating only on the next launch, via the mount read below.
       await openDocs(key)
       if (cancelled) return
+
+      // Subscribe BEFORE the read, so a change landing between the two is caught
+      // rather than falling into the gap.
+      unsubChanges = subscribeDocChanges(({ collection, rkey }) => {
+        // NOT filtered to remote changes, unlike the settings overlay. Most `sub/`
+        // writes here are LOCAL — this instance's own loop made them — and those are
+        // exactly the ones the feed is waiting for. A remote one (a peer device's
+        // loop, synced in) is just as welcome.
+        if (collection === SUB_COLLECTION) {
+          void applyCached(rkey)
+          return
+        }
+        // A stream-level event names no record. It's the signal that content finished
+        // downloading, which is precisely when an earlier read may have come up empty,
+        // so re-check the set. Bounded by the subscription count.
+        if (collection === '') applyAllCached()
+      })
+
       // Whatever a previous session left cached is current enough to show immediately,
       // rather than waiting out the first pass.
       applyAllCached()
@@ -77,7 +87,7 @@ export function useSubscriptionPull() {
 
     return () => {
       cancelled = true
-      unsubChanges()
+      unsubChanges?.()
     }
   }, [client, appKeyHex, curationEnabled])
 }

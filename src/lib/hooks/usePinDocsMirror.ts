@@ -1,7 +1,7 @@
 import { useEffect } from 'react'
 import { useAuthStore } from '../../stores/auth'
 import { usePinStore } from '../../stores/pin'
-import { isRemoteChange, subscribeDocChanges } from '../docs'
+import { isRemoteChange, openDocs, subscribeDocChanges } from '../docs'
 import {
   drainPendingReleases,
   collection as pinnedCollection,
@@ -137,14 +137,25 @@ export function usePinDocsMirror() {
       }
     }
 
+    let unsubChanges: (() => void) | null = null
+
     // Driven by the doc's change feed. `isRemoteChange` filters our own writes, which
     // would bounce straight back; an empty collection is a stream-level event (content
     // finishing its download) and counts.
-    const unsubChanges = subscribeDocChanges(({ collection, kind }) => {
-      if (!isRemoteChange(kind)) return
-      if (collection && collName && collection !== collName) return
-      void applyRecords()
-    })
+    //
+    // Attached only once the doc is open. On desktop the feed is served by the
+    // Curator's engine, and attaching before it exists fails silently for the whole
+    // session — leaving this hook reading only on mount, so a peer's pin would appear
+    // on the next launch and never while running.
+    const watch = async () => {
+      await openDocs(storedKeyHex)
+      if (cancelled) return
+      unsubChanges = subscribeDocChanges(({ collection, kind }) => {
+        if (!isRemoteChange(kind)) return
+        if (collection && collName && collection !== collName) return
+        void applyRecords()
+      })
+    }
 
     // A local change means there may be something to catch up on — a record whose write
     // failed, most often. Cheap when there isn't: syncPinRecords skips records that
@@ -157,13 +168,17 @@ export function usePinDocsMirror() {
     // Boot: get this device's pins recorded, then read back whatever else the doc has.
     // Push for speed, pull for truth — a pin made elsewhere while this instance was
     // closed has no event left to catch.
-    void catchUp().then(() => {
+    void (async () => {
+      await catchUp()
+      if (cancelled) return
+      // Watch before the read, so a change landing between the two isn't missed.
+      await watch()
       if (!cancelled) void applyRecords()
-    })
+    })()
 
     return () => {
       cancelled = true
-      unsubChanges()
+      unsubChanges?.()
       unsubStore()
     }
   }, [storedKeyHex])

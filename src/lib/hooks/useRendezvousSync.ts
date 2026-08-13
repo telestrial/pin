@@ -52,16 +52,20 @@ export function useRendezvousSync() {
     const sync = useSyncStore.getState()
     sync.set({ phase: 'searching', detail: 'Looking for your other devices…' })
 
-    const unsubscribe = subscribeDocChanges(({ collection, rkey, kind }) => {
-      if (!cancelled && isRemoteChange(kind)) {
-        useSyncStore.getState().setEvent(describe(collection, rkey, kind))
-      }
-    })
+    let unsubscribe: (() => void) | null = null
 
     void (async () => {
       try {
+        // After the doc is open, not before: on desktop the change feed is served by
+        // the Curator's engine, and attaching to one that hasn't come up yet fails
+        // silently for the rest of the session.
         await openDocs(appKeyHex)
         if (cancelled) return
+        unsubscribe = subscribeDocChanges(({ collection, rkey, kind }) => {
+          if (!cancelled && isRemoteChange(kind)) {
+            useSyncStore.getState().setEvent(describe(collection, rkey, kind))
+          }
+        })
         await startRendezvousLoop(appKeyHex, (report) => {
           if (cancelled) return
           apply(JSON.parse(report) as RendezvousReport)
@@ -76,7 +80,7 @@ export function useRendezvousSync() {
 
     return () => {
       cancelled = true
-      unsubscribe()
+      unsubscribe?.()
       useSyncStore.getState().reset()
     }
   }, [client, appKeyHex, curationEnabled])
