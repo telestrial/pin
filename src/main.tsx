@@ -34,6 +34,7 @@ if (import.meta.env.DEV || inTauri()) {
     __pinChannelLocatorRoundTrip?: () => Promise<string>
     __pinCuratorDocsRoundTrip?: () => Promise<string>
     __pinCuratorDocsList?: () => Promise<string>
+    __pinSubDiag?: () => Promise<string>
     __pinChannelDocs?: {
       author: (hexOverride?: string) => Promise<string>
       subscriber: (ticket: string, hexOverride?: string) => Promise<string>
@@ -410,6 +411,85 @@ if (import.meta.env.DEV || inTauri()) {
     if (!inTauri()) return 'desktop only (run in the Pin desktop app)'
     const { curatorDocsSelfTest } = await import('./lib/tauriDocs')
     return curatorDocsSelfTest()
+  }
+  // Why isn't a subscribed channel updating? Read-only, mutates nothing.
+  //
+  // Puts the three things that can disagree side by side, for every subscription:
+  // what the pull loop CACHED, what its skip MARK says it last saw, and what the
+  // locator resolves to RIGHT NOW. Which pair disagrees names the layer:
+  //
+  //   cached stale, live fresh  -> the pull loop isn't picking it up
+  //   cached fresh, screen stale -> the cache updated and nothing re-rendered
+  //   cached stale, live stale  -> the author's publish never reached the DHT
+  //
+  // The live read is a real network resolve, so it takes a few seconds per channel.
+  g.__pinSubDiag = async () => {
+    const { hex } = await session()
+    if (!hex) return 'not signed in'
+    const [
+      { useAuthStore },
+      { getRecord, openDocs },
+      locator,
+      { channelKeyFromBase64 },
+    ] = await Promise.all([
+      import('./stores/auth'),
+      import('./lib/docs'),
+      import('./lib/channelLocatorNative'),
+      import('./core/crypto'),
+    ])
+    await openDocs(hex)
+    const subs = useAuthStore.getState().subscriptions
+    if (subs.length === 0) return '(no subscriptions)'
+
+    // Newest publishedAt is what actually moves when a post lands, so it says more
+    // than a count: an edit changes bytes without changing how many items there are.
+    const describe = (json: string) => {
+      try {
+        const m = JSON.parse(json) as {
+          items?: Array<{ publishedAt?: string }>
+        }
+        const items = m.items ?? []
+        const newest = items
+          .map((i) => i.publishedAt ?? '')
+          .sort()
+          .pop()
+        return `${items.length} items, newest ${newest || '(none)'}`
+      } catch (e) {
+        return `unreadable: ${e}`
+      }
+    }
+
+    const lines: string[] = []
+    for (const sub of subs) {
+      const k = channelKeyFromBase64(sub.channelKey)
+      lines.push(`${sub.cachedName ?? sub.channelID} (${sub.channelID})`)
+
+      const cached = await getRecord('sub', sub.channelID)
+      lines.push(
+        `  cached: ${
+          cached
+            ? describe(
+                await locator.openBlob(k, new TextDecoder().decode(cached)),
+              )
+            : '(no sub/ record)'
+        }`,
+      )
+
+      const mark = await getRecord('pull', sub.channelID)
+      lines.push(
+        `  mark:   ${mark ? new TextDecoder().decode(mark) : '(no pull/ mark)'}`,
+      )
+
+      try {
+        const live = await locator.resolveLocator(k)
+        lines.push(
+          `  live:   ${live ? describe(live.manifestJson) : '(locator resolves to nothing)'}`,
+        )
+      } catch (e) {
+        lines.push(`  live:   FAILED ${e}`)
+      }
+    }
+    return lines.join('\n')
   }
   // List the native Curator's records (DESKTOP ONLY) — read-only, no mutation.
   // The verification for slice 1b: after a browser tab writes over sync, run this
