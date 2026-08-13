@@ -686,12 +686,16 @@ pub async fn publish_channel_tallies(
 ) -> Result<bool, String> {
     let channel_doc = open_channel_doc(ctx, channel_id).await?;
     let map = read_tallies(ctx, &channel_doc).await?;
-    let fingerprint = substance(&map)?;
 
     let rkey = pin_derive::published_engagement_rkey(channel_id);
     let published_key = pin_derive::published_key(&ctx.app_key);
     let previous =
         crate::read_published(&ctx.doc, &ctx.blobs, ctx.author_id, &published_key, &rkey).await;
+    if nothing_to_publish(&map, previous.as_ref()) {
+        return Ok(false);
+    }
+
+    let fingerprint = substance(&map)?;
     if previous.as_ref().and_then(|p| p.fp.as_deref()) == Some(fingerprint.as_str()) {
         return Ok(false);
     }
@@ -721,6 +725,23 @@ pub async fn publish_channel_tallies(
         let _ = ctx.sia.delete_object(&stale).await;
     }
     Ok(true)
+}
+
+/// Whether there is anything worth publishing at all.
+///
+/// A channel nobody has endorsed folds to an empty map, and publishing that would mint
+/// a Sia object — a whole slab — to say "nothing", plus a DHT record pointing at it.
+/// That is most channels, most of the time, so it is worth not doing.
+///
+/// Once something HAS been published the empty map stops being nothing: it means every
+/// endorsement was withdrawn, and that has to reach the floor or a reader keeps seeing
+/// counts for a set that no longer exists. So the skip is specifically "empty AND never
+/// published", not "empty".
+fn nothing_to_publish(
+    map: &BTreeMap<String, Aggregate>,
+    previous: Option<&crate::PublishedState>,
+) -> bool {
+    map.is_empty() && previous.is_none()
 }
 
 /// The object a publish may now reclaim: the one from two generations back.
@@ -948,6 +969,30 @@ mod tests {
         let empty = substance(&BTreeMap::new()).unwrap();
         let one = substance(&tallies(1, "root-a", "2026-08-12T10:00:00.000Z", None)).unwrap();
         assert_ne!(empty, one);
+    }
+
+    #[test]
+    fn a_channel_nobody_has_endorsed_publishes_nothing() {
+        // The common case by a wide margin, and the expensive one to get wrong: an
+        // empty map would still mint a Sia object — a whole slab — to say "nothing",
+        // and a DHT record pointing at it, on every channel that has never been
+        // endorsed.
+        assert!(nothing_to_publish(&BTreeMap::new(), None));
+    }
+
+    #[test]
+    fn a_channel_emptied_of_endorsements_still_publishes_the_emptying() {
+        // Once something has been published, empty stops meaning "nothing" and starts
+        // meaning "every endorsement was withdrawn" — which has to reach the floor, or
+        // a reader keeps seeing counts for a set that no longer exists.
+        let previous = state("gen-1", None);
+        assert!(!nothing_to_publish(&BTreeMap::new(), Some(&previous)));
+    }
+
+    #[test]
+    fn a_channel_with_counts_publishes_them() {
+        let map = tallies(1, "root-a", "2026-08-12T10:00:00.000Z", None);
+        assert!(!nothing_to_publish(&map, None));
     }
 
     fn state(id: &str, older: Option<&str>) -> crate::PublishedState {
