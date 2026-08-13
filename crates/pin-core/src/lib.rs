@@ -1229,6 +1229,31 @@ pub fn channel_open_blob(channel_key: &[u8], blob: &str) -> Result<String, JsVal
     pin_channel::open_blob(&key32(channel_key)?, blob).map_err(je)
 }
 
+/// Where a channel's tallies currently are, without fetching them.
+///
+/// Exposed apart from the fetch, unlike the manifest's composed `channel_resolve`,
+/// because for tallies the split IS the point: the URL is a content address, so a caller
+/// holding the one it last read learns from this alone that the counts haven't moved and
+/// skips the download.
+#[wasm_bindgen]
+pub async fn channel_resolve_tallies_url(channel_key: &[u8]) -> Result<Option<String>, JsValue> {
+    pin_channel::resolve_tallies_url(&key32(channel_key)?)
+        .await
+        .map_err(je)
+}
+
+/// Download and open a channel's tallies at a URL already resolved for it. Returns the
+/// subject-to-tally map as JSON.
+#[wasm_bindgen]
+pub async fn channel_fetch_tallies(
+    channel_key: &[u8],
+    item_url: String,
+) -> Result<String, JsValue> {
+    pin_channel::fetch_tallies(&sia(), &key32(channel_key)?, &item_url)
+        .await
+        .map_err(je)
+}
+
 // --- manifest transforms -------------------------------------------------------
 //
 // The rules for changing a channel, reached from the browser. Manifests and items cross
@@ -1502,6 +1527,20 @@ pub fn pkarr_rejoin_txt(records_json: &str, prefix: &str) -> Result<String, JsVa
 #[wasm_bindgen]
 pub fn endorse_collection() -> String {
     pin_derive::ENDORSE_COLLECTION.to_string()
+}
+
+/// The collection where counts are cached for reading.
+#[wasm_bindgen]
+pub fn tally_collection() -> String {
+    pin_derive::TALLY_COLLECTION.to_string()
+}
+
+/// Where one subject's count is cached. From Rust because the Curator's loops write
+/// these records and the frontend reads them: an address spelled twice would have one
+/// side writing where the other never looks, silently.
+#[wasm_bindgen]
+pub fn tally_rkey(channel_id: &str, subject: &str) -> String {
+    pin_derive::tally_rkey(channel_id, subject)
 }
 
 /// The subject an endorsement of this item names — the hash a count is keyed by, so a

@@ -43,6 +43,12 @@ export class IntoUnderlyingSource {
 export function channel_doc_namespaces(): any;
 
 /**
+ * Download and open a channel's tallies at a URL already resolved for it. Returns the
+ * subject-to-tally map as JSON.
+ */
+export function channel_fetch_tallies(channel_key: Uint8Array, item_url: string): Promise<string>;
+
+/**
  * A channel's public identifier, derived from its key. Pin's own format (a truncated
  * SHA-256 in a specific base32 alphabet), so it is derived in one place rather than
  * independently on each side — two sides disagreeing would name the same channel
@@ -72,6 +78,16 @@ export function channel_republish_pointer(channel_key: Uint8Array, item_url: str
  * is ordinary — unpublished, or aged off the DHT.
  */
 export function channel_resolve(channel_key: Uint8Array): Promise<string | undefined>;
+
+/**
+ * Where a channel's tallies currently are, without fetching them.
+ *
+ * Exposed apart from the fetch, unlike the manifest's composed `channel_resolve`,
+ * because for tallies the split IS the point: the URL is a content address, so a caller
+ * holding the one it last read learns from this alone that the counts haven't moved and
+ * skips the download.
+ */
+export function channel_resolve_tallies_url(channel_key: Uint8Array): Promise<string | undefined>;
 
 /**
  * A plaintext content fingerprint (CIDv1, raw codec, SHA-256).
@@ -678,16 +694,30 @@ export function status(): any;
  */
 export function subscribe_doc_changes(on_change: Function): Promise<void>;
 
+/**
+ * The collection where counts are cached for reading.
+ */
+export function tally_collection(): string;
+
+/**
+ * Where one subject's count is cached. From Rust because the Curator's loops write
+ * these records and the frontend reads them: an address spelled twice would have one
+ * side writing where the other never looks, silently.
+ */
+export function tally_rkey(channel_id: string, subject: string): string;
+
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly channel_doc_namespaces: () => [number, number, number];
+    readonly channel_fetch_tallies: (a: number, b: number, c: number, d: number) => any;
     readonly channel_id: (a: number, b: number) => [number, number, number, number];
     readonly channel_open_blob: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly channel_publish: (a: number, b: number, c: number, d: number) => any;
     readonly channel_republish_pointer: (a: number, b: number, c: number, d: number) => any;
     readonly channel_resolve: (a: number, b: number) => any;
+    readonly channel_resolve_tallies_url: (a: number, b: number) => any;
     readonly content_hash: (a: number, b: number) => [number, number];
     readonly decrypt_for_channel: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly decrypt_settings: (a: number, b: number, c: number, d: number) => [number, number, number, number];
@@ -774,6 +804,8 @@ export interface InitOutput {
     readonly start_sync: (a: number, b: number, c: any) => any;
     readonly status: () => [number, number, number];
     readonly subscribe_doc_changes: (a: any) => any;
+    readonly tally_collection: () => [number, number];
+    readonly tally_rkey: (a: number, b: number, c: number, d: number) => [number, number];
     readonly start: () => void;
     readonly __wbg_intounderlyingbytesource_free: (a: number, b: number) => void;
     readonly intounderlyingbytesource_autoAllocateChunkSize: (a: number) => number;

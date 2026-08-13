@@ -25,10 +25,12 @@
 // session, no network — so the wasm path is correct on both platforms.
 
 import {
+  channel_fetch_tallies,
   channel_open_blob,
   channel_publish,
   channel_republish_pointer,
   channel_resolve,
+  channel_resolve_tallies_url,
 } from '../../crates/pin-core/pkg/pin_core.js'
 import { ensureWasm } from '../core/wasm'
 import { inTauri } from './openExternal'
@@ -54,6 +56,8 @@ interface ChannelLocatorTransport {
   ): Promise<PublishedLocator>
   resolveLocator(channelKey: Uint8Array): Promise<ResolvedLocator | null>
   republishPointer(channelKey: Uint8Array, itemURL: string): Promise<void>
+  resolveTalliesUrl(channelKey: Uint8Array): Promise<string | null>
+  fetchTallies(channelKey: Uint8Array, itemURL: string): Promise<string>
 }
 
 let transportP: Promise<ChannelLocatorTransport> | null = null
@@ -86,6 +90,14 @@ async function buildTransport(): Promise<ChannelLocatorTransport> {
       await ensureWasm()
       return channel_republish_pointer(channelKey, itemURL)
     },
+    resolveTalliesUrl: async (channelKey) => {
+      await ensureWasm()
+      return (await channel_resolve_tallies_url(channelKey)) ?? null
+    },
+    fetchTallies: async (channelKey, itemURL) => {
+      await ensureWasm()
+      return channel_fetch_tallies(channelKey, itemURL)
+    },
   }
 }
 
@@ -111,6 +123,26 @@ export async function republishPointer(
   itemURL: string,
 ): Promise<void> {
   return (await transport()).republishPointer(channelKey, itemURL)
+}
+
+/** Where a channel's tallies currently are, or null when none are published — which is
+ *  ordinary and common, since a channel nobody has endorsed has no tallies object.
+ *
+ *  Split from the fetch because the URL is a content address: a caller holding the one it
+ *  last read knows from this alone that the counts are unchanged, and skips the download. */
+export async function resolveTalliesUrl(
+  channelKey: Uint8Array,
+): Promise<string | null> {
+  return (await transport()).resolveTalliesUrl(channelKey)
+}
+
+/** Download and open a channel's tallies at a URL already resolved for it, returning the
+ *  subject-to-tally map as JSON. */
+export async function fetchTallies(
+  channelKey: Uint8Array,
+  itemURL: string,
+): Promise<string> {
+  return (await transport()).fetchTallies(channelKey, itemURL)
 }
 
 /** Open a sealed manifest blob with K, returning its JSON. The path a CACHED copy takes,

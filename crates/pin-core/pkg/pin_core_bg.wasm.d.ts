@@ -2,11 +2,13 @@
 /* eslint-disable */
 export const memory: WebAssembly.Memory;
 export const channel_doc_namespaces: () => [number, number, number];
+export const channel_fetch_tallies: (a: number, b: number, c: number, d: number) => any;
 export const channel_id: (a: number, b: number) => [number, number, number, number];
 export const channel_open_blob: (a: number, b: number, c: number, d: number) => [number, number, number, number];
 export const channel_publish: (a: number, b: number, c: number, d: number) => any;
 export const channel_republish_pointer: (a: number, b: number, c: number, d: number) => any;
 export const channel_resolve: (a: number, b: number) => any;
+export const channel_resolve_tallies_url: (a: number, b: number) => any;
 export const content_hash: (a: number, b: number) => [number, number];
 export const decrypt_for_channel: (a: number, b: number, c: number, d: number) => [number, number, number, number];
 export const decrypt_settings: (a: number, b: number, c: number, d: number) => [number, number, number, number];
@@ -93,6 +95,8 @@ export const start_snapshot_loop: (a: number, b: number, c: number, d: number, e
 export const start_sync: (a: number, b: number, c: any) => any;
 export const status: () => [number, number, number];
 export const subscribe_doc_changes: (a: any) => any;
+export const tally_collection: () => [number, number];
+export const tally_rkey: (a: number, b: number, c: number, d: number) => [number, number];
 export const start: () => void;
 export const __wbg_intounderlyingbytesource_free: (a: number, b: number) => void;
 export const intounderlyingbytesource_autoAllocateChunkSize: (a: number) => number;

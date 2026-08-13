@@ -28,5 +28,16 @@ export async function makeTauriChannelLocator() {
         channelKey: Array.from(channelKey),
         itemURL,
       }),
+
+    resolveTalliesUrl: async (channelKey: Uint8Array) =>
+      (await invoke<string | null>('channel_resolve_tallies_url', {
+        channelKey: Array.from(channelKey),
+      })) ?? null,
+
+    fetchTallies: (channelKey: Uint8Array, itemURL: string) =>
+      invoke<string>('channel_fetch_tallies', {
+        channelKey: Array.from(channelKey),
+        itemURL,
+      }),
   }
 }

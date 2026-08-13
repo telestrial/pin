@@ -59,3 +59,30 @@ pub async fn channel_republish_pointer(
         .run(move |_| async move { pin_channel::republish_pointer(&key, &item_url).await })
         .await
 }
+
+/// Where a channel's tallies currently are, without fetching them. Needs no session,
+/// like `channel_republish_pointer`, and runs here for the same reason.
+#[tauri::command]
+pub async fn channel_resolve_tallies_url(
+    state: tauri::State<'_, SiaState>,
+    channel_key: Vec<u8>,
+) -> Result<Option<String>, String> {
+    let key = key32(&channel_key)?;
+    state
+        .run(move |_| async move { pin_channel::resolve_tallies_url(&key).await })
+        .await
+}
+
+/// Download and open a channel's tallies at a URL already resolved for it, returning the
+/// subject-to-tally map as JSON.
+#[tauri::command]
+pub async fn channel_fetch_tallies(
+    state: tauri::State<'_, SiaState>,
+    channel_key: Vec<u8>,
+    item_url: String,
+) -> Result<String, String> {
+    let key = key32(&channel_key)?;
+    state
+        .run(move |s| async move { pin_channel::fetch_tallies(&s, &key, &item_url).await })
+        .await
+}

@@ -75,6 +75,11 @@ function fakePublicKey(seed: Uint8Array): string {
 export function fakeChannelLocatorNativeModule() {
   const locatorKeyFor = (channelKey: Uint8Array) =>
     `loc-${fakePublicKey(channelKey)}`
+  // A channel's tallies live under their OWN pkarr key, not the manifest's. Modelled
+  // that way here too: sharing one key would let a test pass over a arrangement where
+  // publishing counts overwrote the pointer to the posts.
+  const talliesKeyFor = (channelKey: Uint8Array) =>
+    `eng-${fakePublicKey(channelKey)}`
 
   return {
     publishLocator: async (channelKey: Uint8Array, manifestJson: string) => {
@@ -115,7 +120,41 @@ export function fakeChannelLocatorNativeModule() {
 
     openBlob: async (channelKey: Uint8Array, blob: string) =>
       decrypt_for_channel(channelKey, blob),
+
+    resolveTalliesUrl: async (channelKey: Uint8Array) =>
+      getCurrentWorld()
+        .pkarr.get(talliesKeyFor(channelKey))
+        ?.find((r) => r.name === '_e0')?.value ?? null,
+
+    fetchTallies: async (channelKey: Uint8Array, itemURL: string) => {
+      const world = getCurrentWorld()
+      const id = itemURL.slice('sia://fake/'.length, itemURL.indexOf('#'))
+      const bytes = world.objects.get(id)?.bytes
+      if (!bytes) throw new Error(`Object not found: ${itemURL}`)
+      return decrypt_for_channel(channelKey, new TextDecoder().decode(bytes))
+    },
   }
+}
+
+/** Publish a channel's counts the way its author's Curator would, so a test can read
+ *  them back through the path a screen uses. Sealed under K for real — only Sia and
+ *  pkarr are faked. */
+export function publishFakeTallies(
+  channelKey: Uint8Array,
+  tallies: Record<string, unknown>,
+): void {
+  const world = getCurrentWorld()
+  const id = world.nextObjectID()
+  world.objects.set(id, {
+    id,
+    bytes: new TextEncoder().encode(
+      encrypt_for_channel(channelKey, JSON.stringify(tallies)),
+    ),
+    createdAt: new Date(),
+  })
+  world.pkarr.set(`eng-${fakePublicKey(channelKey)}`, [
+    { name: '_e0', value: `sia://fake/${id}#k=${id}` },
+  ])
 }
 
 export function fakePkarrModule() {

@@ -104,6 +104,8 @@ pub fn run() {
             channel::channel_publish,
             channel::channel_resolve,
             channel::channel_republish_pointer,
+            channel::channel_resolve_tallies_url,
+            channel::channel_fetch_tallies,
             sia::sia_account_snapshot,
             sia::sia_list_pinned_objects,
             sia::sia_get_object_slabs,

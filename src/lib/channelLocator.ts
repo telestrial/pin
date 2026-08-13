@@ -19,6 +19,7 @@ import {
   publishLocator,
   resolveLocator,
 } from './channelLocatorNative'
+import { warmChannelTallies } from './channelTallies'
 import { deleteRecord, getRecord, openDocs, putRecord } from './docs'
 import {
   channelPublishKey,
@@ -261,6 +262,11 @@ export function makeCachingLocatorReader(
     if (!ownedChannelIDs.has(channelID)) {
       void cacheSubscribedManifest(appKeyHex, channelID, resolved.ciphertext)
     }
+    // Counts travel with the channel they belong to: a read that had to go to the network
+    // for the posts is exactly the read whose counts aren't cached either. Owned channels
+    // included — the engagement loop fills their cache, and a screen open before it has
+    // run would otherwise show a post with no counts beside it.
+    void warmChannelTallies(appKeyHex, channelID, channelKey)
     return resolved.manifest
   }
 }
