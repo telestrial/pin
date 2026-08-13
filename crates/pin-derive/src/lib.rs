@@ -332,6 +332,15 @@ pub fn tally_rkey_channel(rkey: &str) -> Option<&str> {
     rkey.split_once(':').map(|(channel_id, _)| channel_id)
 }
 
+/// The collection recording, per subscribed channel, the tallies pointer the pull loop
+/// last read to completion. Keyed by channel id.
+///
+/// Apart from [`PULL_COLLECTION`] rather than a second field on the manifest's mark,
+/// because the two halves succeed independently: a mark is written only after the read
+/// it describes lands, and one record holding both would have each half overwriting the
+/// other's.
+pub const TALLY_PULL_COLLECTION: &str = "tally-pull";
+
 /// The collection recording, per actor, the directory pointer the crawl last read to
 /// completion. Keyed by that actor's `did:dht`.
 ///

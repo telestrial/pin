@@ -510,7 +510,7 @@ pub async fn engagement_once(
             // a reader treats an absent tally and a zero one the same, and one fewer
             // record is one fewer thing to sync.
             let _ = channel_doc.del(ctx.author_id, tally_key(subject)).await;
-            clear_cached_tally(ctx, channel_id, subject).await;
+            crate::clear_cached_tally(&ctx.doc, ctx.author_id, channel_id, subject).await;
             outcome.cleared += 1;
             continue;
         }
@@ -540,7 +540,15 @@ pub async fn engagement_once(
         // in hand — where a screen reaching the channel doc for it would have to hold that
         // replica, which for a channel you own means deriving a namespace the UI has no
         // other reason to know.
-        cache_tally(ctx, channel_id, subject, &aggregate).await;
+        crate::cache_tally(
+            &ctx.doc,
+            &ctx.blobs,
+            ctx.author_id,
+            channel_id,
+            subject,
+            &aggregate,
+        )
+        .await;
         outcome.tallies += 1;
     }
 
@@ -644,20 +652,6 @@ async fn read_tallies(
     Ok(map)
 }
 
-/// What one subject's tally ASSERTS, with the volatile parts stripped out.
-///
-/// `updatedAt` and `retentionCheckedAt` move on every pass whether or not a single
-/// endorsement did. A set root is a commitment over an exact backing set, so two tallies
-/// agreeing on their counts and roots have genuinely not moved — and `sampleActors` is
-/// drawn from that same set in its own sort order, so it is covered too.
-fn asserted(aggregate: &Aggregate) -> BTreeMap<&str, (usize, &str)> {
-    aggregate
-        .kinds
-        .iter()
-        .map(|(kind, tally)| (kind.as_str(), (tally.count, tally.set_root.as_str())))
-        .collect()
-}
-
 /// A fingerprint of what a channel's tallies assert.
 ///
 /// Fingerprinting the map verbatim would mint a fresh Sia object every cadence for every
@@ -665,74 +659,10 @@ fn asserted(aggregate: &Aggregate) -> BTreeMap<&str, (usize, &str)> {
 fn substance(map: &BTreeMap<String, Aggregate>) -> Result<String, String> {
     let stripped: BTreeMap<&str, BTreeMap<&str, (usize, &str)>> = map
         .iter()
-        .map(|(subject, aggregate)| (subject.as_str(), asserted(aggregate)))
+        .map(|(subject, aggregate)| (subject.as_str(), crate::asserted(aggregate)))
         .collect();
     let json = serde_json::to_string(&stripped).map_err(|e| format!("fingerprint: {e}"))?;
     Ok(pin_crypto::content_hash(json.as_bytes()))
-}
-
-/// Whether a held cache already says everything a freshly folded tally does.
-///
-/// Nothing held is never current — a first fold has to land, including the empty one a
-/// withdrawal produces.
-fn cache_is_current(held: Option<&Aggregate>, fresh: &Aggregate) -> bool {
-    held.map(asserted).as_ref() == Some(&asserted(fresh))
-}
-
-/// Cache one subject's tally where this identity's own screens read it.
-///
-/// Written only when what it asserts has changed. This doc syncs to every instance of
-/// the identity and is snapshotted whole to Sia against a fingerprint of its contents,
-/// so a record rewritten each pass because a timestamp moved would mint a fresh snapshot
-/// object every cadence. The cost is that a cached `retentionCheckedAt` lags until a
-/// count moves — understating how recently the check ran, never overstating it, and the
-/// same trade the floor already makes by gating its publish on [`substance`].
-///
-/// Best-effort: this is a cache, and the next pass that moves a count rewrites it.
-async fn cache_tally(
-    ctx: &EngagementContext,
-    channel_id: &str,
-    subject: &str,
-    aggregate: &Aggregate,
-) {
-    let rkey = pin_derive::tally_rkey(channel_id, subject);
-    let held = read_record(
-        &ctx.doc,
-        &ctx.blobs,
-        ctx.author_id,
-        pin_derive::TALLY_COLLECTION,
-        &rkey,
-    )
-    .await
-    .ok()
-    .flatten()
-    .and_then(|bytes| serde_json::from_slice::<Aggregate>(&bytes).ok());
-    if cache_is_current(held.as_ref(), aggregate) {
-        return;
-    }
-    let Ok(bytes) = serde_json::to_vec(aggregate) else {
-        return;
-    };
-    let _ = crate::write_record(
-        &ctx.doc,
-        ctx.author_id,
-        pin_derive::TALLY_COLLECTION,
-        &rkey,
-        bytes,
-    )
-    .await;
-}
-
-/// Drop one subject's cached tally, for a subject nothing endorses any more. Absent and
-/// zero read the same to a screen, so the record goes rather than sitting at zero.
-async fn clear_cached_tally(ctx: &EngagementContext, channel_id: &str, subject: &str) {
-    let _ = crate::delete_record(
-        &ctx.doc,
-        ctx.author_id,
-        pin_derive::TALLY_COLLECTION,
-        &pin_derive::tally_rkey(channel_id, subject),
-    )
-    .await;
 }
 
 /// Publish one channel's tallies where anyone holding its key can read them.
@@ -1066,49 +996,6 @@ mod tests {
     }
 
     /// One subject's tally, out of the map [`tallies`] builds.
-    fn one(count: usize, root: &str, updated: &str, retention: Option<&str>) -> Aggregate {
-        tallies(count, root, updated, retention)
-            .remove(SUBJECT)
-            .unwrap()
-    }
-
-    #[test]
-    fn a_cached_tally_is_not_rewritten_when_only_the_clock_moved() {
-        // The same guard the floor has, and needed here for a sharper reason: this doc
-        // is snapshotted WHOLE to Sia against a fingerprint of its contents, so a record
-        // rewritten every pass would mint a fresh snapshot object every cadence.
-        let held = one(3, "root-a", "2026-08-12T10:00:00.000Z", None);
-        let fresh = one(
-            3,
-            "root-a",
-            "2026-08-12T10:10:00.000Z",
-            Some("2026-08-12T10:10:00.000Z"),
-        );
-        assert!(cache_is_current(Some(&held), &fresh));
-    }
-
-    #[test]
-    fn a_cached_tally_is_rewritten_when_its_count_moved() {
-        let held = one(3, "root-a", "2026-08-12T10:00:00.000Z", None);
-        let fresh = one(4, "root-b", "2026-08-12T10:00:00.000Z", None);
-        assert!(!cache_is_current(Some(&held), &fresh));
-    }
-
-    #[test]
-    fn a_cached_tally_is_rewritten_when_its_set_moved_under_the_same_count() {
-        let held = one(3, "root-a", "2026-08-12T10:00:00.000Z", None);
-        let fresh = one(3, "root-b", "2026-08-12T10:00:00.000Z", None);
-        assert!(!cache_is_current(Some(&held), &fresh));
-    }
-
-    #[test]
-    fn a_first_fold_is_always_written() {
-        // Nothing held can't be current, or a subject's first count would never reach
-        // the screen — the cache would skip the one write that populates it.
-        let fresh = one(1, "root-a", "2026-08-12T10:00:00.000Z", None);
-        assert!(!cache_is_current(None, &fresh));
-    }
-
     fn state(id: &str, older: Option<&str>) -> crate::PublishedState {
         crate::PublishedState {
             id: id.to_string(),

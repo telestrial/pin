@@ -3,8 +3,8 @@
 //
 // Each has its own module, and each is one job:
 //
-//   PULL        keeps the subscribed channels' manifests current in the doc, so a reader
-//               lands on a cached copy instead of waiting on the DHT.
+//   PULL        keeps the subscribed channels' manifests and published counts current in
+//               the doc, so a reader lands on a cached copy instead of waiting on the DHT.
 //   KEEP-ALIVE  republishes the owned channels' locators (and the settings locator) so
 //               they don't age off the DHT and take discoverability with them.
 //   CHANNELDOC  serves each owned channel as a live replica and advertises a read ticket
@@ -42,22 +42,29 @@
 // (see `is_older_than_cached`); it holds `K` for these channels anyway, and moving a
 // channel backwards is the failure this exists to prevent.
 //
-// Most passes download nothing. A manifest's pointer is a Sia URL, so it is a content
-// address: unchanged means the bytes behind it are the ones already cached. A pass
-// resolves the pointer, and fetches only when either it or the cached record has moved
-// (see `may_skip_pull`) — so the steady-state cost of watching a channel is one DHT
-// resolve, and the Sia read happens when there is actually something new to read.
+// It reads a second artifact per channel: the counts its author published, into
+// `tally/<channelID>:<subject>`. That is engagement's floor rung from the reader's side,
+// and it is what a row renders from — the copy that arrives over live sync reaches only
+// subscribers holding that replica, where everyone who can read a channel holds K.
+//
+// Most passes download nothing. Both pointers are Sia URLs, so both are content
+// addresses: unchanged means the bytes behind them are the ones already cached. A pass
+// resolves each pointer and fetches only when something has moved (see `may_skip_pull`
+// and `TallyMark`) — so the steady-state cost of watching a channel is two DHT resolves,
+// and a Sia read happens when there is actually something new to read.
 //
 // It does NOT touch the feed. A pass announces itself by writing a record, and the
 // doc's change feed carries that to whatever is rendering; the loop has no opinion
 // about whether anything is.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
 use iroh_blobs::api::Store;
 use iroh_docs::{api::Doc, AuthorId};
 use pin_derive::{record_key, settings_key};
+use pin_engagement::Aggregate;
 
 mod channeldoc;
 mod channelsync;
@@ -138,6 +145,10 @@ pub struct PullOutcome {
     /// Channels left alone because neither the pointer nor the cached record had moved
     /// since the last pass — so no download at all. The steady state.
     pub skipped: usize,
+    /// Subjects whose cached tally was written from a channel's published counts.
+    pub tallies: usize,
+    /// Channels whose tallies pointer hadn't moved, so their counts weren't downloaded.
+    pub tallies_skipped: usize,
 }
 
 /// What the pull loop last cached for one channel: where it came from, and what it wrote.
@@ -193,6 +204,209 @@ async fn write_pull_mark(ctx: &PullContext, channel_id: &str, mark: &PullMark) {
         bytes,
     )
     .await;
+}
+
+// --- the tally cache ----------------------------------------------------------
+//
+// One address (`tally/<channelID>:<subject>`) that this identity's screens read, written
+// by whichever loop is in a position to know a count: the engagement loop for a channel
+// this identity owns, from the fold it just computed, and the pull loop for a subscribed
+// one, from the counts its author published. Shared here rather than living with either
+// so the two feeders write the same record the same way.
+
+/// What one subject's tally ASSERTS, with the volatile parts stripped out.
+///
+/// `updatedAt` and `retentionCheckedAt` move on every pass whether or not a single
+/// endorsement did. A set root is a commitment over an exact backing set, so two tallies
+/// agreeing on their counts and roots have genuinely not moved — and `sampleActors` is
+/// drawn from that same set in its own sort order, so it is covered too.
+pub(crate) fn asserted(aggregate: &Aggregate) -> BTreeMap<&str, (usize, &str)> {
+    aggregate
+        .kinds
+        .iter()
+        .map(|(kind, tally)| (kind.as_str(), (tally.count, tally.set_root.as_str())))
+        .collect()
+}
+
+/// Whether a held cache already says everything a fresher tally does.
+///
+/// Nothing held is never current — a first count has to land, including the empty one a
+/// withdrawal produces.
+pub(crate) fn cache_is_current(held: Option<&Aggregate>, fresh: &Aggregate) -> bool {
+    held.map(asserted).as_ref() == Some(&asserted(fresh))
+}
+
+/// Whether a tally would replace a held one with an OLDER reading of the same counts.
+///
+/// Every tally for a channel is stamped by that channel's author on one clock, so the
+/// two are comparable. It matters because the cache has more than one feeder and they
+/// don't run at the same distance from the source: a live-synced copy of the author's
+/// own fold arrives in seconds, where a floor read comes off a pointer a browser resolves
+/// through relays minutes behind. Writing the floor's answer over the fresher one would
+/// walk a count backwards.
+pub(crate) fn tally_is_older(held: Option<&Aggregate>, fresh: &Aggregate) -> bool {
+    held.is_some_and(|h| fresh.updated_at < h.updated_at)
+}
+
+/// Cache one subject's tally where this identity's own screens read it.
+///
+/// Written only when what it asserts has changed. This doc syncs to every instance of the
+/// identity and is snapshotted whole to Sia against a fingerprint of its contents, so a
+/// record rewritten each pass because a timestamp moved would mint a fresh snapshot object
+/// every cadence. The cost is that a cached `retentionCheckedAt` lags until a count moves —
+/// understating how recently the check ran, never overstating it, and the same trade the
+/// floor already makes by gating its publish on its own substance.
+///
+/// Best-effort: this is a cache, and the next pass that moves a count rewrites it.
+pub(crate) async fn cache_tally(
+    doc: &Doc,
+    blobs: &Store,
+    author_id: AuthorId,
+    channel_id: &str,
+    subject: &str,
+    aggregate: &Aggregate,
+) -> bool {
+    let rkey = pin_derive::tally_rkey(channel_id, subject);
+    let held = read_record(doc, blobs, author_id, pin_derive::TALLY_COLLECTION, &rkey)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|bytes| serde_json::from_slice::<Aggregate>(&bytes).ok());
+    if cache_is_current(held.as_ref(), aggregate) || tally_is_older(held.as_ref(), aggregate) {
+        return false;
+    }
+    let Ok(bytes) = serde_json::to_vec(aggregate) else {
+        return false;
+    };
+    write_record(doc, author_id, pin_derive::TALLY_COLLECTION, &rkey, bytes)
+        .await
+        .is_ok()
+}
+
+/// Drop one subject's cached tally, for a subject nothing endorses any more. Absent and
+/// zero read the same to a screen, so the record goes rather than sitting at zero.
+pub(crate) async fn clear_cached_tally(
+    doc: &Doc,
+    author_id: AuthorId,
+    channel_id: &str,
+    subject: &str,
+) {
+    let _ = delete_record(
+        doc,
+        author_id,
+        pin_derive::TALLY_COLLECTION,
+        &pin_derive::tally_rkey(channel_id, subject),
+    )
+    .await;
+}
+
+/// Where a channel's published tallies were when this loop last read them.
+///
+/// The pointer alone, unlike the manifest's mark. A cached tally is written back only
+/// when what it asserts has changed, and the accelerant rung — a live-synced copy of the
+/// author's own fold — is never older than the floor it would be overwriting. So the
+/// hazard the manifest's second term guards against, a clobbered cache sitting stale,
+/// doesn't arise: whatever else writes here writes something at least as fresh.
+#[derive(serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+struct TallyMark {
+    url: String,
+}
+
+/// The tallies pointer held for a channel, or None if this loop has never read one.
+async fn read_tally_mark(ctx: &PullContext, channel_id: &str) -> Option<TallyMark> {
+    let raw = read_record(
+        &ctx.doc,
+        &ctx.blobs,
+        ctx.author_id,
+        pin_derive::TALLY_PULL_COLLECTION,
+        channel_id,
+    )
+    .await
+    .ok()??;
+    serde_json::from_slice(&raw).ok()
+}
+
+/// Record the pointer a pass read to completion. Written after the counts land, never
+/// before: a mark recorded on a read that failed would skip the channel until its author
+/// next published.
+async fn write_tally_mark(ctx: &PullContext, channel_id: &str, mark: &TallyMark) {
+    let Ok(bytes) = serde_json::to_vec(mark) else {
+        return;
+    };
+    let _ = write_record(
+        &ctx.doc,
+        ctx.author_id,
+        pin_derive::TALLY_PULL_COLLECTION,
+        channel_id,
+        bytes,
+    )
+    .await;
+}
+
+/// Read one subscribed channel's published counts into the cache its own screens read.
+///
+/// The floor rung from the reader's side. A channel with no tallies pointer is the common
+/// case rather than a failure — nobody has endorsed anything in it — and reads as nothing
+/// to do.
+async fn pull_tallies(
+    ctx: &PullContext,
+    channel_id: &str,
+    k: &[u8; 32],
+    outcome: &mut PullOutcome,
+) {
+    let Ok(Some(item_url)) = pin_channel::resolve_tallies_url(k).await else {
+        return;
+    };
+    let mark = TallyMark { url: item_url };
+    if read_tally_mark(ctx, channel_id).await.as_ref() == Some(&mark) {
+        outcome.tallies_skipped += 1;
+        return;
+    }
+
+    let Ok(json) = pin_channel::fetch_tallies(&ctx.sia, k, &mark.url).await else {
+        return;
+    };
+    let Ok(map) = serde_json::from_str::<BTreeMap<String, Aggregate>>(&json) else {
+        return;
+    };
+
+    for (subject, aggregate) in &map {
+        if cache_tally(
+            &ctx.doc,
+            &ctx.blobs,
+            ctx.author_id,
+            channel_id,
+            subject,
+            aggregate,
+        )
+        .await
+        {
+            outcome.tallies += 1;
+        }
+    }
+
+    // Subjects the author no longer publishes counts for. Their endorsements were
+    // withdrawn, so a cached count would keep asserting a set that no longer exists.
+    for rkey in cached_tally_rkeys(ctx, channel_id).await {
+        let Some((_, subject)) = rkey.split_once(':') else {
+            continue;
+        };
+        if !map.contains_key(subject) {
+            clear_cached_tally(&ctx.doc, ctx.author_id, channel_id, subject).await;
+        }
+    }
+
+    write_tally_mark(ctx, channel_id, &mark).await;
+}
+
+/// The cached-tally rkeys belonging to one channel.
+async fn cached_tally_rkeys(ctx: &PullContext, channel_id: &str) -> Vec<String> {
+    list_rkeys(&ctx.doc, ctx.author_id, pin_derive::TALLY_COLLECTION)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|rkey| pin_derive::tally_rkey_channel(rkey) == Some(channel_id))
+        .collect()
 }
 
 /// The content hash of a record, without fetching its bytes.
@@ -522,8 +736,8 @@ pub(crate) fn is_older_than_cached(
     }
 }
 
-/// One pass: refresh every subscribed channel's cached manifest, and drop the cache for
-/// channels no longer subscribed.
+/// One pass: refresh every subscribed channel's cached manifest and published counts, and
+/// drop the cache for channels no longer subscribed.
 ///
 /// Never gives up the whole pass for one channel. A channel that fails is counted and
 /// left for the next pass — one unreachable author must not stop the rest from being
@@ -540,6 +754,10 @@ pub async fn pull_once(ctx: &PullContext) -> Result<PullOutcome, String> {
             // make the next pass retry something that cannot succeed.
             continue;
         };
+        // Independent of the manifest below: a channel whose posts haven't moved can still
+        // have counts that have, so neither half's skip may stand in for the other's.
+        pull_tallies(ctx, channel_id, &k, &mut outcome).await;
+
         let item_url = match pin_channel::resolve_url(&k).await {
             Ok(Some(url)) => url,
             Ok(None) => {
@@ -628,7 +846,47 @@ pub async fn pull_once(ctx: &PullContext) -> Result<PullOutcome, String> {
     }
 
     outcome.dropped = drop_unsubscribed(ctx, &wanted).await;
+    drop_tallies_for_gone_channels(ctx, &settings, &wanted).await;
     Ok(outcome)
+}
+
+/// The channels whose cached tallies are still wanted.
+///
+/// Owned channels are kept although they are absent from the subscribed set — that set
+/// excludes them deliberately, and their tallies are written by the engagement loop, not
+/// this one. Dropping on the subscribed set alone would delete a channel's own counts
+/// every pass, for the engagement loop to write straight back.
+fn tally_channels_to_keep<'a>(
+    settings: &'a SettingsView,
+    wanted: &[(&'a str, &'a str)],
+) -> std::collections::HashSet<&'a str> {
+    wanted
+        .iter()
+        .map(|(id, _)| *id)
+        .chain(settings.my_channels.iter().map(|c| c.channel_id.as_str()))
+        .collect()
+}
+
+/// Delete cached tallies for channels this identity neither follows nor owns.
+async fn drop_tallies_for_gone_channels(
+    ctx: &PullContext,
+    settings: &SettingsView,
+    wanted: &[(&str, &str)],
+) {
+    let keep = tally_channels_to_keep(settings, wanted);
+
+    for rkey in list_rkeys(&ctx.doc, ctx.author_id, pin_derive::TALLY_COLLECTION)
+        .await
+        .unwrap_or_default()
+    {
+        // A key with no channel can't be attributed, so it goes: it is not a tally any
+        // reader can find, since a reader looks one up by channel and subject.
+        let gone = pin_derive::tally_rkey_channel(&rkey).is_none_or(|id| !keep.contains(id));
+        if gone {
+            let _ =
+                delete_record(&ctx.doc, ctx.author_id, pin_derive::TALLY_COLLECTION, &rkey).await;
+        }
+    }
 }
 
 /// Delete cached manifests for channels the user no longer subscribes to (or that are
@@ -886,5 +1144,111 @@ mod tests {
         // anything else stays wrong until the author happens to publish again.
         let held = pull_mark("sia://a", "h1");
         assert!(!may_skip_pull(Some(&held), &pull_mark("sia://a", "h2")));
+    }
+
+    // --- the tally cache ------------------------------------------------------
+
+    fn tally(count: usize, root: &str, updated: &str, retention: Option<&str>) -> Aggregate {
+        let mut kinds = BTreeMap::new();
+        kinds.insert(
+            pin_engagement::KIND_LIKE.to_string(),
+            pin_engagement::KindTally {
+                count,
+                set_root: root.to_string(),
+                sample_actors: vec!["did:dht:alice".to_string()],
+                retention_checked_at: retention.map(str::to_string),
+            },
+        );
+        Aggregate {
+            kinds,
+            updated_at: updated.to_string(),
+        }
+    }
+
+    #[test]
+    fn a_cached_tally_is_not_rewritten_when_only_the_clock_moved() {
+        // The same guard the floor has, and needed here for a sharper reason: this doc is
+        // snapshotted WHOLE to Sia against a fingerprint of its contents, so a record
+        // rewritten every pass would mint a fresh snapshot object every cadence.
+        let held = tally(3, "root-a", "2026-08-12T10:00:00.000Z", None);
+        let fresh = tally(
+            3,
+            "root-a",
+            "2026-08-12T10:10:00.000Z",
+            Some("2026-08-12T10:10:00.000Z"),
+        );
+        assert!(cache_is_current(Some(&held), &fresh));
+    }
+
+    #[test]
+    fn a_cached_tally_is_rewritten_when_its_count_moved() {
+        let held = tally(3, "root-a", "2026-08-12T10:00:00.000Z", None);
+        let fresh = tally(4, "root-b", "2026-08-12T10:00:00.000Z", None);
+        assert!(!cache_is_current(Some(&held), &fresh));
+    }
+
+    #[test]
+    fn a_cached_tally_is_rewritten_when_its_set_moved_under_the_same_count() {
+        let held = tally(3, "root-a", "2026-08-12T10:00:00.000Z", None);
+        let fresh = tally(3, "root-b", "2026-08-12T10:00:00.000Z", None);
+        assert!(!cache_is_current(Some(&held), &fresh));
+    }
+
+    #[test]
+    fn a_first_count_is_always_written() {
+        // Nothing held can't be current, or a subject's first count would never reach the
+        // screen — the cache would skip the one write that populates it.
+        let fresh = tally(1, "root-a", "2026-08-12T10:00:00.000Z", None);
+        assert!(!cache_is_current(None, &fresh));
+    }
+
+    #[test]
+    fn a_count_older_than_the_cached_one_is_refused() {
+        // A browser resolves the floor through relays minutes behind the DHT, while the
+        // author's own fold arrives over live sync in seconds. Taking the floor's answer
+        // unconditionally would walk the count backwards.
+        let held = tally(5, "root-b", "2026-08-12T10:10:00.000Z", None);
+        let fresh = tally(3, "root-a", "2026-08-12T10:00:00.000Z", None);
+        assert!(tally_is_older(Some(&held), &fresh));
+    }
+
+    #[test]
+    fn a_count_from_the_same_instant_is_taken() {
+        // Strictly older only, like the manifest's guard: equal stamps mean one instant
+        // with different content, and refusing that would be the worse error.
+        let held = tally(3, "root-a", "2026-08-12T10:00:00.000Z", None);
+        let fresh = tally(4, "root-b", "2026-08-12T10:00:00.000Z", None);
+        assert!(!tally_is_older(Some(&held), &fresh));
+    }
+
+    #[test]
+    fn a_count_with_nothing_cached_is_taken() {
+        let fresh = tally(1, "root-a", "2026-08-12T10:00:00.000Z", None);
+        assert!(!tally_is_older(None, &fresh));
+    }
+
+    #[test]
+    fn a_channels_own_counts_survive_the_drop() {
+        // Owned channels are excluded from the subscribed set on purpose, and their
+        // tallies come from the engagement loop rather than this one. Dropping on the
+        // subscribed set alone would delete them every pass.
+        let s = settings(
+            r#"{
+              "subscriptions": [
+                {"channelID": "aaa", "channelKey": "k1"},
+                {"channelID": "bbb", "channelKey": "k2"}
+              ],
+              "myChannels": [{"channelID": "aaa"}]
+            }"#,
+        );
+        let keep = tally_channels_to_keep(&s, &wanted_channels(&s));
+        assert!(keep.contains("aaa"));
+        assert!(keep.contains("bbb"));
+    }
+
+    #[test]
+    fn an_unsubscribed_channels_counts_are_dropped() {
+        let s = settings(r#"{"subscriptions": [], "myChannels": []}"#);
+        assert!(!tally_channels_to_keep(&s, &wanted_channels(&s)).contains("gone"));
     }
 }
