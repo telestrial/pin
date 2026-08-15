@@ -4,7 +4,7 @@ import { installAppBridge } from '../../lib/appBridge'
 import { APP_SANDBOX } from '../../lib/constants'
 import { useItemBytes } from '../../lib/hooks/useItemBytes'
 import type { PinInput } from '../../stores/pin'
-import { PinButton } from '../pin/PinButton'
+import { EngagementRow } from '../engagement/EngagementRow'
 
 export function ReadApp({
   item,
@@ -63,7 +63,7 @@ export function ReadApp({
                   Edit
                 </button>
               )}
-              <PinButton input={pinInput} />
+              <EngagementRow input={pinInput} />
             </div>
           </div>
 

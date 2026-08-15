@@ -1,7 +1,7 @@
 import type { ItemRef } from '../../core/types'
 import { useItemBlobURL } from '../../lib/hooks/useItemBytes'
 import type { PinInput } from '../../stores/pin'
-import { PinButton } from '../pin/PinButton'
+import { EngagementRow } from '../engagement/EngagementRow'
 
 export function ReadImage({
   item,
@@ -51,7 +51,7 @@ export function ReadImage({
                   Edit
                 </button>
               )}
-              <PinButton input={pinInput} />
+              <EngagementRow input={pinInput} />
             </div>
           </div>
 

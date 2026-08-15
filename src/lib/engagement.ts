@@ -61,6 +61,29 @@ export type EndorsedItem = {
  *  existence, which is the property being protected. */
 export type ReferenceAuthor = string | null
 
+/** Who to name in an endorsement's reference for a given channel.
+ *
+ *  Read from the manifest this identity already holds. A did:dht only for a PUBLIC
+ *  channel: naming the author makes the record navigable, which is right for a channel
+ *  already advertised and would give away both an unlisted one and its existence
+ *  otherwise. Absent — an endorsement made before the channel loaded — resolves to null,
+ *  which publishes the subject hash alone, and a catch-up fills the reference in later
+ *  since it sits outside the signature. Null is the safe direction: less is revealed,
+ *  never more.
+ *
+ *  One rule for every gesture, and it has to be: two endorsements of the same item
+ *  disagreeing about the reference would each see the other as stale and rewrite it,
+ *  waking every instance syncing the doc, forever. */
+export async function referenceAuthorFor(
+  channelID: string,
+): Promise<ReferenceAuthor> {
+  const { useFeedStore } = await import('../stores/feed')
+  const manifest = useFeedStore.getState().manifests[channelID]
+  return manifest?.visibility === 'public' && manifest.authorDidDht
+    ? manifest.authorDidDht
+    : null
+}
+
 export async function collection(): Promise<string> {
   await ensureWasm()
   return endorse_collection()

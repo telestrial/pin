@@ -8,7 +8,7 @@ import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
 import { AttachmentGrid } from './AttachmentMedia'
 import { ChannelAvatar } from './channel/ChannelAvatar'
-import { PinButton } from './pin/PinButton'
+import { EngagementRow } from './engagement/EngagementRow'
 
 export function HomeFeed({
   onItemClick,
@@ -314,22 +314,22 @@ export function FeedRow({
                     </span>
                   )}
                 </p>
-                <PinButton
-                  input={{
-                    item,
-                    channel: {
-                      authorHandle: channel.authorHandle,
-                      channelID: channel.channelID,
-                      name: channel.name,
-                    },
-                  }}
-                />
               </div>
             </div>
             <PostBody
               item={item}
               channelID={channel.channelID}
               onHandleClick={onHandleClick}
+            />
+            <EngagementRow
+              input={{
+                item,
+                channel: {
+                  authorHandle: channel.authorHandle,
+                  channelID: channel.channelID,
+                  name: channel.name,
+                },
+              }}
             />
           </div>
         </div>

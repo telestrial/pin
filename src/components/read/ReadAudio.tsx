@@ -1,7 +1,7 @@
 import type { ItemRef } from '../../core/types'
 import { useItemBlobURL } from '../../lib/hooks/useItemBytes'
 import type { PinInput } from '../../stores/pin'
-import { PinButton } from '../pin/PinButton'
+import { EngagementRow } from '../engagement/EngagementRow'
 
 export function ReadAudio({
   item,
@@ -39,7 +39,7 @@ export function ReadAudio({
             >
               {backLabel}
             </button>
-            <PinButton input={pinInput} />
+            <EngagementRow input={pinInput} />
           </div>
 
           <header className="space-y-1">

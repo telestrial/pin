@@ -216,16 +216,30 @@ export function fakePkarrModule() {
 // store, and asserting on records is most of what these tests are for.
 export const fakeDocStore = new Map<string, Uint8Array>()
 
+/** Who's watching the fake doc for changes. */
+type DocChange = { collection: string; rkey: string; kind: string }
+const docWatchers = new Set<(change: DocChange) => void>()
+
 export function fakeDocsModule() {
+  // A write ANNOUNCES itself, as it does in both real engines. The fake used to return
+  // an unsubscribe and never call anything, which made every consumer of the change feed
+  // untestable — and that feed is precisely the machinery that turned out to be dead on
+  // desktop for two weeks without a test able to notice.
+  const announce = (collection: string, rkey: string, kind: string) => {
+    for (const watcher of [...docWatchers]) watcher({ collection, rkey, kind })
+  }
+
   return {
     openDocs: async () => 'fake-namespace',
     putRecord: async (collection: string, rkey: string, value: Uint8Array) => {
       fakeDocStore.set(`${collection}/${rkey}`, value)
+      announce(collection, rkey, 'insert-local')
     },
     getRecord: async (collection: string, rkey: string) =>
       fakeDocStore.get(`${collection}/${rkey}`),
     deleteRecord: async (collection: string, rkey: string) => {
       fakeDocStore.delete(`${collection}/${rkey}`)
+      announce(collection, rkey, 'insert-local')
     },
     listRecords: async (collection: string) =>
       [...fakeDocStore.keys()]
@@ -239,7 +253,10 @@ export function fakeDocsModule() {
         if (i <= 0 || i === k.length - 1) return []
         return [{ collection: k.slice(0, i), rkey: k.slice(i + 1) }]
       }),
-    subscribeDocChanges: () => () => {},
+    subscribeDocChanges: (onChange: (change: DocChange) => void) => {
+      docWatchers.add(onChange)
+      return () => docWatchers.delete(onChange)
+    },
     startPullLoop: async () => {},
   }
 }

@@ -67,20 +67,6 @@ export function endorsedItemFor(ref: PinnedItemRef): {
   }
 }
 
-/** Who to name in the endorsement's reference for a channel this identity doesn't own.
- *
- *  Read from the manifest we already hold. Absent — a pin made before the channel loaded
- *  — resolves to null, which publishes the subject hash alone; the catch-up fills the
- *  reference in later, since it sits outside the signature. Null is the safe direction:
- *  less is revealed, never more. */
-async function referenceAuthorFor(channelID: string): Promise<string | null> {
-  const { useFeedStore } = await import('./feed')
-  const manifest = useFeedStore.getState().manifests[channelID]
-  return manifest?.visibility === 'public' && manifest.authorDidDht
-    ? manifest.authorDidDht
-    : null
-}
-
 /** Publish the pin as an endorsement too, so it can be counted.
  *
  *  A pin is a mixed gesture: it mirrors bytes into this identity's Sia scope (private, in
@@ -97,7 +83,9 @@ async function endorsePin(ref: PinnedItemRef): Promise<void> {
   try {
     const hex = await appKeyHex()
     if (!hex) return
-    const { writeEndorsement } = await import('../lib/engagement')
+    const { writeEndorsement, referenceAuthorFor } = await import(
+      '../lib/engagement'
+    )
     await writeEndorsement(
       hex,
       'pin',

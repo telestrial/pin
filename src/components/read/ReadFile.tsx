@@ -4,7 +4,7 @@ import type { ItemRef } from '../../core/types'
 import { formatBytes } from '../../lib/format'
 import { useAuthStore } from '../../stores/auth'
 import type { PinInput } from '../../stores/pin'
-import { PinButton } from '../pin/PinButton'
+import { EngagementRow } from '../engagement/EngagementRow'
 
 export function ReadFile({
   item,
@@ -72,7 +72,7 @@ export function ReadFile({
             >
               {backLabel}
             </button>
-            <PinButton input={pinInput} />
+            <EngagementRow input={pinInput} />
           </div>
 
           <header className="space-y-1">

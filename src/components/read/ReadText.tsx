@@ -8,7 +8,7 @@ import { useAuthStore } from '../../stores/auth'
 import { useFeedStore } from '../../stores/feed'
 import { type PinInput, usePinStore } from '../../stores/pin'
 import { AttachmentGrid } from '../AttachmentMedia'
-import { PinButton } from '../pin/PinButton'
+import { EngagementRow } from '../engagement/EngagementRow'
 
 export function ReadText({
   item,
@@ -107,7 +107,7 @@ export function ReadText({
                   Edit
                 </button>
               )}
-              <PinButton input={pinInput} />
+              <EngagementRow input={pinInput} />
             </div>
           </div>
 
