@@ -561,7 +561,7 @@ export function start_deliver_loop(app_key_hex: string, cadence_secs: number, re
  * well while it is open, so there is nothing about crawling that differs by device; what
  * differs is only how long it stays open to keep doing it.
  */
-export function start_engagement_loop(app_key_hex: string, cadence_secs: number, on_pass: Function): Promise<void>;
+export function start_engagement_loop(app_key_hex: string, cadence_secs: number, crawl_every: number, on_pass: Function): Promise<void>;
 
 /**
  * Start the identity-publishing loop in this tab — one packet under the did:dht key
@@ -571,7 +571,7 @@ export function start_engagement_loop(app_key_hex: string, cadence_secs: number,
  * assemble it from the doc rather than from what they happen to know locally. That's
  * what stopped them overwriting each other.
  */
-export function start_identity_loop(app_key_hex: string, namespace_id: string, cadence_secs: number, on_pass: Function): Promise<void>;
+export function start_identity_loop(app_key_hex: string, namespace_id: string, cadence_secs: number, retry_secs: number, on_pass: Function): Promise<void>;
 
 /**
  * Start this instance's registration loop in this tab.
@@ -581,7 +581,7 @@ export function start_identity_loop(app_key_hex: string, namespace_id: string, c
  * durable, which is the honest difference: a desktop stays up, a tab doesn't, and a
  * peer choosing among endpoints should know which is which.
  */
-export function start_instance_loop(cadence_secs: number, on_pass: Function): Promise<void>;
+export function start_instance_loop(cadence_secs: number, retry_secs: number, on_pass: Function): Promise<void>;
 
 /**
  * Start the Curator's locator keep-alive loop in this tab.
@@ -805,9 +805,9 @@ export interface InitOutput {
     readonly start_channel_doc_loop: (a: number, b: number, c: number, d: any) => any;
     readonly start_channel_sync_loop: (a: number, b: number, c: number, d: number, e: any) => any;
     readonly start_deliver_loop: (a: number, b: number, c: number, d: number, e: any) => any;
-    readonly start_engagement_loop: (a: number, b: number, c: number, d: any) => any;
-    readonly start_identity_loop: (a: number, b: number, c: number, d: number, e: number, f: any) => any;
-    readonly start_instance_loop: (a: number, b: any) => any;
+    readonly start_engagement_loop: (a: number, b: number, c: number, d: number, e: any) => any;
+    readonly start_identity_loop: (a: number, b: number, c: number, d: number, e: number, f: number, g: any) => any;
+    readonly start_instance_loop: (a: number, b: number, c: any) => any;
     readonly start_keep_alive_loop: (a: number, b: number, c: number, d: any) => any;
     readonly start_pull_loop: (a: number, b: number, c: number, d: any) => any;
     readonly start_rendezvous_loop: (a: number, b: number, c: number, d: number, e: any) => any;

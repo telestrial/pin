@@ -588,6 +588,7 @@ pub async fn start_repack_loop(
 #[wasm_bindgen]
 pub async fn start_instance_loop(
     cadence_secs: u32,
+    retry_secs: u32,
     on_pass: js_sys::Function,
 ) -> Result<(), JsValue> {
     let eng = engine()?;
@@ -615,6 +616,7 @@ pub async fn start_instance_loop(
         pin_curator::run_instance_loop(
             ctx,
             std::time::Duration::from_secs(cadence_secs as u64),
+            std::time::Duration::from_secs(retry_secs as u64),
             // js_sys::Date rather than SystemTime, which panics on this target.
             || (js_sys::Date::now() / 1000.0) as u64,
             relay,
@@ -694,6 +696,7 @@ pub async fn start_rendezvous_loop(
 pub async fn start_engagement_loop(
     app_key_hex: String,
     cadence_secs: u32,
+    crawl_every: u32,
     on_pass: js_sys::Function,
 ) -> Result<(), JsValue> {
     let eng = engine()?;
@@ -721,6 +724,7 @@ pub async fn start_engagement_loop(
             ctx,
             own_did,
             std::time::Duration::from_secs(cadence_secs as u64),
+            crawl_every,
             // From JS: neither SystemTime nor a date formatter is available on this target.
             || js_sys::Date::new_0().to_iso_string().into(),
             |result| {
@@ -731,6 +735,8 @@ pub async fn start_engagement_loop(
                         "added": o.added,
                         "withdrawn": o.withdrawn,
                         "knocked": o.knocked,
+                        "knocksRejected": o.knocks_rejected,
+                        "knocksNotOurs": o.knocks_not_ours,
                         "staleKnocks": o.stale_knocks,
                         "tallies": o.tallies,
                         "cleared": o.cleared,
@@ -820,6 +826,7 @@ pub async fn start_identity_loop(
     app_key_hex: String,
     namespace_id: String,
     cadence_secs: u32,
+    retry_secs: u32,
     on_pass: js_sys::Function,
 ) -> Result<(), JsValue> {
     let eng = engine()?;
@@ -840,6 +847,7 @@ pub async fn start_identity_loop(
         pin_curator::run_identity_loop(
             ctx,
             std::time::Duration::from_secs(cadence_secs as u64),
+            std::time::Duration::from_secs(retry_secs as u64),
             // Both clocks come from JS: neither SystemTime nor a date formatter is
             // available on this target.
             || js_sys::Date::new_0().to_iso_string().into(),

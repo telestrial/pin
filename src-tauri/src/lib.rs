@@ -93,6 +93,7 @@ pub fn run() {
             curator::curator_start_identity,
             curator::curator_start_engagement,
             curator::curator_start_deliver,
+            curator::curator_deliver_probe,
             curator::curator_start_sync,
             sia::sia_connect,
             sia::sia_upload_item,

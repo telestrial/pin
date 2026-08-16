@@ -485,6 +485,9 @@ export async function startRepackLoop(
  *  the liveness window the Curator crate defines, so a missed pass doesn't drop a
  *  running instance out of the identity's published endpoints. */
 const INSTANCE_CADENCE_SECS = 15 * 60
+/** How soon to re-register while this instance has no address to publish yet. A peer
+ *  skips an endpoint that doesn't say where it is, so until this lands nobody can knock. */
+const INSTANCE_RETRY_SECS = 15
 
 /** Start this instance's registration loop — a heartbeat recording that this node id
  *  is a live endpoint for this identity.
@@ -499,8 +502,10 @@ export async function startInstanceLoop(
 ): Promise<void> {
   if (inTauri()) return startInstanceLoopNative()
   await ensureWasm()
-  await start_instance_loop(INSTANCE_CADENCE_SECS, (report: string) =>
-    onPass?.(report),
+  await start_instance_loop(
+    INSTANCE_CADENCE_SECS,
+    INSTANCE_RETRY_SECS,
+    (report: string) => onPass?.(report),
   )
 }
 
@@ -551,6 +556,8 @@ export async function startRendezvousLoop(
  *  the locator keep-alive: a pkarr record ages off Mainline, and an identity nobody
  *  republishes stops resolving. */
 const IDENTITY_CADENCE_SECS = 30 * 60
+/** How soon to republish while the packet carries nothing anyone could dial. */
+const IDENTITY_RETRY_SECS = 20
 
 /** Start the identity-publishing loop — ONE packet under the did:dht key carrying the
  *  directory pointer, the doc namespace, and every live endpoint of this identity.
@@ -572,6 +579,7 @@ export async function startIdentityLoop(
     appKeyHex,
     namespaceId,
     IDENTITY_CADENCE_SECS,
+    IDENTITY_RETRY_SECS,
     (report: string) => onPass?.(report),
   )
 }
@@ -582,7 +590,14 @@ export async function startIdentityLoop(
  *  directories: a DHT resolve and a Sia download per actor in the graph, every pass. A count
  *  a few minutes behind is not the problem an expired locator is. It doubles as the
  *  retention check, which is why it repeats at all rather than running once. */
-const ENGAGEMENT_CADENCE_SECS = 10 * 60
+const ENGAGEMENT_CADENCE_SECS = 30
+/** How many passes between crawls, so the expensive half still runs every ~10 minutes.
+ *
+ *  The loop does two jobs whose costs are nothing alike: folding local records into a count
+ *  is free, and reading everybody else's directories is a DHT resolve and possibly a Sia
+ *  download each. Paced together, the number saying you are keeping your own post alive —
+ *  derived from a record you just wrote — took as long to appear as reading the whole graph. */
+const ENGAGEMENT_CRAWL_EVERY = 20
 
 /** Start the engagement loop — read what the graph has endorsed, hold what verifies, and
  *  publish a tally per subject into the channel that owns it.
@@ -601,6 +616,7 @@ export async function startEngagementLoop(
   await start_engagement_loop(
     appKeyHex,
     ENGAGEMENT_CADENCE_SECS,
+    ENGAGEMENT_CRAWL_EVERY,
     (report: string) => onPass?.(report),
   )
 }

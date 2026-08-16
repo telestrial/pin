@@ -85,9 +85,9 @@ export const sign_endorsement: (a: number, b: number, c: number, d: number, e: n
 export const start_channel_doc_loop: (a: number, b: number, c: number, d: any) => any;
 export const start_channel_sync_loop: (a: number, b: number, c: number, d: number, e: any) => any;
 export const start_deliver_loop: (a: number, b: number, c: number, d: number, e: any) => any;
-export const start_engagement_loop: (a: number, b: number, c: number, d: any) => any;
-export const start_identity_loop: (a: number, b: number, c: number, d: number, e: number, f: any) => any;
-export const start_instance_loop: (a: number, b: any) => any;
+export const start_engagement_loop: (a: number, b: number, c: number, d: number, e: any) => any;
+export const start_identity_loop: (a: number, b: number, c: number, d: number, e: number, f: number, g: any) => any;
+export const start_instance_loop: (a: number, b: number, c: any) => any;
 export const start_keep_alive_loop: (a: number, b: number, c: number, d: any) => any;
 export const start_pull_loop: (a: number, b: number, c: number, d: any) => any;
 export const start_rendezvous_loop: (a: number, b: number, c: number, d: number, e: any) => any;

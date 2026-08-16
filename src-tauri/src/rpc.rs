@@ -12,8 +12,8 @@ use std::time::Duration;
 use iroh::endpoint::presets;
 use iroh::{Endpoint, EndpointAddr};
 
-use pin_rpc::hey_request;
 pub use pin_rpc::{clear, new_inbox, queued, HeyHandler, HeyInbox, ALPN};
+use pin_rpc::{hey_request, MAX_FRAME};
 
 /// How long to wait for a sent knock to show up in the inbox.
 ///
@@ -51,17 +51,18 @@ async fn run_self_test(
         .map_err(|_| "connect timed out".to_string())?
         .map_err(|e| format!("connect: {e}"))?;
 
-    let mut send = conn
-        .open_uni()
-        .await
-        .map_err(|e| format!("open_uni: {e}"))?;
+    let (mut send, mut recv) = conn.open_bi().await.map_err(|e| format!("open_bi: {e}"))?;
     send.write_all(&hey_request(&synthetic_record()))
         .await
         .map_err(|e| format!("write: {e}"))?;
     send.finish().map_err(|e| format!("finish: {e}"))?;
+    // Empty by protocol; completing is what says the frame was taken.
+    recv.read_to_end(MAX_FRAME)
+        .await
+        .map_err(|e| format!("read: {e}"))?;
 
-    // The connection stays open until the knock lands: closing it immediately can tear
-    // the stream down before the server has read it.
+    // Still watched on THIS side rather than inferred from the read: inbox depth says the
+    // knock was understood and parked, where the read only says it was consumed.
     let landed = wait_for_landing(inbox, before).await;
     conn.close(0u32.into(), b"bye");
 

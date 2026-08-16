@@ -136,6 +136,12 @@ pub struct InstanceOutcome {
     pub live: usize,
     /// Registrations dropped for having aged out.
     pub pruned: usize,
+    /// Whether THIS instance registered an address, rather than only its id.
+    ///
+    /// False right after a bind, before the endpoint has reached its home relay. It
+    /// matters because a peer skips an endpoint that doesn't say where it is — so until
+    /// this turns true, this instance is published but unreachable.
+    pub located: bool,
 }
 
 /// One instance's registration, as stored.
@@ -180,6 +186,7 @@ pub async fn register_instance(
         durable: ctx.durable,
         relay: relay_to_register(relay, held.and_then(|h| h.relay)),
     };
+    let located = mine.relay.is_some();
     let value = serde_json::to_vec(&mine).map_err(|e| format!("encode registration: {e}"))?;
     ctx.doc
         .set_bytes(
@@ -191,7 +198,10 @@ pub async fn register_instance(
         .map_err(|e| format!("register instance: {e}"))?;
 
     let all = read_registrations(&ctx.doc, &ctx.blobs, ctx.author_id).await;
-    let mut outcome = InstanceOutcome::default();
+    let mut outcome = InstanceOutcome {
+        located,
+        ..Default::default()
+    };
     for (node_id, reg) in all {
         // Saturating, because a clock that runs behind another device's would
         // otherwise wrap and prune a live instance.
@@ -270,16 +280,25 @@ async fn read_registrations(
 
 /// Register, wait, repeat — forever. The clock and the relay both come from the caller
 /// for the same reasons `register_instance`'s do.
+/// Two cadences, because an instance with no address yet is one nobody can reach.
+///
+/// An endpoint takes a moment to reach its home relay after binding, so the first pass
+/// registers an id and nothing else. Waiting out the settled cadence to correct that
+/// leaves this instance published-but-undialable for the whole interval — which after a
+/// fresh start is exactly when someone is most likely to be trying to knock.
 pub async fn run_instance_loop(
     ctx: InstanceContext,
     cadence: Duration,
+    retry: Duration,
     now_secs: impl Fn() -> u64,
     relay: impl Fn() -> Option<String>,
     on_pass: impl Fn(Result<InstanceOutcome, String>),
 ) -> ! {
     loop {
-        on_pass(register_instance(&ctx, now_secs(), relay()).await);
-        n0_future::time::sleep(cadence).await;
+        let outcome = register_instance(&ctx, now_secs(), relay()).await;
+        let located = matches!(&outcome, Ok(o) if o.located);
+        on_pass(outcome);
+        n0_future::time::sleep(if located { cadence } else { retry }).await;
     }
 }
 

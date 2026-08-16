@@ -1005,6 +1005,9 @@ pub async fn curator_start_snapshot(
 /// `INSTANCE_TTL_SECS`, so a missed pass doesn't drop a running instance out of the
 /// identity's published endpoints.
 const INSTANCE_CADENCE: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+/// How soon to re-register while this instance still has no address to publish, so a
+/// fresh start becomes dialable in seconds rather than at the next settled pass.
+const INSTANCE_RETRY: std::time::Duration = std::time::Duration::from_secs(15);
 
 /// Start this instance's registration loop — a heartbeat saying "this node id is a
 /// live endpoint for this identity", so whoever publishes the identity's coordinates
@@ -1038,20 +1041,24 @@ pub async fn curator_start_instance(
         diag.as_ref()
             .and_then(|d| d.lock().ok()?.relays.first().cloned())
     };
-    let loop_handle =
-        sia.detach(async move {
-            pin_curator::run_instance_loop(ctx, INSTANCE_CADENCE, now_secs, relay, |result| {
-                match result {
-                    Ok(o) => {
-                        if o.pruned > 0 {
-                            println!("curator instance: {} live, {} pruned", o.live, o.pruned);
-                        }
+    let loop_handle = sia.detach(async move {
+        pin_curator::run_instance_loop(
+            ctx,
+            INSTANCE_CADENCE,
+            INSTANCE_RETRY,
+            now_secs,
+            relay,
+            |result| match result {
+                Ok(o) => {
+                    if o.pruned > 0 {
+                        println!("curator instance: {} live, {} pruned", o.live, o.pruned);
                     }
-                    Err(e) => println!("curator instance: {e}"),
                 }
-            })
-            .await
-        });
+                Err(e) => println!("curator instance: {e}"),
+            },
+        )
+        .await
+    });
     curator.0.lock().unwrap().loops.push(loop_handle);
     Ok(())
 }
@@ -1120,7 +1127,13 @@ pub async fn curator_start_rendezvous(
 /// graph, and a count being a few minutes behind is not a problem the way an expired
 /// locator is. It doubles as the retention check, which is the other reason it repeats at
 /// all rather than running once.
-const ENGAGEMENT_CADENCE: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+const ENGAGEMENT_CADENCE: std::time::Duration = std::time::Duration::from_secs(30);
+/// How many passes between crawls, so the expensive half still runs every ~10 minutes.
+///
+/// Folding is local and costs nothing, so it runs at the cadence above; reading everybody
+/// else's directories is a DHT resolve and possibly a Sia download each, and a count being
+/// a few minutes behind is not the problem an expired locator is.
+const ENGAGEMENT_CRAWL_EVERY: u32 = 20;
 
 /// Start the engagement loop — read what the graph has endorsed, hold what verifies, and
 /// publish a tally per subject into the channel that owns it.
@@ -1133,9 +1146,6 @@ pub async fn curator_start_engagement(
     app_key_hex: String,
 ) -> Result<(), String> {
     let engine = current_engine(&curator)?;
-    if engine.engagement_started() {
-        return Ok(());
-    }
     let app_key = pin_derive::decode_app_key(&app_key_hex).ok_or("app key hex must be 32 bytes")?;
     // This identity's own did:dht, so the loop can include its own endorsements without
     // resolving itself over the network — a published copy lags local edits, and an author
@@ -1161,26 +1171,48 @@ pub async fn curator_start_engagement(
         app_key,
         inbox,
     };
+    // Marked started only once everything the loop needs is in hand. Setting it up front
+    // makes a TRANSIENT failure permanent: the command returns an error the caller
+    // swallows, and every retry then short-circuits on a flag set by an attempt that never
+    // ran. A second caller that races this does its setup twice and one of them returns —
+    // wasteful for an instant, where the other way round is a loop that never starts.
+    if engine.engagement_started() {
+        return Ok(());
+    }
     let loop_handle = sia.detach(async move {
-        pin_curator::run_engagement_loop(ctx, own_did, ENGAGEMENT_CADENCE, now_iso, |result| {
+        pin_curator::run_engagement_loop(
+            ctx,
+            own_did,
+            ENGAGEMENT_CADENCE,
+            ENGAGEMENT_CRAWL_EVERY,
+            now_iso,
+            |result| {
             match result {
                 Ok(o) => {
                     // Quiet when a pass found nothing new. Reported when anything moved, or
                     // when something was unreachable or rejected — both of which say
                     // something about the count's honesty.
+                    // Any knock at all is reported, whatever became of it. A knock was
+                    // aimed at us on purpose, so one that arrives and is discarded is the
+                    // most interesting thing a pass can do — and the quietest.
+                    let knocks = o.knocked
+                        + o.knocks_rejected
+                        + o.knocks_not_ours
+                        + o.stale_knocks;
                     if o.added > 0
                         || o.withdrawn > 0
                         || o.unreachable > 0
                         || o.rejected > 0
-                        || o.knocked > 0
+                        || knocks > 0
                         || o.published > 0
                         || o.publish_failed > 0
                     {
                         println!(
-                            "curator engagement: reached {} unreachable {} added {} withdrawn {} knocked {} stale-knocks {} tallies {} cleared {} rejected {} not-ours {} published {} publish-failed {}",
-                            o.reached, o.unreachable, o.added, o.withdrawn, o.knocked,
-                            o.stale_knocks, o.tallies, o.cleared, o.rejected, o.not_ours,
-                            o.published, o.publish_failed
+                            "curator engagement: reached {} unreachable {} added {} withdrawn {} tallies {} cleared {} rejected {} not-ours {} published {} publish-failed {} | knocks: accepted {} rejected {} not-ours {} stale {}",
+                            o.reached, o.unreachable, o.added, o.withdrawn, o.tallies,
+                            o.cleared, o.rejected, o.not_ours, o.published,
+                            o.publish_failed, o.knocked, o.knocks_rejected,
+                            o.knocks_not_ours, o.stale_knocks
                         );
                     }
                 }
@@ -1218,9 +1250,6 @@ pub async fn curator_start_deliver(
     app_key_hex: String,
 ) -> Result<(), String> {
     let engine = current_engine(&curator)?;
-    if engine.deliver_started() {
-        return Ok(());
-    }
     let app_key = pin_derive::decode_app_key(&app_key_hex).ok_or("app key hex must be 32 bytes")?;
     let own_did = crate::identity::did_dht(&crate::identity::derive_identity(&app_key)?);
     let endpoint = curator
@@ -1239,6 +1268,10 @@ pub async fn curator_start_deliver(
         endpoint,
         app_key,
     };
+    // After the setup, not before — see `curator_start_engagement` for why.
+    if engine.deliver_started() {
+        return Ok(());
+    }
     let loop_handle = sia.detach(async move {
         pin_curator::run_deliver_loop(
             ctx,
@@ -1249,7 +1282,10 @@ pub async fn curator_start_deliver(
                 // Quiet when everything has already been delivered, which is the steady
                 // state. Reported when something moved or is still outstanding.
                 Ok(o) => {
-                    if o.delivered > 0 || o.unreachable > 0 || o.dropped > 0 {
+                    // `no_target` is reported too: an endorsement with nobody to knock is
+                    // the quietest possible failure — the loop is running, finding work,
+                    // and doing nothing with it — so a pass that hits one has to say so.
+                    if o.delivered > 0 || o.unreachable > 0 || o.dropped > 0 || o.no_target > 0 {
                         println!(
                             "curator deliver: delivered {} already {} unreachable {} no-target {} own {} dropped {}",
                             o.delivered, o.already, o.unreachable, o.no_target, o.own, o.dropped
@@ -1265,10 +1301,53 @@ pub async fn curator_start_deliver(
     Ok(())
 }
 
+/// Run ONE delivery pass now and report everything it decided.
+///
+/// The loop's own reporting is a summary, and every interesting failure on this path is
+/// silent by nature — no target, no dialable address, a dial nobody answers all leave the
+/// same trace as never having tried. This runs the same `deliver_once` the loop runs and
+/// hands back the per-endorsement steps, so "nothing was delivered" can be told apart from
+/// "nothing needed delivering".
+///
+/// Diagnostic, not part of the loop: it is safe to call at any time, and it does exactly
+/// what a scheduled pass does, so it cannot report on behaviour the loop doesn't have.
+#[tauri::command]
+pub async fn curator_deliver_probe(
+    curator: tauri::State<'_, CuratorState>,
+    sia: tauri::State<'_, crate::sia::SiaState>,
+    app_key_hex: String,
+) -> Result<String, String> {
+    let engine = current_engine(&curator)?;
+    let app_key = pin_derive::decode_app_key(&app_key_hex).ok_or("app key hex must be 32 bytes")?;
+    let own_did = crate::identity::did_dht(&crate::identity::derive_identity(&app_key)?);
+    let endpoint = curator
+        .0
+        .lock()
+        .unwrap()
+        .endpoint_slot
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or("curator endpoint is not up yet")?;
+    let ctx = pin_curator::DeliverContext {
+        doc: engine.doc.clone(),
+        blobs: (*engine.blobs).clone(),
+        author_id: engine.author_id,
+        endpoint,
+        app_key,
+    };
+    let outcome = sia
+        .run(move |_| async move { pin_curator::deliver_once(&ctx, &own_did).await })
+        .await?;
+    serde_json::to_string(&outcome).map_err(|e| format!("encode: {e}"))
+}
+
 /// How often the identity's coordinates are republished. Same reasoning as the locator
 /// keep-alive: a pkarr record ages off Mainline in a couple of hours, and an identity
 /// nobody republishes stops resolving.
 const IDENTITY_CADENCE: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+/// How soon to republish while the packet carries nothing anyone could dial.
+const IDENTITY_RETRY: std::time::Duration = std::time::Duration::from_secs(20);
 
 /// Start the identity-publishing loop — one packet under the did:dht key carrying the
 /// directory pointer, the doc namespace, and every live endpoint.
@@ -1298,19 +1377,27 @@ pub async fn curator_start_identity(
     };
     let report = curator.report_handle();
     let loop_handle = sia.detach(async move {
-        pin_curator::run_identity_loop(ctx, IDENTITY_CADENCE, now_iso, now_secs, move |result| {
-            let note = match &result {
-                Ok(o) if o.empty => "nothing to advertise yet".to_string(),
-                Ok(o) => format!(
-                    "ok (published{}, {} endpoint(s))",
-                    if o.uploaded { " + uploaded" } else { "" },
-                    o.endpoints
-                ),
-                Err(e) => format!("failed: {e}"),
-            };
-            println!("curator identity: {note}");
-            report(note);
-        })
+        pin_curator::run_identity_loop(
+            ctx,
+            IDENTITY_CADENCE,
+            IDENTITY_RETRY,
+            now_iso,
+            now_secs,
+            move |result| {
+                let note = match &result {
+                    Ok(o) if o.empty => "nothing to advertise yet".to_string(),
+                    Ok(o) => format!(
+                        "ok (published{}, {} of {} endpoint(s) dialable)",
+                        if o.uploaded { " + uploaded" } else { "" },
+                        o.dialable,
+                        o.endpoints
+                    ),
+                    Err(e) => format!("failed: {e}"),
+                };
+                println!("curator identity: {note}");
+                report(note);
+            },
+        )
         .await
     });
     curator.0.lock().unwrap().loops.push(loop_handle);
@@ -1542,6 +1629,10 @@ async fn curator_loop(
     // when the docs engine is up — one ALPN-multiplexed Router. The atrium repo and
     // its head/record/diff verbs are gone; iroh-docs' own sync subsumes them.
     let inbox = crate::rpc::new_inbox();
+    // Published immediately rather than after the self-test below: the frontend starts
+    // its loops as soon as the doc slot is set, and a loop that asks for the inbox in that
+    // window would find nothing and never be started again.
+    *inbox_slot.lock().unwrap() = Some(inbox.clone());
     let mut rb = iroh::protocol::Router::builder(endpoint.clone())
         .accept(crate::rpc::ALPN, crate::rpc::HeyHandler::new(inbox.clone()));
     if let Some(engine) = doc_engine.as_ref() {
@@ -1571,7 +1662,6 @@ async fn curator_loop(
     }
     crate::rpc::clear(&inbox);
     // Held past here for the poll loop (inbox depth) and shutdown (router).
-    *inbox_slot.lock().unwrap() = Some(inbox.clone());
     let hey_inbox = Some(inbox);
     let router = Some(r);
 

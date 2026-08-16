@@ -61,8 +61,29 @@ pub struct DeliverContext {
     pub app_key: [u8; 32],
 }
 
+/// What one pass did about ONE endorsement — the decisions it made, in order.
+///
+/// Kept because the interesting failures here are all silent by nature: a target that
+/// can't be worked out, coordinates that name an endpoint without locating it, a dial
+/// nobody answers. Each leaves the same trace in the doc as never having tried, which is
+/// nothing. A count says a pass delivered nothing; this says why.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct DeliverStep {
+    /// The endorsement, by its own address.
+    pub rkey: String,
+    /// Who this is about, once worked out — the author of the endorsed item.
+    pub target: Option<String>,
+    /// How many endpoints the target advertises, and how many of those say enough to
+    /// dial. `endpoints > 0` with `dialable == 0` is an identity advertised but
+    /// unreachable, which is invisible from every other angle.
+    pub endpoints: usize,
+    pub dialable: usize,
+    /// delivered | already | no target | own | unreachable.
+    pub result: &'static str,
+}
+
 /// What one pass did.
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct DeliverOutcome {
     /// Endorsements knocked through to their author this pass.
     pub delivered: usize,
@@ -79,6 +100,9 @@ pub struct DeliverOutcome {
     pub own: usize,
     /// Delivery marks dropped because the endorsement they recorded is gone.
     pub dropped: usize,
+    /// One entry per endorsement considered, for when the counts aren't enough to say
+    /// what went wrong.
+    pub steps: Vec<DeliverStep>,
 }
 
 /// What was last delivered for one endorsement.
@@ -246,14 +270,25 @@ async fn knock(ctx: &DeliverContext, endpoints: &[InstanceAddr], record: &Endors
     false
 }
 
+/// Hand one knock over, and wait until the receiver has actually taken it.
+///
+/// The wait is the point. `finish()` closes our side of the stream and says nothing about
+/// the peer having read it, so a sender that finished and closed the connection would tear
+/// the stream down underneath the receiver's read — marking knocks delivered that never
+/// arrived. The receiver closes its (empty) side once it has parked the frame, so this read
+/// completing is what makes the delivery mark honest.
 async fn send_knock(conn: &iroh::endpoint::Connection, frame: &[u8]) -> bool {
-    let Ok(mut send) = conn.open_uni().await else {
+    let Ok((mut send, mut recv)) = conn.open_bi().await else {
         return false;
     };
     if send.write_all(frame).await.is_err() {
         return false;
     }
-    send.finish().is_ok()
+    if send.finish().is_err() {
+        return false;
+    }
+    // Empty by protocol; what matters is that it completes rather than what it holds.
+    recv.read_to_end(pin_rpc::MAX_FRAME).await.is_ok()
 }
 
 /// One pass: knock through every endorsement whose author hasn't heard it yet.
@@ -272,8 +307,16 @@ pub async fn deliver_once(ctx: &DeliverContext, own_did: &str) -> Result<Deliver
 
     for (rkey, record) in &records {
         let held = read_mark(ctx, rkey).await;
+        let mut step = DeliverStep {
+            rkey: rkey.clone(),
+            target: None,
+            endpoints: 0,
+            dialable: 0,
+            result: "already",
+        };
         if !needs_delivery(held.as_ref(), &record.sig) {
             outcome.already += 1;
+            outcome.steps.push(step);
             continue;
         }
 
@@ -282,17 +325,27 @@ pub async fn deliver_once(ctx: &DeliverContext, own_did: &str) -> Result<Deliver
         }
         let Some(target) = target_for(record, subjects.as_ref().expect("just built")) else {
             outcome.no_target += 1;
+            step.result = "no target";
+            outcome.steps.push(step);
             continue;
         };
+        step.target = Some(target.clone());
         if target == own_did {
             // Our own item. The fold reads these straight out of the doc, so there is
             // nobody to tell.
             outcome.own += 1;
+            step.result = "own";
+            outcome.steps.push(step);
             continue;
         }
 
         let endpoints = resolve_endpoints(&target).await;
-        if knock(ctx, &endpoints, record).await {
+        step.endpoints = endpoints.len();
+        step.dialable = endpoints.iter().filter_map(dialable).count();
+        let sent = knock(ctx, &endpoints, record).await;
+        step.result = if sent { "delivered" } else { "unreachable" };
+        outcome.steps.push(step);
+        if sent {
             write_mark(
                 ctx,
                 rkey,
@@ -385,7 +438,11 @@ pub async fn run_deliver_loop(
 ) -> ! {
     loop {
         let outcome = deliver_once(&ctx, &own_did).await;
-        let outstanding = matches!(&outcome, Ok(o) if o.unreachable > 0 || o.no_target > 0);
+        // A FAILED pass counts as outstanding too. Its commonest cause is settings not
+        // being written yet, which is where every fresh instance starts — and settling on
+        // that would put the first knock a whole cadence away, on the one path engagement
+        // from outside the graph has.
+        let outstanding = !matches!(&outcome, Ok(o) if o.unreachable == 0 && o.no_target == 0);
         on_pass(&outcome);
         n0_future::time::sleep(if outstanding { retry } else { cadence }).await;
     }

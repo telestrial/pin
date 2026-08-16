@@ -35,6 +35,7 @@ if (import.meta.env.DEV || inTauri()) {
     __pinCuratorDocsRoundTrip?: () => Promise<string>
     __pinCuratorDocsList?: () => Promise<string>
     __pinSubDiag?: () => Promise<string>
+    __pinDeliverProbe?: () => Promise<string>
     __pinChannelDocs?: {
       author: (hexOverride?: string) => Promise<string>
       subscriber: (ticket: string, hexOverride?: string) => Promise<string>
@@ -504,6 +505,19 @@ if (import.meta.env.DEV || inTauri()) {
     return all.length === 0
       ? '(no records)'
       : all.map((k) => `${k.collection}/${k.rkey}`).join('\n')
+  }
+  // Why an endorsement hasn't been delivered. Runs one real delivery pass and reports
+  // every decision it made — the target it worked out, how many endpoints that identity
+  // advertises, how many of those say enough to dial, and what became of the knock. Each
+  // of those failing leaves the same trace as never having tried, which is nothing.
+  g.__pinDeliverProbe = async () => {
+    const { inTauri } = await import('./lib/openExternal')
+    if (!inTauri()) return 'desktop only (run in the Pin desktop app)'
+    const { useAuthStore } = await import('./stores/auth')
+    const hex = useAuthStore.getState().storedKeyHex
+    if (!hex) return 'not signed in'
+    const { deliverProbeNative } = await import('./lib/tauriDocs')
+    return deliverProbeNative(hex)
   }
   // Sync-loopback harness (slice 1a): drive docs.ts's OWN sync verbs across two
   // browser tabs to prove two replicas of one identity converge bidirectionally

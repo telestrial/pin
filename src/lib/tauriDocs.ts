@@ -210,6 +210,12 @@ export function startEngagementLoopNative(appKeyHex: string): Promise<void> {
   return call<void>('curator_start_engagement', { appKeyHex })
 }
 
+/** Run one delivery pass now and report every decision it made. Diagnostic — it is the
+ *  same pass the loop runs, so it can only report behaviour the loop actually has. */
+export function deliverProbeNative(appKeyHex: string): Promise<string> {
+  return call<string>('curator_deliver_probe', { appKeyHex })
+}
+
 /** Start the delivery loop — knock this identity's endorsements through to the people
  *  they are about. Idempotent — the engine keeps one. */
 export function startDeliverLoopNative(appKeyHex: string): Promise<void> {

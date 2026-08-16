@@ -12,7 +12,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useAuthStore } from '../../stores/auth'
 import { type Aggregate, readTally } from '../channelTallies'
-import { getRecord, subscribeDocChanges } from '../docs'
+import { getRecord, openDocs, subscribeDocChanges } from '../docs'
 import {
   deleteEndorsement,
   type EndorsedItem,
@@ -82,14 +82,31 @@ export function useEngagement(item: EndorsedItem): Engagement {
       }
     }
 
-    // A stream-level event names no collection — iroh-blobs reports content arriving
-    // without saying which key it belongs to — so an unnamed one has to count as
-    // "re-read" rather than be filtered away.
-    const unsub = subscribeDocChanges(({ collection }) => {
-      if (collection && collection !== TALLY && collection !== ENDORSE) return
+    // Attached only once the doc is open, and BEFORE the first read.
+    //
+    // Both halves of that order are load-bearing. Subscribing to an engine that isn't up
+    // yet fails — on desktop the doc belongs to the Curator, which the app waits for —
+    // and the failure is silent, so the row would keep whatever it read on mount for the
+    // life of the session. Reading before subscribing would drop a change that landed in
+    // between, which for a count folded by a background loop is most of them.
+    let unsub = () => {}
+    void (async () => {
+      try {
+        await openDocs(storedKeyHex)
+      } catch {
+        // Nothing to watch and nothing to read; the next mount tries again.
+        return
+      }
+      if (cancelled) return
+      // A stream-level event names no collection — iroh-blobs reports content arriving
+      // without saying which key it belongs to — so an unnamed one has to count as
+      // "re-read" rather than be filtered away.
+      unsub = subscribeDocChanges(({ collection }) => {
+        if (collection && collection !== TALLY && collection !== ENDORSE) return
+        void refresh()
+      })
       void refresh()
-    })
-    void refresh()
+    })()
 
     return () => {
       cancelled = true

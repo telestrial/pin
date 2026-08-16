@@ -89,6 +89,14 @@ pub struct IdentityOutcome {
     pub published: bool,
     /// Endpoints advertised in this packet.
     pub endpoints: usize,
+    /// Of those, how many say WHERE they are rather than only who they are.
+    ///
+    /// A peer skips an endpoint with no address — dialing a bare id is the fall-through to
+    /// a discovery service we don't want to depend on — so a packet advertising endpoints
+    /// but none of them dialable is one nobody can knock at. Reported because the two look
+    /// identical from outside, and the difference is whether anyone can reach this
+    /// identity at all.
+    pub dialable: usize,
     /// Whether there was nothing to advertise, so nothing was published.
     pub empty: bool,
 }
@@ -273,6 +281,7 @@ pub async fn publish_identity_once(
     let endpoints = live_instances(&ctx.doc, &ctx.blobs, ctx.author_id, now_secs).await;
     let endpoints: Vec<crate::InstanceAddr> = endpoints.into_iter().take(MAX_ENDPOINTS).collect();
     outcome.endpoints = endpoints.len();
+    outcome.dialable = endpoints.iter().filter(|e| e.relay.is_some()).count();
 
     let mut records = pin_pkarr::chunk_txt(DIR_PREFIX, &item_url);
     records.push(pin_pkarr::TxtRecord {
@@ -317,6 +326,16 @@ pub async fn publish_identity_once(
     Ok(outcome)
 }
 
+/// Whether this identity is now published in a state a peer can act on, and so whether the
+/// loop may settle onto its slow cadence.
+///
+/// Only a publish that carried at least one dialable endpoint counts. Every other outcome —
+/// an error, nothing to advertise, a packet with no addresses in it — leaves this identity
+/// unreachable, and being unreachable is not a state to sit in for half an hour.
+fn settled(outcome: &Result<IdentityOutcome, String>) -> bool {
+    matches!(outcome, Ok(o) if o.published && o.dialable > 0)
+}
+
 async fn read_published(ctx: &IdentityContext, key: &[u8; 32]) -> Option<PublishedState> {
     let raw = read_record(
         &ctx.doc,
@@ -335,16 +354,38 @@ async fn read_published(ctx: &IdentityContext, key: &[u8; 32]) -> Option<Publish
 
 /// Publish, wait, repeat — forever. Clocks come from the caller, since neither
 /// `SystemTime::now()` nor a date formatter is available on the wasm target.
+/// Two cadences, and the loop settles onto the slow one ONLY once it has published
+/// something a peer could actually dial.
+///
+/// Anything short of that retries promptly, and the three ways to fall short all happen on
+/// an ordinary first run:
+///
+/// - **The pass failed.** The commonest is `no settings record yet`: this loop's first pass
+///   fires as soon as the engine is up, which is before the frontend has written settings.
+///   Treating that like a settled success meant a fresh identity published NOTHING for half
+///   an hour — no directory, no namespace, no endpoints — so nobody could resolve it, dial
+///   it, or knock at it. It is the whole reason a first-run knock never landed.
+/// - **Nothing to advertise yet.** Then the moment a channel is created, it should be
+///   findable in seconds rather than at the next half-hour boundary.
+/// - **Published, but nothing dialable.** An instance registers its address only once its
+///   endpoint has reached a relay, some seconds after binding; a packet built before that
+///   names endpoints without saying where they are, and a peer skips those.
+///
+/// The retry costs a local doc read, so an identity that stays in one of those states is
+/// polling its own doc rather than the network.
 pub async fn run_identity_loop(
     ctx: IdentityContext,
     cadence: Duration,
+    retry: Duration,
     now_iso: impl Fn() -> String,
     now_secs: impl Fn() -> u64,
     on_pass: impl Fn(Result<IdentityOutcome, String>),
 ) -> ! {
     loop {
-        on_pass(publish_identity_once(&ctx, now_iso(), now_secs()).await);
-        n0_future::time::sleep(cadence).await;
+        let outcome = publish_identity_once(&ctx, now_iso(), now_secs()).await;
+        let reachable = settled(&outcome);
+        on_pass(outcome);
+        n0_future::time::sleep(if reachable { cadence } else { retry }).await;
     }
 }
 
@@ -544,6 +585,44 @@ mod tests {
         // signing, which is what `MAX_ENDPOINTS` exists to stay under.
         let over = pin_pkarr::build_packet(&[7u8; 32], &worst_case_records(MAX_ENDPOINTS + 6));
         assert!(over.is_err(), "the cap should be the binding constraint");
+    }
+
+    fn outcome(published: bool, dialable: usize, empty: bool) -> Result<IdentityOutcome, String> {
+        Ok(IdentityOutcome {
+            uploaded: false,
+            published,
+            endpoints: if dialable > 0 { dialable } else { 1 },
+            dialable,
+            empty,
+        })
+    }
+
+    #[test]
+    fn a_pass_that_published_something_dialable_settles() {
+        assert!(settled(&outcome(true, 1, false)));
+    }
+
+    #[test]
+    fn a_failed_pass_retries_rather_than_settling() {
+        // THE one that cost a first-run knock. This loop's first pass fires before the
+        // frontend has written settings, so `no settings record yet` is the ordinary
+        // opening state — and settling on it meant a fresh identity published nothing at
+        // all for half an hour, so nobody could resolve it, dial it, or knock at it.
+        assert!(!settled(&Err("no settings record yet".to_string())));
+    }
+
+    #[test]
+    fn an_identity_with_nothing_to_advertise_yet_retries() {
+        // Otherwise creating your first channel would leave you unfindable until the next
+        // half-hour boundary.
+        assert!(!settled(&outcome(false, 0, true)));
+    }
+
+    #[test]
+    fn a_packet_with_no_dialable_endpoint_retries() {
+        // Published, but every endpoint names itself without saying where it is — which a
+        // peer skips, so this identity is advertised and unreachable at the same time.
+        assert!(!settled(&outcome(true, 0, false)));
     }
 
     #[test]

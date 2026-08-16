@@ -18,12 +18,24 @@
 //! access request for a private channel) needs no change here to pass through. The same
 //! posture the identity loop takes when it publishes endorsements verbatim.
 //!
-//! **There is no reply.** One unidirectional stream per knock: the dialer writes and
-//! finishes, and that is the whole exchange. A response frame would be a timing oracle —
-//! how long we take to answer distinguishes "verified" from "dropped at the door" from
-//! "not running", and lets a flooder tune against us — while telling the sender nothing
-//! QUIC hasn't already: the stream closed, so it landed. Silence is the only reliably
-//! constant answer, and it collapses four observable states into one.
+//! **The reply is empty, and that is not the same as having none.** A knock rides one
+//! bidirectional stream: the dialer writes and finishes, the receiver reads, parks, and
+//! closes its side without writing a byte. The sender's read completing is what tells it
+//! the frame was consumed.
+//!
+//! It was unidirectional first, and that was wrong. `finish()` closes the LOCAL side of a
+//! stream; it says nothing about the peer having read anything. A sender that finished and
+//! immediately closed the connection tore the stream down underneath the receiver's read,
+//! which failed — so knocks were counted as delivered and silently never arrived. With
+//! nothing coming back there was no way for a sender to know better.
+//!
+//! What the original reasoning was protecting still holds, because an empty close is not a
+//! response frame. It carries no bytes, so there is nothing to read; the receiver closes
+//! IDENTICALLY whether it parked the knock or discarded it, so acceptance can't be
+//! inferred; and it happens before any verification — that is the reconcile loop's job,
+//! minutes later — so its timing reveals nothing about what we decided. All a sender
+//! learns is that we were up and read the stream, which a completed QUIC handshake already
+//! told it.
 //!
 //! Accepting-and-parking is deliberately the whole job. The reconcile loop is what
 //! drains the inbox — verify the signature, match the subject against what this identity
@@ -145,10 +157,9 @@ impl HeyHandler {
 
 impl ProtocolHandler for HeyHandler {
     async fn accept(&self, connection: Connection) -> Result<(), AcceptError> {
-        // One knock per unidirectional stream, many streams per connection, until the
-        // peer closes. Nothing is written back on any of them.
+        // One knock per stream, many streams per connection, until the peer closes.
         loop {
-            let mut recv = match connection.accept_uni().await {
+            let (mut send, mut recv) = match connection.accept_bi().await {
                 Ok(s) => s,
                 // Peer closed the connection: clean end of the session.
                 Err(_) => return Ok(()),
@@ -158,8 +169,10 @@ impl ProtocolHandler for HeyHandler {
                 .await
                 .map_err(AcceptError::from_err)?;
             // A frame we can't use is dropped in silence, the same as one we can. Telling
-            // a knocker which it was is the oracle this protocol declines to be.
+            // a knocker which it was is the oracle this protocol declines to be — so the
+            // close below happens either way, and before anything is verified.
             self.accept_knock(&request);
+            send.finish().map_err(AcceptError::from_err)?;
         }
     }
 }

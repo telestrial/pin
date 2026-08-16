@@ -108,6 +108,17 @@ pub struct EngagementOutcome {
     /// A replay, or a duplicate the sender retried — harmless either way, and counted so
     /// a climbing number is visible.
     pub stale_knocks: usize,
+    /// Knocks whose signature didn't hold up.
+    ///
+    /// Counted apart from the crawl's `rejected`, and likewise `knocks_not_ours` from
+    /// `not_ours`, because the two mean opposite things. Reading somebody's directory
+    /// turns up everything they ever endorsed, nearly all of it other people's — so a
+    /// crawl's `not_ours` is the ordinary case and says nothing. A KNOCK was aimed at us
+    /// deliberately, so one we discard is a real disagreement about what we publish or who
+    /// signed it, and blurring the two hid exactly that.
+    pub knocks_rejected: usize,
+    /// Knocks about a subject this identity doesn't publish.
+    pub knocks_not_ours: usize,
     /// Channels whose tallies were republished to Sia and the DHT — the floor rung, and
     /// the only copy a reader without a live replica ever sees. Zero on a quiet pass:
     /// the publish is fingerprinted on the counts themselves.
@@ -305,6 +316,41 @@ async fn held_endorsements(ctx: &EngagementContext, rkeys: &[String]) -> Vec<End
     out
 }
 
+/// Every record this identity holds about one subject.
+///
+/// A prefix scan of the log, which is keyed subject-first for exactly this. Unreadable
+/// entries are skipped rather than failing the fold: one bad record must not take a whole
+/// count with it.
+async fn log_records_for(ctx: &EngagementContext, subject: &str) -> Vec<Endorsement> {
+    let prefix = format!("{subject}:");
+    let rkeys = crate::list_rkeys(
+        &ctx.doc,
+        ctx.author_id,
+        pin_derive::ENGAGEMENT_LOG_COLLECTION,
+    )
+    .await
+    .unwrap_or_default();
+
+    let mut out = Vec::new();
+    for rkey in rkeys.iter().filter(|k| k.starts_with(&prefix)) {
+        let Ok(Some(raw)) = read_record(
+            &ctx.doc,
+            &ctx.blobs,
+            ctx.author_id,
+            pin_derive::ENGAGEMENT_LOG_COLLECTION,
+            rkey,
+        )
+        .await
+        else {
+            continue;
+        };
+        if let Ok(record) = serde_json::from_slice::<Endorsement>(&raw) {
+            out.push(record);
+        }
+    }
+    out
+}
+
 /// When the record already held for one actor and subject says it was made, if there is
 /// one.
 ///
@@ -432,10 +478,22 @@ fn knock_verdict(
 
 /// One pass: read the graph, take what was knocked through, hold what's verified and
 /// ours, withdraw what's gone, and republish every tally that moved.
+/// `crawl` says whether to go and read the graph's directories this pass.
+///
+/// The loop does two jobs whose costs are nothing alike. FOLDING is local: this identity's
+/// own endorsements plus the records already held, turned into a tally. It touches no
+/// network and takes milliseconds. CRAWLING is a DHT resolve and possibly a Sia download
+/// per actor in the graph, which is why the loop's cadence is measured in minutes.
+///
+/// Pacing them together made a count that needs no network wait on one that does: publish a
+/// post, and the 1 that says you are keeping it alive — derived entirely from a record you
+/// just wrote — took as long to appear as reading everybody else's directories. So a
+/// fold-only pass runs often and a crawling pass runs on the slow cadence.
 pub async fn engagement_once(
     ctx: &EngagementContext,
     own_did: &str,
     now_iso: String,
+    crawl: bool,
 ) -> Result<EngagementOutcome, String> {
     let settings = read_settings(&ctx.doc, &ctx.blobs, ctx.author_id, &ctx.app_key).await?;
     let subjects = own_subjects(ctx, &settings).await?;
@@ -479,6 +537,15 @@ pub async fn engagement_once(
 
     for did in graph_actors(&settings) {
         if did == own_did {
+            continue;
+        }
+        // A fold-only pass reads nobody. Their held records still count — dropping them
+        // would make every fast pass halve the numbers a crawl had established — but
+        // nobody is marked reached, so nothing can be withdrawn on the strength of a
+        // reading that didn't happen.
+        if !crawl {
+            let rkeys = held_by_actor.get(did.as_str()).cloned().unwrap_or_default();
+            all.push((did, held_endorsements(ctx, &rkeys).await));
             continue;
         }
         let url = match resolve_directory_url(&did).await {
@@ -542,7 +609,7 @@ pub async fn engagement_once(
     // own directory this pass is already in `found` and takes precedence.
     for knock in knocks {
         let Ok(record) = serde_json::from_value::<Endorsement>(knock.record) else {
-            outcome.rejected += 1;
+            outcome.knocks_rejected += 1;
             continue;
         };
         let key = (record.subject.clone(), record.actor.clone());
@@ -557,8 +624,8 @@ pub async fn engagement_once(
                 found.insert(key, record);
                 outcome.knocked += 1;
             }
-            KnockVerdict::Rejected => outcome.rejected += 1,
-            KnockVerdict::NotOurs => outcome.not_ours += 1,
+            KnockVerdict::Rejected => outcome.knocks_rejected += 1,
+            KnockVerdict::NotOurs => outcome.knocks_not_ours += 1,
             KnockVerdict::Stale => outcome.stale_knocks += 1,
         }
     }
@@ -620,11 +687,19 @@ pub async fn engagement_once(
         let Some(channel_id) = subjects.get(subject) else {
             continue;
         };
-        let records: Vec<Endorsement> = found
-            .iter()
-            .filter(|((held_subject, _), _)| held_subject == subject)
-            .map(|(_, record)| record.clone())
-            .collect();
+        // From the LOG, not from what this pass happened to see.
+        //
+        // `found` is one pass's observations: this identity's own endorsements, the actors
+        // it crawled, and whatever was knocked through. A knocked record is in there for
+        // exactly the pass it arrived on — its actor is outside the graph by definition, so
+        // no later crawl reloads it — and folding from `found` therefore counted it once
+        // and then quietly un-counted it on the next pass. The number appeared and vanished
+        // while the record sat in the log the whole time.
+        //
+        // The log IS the backing set a count asserts, so it is what a count is folded from.
+        // `found` keeps its job of deciding what the log should say; it just stops standing
+        // in for the log afterwards.
+        let records = log_records_for(ctx, subject).await;
 
         let channel_doc = open_channel_doc(ctx, channel_id).await?;
         if records.is_empty() {
@@ -897,15 +972,33 @@ async fn open_channel_doc(ctx: &EngagementContext, channel_id: &str) -> Result<D
 /// Pass, wait, repeat — forever. Returned rather than spawned, so the caller decides which
 /// executor it belongs on: tokio imposes a `Send` bound a browser can't satisfy, and which
 /// executor a task runs on is the one genuinely per-target question here.
+/// Whether this pass should read the graph as well as fold.
+///
+/// Zero and one both mean "every pass", so a caller that doesn't want the split can't
+/// accidentally ask for a loop that never crawls — which would leave an identity folding
+/// its own records forever and never learning what anyone else did.
+fn should_crawl(pass: u32, crawl_every: u32) -> bool {
+    crawl_every <= 1 || pass % crawl_every == 0
+}
+
+/// Pass, wait, repeat — forever.
+///
+/// Every pass folds; one in `crawl_every` also reads the graph. So a count derived from
+/// local records appears at `cadence`, and the expensive half still runs at
+/// `cadence * crawl_every`. The first pass crawls, so a fresh start doesn't wait to learn
+/// what it missed while it was down.
 pub async fn run_engagement_loop(
     ctx: EngagementContext,
     own_did: String,
     cadence: Duration,
+    crawl_every: u32,
     now_iso: impl Fn() -> String,
     on_pass: impl Fn(Result<EngagementOutcome, String>),
 ) -> ! {
+    let mut pass: u32 = 0;
     loop {
-        on_pass(engagement_once(&ctx, &own_did, now_iso()).await);
+        on_pass(engagement_once(&ctx, &own_did, now_iso(), should_crawl(pass, crawl_every)).await);
+        pass = pass.wrapping_add(1);
         n0_future::time::sleep(cadence).await;
     }
 }
@@ -927,6 +1020,28 @@ mod tests {
 
     fn dids(list: &[&str]) -> BTreeSet<String> {
         list.iter().map(|d| d.to_string()).collect()
+    }
+
+    #[test]
+    fn a_fresh_start_crawls_before_it_settles_into_folding() {
+        // The first pass reads the graph, so a restart doesn't wait out the slow cadence
+        // to learn what happened while it was down.
+        assert!(should_crawl(0, 20));
+        for pass in 1..20 {
+            assert!(!should_crawl(pass, 20), "pass {pass} should only fold");
+        }
+        assert!(should_crawl(20, 20));
+    }
+
+    #[test]
+    fn a_loop_asked_not_to_split_still_crawls_every_pass() {
+        // Zero would otherwise be a division by zero, and one has to mean "every pass" —
+        // either read as "never crawl" would leave an identity folding its own records
+        // forever and never learning what anyone else did.
+        for pass in 0..5 {
+            assert!(should_crawl(pass, 0));
+            assert!(should_crawl(pass, 1));
+        }
     }
 
     // --- what a knock is worth ---------------------------------------------------

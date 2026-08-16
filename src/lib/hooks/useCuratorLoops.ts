@@ -65,17 +65,27 @@ export function useCuratorLoops() {
     void (async () => {
       const namespaceId = await openDocs(appKeyHex)
       if (cancelled) return
-      await Promise.allSettled([
-        startKeepAliveLoop(appKeyHex),
-        startChannelDocLoop(appKeyHex),
-        startChannelSyncLoop(appKeyHex),
-        startSnapshotLoop(appKeyHex),
-        startRepackLoop(appKeyHex),
-        startInstanceLoop(),
-        startIdentityLoop(appKeyHex, namespaceId),
-        startEngagementLoop(appKeyHex),
-        startDeliverLoop(appKeyHex),
-      ])
+      // Settled rather than all, so one loop failing to start doesn't take the rest with
+      // it. But a rejection here is a loop that will not run for this whole session, and
+      // swallowing it silently is how a Curator that had quietly stopped folding
+      // engagement looked exactly like one with nothing to fold.
+      const named: [string, Promise<unknown>][] = [
+        ['keep-alive', startKeepAliveLoop(appKeyHex)],
+        ['channel-doc', startChannelDocLoop(appKeyHex)],
+        ['channel-sync', startChannelSyncLoop(appKeyHex)],
+        ['snapshot', startSnapshotLoop(appKeyHex)],
+        ['repack', startRepackLoop(appKeyHex)],
+        ['instance', startInstanceLoop()],
+        ['identity', startIdentityLoop(appKeyHex, namespaceId)],
+        ['engagement', startEngagementLoop(appKeyHex)],
+        ['deliver', startDeliverLoop(appKeyHex)],
+      ]
+      const results = await Promise.allSettled(named.map(([, p]) => p))
+      results.forEach((r, i) => {
+        if (r.status === 'rejected') {
+          console.warn(`curator loop "${named[i][0]}" did not start:`, r.reason)
+        }
+      })
     })()
 
     return () => {
