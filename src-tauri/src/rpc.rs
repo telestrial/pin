@@ -12,39 +12,87 @@ use std::time::Duration;
 use iroh::endpoint::presets;
 use iroh::{Endpoint, EndpointAddr};
 
-pub use pin_rpc::{clear, new_inbox, queued, HeyHandler, ALPN};
-use pin_rpc::{hey_request, parse_hey_response, MAX_FRAME};
+use pin_rpc::hey_request;
+pub use pin_rpc::{clear, new_inbox, queued, HeyHandler, HeyInbox, ALPN};
+
+/// How long to wait for a sent knock to show up in the inbox.
+///
+/// The knock is answered with silence, so landing it is observed on OUR side rather
+/// than reported back — which means waiting for the server task to get to it.
+const LANDING_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// One-shot self-test: bind a throwaway client endpoint, dial the Curator's endpoint
-/// over the /hey ALPN, send a synthetic knock, and confirm it's accepted. Proves
-/// serve + dial + the inbox path end-to-end on one machine. The caller clears the
-/// inbox afterward (this knock is synthetic).
-pub async fn self_test(server_addr: EndpointAddr) -> Result<String, String> {
+/// over the /hey ALPN, send a synthetic knock, and confirm it lands in the inbox.
+/// Proves serve + dial + the inbox path end-to-end on one machine.
+///
+/// It watches the INBOX rather than a reply, because there is no reply — a knock is a
+/// unidirectional stream by design. That makes this a stronger check than the ack it
+/// replaces: an ack only said the frame was received, where inbox depth says it was
+/// understood and parked. The caller clears the inbox afterward, since this knock is
+/// synthetic.
+pub async fn self_test(server_addr: EndpointAddr, inbox: &HeyInbox) -> Result<String, String> {
     let client = Endpoint::bind(presets::N0)
         .await
         .map_err(|e| format!("client bind: {e}"))?;
-    let result = run_self_test(&client, server_addr).await;
+    let result = run_self_test(&client, server_addr, inbox).await;
     client.close().await;
     result
 }
 
-async fn run_self_test(client: &Endpoint, server_addr: EndpointAddr) -> Result<String, String> {
+async fn run_self_test(
+    client: &Endpoint,
+    server_addr: EndpointAddr,
+    inbox: &HeyInbox,
+) -> Result<String, String> {
+    let before = queued(inbox);
+
     let conn = tokio::time::timeout(Duration::from_secs(20), client.connect(server_addr, ALPN))
         .await
         .map_err(|_| "connect timed out".to_string())?
         .map_err(|e| format!("connect: {e}"))?;
 
-    let (mut send, mut recv) = conn.open_bi().await.map_err(|e| format!("open_bi: {e}"))?;
-    send.write_all(&hey_request("did:self-test", "00", "at://self-test"))
+    let mut send = conn
+        .open_uni()
+        .await
+        .map_err(|e| format!("open_uni: {e}"))?;
+    send.write_all(&hey_request(&synthetic_record()))
         .await
         .map_err(|e| format!("write: {e}"))?;
     send.finish().map_err(|e| format!("finish: {e}"))?;
-    let response = recv
-        .read_to_end(MAX_FRAME)
-        .await
-        .map_err(|e| format!("read: {e}"))?;
+
+    // The connection stays open until the knock lands: closing it immediately can tear
+    // the stream down before the server has read it.
+    let landed = wait_for_landing(inbox, before).await;
     conn.close(0u32.into(), b"bye");
 
-    parse_hey_response(&response)?;
-    Ok("ok (hey round-trip)".to_string())
+    if landed {
+        Ok("ok (hey knock landed)".to_string())
+    } else {
+        Err("knock sent but never reached the inbox".to_string())
+    }
+}
+
+/// Poll until the inbox grows, or the timeout runs out.
+async fn wait_for_landing(inbox: &HeyInbox, before: usize) -> bool {
+    let deadline = tokio::time::Instant::now() + LANDING_TIMEOUT;
+    while tokio::time::Instant::now() < deadline {
+        if queued(inbox) > before {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    false
+}
+
+/// A well-formed but unsigned record. The handler parks without verifying — that is the
+/// drain's job — so this exercises the transport without needing an identity.
+fn synthetic_record() -> serde_json::Value {
+    serde_json::json!({
+        "kind": "like",
+        "actor": "did:dht:self-test",
+        "subject": "self-test",
+        "version": "self-test",
+        "createdAt": "1970-01-01T00:00:00.000Z",
+        "sig": "",
+    })
 }

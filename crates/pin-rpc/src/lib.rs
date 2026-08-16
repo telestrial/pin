@@ -2,22 +2,38 @@
 //!
 //! iroh-docs' own sync protocol (range-based set reconciliation + live-sync over
 //! gossip, on its own ALPNs) covers reads. What ALPN `pin-keeper/0` carries is the
-//! thing sync can't: a peer telling us it did something about us. `{ from, sig,
-//! referent }` — "I did something about this" — gets accepted and parked. The
-//! reconcile loop (not yet built) is what drains the inbox: verify the sig, fetch
-//! the referent, materialize an index record.
+//! thing sync can't: a peer telling us it did something about us. Everything else in
+//! the system is pull-shaped — a crawl finds what people in your graph endorsed — and a
+//! knock is how someone OUTSIDE that graph reaches you at all.
 //!
-//! Accepting-and-parking is deliberately the whole job here. A knock is tiny and
-//! rare, and store-and-forward retry lives on the sender, so the inbox tolerates an
-//! offline receiver — which is why it can ship before the harder reconcile work.
+//! **The knock carries the signed record**, not a pointer to one. Both halves of what
+//! atproto calls a strongRef: the record says what was asserted, and it verifies against
+//! the actor named on it with no lookup, no packet, and no prior contact, because a
+//! `did:dht` IS its ed25519 public key. So a stranger's knock costs a parse and one
+//! signature check, and we never fetch them — which is what makes accepting knocks from
+//! outside the graph affordable in the first place.
+//!
+//! **The record travels as opaque JSON.** This crate is a courier: it does not parse an
+//! endorsement, so it cannot corrupt one, and a later rung of the ladder (a comment, an
+//! access request for a private channel) needs no change here to pass through. The same
+//! posture the identity loop takes when it publishes endorsements verbatim.
+//!
+//! **There is no reply.** One unidirectional stream per knock: the dialer writes and
+//! finishes, and that is the whole exchange. A response frame would be a timing oracle —
+//! how long we take to answer distinguishes "verified" from "dropped at the door" from
+//! "not running", and lets a flooder tune against us — while telling the sender nothing
+//! QUIC hasn't already: the stream closed, so it landed. Silence is the only reliably
+//! constant answer, and it collapses four observable states into one.
+//!
+//! Accepting-and-parking is deliberately the whole job. The reconcile loop is what
+//! drains the inbox — verify the signature, match the subject against what this identity
+//! publishes, fold it into a count. Store-and-forward retry lives on the sender, so the
+//! inbox tolerates an offline receiver.
 //!
 //! **Every instance that's up serves this**, browser tab or desktop. A tab has no
 //! listening socket, so inbound arrives over the relay it already holds rather than
 //! a direct path, but it answers the same protocol — hence one shared crate instead
 //! of a native copy and a wasm copy that could drift apart.
-//!
-//! Wire format per call: the dialer opens a bidi stream, writes a JSON request,
-//! finishes its send side; the server reads to end, writes a JSON response, finishes.
 
 use std::sync::{Arc, Mutex};
 
@@ -27,37 +43,40 @@ use serde::{Deserialize, Serialize};
 
 pub const ALPN: &[u8] = b"pin-keeper/0";
 
-/// Per-frame read cap. A /hey knock is a few small fields, so this is generous.
+/// Per-frame read cap. A knock is one signed record — a few hundred bytes — so this is
+/// generous, and it is a read bound rather than an allocation.
 pub const MAX_FRAME: usize = 64 * 1024;
 
-#[derive(Deserialize)]
+/// How many knocks may be parked at once.
+///
+/// The inbox is in memory and nothing drains it yet, so it needs a ceiling: without one
+/// a peer could grow it until the process dies, and there is no reply through which to
+/// signal backpressure. When it is full a knock is DROPPED rather than evicting an older
+/// one — a flooder should not be able to push real knocks out — and the sender's own
+/// retry is what recovers it once the drain has made room.
+pub const MAX_INBOX: usize = 1024;
+
+#[derive(Serialize, Deserialize)]
 struct Request {
     verb: String,
-    /// `hey`: the knocking party (DID or node id).
-    #[serde(default)]
-    from: Option<String>,
-    /// `hey`: hex signature over the knock (not verified yet — that's reconcile).
-    #[serde(default)]
-    sig: Option<String>,
-    /// `hey`: the AT-URI the knock is about ("I did something about this").
-    #[serde(default)]
-    referent: Option<String>,
+    /// `hey`: the signed record, exactly as its author wrote it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    record: Option<serde_json::Value>,
 }
 
-/// An inbound knock parked in the inbox until the reconcile loop drains it (fetch
-/// the referent, verify the sig, materialize an index record). None of that happens
-/// yet — we just hold the pointer, so the fields are stored but not yet read.
-#[allow(dead_code)]
+/// An inbound knock, parked until the reconcile loop drains it.
+///
+/// It carries only the record, because the record names its own actor. Repeating that
+/// outside it would be two places for one fact and a claim to cross-check — and the copy
+/// outside the signature is the one that could lie.
 #[derive(Debug, Clone)]
 pub struct Knock {
-    pub from: String,
-    pub sig: String,
-    pub referent: String,
+    pub record: serde_json::Value,
 }
 
-/// The `hey` inbox: knocks accepted but not yet reconciled. In-memory for now;
-/// persisting + draining it is the reconcile slice. A std mutex (not tokio) — it's
-/// only ever held for a push/read with no await in between.
+/// The `hey` inbox: knocks accepted but not yet reconciled. In-memory — a knock lost to
+/// a restart is one the sender retries. A std mutex (not tokio), since it is only ever
+/// held for a push or a read with no await in between.
 pub type HeyInbox = Arc<Mutex<Vec<Knock>>>;
 
 /// A fresh, empty inbox.
@@ -65,9 +84,18 @@ pub fn new_inbox() -> HeyInbox {
     Arc::new(Mutex::new(Vec::new()))
 }
 
-/// How many knocks are parked — what diagnostics report.
+/// How many knocks are parked — what diagnostics report, and what the drain works
+/// through.
 pub fn queued(inbox: &HeyInbox) -> usize {
     inbox.lock().map(|i| i.len()).unwrap_or(0)
+}
+
+/// Take everything parked, leaving the inbox empty.
+pub fn drain(inbox: &HeyInbox) -> Vec<Knock> {
+    inbox
+        .lock()
+        .map(|mut i| std::mem::take(&mut *i))
+        .unwrap_or_default()
 }
 
 /// Drop every parked knock. Used after a synthetic self-test knock so real knocks
@@ -76,23 +104,6 @@ pub fn clear(inbox: &HeyInbox) {
     if let Ok(mut i) = inbox.lock() {
         i.clear();
     }
-}
-
-#[derive(Serialize)]
-struct HeyResponse {
-    accepted: bool,
-    /// Inbox depth after enqueuing — lets the knocker (and our diagnostics) see the
-    /// knock landed.
-    queued: usize,
-}
-
-#[derive(Serialize)]
-struct ErrorResponse<'a> {
-    error: &'a str,
-}
-
-fn error_frame(msg: &str) -> Vec<u8> {
-    serde_json::to_vec(&ErrorResponse { error: msg }).unwrap_or_default()
 }
 
 /// Serves the /hey inbox knock over iroh (ALPN `pin-keeper/0`).
@@ -106,53 +117,38 @@ impl HeyHandler {
         Self { inbox }
     }
 
-    /// Handle one request frame, returning the response frame. Pure over the inbox,
-    /// so it's directly testable without a network.
-    pub fn respond(&self, request: &[u8]) -> Vec<u8> {
-        let req: Request = match serde_json::from_slice(request) {
-            Ok(r) => r,
-            Err(e) => return error_frame(&format!("bad request: {e}")),
+    /// Take one request frame. Returns whether it was parked.
+    ///
+    /// Pure over the inbox, so it is directly testable without a network. The return
+    /// value is for tests and diagnostics — nothing is sent back to the knocker, whether
+    /// this succeeded or not.
+    pub fn accept_knock(&self, request: &[u8]) -> bool {
+        let Ok(req) = serde_json::from_slice::<Request>(request) else {
+            return false;
         };
-        match req.verb.as_str() {
-            "hey" => self.respond_hey(req.from, req.sig, req.referent),
-            other => error_frame(&format!("unknown verb: {other}")),
+        if req.verb != "hey" {
+            return false;
         }
-    }
-
-    fn respond_hey(
-        &self,
-        from: Option<String>,
-        sig: Option<String>,
-        referent: Option<String>,
-    ) -> Vec<u8> {
-        let (Some(from), Some(sig), Some(referent)) = (from, sig, referent) else {
-            return error_frame("hey requires from, sig, and referent");
+        let Some(record) = req.record else {
+            return false;
         };
-        // Park the knock. We don't verify the sig or fetch the referent here — that's
-        // the reconcile loop. Acceptance just means "received and queued."
-        let queued = {
-            let mut inbox = self.inbox.lock().unwrap();
-            inbox.push(Knock {
-                from,
-                sig,
-                referent,
-            });
-            inbox.len()
+        let Ok(mut inbox) = self.inbox.lock() else {
+            return false;
         };
-        serde_json::to_vec(&HeyResponse {
-            accepted: true,
-            queued,
-        })
-        .unwrap_or_else(|e| error_frame(&format!("encode: {e}")))
+        if inbox.len() >= MAX_INBOX {
+            return false;
+        }
+        inbox.push(Knock { record });
+        true
     }
 }
 
 impl ProtocolHandler for HeyHandler {
     async fn accept(&self, connection: Connection) -> Result<(), AcceptError> {
-        // Service requests until the peer closes the connection — one
-        // request/response per bidi stream, many streams per connection.
+        // One knock per unidirectional stream, many streams per connection, until the
+        // peer closes. Nothing is written back on any of them.
         loop {
-            let (mut send, mut recv) = match connection.accept_bi().await {
+            let mut recv = match connection.accept_uni().await {
                 Ok(s) => s,
                 // Peer closed the connection: clean end of the session.
                 Err(_) => return Ok(()),
@@ -161,71 +157,117 @@ impl ProtocolHandler for HeyHandler {
                 .read_to_end(MAX_FRAME)
                 .await
                 .map_err(AcceptError::from_err)?;
-            let response = self.respond(&request);
-            send.write_all(&response)
-                .await
-                .map_err(AcceptError::from_err)?;
-            send.finish().map_err(AcceptError::from_err)?;
+            // A frame we can't use is dropped in silence, the same as one we can. Telling
+            // a knocker which it was is the oracle this protocol declines to be.
+            self.accept_knock(&request);
         }
     }
 }
 
 /// The request frame a dialer sends for a `hey` knock. Here so a caller doesn't
-/// hand-write the JSON and drift from what `respond` parses.
-pub fn hey_request(from: &str, sig: &str, referent: &str) -> Vec<u8> {
-    serde_json::to_vec(&serde_json::json!({
-        "verb": "hey",
-        "from": from,
-        "sig": sig,
-        "referent": referent,
-    }))
-    .unwrap_or_default()
-}
-
-/// Read a response frame's `accepted` flag, or the server's error message.
-pub fn parse_hey_response(response: &[u8]) -> Result<(), String> {
-    let v: serde_json::Value =
-        serde_json::from_slice(response).map_err(|e| format!("parse: {e}"))?;
-    if v.get("accepted").and_then(|a| a.as_bool()) == Some(true) {
-        return Ok(());
-    }
-    Err(match v.get("error").and_then(|e| e.as_str()) {
-        Some(err) => format!("hey server error: {err}"),
-        None => "hey not accepted".to_string(),
+/// hand-write the JSON and drift from what the handler parses.
+pub fn hey_request(record: &serde_json::Value) -> Vec<u8> {
+    serde_json::to_vec(&Request {
+        verb: "hey".to_string(),
+        record: Some(record.clone()),
     })
+    .unwrap_or_default()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn a_well_formed_knock_is_accepted_and_parked() {
-        let inbox = new_inbox();
-        let handler = HeyHandler::new(inbox.clone());
-        let response = handler.respond(&hey_request("did:x", "00", "at://y"));
-        assert!(parse_hey_response(&response).is_ok());
-        assert_eq!(queued(&inbox), 1);
-        let knock = inbox.lock().unwrap()[0].clone();
-        assert_eq!(knock.from, "did:x");
-        assert_eq!(knock.referent, "at://y");
+    fn record() -> serde_json::Value {
+        serde_json::json!({
+            "kind": "like",
+            "actor": "did:dht:someone",
+            "subject": "f4xlljzqxtqpv7ul6ngkyeafusdwqrirpmhochqyjz2hgz3djo6a",
+            "version": "bafkreisomething",
+            "createdAt": "2026-08-11T12:00:00.000Z",
+            "sig": "Zm9vYmFy",
+        })
     }
 
     #[test]
-    fn an_incomplete_knock_is_rejected_and_parks_nothing() {
+    fn a_knock_parks_the_record_it_carried() {
         let inbox = new_inbox();
         let handler = HeyHandler::new(inbox.clone());
-        let response = handler.respond(br#"{"verb":"hey","from":"did:x"}"#);
-        assert!(parse_hey_response(&response).is_err());
+        assert!(handler.accept_knock(&hey_request(&record())));
+        assert_eq!(queued(&inbox), 1);
+        assert_eq!(inbox.lock().unwrap()[0].record, record());
+    }
+
+    #[test]
+    fn a_record_survives_the_wire_verbatim() {
+        // The signature is checked against fields read off this record, so anything the
+        // frame did to it on the way through would be a knock that can never verify.
+        let inbox = new_inbox();
+        let handler = HeyHandler::new(inbox.clone());
+        handler.accept_knock(&hey_request(&record()));
+        let parked = inbox.lock().unwrap()[0].record.clone();
+        assert_eq!(
+            serde_json::to_string(&parked).unwrap(),
+            serde_json::to_string(&record()).unwrap()
+        );
+    }
+
+    #[test]
+    fn a_knock_with_no_record_parks_nothing() {
+        // A knock used to be a pointer, and a pointer without a record is what this
+        // protocol no longer accepts: there is nothing to verify and nothing to count.
+        let inbox = new_inbox();
+        let handler = HeyHandler::new(inbox.clone());
+        assert!(!handler.accept_knock(br#"{"verb":"hey"}"#));
         assert_eq!(queued(&inbox), 0);
     }
 
     #[test]
-    fn an_unknown_verb_is_rejected() {
+    fn an_unknown_verb_or_unparseable_frame_parks_nothing() {
         let inbox = new_inbox();
         let handler = HeyHandler::new(inbox.clone());
-        assert!(parse_hey_response(&handler.respond(br#"{"verb":"nope"}"#)).is_err());
-        assert!(parse_hey_response(&handler.respond(b"not json")).is_err());
+        assert!(!handler.accept_knock(br#"{"verb":"nope","record":{}}"#));
+        assert!(!handler.accept_knock(b"not json"));
+        assert_eq!(queued(&inbox), 0);
+    }
+
+    #[test]
+    fn a_full_inbox_refuses_rather_than_growing() {
+        // Nothing drains it yet and there is no reply to signal backpressure, so the
+        // ceiling is what stops a peer growing it until the process dies.
+        let inbox = new_inbox();
+        let handler = HeyHandler::new(inbox.clone());
+        let frame = hey_request(&record());
+        for _ in 0..MAX_INBOX {
+            assert!(handler.accept_knock(&frame));
+        }
+        assert!(!handler.accept_knock(&frame));
+        assert_eq!(queued(&inbox), MAX_INBOX);
+    }
+
+    #[test]
+    fn a_full_inbox_keeps_the_knocks_it_already_has() {
+        // Dropping the NEWEST rather than evicting the oldest, so a flooder cannot push
+        // real knocks out of a full inbox.
+        let inbox = new_inbox();
+        let handler = HeyHandler::new(inbox.clone());
+        let mut first = record();
+        first["sig"] = serde_json::Value::String("first".into());
+        handler.accept_knock(&hey_request(&first));
+        for _ in 1..MAX_INBOX {
+            handler.accept_knock(&hey_request(&record()));
+        }
+        handler.accept_knock(&hey_request(&record()));
+        assert_eq!(inbox.lock().unwrap()[0].record["sig"], "first");
+    }
+
+    #[test]
+    fn draining_takes_everything_and_leaves_the_inbox_empty() {
+        let inbox = new_inbox();
+        let handler = HeyHandler::new(inbox.clone());
+        handler.accept_knock(&hey_request(&record()));
+        handler.accept_knock(&hey_request(&record()));
+        assert_eq!(drain(&inbox).len(), 2);
         assert_eq!(queued(&inbox), 0);
     }
 
@@ -233,7 +275,7 @@ mod tests {
     fn clear_empties_the_inbox() {
         let inbox = new_inbox();
         let handler = HeyHandler::new(inbox.clone());
-        handler.respond(&hey_request("did:x", "00", "at://y"));
+        handler.accept_knock(&hey_request(&record()));
         clear(&inbox);
         assert_eq!(queued(&inbox), 0);
     }

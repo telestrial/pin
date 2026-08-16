@@ -1431,7 +1431,7 @@ async fn curator_loop(
 
     // One-shot self-test: a throwaway client dials us and sends a /hey knock. The
     // knock is synthetic, so clear the inbox afterward — real knocks start from zero.
-    match crate::rpc::self_test(endpoint.addr()).await {
+    match crate::rpc::self_test(endpoint.addr(), &inbox).await {
         Ok(msg) => {
             log::info!("curator hey self-test: {msg}");
             diag.lock().unwrap().rpc_selftest = Some(msg);
