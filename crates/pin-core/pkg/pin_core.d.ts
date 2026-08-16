@@ -543,6 +543,17 @@ export function start_channel_doc_loop(app_key_hex: string, cadence_secs: number
 export function start_channel_sync_loop(app_key_hex: string, cadence_secs: number, retry_secs: number, on_pass: Function): Promise<void>;
 
 /**
+ * Start the delivery loop in this tab — knock this identity's endorsements through to
+ * the people they are about.
+ *
+ * A tab dials exactly as well as a desktop, so this is the same loop from the same crate.
+ * What differs is only how long it stays open to keep making the attempt — and an
+ * endorsement it doesn't get to is one the next instance picks up, since the mark that
+ * says what has been delivered lives in the doc they share.
+ */
+export function start_deliver_loop(app_key_hex: string, cadence_secs: number, retry_secs: number, on_pass: Function): Promise<void>;
+
+/**
  * Start the engagement loop in this tab — read what the graph endorsed, hold what
  * verifies, publish a tally per subject.
  *
@@ -793,6 +804,7 @@ export interface InitOutput {
     readonly sign_endorsement: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number) => [number, number, number, number];
     readonly start_channel_doc_loop: (a: number, b: number, c: number, d: any) => any;
     readonly start_channel_sync_loop: (a: number, b: number, c: number, d: number, e: any) => any;
+    readonly start_deliver_loop: (a: number, b: number, c: number, d: number, e: any) => any;
     readonly start_engagement_loop: (a: number, b: number, c: number, d: any) => any;
     readonly start_identity_loop: (a: number, b: number, c: number, d: number, e: number, f: any) => any;
     readonly start_instance_loop: (a: number, b: any) => any;

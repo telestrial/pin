@@ -31,6 +31,7 @@ import {
   share_channel_doc,
   start_channel_doc_loop,
   start_channel_sync_loop,
+  start_deliver_loop,
   start_engagement_loop,
   start_identity_loop,
   start_instance_loop,
@@ -61,6 +62,7 @@ import {
   shareDocNative,
   startChannelDocLoopNative,
   startChannelSyncLoopNative,
+  startDeliverLoopNative,
   startEngagementLoopNative,
   startIdentityLoopNative,
   startInstanceLoopNative,
@@ -599,6 +601,42 @@ export async function startEngagementLoop(
   await start_engagement_loop(
     appKeyHex,
     ENGAGEMENT_CADENCE_SECS,
+    (report: string) => onPass?.(report),
+  )
+}
+
+/** How often delivery looks for endorsements nobody has been told about, and how soon it
+ *  tries again while something is still outstanding.
+ *
+ *  Settled rather than eager: a pass with nothing undelivered is a doc scan and no network
+ *  at all. But an endorsement its author hasn't heard is latency a reader can see, so a
+ *  pass that left something outstanding comes round quickly instead. */
+const DELIVER_CADENCE_SECS = 5 * 60
+const DELIVER_RETRY_SECS = 30
+
+/** Start the delivery loop — knock this identity's endorsements through to the people
+ *  they are about.
+ *
+ *  The only route by which engagement reaches an author outside this identity's graph: a
+ *  crawl reads the directories of people you already know, and someone who has never heard
+ *  of you does not read yours.
+ *
+ *  The same loop on both platforms. A tab dials exactly as well as a desktop; what differs
+ *  is how long it stays open to keep trying, and an endorsement it doesn't get to is picked
+ *  up by whichever instance is next, since the mark recording what has been delivered lives
+ *  in the doc they share.
+ *
+ *  Idempotent (each engine keeps one loop). Requires an open doc ({@link openDocs}). */
+export async function startDeliverLoop(
+  appKeyHex: string,
+  onPass?: (report: string) => void,
+): Promise<void> {
+  if (inTauri()) return startDeliverLoopNative(appKeyHex)
+  await ensureWasm()
+  await start_deliver_loop(
+    appKeyHex,
+    DELIVER_CADENCE_SECS,
+    DELIVER_RETRY_SECS,
     (report: string) => onPass?.(report),
   )
 }

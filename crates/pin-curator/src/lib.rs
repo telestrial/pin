@@ -11,6 +11,8 @@
 //               for it — the author half of the ladder's top rung.
 //   CHANNELSYNC imports the subscribed channels' replicas, so their authors' writes are
 //               pushed here rather than polled for.
+//   DELIVER     knocks this identity's endorsements through to the people they are about,
+//               which is the only way engagement reaches an author outside our graph.
 //   INSTANCE    records where THIS instance can be dialed, so the identity's published
 //               coordinates are the set of its live endpoints rather than whichever one
 //               wrote last.
@@ -68,6 +70,7 @@ use pin_engagement::Aggregate;
 
 mod channeldoc;
 mod channelsync;
+mod deliver;
 mod engagement;
 mod identity;
 mod instance;
@@ -79,6 +82,7 @@ pub use channeldoc::{
     channel_docs_once, run_channel_doc_loop, ChannelDocContext, ChannelDocOutcome,
 };
 pub use channelsync::{run_channel_sync_loop, ChannelSyncContext, ChannelSyncOutcome};
+pub use deliver::{deliver_once, run_deliver_loop, DeliverContext, DeliverOutcome};
 pub use engagement::{engagement_once, run_engagement_loop, EngagementContext, EngagementOutcome};
 pub use identity::{
     publish_identity_once, run_identity_loop, IdentityContext, IdentityOutcome,

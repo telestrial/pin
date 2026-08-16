@@ -41,7 +41,7 @@ pub const DIRECTORY_DOC_VERSION: u32 = 3;
 /// TXT prefixes in the published packet.
 pub(crate) const DIR_PREFIX: &str = "_dir";
 const NS_PREFIX: &str = "_ns";
-const IROH_PREFIX: &str = "_iroh";
+pub(crate) const IROH_PREFIX: &str = "_iroh";
 
 /// Where this identity's directory publish state lives, so the superseded blob gets
 /// reclaimed like any other supersede.

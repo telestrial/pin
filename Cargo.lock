@@ -4629,6 +4629,7 @@ dependencies = [
  "pin-engagement",
  "pin-manifest",
  "pin-pkarr",
+ "pin-rpc",
  "pin-sia",
  "serde",
  "serde_json",

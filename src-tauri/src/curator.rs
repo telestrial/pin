@@ -43,6 +43,12 @@ use crate::docstore::DocEngine;
 /// serves over iroh. `None` whenever curation is off / the engine hasn't come up.
 type DocSlot = Arc<Mutex<Option<Arc<DocEngine>>>>;
 
+/// Shared handle to the running Curator's iroh endpoint, for loops that DIAL rather than
+/// only read and write records. Populated when the endpoint binds and cleared on stop, the
+/// same way `doc_slot` is — the endpoint is a local in the Curator's own task, and a
+/// command-started loop has no other way to reach it.
+type EndpointSlot = Arc<Mutex<Option<Endpoint>>>;
+
 /// What the frontend reads. snake_case fields are renamed to camelCase on the
 /// wire for the TS client.
 #[derive(serde::Serialize, Clone)]
@@ -141,6 +147,8 @@ struct Inner {
     /// slot is minted per start (like `diag`), so a stopped loop clearing its old
     /// slot can't clear the current one.
     doc_slot: DocSlot,
+    /// Live handle to the running endpoint, for loops that dial (delivery).
+    endpoint_slot: EndpointSlot,
     /// Abort handles for the background loops (pull, keep-alive, instance, identity,
     /// repack). They run forever and hold doc handles, so stopping the Curator means
     /// stopping them — otherwise they outlive it and keep its store open.
@@ -160,6 +168,7 @@ impl Inner {
             l.abort();
         }
         *self.doc_slot.lock().unwrap() = None;
+        *self.endpoint_slot.lock().unwrap() = None;
     }
 }
 
@@ -274,6 +283,7 @@ pub fn start_curator(
     let running = Arc::new(AtomicBool::new(true));
     let diag = Arc::new(Mutex::new(Diag::off()));
     let doc_slot: DocSlot = Arc::new(Mutex::new(None));
+    let endpoint_slot: EndpointSlot = Arc::new(Mutex::new(None));
     {
         let mut d = diag.lock().unwrap();
         d.phase = "binding";
@@ -281,8 +291,9 @@ pub fn start_curator(
     inner.running = running.clone();
     inner.diag = Some(diag.clone());
     inner.doc_slot = doc_slot.clone();
+    inner.endpoint_slot = endpoint_slot.clone();
     inner.handle = Some(thread::spawn(move || {
-        run_curator(running, diag, doc_slot, data_dir, creds)
+        run_curator(running, diag, doc_slot, endpoint_slot, data_dir, creds)
     }));
 
     CuratorState::snapshot(&inner)
@@ -1150,6 +1161,78 @@ pub async fn curator_start_engagement(
     Ok(())
 }
 
+/// How often delivery looks for endorsements nobody has been told about.
+///
+/// Settled rather than eager: a pass with nothing outstanding is a doc scan and no
+/// network at all, and everything it might deliver was already written locally.
+const DELIVER_CADENCE: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+/// How soon to try again while something is still undelivered. An endorsement its author
+/// hasn't heard is latency a reader can see, so an outstanding pass comes round quickly
+/// instead of waiting out the settled cadence.
+const DELIVER_RETRY: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Start the delivery loop — knock this identity's endorsements through to the people
+/// they are about.
+///
+/// The only route by which engagement reaches an author outside this identity's graph: a
+/// crawl reads the directories of people you already know, and someone who has never
+/// heard of you does not read yours.
+///
+/// Idempotent (the engine keeps one loop), so a remounting caller can just call it.
+#[tauri::command]
+pub async fn curator_start_deliver(
+    curator: tauri::State<'_, CuratorState>,
+    sia: tauri::State<'_, crate::sia::SiaState>,
+    app_key_hex: String,
+) -> Result<(), String> {
+    let engine = current_engine(&curator)?;
+    if engine.deliver_started() {
+        return Ok(());
+    }
+    let app_key = pin_derive::decode_app_key(&app_key_hex).ok_or("app key hex must be 32 bytes")?;
+    let own_did = crate::identity::did_dht(&crate::identity::derive_identity(&app_key)?);
+    let endpoint = curator
+        .0
+        .lock()
+        .unwrap()
+        .endpoint_slot
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or("curator endpoint is not up yet")?;
+    let ctx = pin_curator::DeliverContext {
+        doc: engine.doc.clone(),
+        blobs: (*engine.blobs).clone(),
+        author_id: engine.author_id,
+        endpoint,
+        app_key,
+    };
+    let loop_handle = sia.detach(async move {
+        pin_curator::run_deliver_loop(
+            ctx,
+            own_did,
+            DELIVER_CADENCE,
+            DELIVER_RETRY,
+            |result| match result {
+                // Quiet when everything has already been delivered, which is the steady
+                // state. Reported when something moved or is still outstanding.
+                Ok(o) => {
+                    if o.delivered > 0 || o.unreachable > 0 || o.dropped > 0 {
+                        println!(
+                            "curator deliver: delivered {} already {} unreachable {} no-target {} own {} dropped {}",
+                            o.delivered, o.already, o.unreachable, o.no_target, o.own, o.dropped
+                        );
+                    }
+                }
+                Err(e) => println!("curator deliver: {e}"),
+            },
+        )
+        .await
+    });
+    curator.0.lock().unwrap().loops.push(loop_handle);
+    Ok(())
+}
+
 /// How often the identity's coordinates are republished. Same reasoning as the locator
 /// keep-alive: a pkarr record ages off Mainline in a couple of hours, and an identity
 /// nobody republishes stops resolving.
@@ -1287,6 +1370,7 @@ fn run_curator(
     running: Arc<AtomicBool>,
     diag: Arc<Mutex<Diag>>,
     doc_slot: DocSlot,
+    endpoint_slot: EndpointSlot,
     data_dir: Option<PathBuf>,
     creds: Option<SiaCreds>,
 ) {
@@ -1302,7 +1386,14 @@ fn run_curator(
             return;
         }
     };
-    rt.block_on(curator_loop(running, diag, doc_slot, data_dir, creds));
+    rt.block_on(curator_loop(
+        running,
+        diag,
+        doc_slot,
+        endpoint_slot,
+        data_dir,
+        creds,
+    ));
 }
 
 /// Load the persisted iroh secret key, or generate one and persist it. The key
@@ -1334,6 +1425,7 @@ async fn curator_loop(
     running: Arc<AtomicBool>,
     diag: Arc<Mutex<Diag>>,
     doc_slot: DocSlot,
+    endpoint_slot: EndpointSlot,
     data_dir: Option<PathBuf>,
     creds: Option<SiaCreds>,
 ) {
@@ -1409,6 +1501,7 @@ async fn curator_loop(
         d.docs_reopened = engine.reopened;
     }
     *doc_slot.lock().unwrap() = doc_engine.clone();
+    *endpoint_slot.lock().unwrap() = Some(endpoint.clone());
 
     // Serve the /hey inbox over iroh, plus the iroh-docs / blobs / gossip protocols
     // when the docs engine is up — one ALPN-multiplexed Router. The atrium repo and
@@ -1539,6 +1632,7 @@ async fn curator_loop(
     }
     // Doc goes unavailable to the `docs_*` commands the moment teardown begins.
     *doc_slot.lock().unwrap() = None;
+    *endpoint_slot.lock().unwrap() = None;
     if let Some(r) = router {
         r.shutdown().await.ok();
     }

@@ -87,6 +87,7 @@ struct Engine {
     rendezvous_running: Cell<bool>,
     /// Same, for the engagement crawl/fold loop.
     engagement_running: Cell<bool>,
+    deliver_running: Cell<bool>,
     _gossip: Gossip,
     docs: Docs,
     _router: Router,
@@ -168,6 +169,7 @@ pub async fn open(app_key_hex: String) -> Result<String, JsValue> {
         snapshot_running: Cell::new(false),
         rendezvous_running: Cell::new(false),
         engagement_running: Cell::new(false),
+        deliver_running: Cell::new(false),
         _gossip: gossip,
         docs,
         _router: router,
@@ -733,6 +735,65 @@ pub async fn start_engagement_loop(
                         "notOurs": o.not_ours,
                         "published": o.published,
                         "publishFailed": o.publish_failed,
+                    })
+                    .to_string(),
+                    Err(e) => serde_json::json!({ "error": e }).to_string(),
+                };
+                let _ = on_pass.call1(&JsValue::NULL, &JsValue::from_str(&report));
+            },
+        )
+        .await
+    });
+    Ok(())
+}
+
+/// Start the delivery loop in this tab — knock this identity's endorsements through to
+/// the people they are about.
+///
+/// A tab dials exactly as well as a desktop, so this is the same loop from the same crate.
+/// What differs is only how long it stays open to keep making the attempt — and an
+/// endorsement it doesn't get to is one the next instance picks up, since the mark that
+/// says what has been delivered lives in the doc they share.
+#[wasm_bindgen]
+pub async fn start_deliver_loop(
+    app_key_hex: String,
+    cadence_secs: u32,
+    retry_secs: u32,
+    on_pass: js_sys::Function,
+) -> Result<(), JsValue> {
+    let eng = engine()?;
+    if eng.deliver_running.replace(true) {
+        return Ok(());
+    }
+    let app_key = decode_app_key(&app_key_hex)
+        .ok_or_else(|| JsValue::from_str("app key hex must be 32 bytes (64 hex chars)"))?;
+    let own_did = format!(
+        "did:dht:{}",
+        pin_pkarr::public_key_from_seed(&pin_derive::did_dht_seed(&app_key))
+            .map_err(|e| JsValue::from_str(&e))?
+    );
+    let ctx = pin_curator::DeliverContext {
+        doc: eng.doc.clone(),
+        blobs: (*eng.blobs).clone(),
+        author_id: eng.author_id,
+        endpoint: eng.endpoint.clone(),
+        app_key,
+    };
+    wasm_bindgen_futures::spawn_local(async move {
+        pin_curator::run_deliver_loop(
+            ctx,
+            own_did,
+            std::time::Duration::from_secs(cadence_secs as u64),
+            std::time::Duration::from_secs(retry_secs as u64),
+            |result| {
+                let report = match result {
+                    Ok(o) => serde_json::json!({
+                        "delivered": o.delivered,
+                        "already": o.already,
+                        "unreachable": o.unreachable,
+                        "noTarget": o.no_target,
+                        "own": o.own,
+                        "dropped": o.dropped,
                     })
                     .to_string(),
                     Err(e) => serde_json::json!({ "error": e }).to_string(),

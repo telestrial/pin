@@ -67,6 +67,8 @@ if (import.meta.env.DEV || inTauri()) {
       identityPasses: () => string[]
       startEngagement: (hex: string) => Promise<string>
       engagementPasses: () => string[]
+      startDeliver: (hex: string) => Promise<string>
+      deliverPasses: () => string[]
       startChannelDocs: (hex: string) => Promise<string>
       channelDocPasses: () => string[]
       startChannelSync: (hex: string) => Promise<string>
@@ -524,6 +526,7 @@ if (import.meta.env.DEV || inTauri()) {
     const instancePasses: string[] = []
     const identityPasses: string[] = []
     const engagementPasses: string[] = []
+    const deliverPasses: string[] = []
     const rendezvousPasses: string[] = []
     const docs = () => import('./lib/docs')
     g.__pinSync = {
@@ -659,6 +662,17 @@ if (import.meta.env.DEV || inTauri()) {
         return 'started'
       },
       engagementPasses: () => engagementPasses.slice(),
+      // And delivery. Also settings-first — it needs the subscription list to work out
+      // who an unlisted endorsement is about — so an empty doc stops it there, which is
+      // the proof available without a peer to knock.
+      startDeliver: async (hex) => {
+        await (await docs()).openDocs(hex)
+        await (await docs()).startDeliverLoop(hex, (report) => {
+          deliverPasses.push(report)
+        })
+        return 'started'
+      },
+      deliverPasses: () => deliverPasses.slice(),
     }
   }
 }

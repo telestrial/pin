@@ -227,3 +227,29 @@ test('the engagement loop runs a pass in the browser and reports it', async ({
   )
   expect(JSON.parse(first)).toEqual({ error: 'no settings record yet' })
 })
+
+test('the delivery loop runs a pass in the browser and reports it', async ({
+  page,
+}) => {
+  const appKeyHex = Array.from(crypto.getRandomValues(new Uint8Array(32)))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('')
+
+  await harness(page)
+  await page.evaluate((hex) => window.__pinSync!.startDeliver(hex), appKeyHex)
+
+  await expect
+    .poll(() => page.evaluate(() => window.__pinSync!.deliverPasses()), {
+      timeout: 60_000,
+      intervals: [250],
+    })
+    .not.toHaveLength(0)
+
+  // A tab dials as well as a desktop, so delivery is the same loop here — and this is
+  // what proves it actually RUNS on this target rather than merely compiling for it: a
+  // task with no executor stays pending forever, silently. It reads the subscription
+  // list first (to work out who an unlisted endorsement is about), so an empty doc stops
+  // it there, which is the answer available without a peer to knock.
+  const [first] = await page.evaluate(() => window.__pinSync!.deliverPasses())
+  expect(JSON.parse(first)).toEqual({ error: 'no settings record yet' })
+})

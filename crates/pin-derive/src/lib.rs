@@ -364,6 +364,18 @@ pub const CRAWL_COLLECTION: &str = "crawl";
 /// alone would leave a clobbered cache stale until the author happened to republish.
 pub const PULL_COLLECTION: &str = "pull";
 
+/// The collection recording which of this identity's endorsements have been delivered to
+/// the identity they are about, keyed by the endorsement's own rkey.
+///
+/// A crawl only finds what people in your graph endorsed, so an author outside it would
+/// never learn of an endorsement at all. Delivery is what reaches them — and this is how a
+/// pass knows what it has already sent, so a knock goes once rather than every cadence.
+///
+/// It records the SIGNATURE that was sent, not merely that something was. An endorsement
+/// re-signed against an edited item is a different assertion and has to be delivered
+/// again; a mark that only said "sent" could never tell the two apart.
+pub const DELIVER_COLLECTION: &str = "deliver";
+
 /// The collection where each of this identity's live instances registers itself,
 /// keyed by its iroh node id.
 ///

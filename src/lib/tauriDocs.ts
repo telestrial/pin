@@ -210,6 +210,12 @@ export function startEngagementLoopNative(appKeyHex: string): Promise<void> {
   return call<void>('curator_start_engagement', { appKeyHex })
 }
 
+/** Start the delivery loop — knock this identity's endorsements through to the people
+ *  they are about. Idempotent — the engine keeps one. */
+export function startDeliverLoopNative(appKeyHex: string): Promise<void> {
+  return call<void>('curator_start_deliver', { appKeyHex })
+}
+
 export function openChannelNative(nsSeedHex: string): Promise<string> {
   return call<string>('docs_open_channel', { nsSeedHex })
 }

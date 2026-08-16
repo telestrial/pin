@@ -4,6 +4,7 @@ import {
   openDocs,
   startChannelDocLoop,
   startChannelSyncLoop,
+  startDeliverLoop,
   startEngagementLoop,
   startIdentityLoop,
   startInstanceLoop,
@@ -73,6 +74,7 @@ export function useCuratorLoops() {
         startInstanceLoop(),
         startIdentityLoop(appKeyHex, namespaceId),
         startEngagementLoop(appKeyHex),
+        startDeliverLoop(appKeyHex),
       ])
     })()
 
