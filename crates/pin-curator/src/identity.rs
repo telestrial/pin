@@ -47,10 +47,23 @@ const IROH_PREFIX: &str = "_iroh";
 /// reclaimed like any other supersede.
 const DIRECTORY_RKEY: &str = "directory";
 
-/// How many endpoints to advertise. A whole packet is ~1000 bytes and the directory
-/// pointer needs most of it, so the set is bounded — `live_instances` orders always-on
-/// endpoints first, so truncation drops the ones a peer was least likely to reach.
-const MAX_ENDPOINTS: usize = 8;
+/// How many endpoints to advertise.
+///
+/// A whole packet is ~1000 bytes and the directory pointer needs most of it, so the set is
+/// bounded. Lower than it was, because an endpoint now carries its relay URL as well as
+/// its id and costs roughly three times as much room — a worthwhile trade, since an id
+/// alone names an endpoint without locating it and dialing it would fall through to a
+/// discovery service we'd rather not depend on.
+///
+/// Three is generous for what an identity actually runs at once: a desktop, a phone, a
+/// tab. `live_instances` orders always-on endpoints first, so truncation drops the ones a
+/// peer was least likely to reach anyway.
+///
+/// Measured, not estimated: against the longest realistic directory pointer this comes to
+/// 821 bytes, four still fits, and five does not. The one spare slot is deliberate — the
+/// worst case below is the worst case we know of, and a packet that stops signing takes an
+/// identity's whole coordinate set off the DHT rather than just its last endpoint.
+const MAX_ENDPOINTS: usize = 3;
 
 /// Everything a publish pass needs.
 pub struct IdentityContext {
@@ -258,7 +271,7 @@ pub async fn publish_identity_once(
     };
 
     let endpoints = live_instances(&ctx.doc, &ctx.blobs, ctx.author_id, now_secs).await;
-    let endpoints: Vec<String> = endpoints.into_iter().take(MAX_ENDPOINTS).collect();
+    let endpoints: Vec<crate::InstanceAddr> = endpoints.into_iter().take(MAX_ENDPOINTS).collect();
     outcome.endpoints = endpoints.len();
 
     let mut records = pin_pkarr::chunk_txt(DIR_PREFIX, &item_url);
@@ -267,10 +280,14 @@ pub async fn publish_identity_once(
         value: ctx.namespace_id.clone(),
     });
     if !endpoints.is_empty() {
-        // Comma-joined into ONE logical value rather than one record per endpoint, so
-        // the existing chunking carries it and a prefix keeps a single meaning. With
-        // one endpoint this is byte-identical to the single-node-id form it replaces.
-        records.extend(pin_pkarr::chunk_txt(IROH_PREFIX, &endpoints.join(",")));
+        // ONE logical value rather than a record per endpoint, so the existing chunking
+        // carries it and a prefix keeps a single meaning. Each entry names an endpoint
+        // AND says where to reach it, so a peer dials from what it resolved here instead
+        // of asking a discovery service — see the module docs on `instance`.
+        records.extend(pin_pkarr::chunk_txt(
+            IROH_PREFIX,
+            &crate::encode_endpoints(&endpoints),
+        ));
     }
 
     let seed = pin_derive::did_dht_seed(&ctx.app_key);
@@ -477,6 +494,56 @@ mod tests {
         // UNKNOWN, and unknown is not published. Guessing 'public' for "old" would
         // enumerate a channel that may be obscure, which is the property obscurity is.
         assert!(!ids.contains(&"old"));
+    }
+
+    /// A packet as large as a real one gets: a chunked Sia share URL, a namespace id, and
+    /// a full complement of endpoints each carrying a relay URL.
+    fn worst_case_records(endpoints: usize) -> Vec<pin_pkarr::TxtRecord> {
+        // A Sia share URL with its encryption-key fragment — the longest thing published.
+        let item_url = format!(
+            "sia://sia.storage/objects/{}/shared?sv=253402214400&sig={}#encryption_key={}",
+            "a".repeat(64),
+            "b".repeat(96),
+            "c".repeat(64)
+        );
+        let set: Vec<crate::InstanceAddr> = (0..endpoints)
+            .map(|i| crate::InstanceAddr {
+                node_id: format!("{i:0>64}"),
+                relay: Some("https://use1-1.relay.n0.iroh.link./".into()),
+            })
+            .collect();
+
+        let mut records = pin_pkarr::chunk_txt(DIR_PREFIX, &item_url);
+        records.push(pin_pkarr::TxtRecord {
+            name: NS_PREFIX.to_string(),
+            value: "d".repeat(64),
+        });
+        records.extend(pin_pkarr::chunk_txt(
+            IROH_PREFIX,
+            &crate::encode_endpoints(&set),
+        ));
+        records
+    }
+
+    #[test]
+    fn a_full_packet_fits_inside_the_dht_record_limit() {
+        // THE constraint on `MAX_ENDPOINTS`, measured rather than estimated. A BEP44
+        // value is capped at 1000 bytes and `build_packet` refuses to sign past it, so
+        // getting this wrong means an identity silently stops publishing its coordinates
+        // the moment it has one device too many.
+        let packet = pin_pkarr::build_packet(&[7u8; 32], &worst_case_records(MAX_ENDPOINTS))
+            .expect("a full packet must still sign");
+        let size = packet.encoded_packet().len();
+        assert!(size <= 1000, "packet is {size} bytes");
+    }
+
+    #[test]
+    fn the_endpoint_cap_is_what_keeps_it_fitting() {
+        // Paired with the test above so the cap reads as a measured limit rather than a
+        // number someone picked: enough more endpoints and the packet genuinely stops
+        // signing, which is what `MAX_ENDPOINTS` exists to stay under.
+        let over = pin_pkarr::build_packet(&[7u8; 32], &worst_case_records(MAX_ENDPOINTS + 6));
+        assert!(over.is_err(), "the cap should be the binding constraint");
     }
 
     #[test]

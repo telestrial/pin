@@ -26,7 +26,7 @@ use std::str::FromStr as _;
 
 use futures_lite::StreamExt as _;
 use iroh::endpoint::presets;
-use iroh::{Endpoint, SecretKey};
+use iroh::{Endpoint, SecretKey, TransportAddr};
 use iroh_docs::api::protocol::{AddrInfoOptions, ShareMode};
 use iroh_docs::store::Query;
 use iroh_docs::DocTicket;
@@ -1001,17 +1001,28 @@ pub async fn curator_start_instance(
         node_id: engine.node_id.clone(),
         durable: true,
     };
-    let loop_handle = sia.detach(async move {
-        pin_curator::run_instance_loop(ctx, INSTANCE_CADENCE, now_secs, |result| match result {
-            Ok(o) => {
-                if o.pruned > 0 {
-                    println!("curator instance: {} live, {} pruned", o.live, o.pruned);
+    // The home relay, read per pass off the diagnostics the Curator task already polls
+    // the endpoint into. Per pass rather than captured, because an endpoint reaches its
+    // relay some time after it binds — the first pass usually finds nothing here.
+    let diag = curator.0.lock().unwrap().diag.clone();
+    let relay = move || {
+        diag.as_ref()
+            .and_then(|d| d.lock().ok()?.relays.first().cloned())
+    };
+    let loop_handle =
+        sia.detach(async move {
+            pin_curator::run_instance_loop(ctx, INSTANCE_CADENCE, now_secs, relay, |result| {
+                match result {
+                    Ok(o) => {
+                        if o.pruned > 0 {
+                            println!("curator instance: {} live, {} pruned", o.live, o.pruned);
+                        }
+                    }
+                    Err(e) => println!("curator instance: {e}"),
                 }
-            }
-            Err(e) => println!("curator instance: {e}"),
-        })
-        .await
-    });
+            })
+            .await
+        });
     curator.0.lock().unwrap().loops.push(loop_handle);
     Ok(())
 }
@@ -1464,13 +1475,15 @@ async fn curator_loop(
         let mut direct = Vec::new();
         let mut other = Vec::new();
         for a in &addr.addrs {
-            let s = format!("{a:?}");
-            if a.is_relay() {
-                relays.push(s);
-            } else if a.is_ip() {
-                direct.push(s);
-            } else {
-                other.push(s);
+            // Matched rather than Debug-formatted, because the relay URL is no longer
+            // only a diagnostic: the instance loop registers it as this instance's dial
+            // coordinate, and `Relay(https://…)` is not an address anyone can dial.
+            match a {
+                TransportAddr::Relay(url) => relays.push(url.to_string()),
+                TransportAddr::Ip(ip) => direct.push(ip.to_string()),
+                // Non-exhaustive upstream, and a transport we have no reading of is
+                // still worth surfacing as one that exists.
+                other_addr => other.push(format!("{other_addr:?}")),
             }
         }
         let online = !relays.is_empty();

@@ -85,8 +85,8 @@ pub use identity::{
     DIRECTORY_DOC_VERSION,
 };
 pub use instance::{
-    live_instances, register_instance, run_instance_loop, InstanceContext, InstanceOutcome,
-    INSTANCE_TTL_SECS,
+    encode_endpoints, live_instances, parse_endpoints, register_instance, run_instance_loop,
+    InstanceAddr, InstanceContext, InstanceOutcome, INSTANCE_TTL_SECS,
 };
 pub use keepalive::{
     keep_alive_once, run_keep_alive_loop, KeepAliveContext, KeepAliveOutcome, SettingsLocator,

@@ -599,12 +599,23 @@ pub async fn start_instance_loop(
         node_id: eng.endpoint.id().to_string(),
         durable: false,
     };
+    // The home relay, read per pass rather than captured: a tab is relay-only, and the
+    // endpoint reaches its relay some time after binding — so the first pass usually has
+    // nothing to report and a later one fills it in.
+    let endpoint = eng.endpoint.clone();
+    let relay = move || {
+        endpoint.addr().addrs.iter().find_map(|a| match a {
+            iroh::TransportAddr::Relay(url) => Some(url.to_string()),
+            _ => None,
+        })
+    };
     wasm_bindgen_futures::spawn_local(async move {
         pin_curator::run_instance_loop(
             ctx,
             std::time::Duration::from_secs(cadence_secs as u64),
             // js_sys::Date rather than SystemTime, which panics on this target.
             || (js_sys::Date::now() / 1000.0) as u64,
+            relay,
             |result| {
                 let report = match &result {
                     Ok(o) => serde_json::json!({ "live": o.live, "pruned": o.pruned }).to_string(),
