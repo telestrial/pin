@@ -714,6 +714,7 @@ pub async fn start_engagement_loop(
         docs: eng.docs.api().clone(),
         sia: sia(),
         app_key,
+        inbox: eng.hey_inbox.clone(),
     };
     wasm_bindgen_futures::spawn_local(async move {
         pin_curator::run_engagement_loop(
@@ -729,6 +730,8 @@ pub async fn start_engagement_loop(
                         "unreachable": o.unreachable,
                         "added": o.added,
                         "withdrawn": o.withdrawn,
+                        "knocked": o.knocked,
+                        "staleKnocks": o.stale_knocks,
                         "tallies": o.tallies,
                         "cleared": o.cleared,
                         "rejected": o.rejected,

@@ -49,6 +49,11 @@ type DocSlot = Arc<Mutex<Option<Arc<DocEngine>>>>;
 /// command-started loop has no other way to reach it.
 type EndpointSlot = Arc<Mutex<Option<Endpoint>>>;
 
+/// Shared handle to the running Curator's /hey inbox, so the engagement loop can drain
+/// what has been knocked through. Same slot pattern as the endpoint: the inbox is a local
+/// in the Curator's own task, and a command-started loop has no other way to reach it.
+type InboxSlot = Arc<Mutex<Option<crate::rpc::HeyInbox>>>;
+
 /// What the frontend reads. snake_case fields are renamed to camelCase on the
 /// wire for the TS client.
 #[derive(serde::Serialize, Clone)]
@@ -149,6 +154,8 @@ struct Inner {
     doc_slot: DocSlot,
     /// Live handle to the running endpoint, for loops that dial (delivery).
     endpoint_slot: EndpointSlot,
+    /// Live handle to the /hey inbox, for the loop that drains it (engagement).
+    inbox_slot: InboxSlot,
     /// Abort handles for the background loops (pull, keep-alive, instance, identity,
     /// repack). They run forever and hold doc handles, so stopping the Curator means
     /// stopping them — otherwise they outlive it and keep its store open.
@@ -169,6 +176,7 @@ impl Inner {
         }
         *self.doc_slot.lock().unwrap() = None;
         *self.endpoint_slot.lock().unwrap() = None;
+        *self.inbox_slot.lock().unwrap() = None;
     }
 }
 
@@ -284,6 +292,7 @@ pub fn start_curator(
     let diag = Arc::new(Mutex::new(Diag::off()));
     let doc_slot: DocSlot = Arc::new(Mutex::new(None));
     let endpoint_slot: EndpointSlot = Arc::new(Mutex::new(None));
+    let inbox_slot: InboxSlot = Arc::new(Mutex::new(None));
     {
         let mut d = diag.lock().unwrap();
         d.phase = "binding";
@@ -292,8 +301,17 @@ pub fn start_curator(
     inner.diag = Some(diag.clone());
     inner.doc_slot = doc_slot.clone();
     inner.endpoint_slot = endpoint_slot.clone();
+    inner.inbox_slot = inbox_slot.clone();
     inner.handle = Some(thread::spawn(move || {
-        run_curator(running, diag, doc_slot, endpoint_slot, data_dir, creds)
+        run_curator(
+            running,
+            diag,
+            doc_slot,
+            endpoint_slot,
+            inbox_slot,
+            data_dir,
+            creds,
+        )
     }));
 
     CuratorState::snapshot(&inner)
@@ -1123,6 +1141,17 @@ pub async fn curator_start_engagement(
     // resolving itself over the network — a published copy lags local edits, and an author
     // is pin #1 on their own post, so leaving them out would make a fresh post read zero.
     let own_did = crate::identity::did_dht(&crate::identity::derive_identity(&app_key)?);
+    // The knocks this instance has been sent. Engagement drains them, because turning one
+    // into a count needs the subject table this pass builds anyway.
+    let inbox = curator
+        .0
+        .lock()
+        .unwrap()
+        .inbox_slot
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or("curator inbox is not up yet")?;
     let ctx = pin_curator::EngagementContext {
         doc: engine.doc.clone(),
         blobs: (*engine.blobs).clone(),
@@ -1130,6 +1159,7 @@ pub async fn curator_start_engagement(
         docs: engine.docs.api().clone(),
         sia: sia.session(),
         app_key,
+        inbox,
     };
     let loop_handle = sia.detach(async move {
         pin_curator::run_engagement_loop(ctx, own_did, ENGAGEMENT_CADENCE, now_iso, |result| {
@@ -1142,13 +1172,15 @@ pub async fn curator_start_engagement(
                         || o.withdrawn > 0
                         || o.unreachable > 0
                         || o.rejected > 0
+                        || o.knocked > 0
                         || o.published > 0
                         || o.publish_failed > 0
                     {
                         println!(
-                            "curator engagement: reached {} unreachable {} added {} withdrawn {} tallies {} cleared {} rejected {} not-ours {} published {} publish-failed {}",
-                            o.reached, o.unreachable, o.added, o.withdrawn, o.tallies, o.cleared,
-                            o.rejected, o.not_ours, o.published, o.publish_failed
+                            "curator engagement: reached {} unreachable {} added {} withdrawn {} knocked {} stale-knocks {} tallies {} cleared {} rejected {} not-ours {} published {} publish-failed {}",
+                            o.reached, o.unreachable, o.added, o.withdrawn, o.knocked,
+                            o.stale_knocks, o.tallies, o.cleared, o.rejected, o.not_ours,
+                            o.published, o.publish_failed
                         );
                     }
                 }
@@ -1371,6 +1403,7 @@ fn run_curator(
     diag: Arc<Mutex<Diag>>,
     doc_slot: DocSlot,
     endpoint_slot: EndpointSlot,
+    inbox_slot: InboxSlot,
     data_dir: Option<PathBuf>,
     creds: Option<SiaCreds>,
 ) {
@@ -1391,6 +1424,7 @@ fn run_curator(
         diag,
         doc_slot,
         endpoint_slot,
+        inbox_slot,
         data_dir,
         creds,
     ));
@@ -1426,6 +1460,7 @@ async fn curator_loop(
     diag: Arc<Mutex<Diag>>,
     doc_slot: DocSlot,
     endpoint_slot: EndpointSlot,
+    inbox_slot: InboxSlot,
     data_dir: Option<PathBuf>,
     creds: Option<SiaCreds>,
 ) {
@@ -1536,6 +1571,7 @@ async fn curator_loop(
     }
     crate::rpc::clear(&inbox);
     // Held past here for the poll loop (inbox depth) and shutdown (router).
+    *inbox_slot.lock().unwrap() = Some(inbox.clone());
     let hey_inbox = Some(inbox);
     let router = Some(r);
 
@@ -1633,6 +1669,7 @@ async fn curator_loop(
     // Doc goes unavailable to the `docs_*` commands the moment teardown begins.
     *doc_slot.lock().unwrap() = None;
     *endpoint_slot.lock().unwrap() = None;
+    *inbox_slot.lock().unwrap() = None;
     if let Some(r) = router {
         r.shutdown().await.ok();
     }

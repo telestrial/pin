@@ -30,9 +30,19 @@
 //! bad network, and deletion-by-absence is the mistake this codebase has already made
 //! twice, in the orphan sweep and in settings.
 //!
-//! What it does NOT do: reach strangers. A crawl only ever finds endorsements from people
-//! whose directories it has reason to read. Engagement from outside the graph arrives by
-//! `/hey` instead — that is what the knock is FOR, and it is a separate rung.
+//! **A crawl cannot reach strangers, so knocks land here too.** It only ever finds
+//! endorsements from people whose directories it has reason to read — someone outside the
+//! graph has no such directory as far as we are concerned. Their endorsement arrives by
+//! `/hey`, and this loop is where it becomes a count, for two reasons that both point
+//! here: matching a subject needs the table of what this identity publishes, and a record
+//! that doesn't mark its subject as touched is one the fold never re-runs, so the knock
+//! would sit in the log without moving a number.
+//!
+//! A knocked record is held to the same bar as a crawled one — signed by the actor it
+//! names, and about something we publish — plus one a crawled record doesn't need: it may
+//! not displace something NEWER. A directory read is current state at the source, so it
+//! wins outright; a knock is an assertion somebody sent us, and a replayed old one must
+//! not be able to undo what has happened since.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
@@ -59,6 +69,10 @@ pub struct EngagementContext {
     /// else's endorsements means downloading it.
     pub sia: Arc<pin_sia::Session>,
     pub app_key: [u8; 32],
+    /// Knocks parked by whatever is serving `/hey` on this instance. Drained here rather
+    /// than in a loop of its own, because turning one into a count needs this pass's
+    /// subject table and has to mark the subject touched so the tally is re-folded.
+    pub inbox: pin_rpc::HeyInbox,
 }
 
 /// What one pass did. Reported rather than summarised, because "reached nobody" and "found
@@ -87,6 +101,13 @@ pub struct EngagementOutcome {
     /// Records that failed verification. Not an error — a forgery failing is the system
     /// working — but worth counting, because a number that climbs is worth knowing about.
     pub rejected: usize,
+    /// Knocked records taken into the log this pass. The out-of-graph half: engagement
+    /// from someone whose directory this identity has no reason to read.
+    pub knocked: usize,
+    /// Knocks that named something we publish but were older than what is already held.
+    /// A replay, or a duplicate the sender retried — harmless either way, and counted so
+    /// a climbing number is visible.
+    pub stale_knocks: usize,
     /// Channels whose tallies were republished to Sia and the DHT — the floor rung, and
     /// the only copy a reader without a live replica ever sees. Zero on a quiet pass:
     /// the publish is fingerprinted on the counts themselves.
@@ -284,6 +305,27 @@ async fn held_endorsements(ctx: &EngagementContext, rkeys: &[String]) -> Vec<End
     out
 }
 
+/// When the record already held for one actor and subject says it was made, if there is
+/// one.
+///
+/// What a knock is compared against, so a replayed record can't displace something newer.
+/// Unreadable counts as absent, which lets the knock through — the write path compares
+/// bytes before writing anyway, so the worst case is re-writing what is already there.
+async fn held_created_at(ctx: &EngagementContext, subject: &str, actor: &str) -> Option<String> {
+    let raw = read_record(
+        &ctx.doc,
+        &ctx.blobs,
+        ctx.author_id,
+        pin_derive::ENGAGEMENT_LOG_COLLECTION,
+        &pin_derive::engagement_log_rkey(subject, actor),
+    )
+    .await
+    .ok()??;
+    serde_json::from_slice::<Endorsement>(&raw)
+        .ok()
+        .map(|e| e.created_at)
+}
+
 /// One actor's current endorsements, downloaded from their published directory.
 ///
 /// Errors mean "couldn't read", which is what keeps their held records alive. An actor who
@@ -340,8 +382,56 @@ async fn own_endorsements(ctx: &EngagementContext) -> Vec<Endorsement> {
     out
 }
 
-/// One pass: read the graph, hold what's verified and ours, withdraw what's gone, and
-/// republish every tally that moved.
+/// What a knocked record is worth once it has been looked at.
+#[derive(Debug, PartialEq, Eq)]
+enum KnockVerdict {
+    /// Signed, ours, and newer than anything held — take it.
+    Accept,
+    /// Not signed by the identity it names, or its coordinates don't hash to its subject.
+    Rejected,
+    /// About something this identity doesn't publish. Ordinary: a subject is a hash, and
+    /// one we can't compute belongs to somebody else.
+    NotOurs,
+    /// Older than what is already held for this actor and subject.
+    Stale,
+}
+
+/// Whether a knocked record should be taken into the log.
+///
+/// Verification first, because everything after it presumes a record that holds up. Then
+/// the subject, because a knock about somebody else's item is not ours to count. Then
+/// recency — and that last check is the one a CRAWLED record doesn't get: reading an
+/// actor's directory returns their current state, so it is authoritative by construction,
+/// where a knock is an assertion pushed at us and could be a replay of something long
+/// since withdrawn.
+///
+/// `crawled` is whether this pass already read this record from the actor's own
+/// directory. If it did, that reading wins outright: it came from the source, this pass,
+/// and no timestamp comparison can improve on it.
+fn knock_verdict(
+    record: &Endorsement,
+    subjects: &SubjectTable,
+    crawled: bool,
+    held_created_at: Option<&str>,
+) -> KnockVerdict {
+    if record.verify().is_err() {
+        return KnockVerdict::Rejected;
+    }
+    if !subjects.contains_key(&record.subject) {
+        return KnockVerdict::NotOurs;
+    }
+    if crawled {
+        return KnockVerdict::Stale;
+    }
+    match held_created_at {
+        None => KnockVerdict::Accept,
+        Some(held) if record.supersedes(held) => KnockVerdict::Accept,
+        Some(_) => KnockVerdict::Stale,
+    }
+}
+
+/// One pass: read the graph, take what was knocked through, hold what's verified and
+/// ours, withdraw what's gone, and republish every tally that moved.
 pub async fn engagement_once(
     ctx: &EngagementContext,
     own_did: &str,
@@ -350,8 +440,15 @@ pub async fn engagement_once(
     let settings = read_settings(&ctx.doc, &ctx.blobs, ctx.author_id, &ctx.app_key).await?;
     let subjects = own_subjects(ctx, &settings).await?;
     let mut outcome = EngagementOutcome::default();
+
+    // Emptied whatever happens to them. A knock left parked would be re-examined every
+    // pass forever, and the inbox has a ceiling it would eventually reach.
+    let knocks = pin_rpc::drain(&ctx.inbox);
+
     if subjects.is_empty() {
-        // Nothing published, so nothing can be endorsed. Not a failure.
+        // Nothing published, so nothing can be endorsed — including by knock. Not a
+        // failure, and not a reason to hold on to what was knocked.
+        outcome.not_ours = knocks.len();
         return Ok(outcome);
     }
 
@@ -438,6 +535,31 @@ pub async fn engagement_once(
                 continue;
             }
             found.insert((record.subject.clone(), record.actor.clone()), record);
+        }
+    }
+
+    // Then what was knocked through. After the crawl, so a record read from its actor's
+    // own directory this pass is already in `found` and takes precedence.
+    for knock in knocks {
+        let Ok(record) = serde_json::from_value::<Endorsement>(knock.record) else {
+            outcome.rejected += 1;
+            continue;
+        };
+        let key = (record.subject.clone(), record.actor.clone());
+        let held_at = held_created_at(ctx, &record.subject, &record.actor).await;
+        match knock_verdict(
+            &record,
+            &subjects,
+            found.contains_key(&key),
+            held_at.as_deref(),
+        ) {
+            KnockVerdict::Accept => {
+                found.insert(key, record);
+                outcome.knocked += 1;
+            }
+            KnockVerdict::Rejected => outcome.rejected += 1,
+            KnockVerdict::NotOurs => outcome.not_ours += 1,
+            KnockVerdict::Stale => outcome.stale_knocks += 1,
         }
     }
 
@@ -805,6 +927,112 @@ mod tests {
 
     fn dids(list: &[&str]) -> BTreeSet<String> {
         list.iter().map(|d| d.to_string()).collect()
+    }
+
+    // --- what a knock is worth ---------------------------------------------------
+
+    const SEED: [u8; 32] = [3u8; 32];
+    const WHEN: &str = "2026-08-16T12:00:00.000Z";
+
+    fn knocked(subject: &str, when: &str) -> Endorsement {
+        Endorsement::sign(
+            &SEED,
+            pin_engagement::KIND_LIKE,
+            subject,
+            "bafkreisomething",
+            when,
+            None,
+        )
+        .unwrap()
+    }
+
+    fn ours(subject: &str) -> SubjectTable {
+        SubjectTable::from([(subject.to_string(), "chan".to_string())])
+    }
+
+    #[test]
+    fn a_signed_knock_about_something_we_publish_is_taken() {
+        // The whole point of the knock: an endorsement from someone whose directory this
+        // identity has no reason to read, and would therefore never find.
+        assert_eq!(
+            knock_verdict(&knocked(SUBJECT, WHEN), &ours(SUBJECT), false, None),
+            KnockVerdict::Accept
+        );
+    }
+
+    #[test]
+    fn a_knock_that_does_not_verify_is_rejected() {
+        // Anyone can dial and send bytes, so the signature is the only thing standing
+        // between a count and whatever a stranger felt like asserting.
+        let mut forged = knocked(SUBJECT, WHEN);
+        forged.subject = SUBJECT.into();
+        forged.sig = pin_crypto::b64_encode(&[0u8; 64]);
+        assert_eq!(
+            knock_verdict(&forged, &ours(SUBJECT), false, None),
+            KnockVerdict::Rejected
+        );
+    }
+
+    #[test]
+    fn a_knock_about_somebody_elses_item_is_not_ours_to_count() {
+        // A subject is a hash, so one we can't compute over our own items belongs to
+        // someone else — and counting it would let anyone inflate any number by
+        // knocking us about it.
+        assert_eq!(
+            knock_verdict(&knocked("other", WHEN), &ours(SUBJECT), false, None),
+            KnockVerdict::NotOurs
+        );
+    }
+
+    #[test]
+    fn a_replayed_knock_cannot_displace_something_newer() {
+        // THE check a crawled record doesn't need. A directory read is current state at
+        // the source; a knock is an assertion pushed at us, so an old one re-sent could
+        // otherwise undo a withdrawal or restore a superseded version.
+        let old = knocked(SUBJECT, "2026-08-16T11:00:00.000Z");
+        assert_eq!(
+            knock_verdict(&old, &ours(SUBJECT), false, Some(WHEN)),
+            KnockVerdict::Stale
+        );
+        // Re-sending the identical record is not an update either.
+        assert_eq!(
+            knock_verdict(&knocked(SUBJECT, WHEN), &ours(SUBJECT), false, Some(WHEN)),
+            KnockVerdict::Stale
+        );
+    }
+
+    #[test]
+    fn a_knock_newer_than_what_is_held_is_taken() {
+        let fresh = knocked(SUBJECT, "2026-08-16T13:00:00.000Z");
+        assert_eq!(
+            knock_verdict(&fresh, &ours(SUBJECT), false, Some(WHEN)),
+            KnockVerdict::Accept
+        );
+    }
+
+    #[test]
+    fn a_record_this_pass_read_at_its_source_beats_the_knock_of_it() {
+        // The actor's own directory is where their current state lives, so a reading of
+        // it this pass cannot be improved on by a copy somebody pushed — whatever the
+        // timestamps say. A knock arriving alongside is a duplicate, not an update.
+        let fresh = knocked(SUBJECT, "2099-01-01T00:00:00.000Z");
+        assert_eq!(
+            knock_verdict(&fresh, &ours(SUBJECT), true, None),
+            KnockVerdict::Stale
+        );
+    }
+
+    #[test]
+    fn verification_is_checked_before_anything_else() {
+        // Order matters for what gets reported: an unverifiable record about somebody
+        // else's item is a forgery first. Reading it as merely not-ours would hide the
+        // one number worth watching climb.
+        let mut forged = knocked("other", WHEN);
+        forged.sig = pin_crypto::b64_encode(&[0u8; 64]);
+        assert_eq!(
+            knock_verdict(&forged, &ours(SUBJECT), false, None),
+            KnockVerdict::Rejected
+        );
     }
 
     #[test]
