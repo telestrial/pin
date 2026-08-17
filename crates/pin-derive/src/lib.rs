@@ -269,28 +269,41 @@ pub fn endorse_rkey(kind: &str, subject: &str) -> String {
 /// directory and can be re-read from there. Losing it costs a crawl, not a fact.
 pub const ENGAGEMENT_LOG_COLLECTION: &str = "engagement-log";
 
-/// One held record: the subject, then who asserted it.
+/// One held record: the subject, then the gesture, then who asserted it.
 ///
 /// Subject first so a prefix scan gathers everything about one item — which is how a
-/// tally is folded. One record per actor per subject and kind, so a re-arriving
-/// endorsement overwrites rather than accumulating; the kind rides inside the record
-/// because the fold reads them all and groups.
-pub fn engagement_log_rkey(subject: &str, actor: &str) -> String {
-    format!("{subject}:{actor}")
+/// tally is folded. Then the kind, for the reason `endorse_rkey` states on the writing
+/// side: both gestures are available on the same post, so a key without it makes one
+/// person's like and pin the same record, and whichever arrives second takes the other's
+/// place. That costs the displaced gesture an actor, silently — including on your own
+/// post, where publishing writes a pin and liking it would then displace that pin.
+///
+/// The actor goes last because a `did:dht:…` string carries colons of its own, so it is
+/// the only field that can absorb the remainder.
+pub fn engagement_log_rkey(subject: &str, kind: &str, actor: &str) -> String {
+    format!("{subject}:{kind}:{actor}")
 }
 
-/// Split a held record's key back into its subject and actor.
+/// Split a held record's key back into its subject, kind and actor.
 ///
-/// At the FIRST separator, because an actor is a `did:dht:…` string and carries colons of
-/// its own while a subject is base32 and carries none. Here beside the builder so the two
-/// can't disagree — the crawl writes with one and decides what to withdraw with the other,
-/// and a mismatch would make it drop records it should keep.
-pub fn parse_engagement_log_rkey(rkey: &str) -> Option<(&str, &str)> {
-    let (subject, actor) = rkey.split_once(':')?;
-    if subject.is_empty() || actor.is_empty() {
+/// Left to right at the first two separators: a subject is base32 and a kind is a bare
+/// word, so neither carries a colon, and everything after the second belongs to the actor.
+/// Here beside the builder so the two can't disagree — the crawl writes with one and
+/// decides what to withdraw with the other, and a mismatch would make it drop records it
+/// should keep.
+///
+/// The actor still has to look like a DID, because two fields here can absorb the wrong
+/// text without anything looking amiss: a key missing its kind reads as a kind of `did`
+/// and an actor of `dht:x`. That parse succeeds and is wrong, which is worse than one that
+/// fails — the crawl decides what to DELETE from this, so a plausible misreading is how a
+/// live record gets dropped.
+pub fn parse_engagement_log_rkey(rkey: &str) -> Option<(&str, &str, &str)> {
+    let (subject, rest) = rkey.split_once(':')?;
+    let (kind, actor) = rest.split_once(':')?;
+    if subject.is_empty() || kind.is_empty() || !actor.starts_with("did:") {
         return None;
     }
-    Some((subject, actor))
+    Some((subject, kind, actor))
 }
 
 /// The collection holding the published tally for each subject, in the CHANNEL's doc.
@@ -600,18 +613,24 @@ mod tests {
     fn an_engagement_log_key_gathers_one_subject_and_separates_its_actors() {
         let subject = "f4xlljzqxtqpv7ul6ngkyeafusdwqrirpmhochqyjz2hgz3djo6a";
         // Subject first, because folding a tally means scanning everything about one item.
-        assert!(engagement_log_rkey(subject, "did:dht:alice").starts_with(subject));
+        assert!(engagement_log_rkey(subject, "like", "did:dht:alice").starts_with(subject));
         // And one record per actor: two people endorsing the same thing must not collide,
         // or a count would be short by however many shared a key.
         assert_ne!(
-            engagement_log_rkey(subject, "did:dht:alice"),
-            engagement_log_rkey(subject, "did:dht:bob")
+            engagement_log_rkey(subject, "like", "did:dht:alice"),
+            engagement_log_rkey(subject, "like", "did:dht:bob")
+        );
+        // One record per GESTURE too. Without the kind, one person's like and pin were the
+        // same key and the second silently replaced the first.
+        assert_ne!(
+            engagement_log_rkey(subject, "like", "did:dht:alice"),
+            engagement_log_rkey(subject, "pin", "did:dht:alice")
         );
         // The same actor re-endorsing overwrites, which is what makes a repeated knock
         // harmless rather than double-counted.
         assert_eq!(
-            engagement_log_rkey(subject, "did:dht:alice"),
-            engagement_log_rkey(subject, "did:dht:alice")
+            engagement_log_rkey(subject, "like", "did:dht:alice"),
+            engagement_log_rkey(subject, "like", "did:dht:alice")
         );
         // The private log and the published tally are different collections — one is held,
         // the other is served to every subscriber.
@@ -658,12 +677,29 @@ mod tests {
         // decides what to withdraw from this, so getting it wrong drops live records.
         let subject = "f4xlljzqxtqpv7ul6ngkyeafusdwqrirpmhochqyjz2hgz3djo6a";
         let actor = "did:dht:iyypk375c71qwjem5isiramudutoogo1t9gogz8f587sfkt9db4o";
-        let rkey = engagement_log_rkey(subject, actor);
-        assert_eq!(parse_engagement_log_rkey(&rkey), Some((subject, actor)));
+        let rkey = engagement_log_rkey(subject, "like", actor);
+        assert_eq!(
+            parse_engagement_log_rkey(&rkey),
+            Some((subject, "like", actor))
+        );
+
+        // A key with no kind must not read as one that has it. Parsed loosely it looks
+        // like a kind of `did` and an actor of `dht:…`: plausible enough to pass, wrong
+        // enough that the crawl would then withdraw against an actor who doesn't exist.
+        assert_eq!(
+            parse_engagement_log_rkey(&format!("{subject}:{actor}")),
+            None
+        );
+
         // And nonsense is rejected rather than half-read.
         assert_eq!(parse_engagement_log_rkey("nocolon"), None);
         assert_eq!(parse_engagement_log_rkey(":actor"), None);
         assert_eq!(parse_engagement_log_rkey("subject:"), None);
+        assert_eq!(parse_engagement_log_rkey(&format!(":like:{actor}")), None);
+        assert_eq!(
+            parse_engagement_log_rkey(&format!("{subject}::{actor}")),
+            None
+        );
     }
 
     #[test]

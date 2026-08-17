@@ -316,13 +316,22 @@ async fn held_endorsements(ctx: &EngagementContext, rkeys: &[String]) -> Vec<End
     out
 }
 
+/// Whether a log key belongs in one subject's fold.
+///
+/// The subject comes from PARSING rather than from a prefix match, so a key this version
+/// can't address is left out of the count rather than half-read into it. Every key starts
+/// with its subject, so a prefix test would take one anyway — and a record folded under a
+/// key nothing can address is one that can never be withdrawn either.
+fn folds_into(rkey: &str, subject: &str) -> bool {
+    matches!(pin_derive::parse_engagement_log_rkey(rkey), Some((s, _, _)) if s == subject)
+}
+
 /// Every record this identity holds about one subject.
 ///
-/// A prefix scan of the log, which is keyed subject-first for exactly this. Unreadable
-/// entries are skipped rather than failing the fold: one bad record must not take a whole
-/// count with it.
+/// A scan of the log, which is keyed subject-first for exactly this. Unreadable entries
+/// are skipped rather than failing the fold: one bad record must not take a whole count
+/// with it.
 async fn log_records_for(ctx: &EngagementContext, subject: &str) -> Vec<Endorsement> {
-    let prefix = format!("{subject}:");
     let rkeys = crate::list_rkeys(
         &ctx.doc,
         ctx.author_id,
@@ -332,7 +341,7 @@ async fn log_records_for(ctx: &EngagementContext, subject: &str) -> Vec<Endorsem
     .unwrap_or_default();
 
     let mut out = Vec::new();
-    for rkey in rkeys.iter().filter(|k| k.starts_with(&prefix)) {
+    for rkey in rkeys.iter().filter(|k| folds_into(k, subject)) {
         let Ok(Some(raw)) = read_record(
             &ctx.doc,
             &ctx.blobs,
@@ -351,19 +360,27 @@ async fn log_records_for(ctx: &EngagementContext, subject: &str) -> Vec<Endorsem
     out
 }
 
-/// When the record already held for one actor and subject says it was made, if there is
-/// one.
+/// Where one record belongs in the log.
+///
+/// Derived from the record itself, so everything that has to agree on a record's address
+/// — the working set, the write, the lookup a knock is compared against — asks the same
+/// question of the same thing rather than each assembling an answer.
+fn log_key(record: &Endorsement) -> String {
+    pin_derive::engagement_log_rkey(&record.subject, &record.kind, &record.actor)
+}
+
+/// When the record already held at one log key says it was made, if there is one.
 ///
 /// What a knock is compared against, so a replayed record can't displace something newer.
 /// Unreadable counts as absent, which lets the knock through — the write path compares
 /// bytes before writing anyway, so the worst case is re-writing what is already there.
-async fn held_created_at(ctx: &EngagementContext, subject: &str, actor: &str) -> Option<String> {
+async fn held_created_at(ctx: &EngagementContext, rkey: &str) -> Option<String> {
     let raw = read_record(
         &ctx.doc,
         &ctx.blobs,
         ctx.author_id,
         pin_derive::ENGAGEMENT_LOG_COLLECTION,
-        &pin_derive::engagement_log_rkey(subject, actor),
+        rkey,
     )
     .await
     .ok()??;
@@ -510,8 +527,11 @@ pub async fn engagement_once(
         return Ok(outcome);
     }
 
-    // What we found, keyed the way the log is keyed.
-    let mut found: BTreeMap<(String, String), Endorsement> = BTreeMap::new();
+    // What we found, keyed BY the log's own key rather than by something built to match
+    // it. The two agreeing is then a property of the code instead of a thing to remember:
+    // when this was a `(subject, actor)` pair it silently disagreed with a log key that
+    // was meant to include the gesture, and one person's like and pin became one record.
+    let mut found: BTreeMap<String, Endorsement> = BTreeMap::new();
     // Actors whose directory we actually read. Only these can withdraw anything.
     let mut reached: BTreeSet<String> = BTreeSet::new();
 
@@ -530,7 +550,7 @@ pub async fn engagement_once(
     .unwrap_or_default();
     let mut held_by_actor: HashMap<&str, Vec<String>> = HashMap::new();
     for rkey in &held {
-        if let Some((_, actor)) = pin_derive::parse_engagement_log_rkey(rkey) {
+        if let Some((_, _, actor)) = pin_derive::parse_engagement_log_rkey(rkey) {
             held_by_actor.entry(actor).or_default().push(rkey.clone());
         }
     }
@@ -601,7 +621,7 @@ pub async fn engagement_once(
                 outcome.not_ours += 1;
                 continue;
             }
-            found.insert((record.subject.clone(), record.actor.clone()), record);
+            found.insert(log_key(&record), record);
         }
     }
 
@@ -612,8 +632,8 @@ pub async fn engagement_once(
             outcome.knocks_rejected += 1;
             continue;
         };
-        let key = (record.subject.clone(), record.actor.clone());
-        let held_at = held_created_at(ctx, &record.subject, &record.actor).await;
+        let key = log_key(&record);
+        let held_at = held_created_at(ctx, &key).await;
         match knock_verdict(
             &record,
             &subjects,
@@ -632,8 +652,8 @@ pub async fn engagement_once(
 
     // Reconcile the held log against what this pass saw. `held` was listed before the
     // crawl, and nothing has written to that collection since.
-    let mut touched: BTreeSet<String> = found.keys().map(|(subject, _)| subject.clone()).collect();
-    let found_keys: BTreeSet<(String, String)> = found.keys().cloned().collect();
+    let mut touched: BTreeSet<String> = found.values().map(|r| r.subject.clone()).collect();
+    let found_keys: BTreeSet<String> = found.keys().cloned().collect();
     for rkey in &held {
         let Some(subject) = withdrawal(rkey, &found_keys, &reached) else {
             continue;
@@ -652,8 +672,7 @@ pub async fn engagement_once(
         }
     }
 
-    for ((subject, actor), record) in &found {
-        let rkey = pin_derive::engagement_log_rkey(subject, actor);
+    for (rkey, record) in &found {
         let bytes = serde_json::to_vec(record).map_err(|e| format!("encode record: {e}"))?;
         // Compare before writing: a pass that found the same records must not rewrite them,
         // because every write here is a change announced to every instance syncing this doc.
@@ -774,13 +793,9 @@ pub async fn engagement_once(
 /// an actor we couldn't reach means nothing — that is the difference between a withdrawal
 /// and a bad network, and conflating them would empty a count for the duration of an outage.
 /// Deletion by absence is the mistake this codebase has already made twice.
-fn withdrawal(
-    rkey: &str,
-    found: &BTreeSet<(String, String)>,
-    reached: &BTreeSet<String>,
-) -> Option<String> {
-    let (subject, actor) = pin_derive::parse_engagement_log_rkey(rkey)?;
-    if found.contains(&(subject.to_string(), actor.to_string())) {
+fn withdrawal(rkey: &str, found: &BTreeSet<String>, reached: &BTreeSet<String>) -> Option<String> {
+    let (subject, _, actor) = pin_derive::parse_engagement_log_rkey(rkey)?;
+    if found.contains(rkey) {
         return None;
     }
     if !reached.contains(actor) {
@@ -1010,11 +1025,14 @@ mod tests {
     const SUBJECT: &str = "f4xlljzqxtqpv7ul6ngkyeafusdwqrirpmhochqyjz2hgz3djo6a";
     const ALICE: &str = "did:dht:alice";
     const BOB: &str = "did:dht:bob";
+    const LIKE: &str = pin_engagement::KIND_LIKE;
+    const PIN: &str = pin_engagement::KIND_PIN;
 
-    fn keys(pairs: &[(&str, &str)]) -> BTreeSet<(String, String)> {
-        pairs
+    /// The log keys a pass found, built the way the pass builds them.
+    fn keys(triples: &[(&str, &str, &str)]) -> BTreeSet<String> {
+        triples
             .iter()
-            .map(|(s, a)| (s.to_string(), a.to_string()))
+            .map(|(s, k, a)| pin_derive::engagement_log_rkey(s, k, a))
             .collect()
     }
 
@@ -1152,9 +1170,9 @@ mod tests {
 
     #[test]
     fn a_record_its_actor_still_publishes_is_kept() {
-        let rkey = pin_derive::engagement_log_rkey(SUBJECT, ALICE);
+        let rkey = pin_derive::engagement_log_rkey(SUBJECT, LIKE, ALICE);
         assert_eq!(
-            withdrawal(&rkey, &keys(&[(SUBJECT, ALICE)]), &dids(&[ALICE])),
+            withdrawal(&rkey, &keys(&[(SUBJECT, LIKE, ALICE)]), &dids(&[ALICE])),
             None
         );
     }
@@ -1163,11 +1181,57 @@ mod tests {
     fn a_record_its_actor_no_longer_publishes_is_withdrawn() {
         // Read their directory, the endorsement is gone: that is a withdrawal, and the
         // count has to fall. Without this an unlike would never take effect.
-        let rkey = pin_derive::engagement_log_rkey(SUBJECT, ALICE);
+        let rkey = pin_derive::engagement_log_rkey(SUBJECT, LIKE, ALICE);
         assert_eq!(
             withdrawal(&rkey, &keys(&[]), &dids(&[ALICE])),
             Some(SUBJECT.to_string())
         );
+    }
+
+    #[test]
+    fn dropping_one_gesture_leaves_the_other_alone() {
+        // Alice unliked but still pins. Only the like is withdrawn — before the gesture
+        // was in the key these were one record, so one of the two counts was always
+        // wrong: either the pin vanished with the like, or the like survived it.
+        let like_key = pin_derive::engagement_log_rkey(SUBJECT, LIKE, ALICE);
+        let pin_key = pin_derive::engagement_log_rkey(SUBJECT, PIN, ALICE);
+        let found = keys(&[(SUBJECT, PIN, ALICE)]);
+        let reached = dids(&[ALICE]);
+        assert_eq!(
+            withdrawal(&like_key, &found, &reached),
+            Some(SUBJECT.to_string())
+        );
+        assert_eq!(withdrawal(&pin_key, &found, &reached), None);
+    }
+
+    #[test]
+    fn both_of_an_actors_gestures_fold_into_the_same_subject() {
+        // The fold groups by the kind inside each record, so it only reports both counts
+        // if both records reach it.
+        assert!(folds_into(
+            &pin_derive::engagement_log_rkey(SUBJECT, LIKE, ALICE),
+            SUBJECT
+        ));
+        assert!(folds_into(
+            &pin_derive::engagement_log_rkey(SUBJECT, PIN, ALICE),
+            SUBJECT
+        ));
+        // Another item's records are not this item's count.
+        let other = "aaxlljzqxtqpv7ul6ngkyeafusdwqrirpmhochqyjz2hgz3djo6a";
+        assert!(!folds_into(
+            &pin_derive::engagement_log_rkey(other, LIKE, ALICE),
+            SUBJECT
+        ));
+    }
+
+    #[test]
+    fn a_record_keyed_before_the_gesture_was_in_it_is_not_folded() {
+        // A key this version didn't write is not a record this version can place. Folding
+        // by prefix would take one anyway — every key starts with its subject — and count
+        // an actor it can neither address nor withdraw.
+        let unaddressable = format!("{SUBJECT}:{ALICE}");
+        assert!(unaddressable.starts_with(SUBJECT));
+        assert!(!folds_into(&unaddressable, SUBJECT));
     }
 
     #[test]
@@ -1176,7 +1240,7 @@ mod tests {
         // still endorse, so treating their absence as a withdrawal would empty every count
         // they contribute to for as long as their relay, their DHT record, or the network
         // is unhappy.
-        let rkey = pin_derive::engagement_log_rkey(SUBJECT, ALICE);
+        let rkey = pin_derive::engagement_log_rkey(SUBJECT, LIKE, ALICE);
         assert_eq!(withdrawal(&rkey, &keys(&[]), &dids(&[BOB])), None);
         assert_eq!(withdrawal(&rkey, &keys(&[]), &dids(&[])), None);
     }
@@ -1185,9 +1249,9 @@ mod tests {
     fn one_actors_withdrawal_does_not_touch_anothers_record() {
         // Both endorse the same subject; only Bob was read and only Bob stopped. Alice's
         // record is not his to withdraw.
-        let alice_key = pin_derive::engagement_log_rkey(SUBJECT, ALICE);
-        let bob_key = pin_derive::engagement_log_rkey(SUBJECT, BOB);
-        let found = keys(&[(SUBJECT, ALICE)]);
+        let alice_key = pin_derive::engagement_log_rkey(SUBJECT, LIKE, ALICE);
+        let bob_key = pin_derive::engagement_log_rkey(SUBJECT, LIKE, BOB);
+        let found = keys(&[(SUBJECT, LIKE, ALICE)]);
         let reached = dids(&[ALICE, BOB]);
         assert_eq!(withdrawal(&alice_key, &found, &reached), None);
         assert_eq!(
