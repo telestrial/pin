@@ -768,6 +768,7 @@ pub async fn start_deliver_loop(
     app_key_hex: String,
     cadence_secs: u32,
     retry_secs: u32,
+    settle_secs: u32,
     on_pass: js_sys::Function,
 ) -> Result<(), JsValue> {
     let eng = engine()?;
@@ -794,6 +795,7 @@ pub async fn start_deliver_loop(
             own_did,
             std::time::Duration::from_secs(cadence_secs as u64),
             std::time::Duration::from_secs(retry_secs as u64),
+            std::time::Duration::from_secs(settle_secs as u64),
             |result| {
                 let report = match result {
                     Ok(o) => serde_json::json!({

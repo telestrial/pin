@@ -34,7 +34,8 @@ use std::time::Duration;
 
 use iroh::{Endpoint, EndpointAddr};
 use iroh_blobs::api::Store;
-use iroh_docs::{api::Doc, AuthorId};
+use iroh_docs::{api::Doc, engine::LiveEvent, AuthorId};
+use n0_future::StreamExt as _;
 use pin_engagement::Endorsement;
 
 use crate::{read_record, read_settings, InstanceAddr, SettingsView};
@@ -423,19 +424,59 @@ async fn write_mark(ctx: &DeliverContext, rkey: &str, mark: &DeliverMark) {
     .await;
 }
 
+/// Whether an event says this identity endorsed something.
+///
+/// Both directions count. A local write is this instance's own click; a remote one is
+/// another instance of the same identity syncing in an endorsement it may not have been
+/// in a position to deliver itself, and whichever instance is up should carry it.
+///
+/// Everything else in the doc — tallies, the engagement log, this loop's own delivery
+/// marks — is other work, and waking on it would run a pass per doc write. The marks
+/// matter most: waking on those is a loop feeding itself.
+fn endorsement_written(event: &LiveEvent) -> bool {
+    let key = match event {
+        LiveEvent::InsertLocal { entry } => entry.key(),
+        LiveEvent::InsertRemote { entry, .. } => entry.key(),
+        _ => return false,
+    };
+    String::from_utf8_lossy(key).starts_with(&pin_derive::collection_prefix(
+        pin_derive::ENDORSE_COLLECTION,
+    ))
+}
+
+/// What ended a wait.
+enum Woke {
+    /// An endorsement was written, so there is something new to deliver.
+    Endorsement,
+    /// The cadence came round.
+    Timeout,
+    /// The doc's stream closed and will not wake us again.
+    Ended,
+}
+
 /// Pass, wait, repeat — forever.
 ///
-/// Two cadences, like the channel-sync loop's: an endorsement nobody has heard yet is
-/// latency a reader can see, so a pass with something outstanding comes round again
-/// quickly, while a settled one waits. The clock belongs to the caller for the same reason
-/// every other loop's does.
+/// Woken by an endorsement being written, because a cadence alone cannot be short enough:
+/// a like is a thing a person just did, and waiting out even a settled cadence to send it
+/// is latency the author sees as a count that isn't there yet. The two cadences are the
+/// backstop under that — a pass with something outstanding comes round quickly, a settled
+/// one waits — so a wake that never arrives costs freshness rather than delivery.
+///
+/// Held for `settle` after a wake, so a burst costs one pass rather than one each: pinning
+/// a channel writes an endorsement per item.
+///
+/// The clock belongs to the caller for the same reason every other loop's does.
 pub async fn run_deliver_loop(
     ctx: DeliverContext,
     own_did: String,
     cadence: Duration,
     retry: Duration,
+    settle: Duration,
     on_pass: impl Fn(&Result<DeliverOutcome, String>),
 ) -> ! {
+    // A doc whose stream is unavailable falls back to the cadence alone, which is slower
+    // but never wrong.
+    let mut events = ctx.doc.subscribe().await.ok().map(Box::pin);
     loop {
         let outcome = deliver_once(&ctx, &own_did).await;
         // A FAILED pass counts as outstanding too. Its commonest cause is settings not
@@ -444,7 +485,37 @@ pub async fn run_deliver_loop(
         // from outside the graph has.
         let outstanding = !matches!(&outcome, Ok(o) if o.unreachable == 0 && o.no_target == 0);
         on_pass(&outcome);
-        n0_future::time::sleep(if outstanding { retry } else { cadence }).await;
+        let wait = if outstanding { retry } else { cadence };
+
+        let woke = match events.as_mut() {
+            Some(stream) => {
+                let woken = async {
+                    loop {
+                        match stream.next().await {
+                            Some(Ok(ev)) if endorsement_written(&ev) => return Woke::Endorsement,
+                            Some(_) => continue,
+                            None => return Woke::Ended,
+                        }
+                    }
+                };
+                let timeout = async {
+                    n0_future::time::sleep(wait).await;
+                    Woke::Timeout
+                };
+                n0_future::future::race(woken, timeout).await
+            }
+            None => {
+                n0_future::time::sleep(wait).await;
+                Woke::Timeout
+            }
+        };
+        match woke {
+            Woke::Endorsement => n0_future::time::sleep(settle).await,
+            Woke::Timeout => {}
+            // Dropped rather than re-polled: a closed stream yields `None` forever, so
+            // racing it again would return instantly and turn the cadence into a spin.
+            Woke::Ended => events = None,
+        }
     }
 }
 
@@ -453,6 +524,42 @@ mod tests {
     use super::*;
 
     const SUBJECT: &str = "f4xlljzqxtqpv7ul6ngkyeafusdwqrirpmhochqyjz2hgz3djo6a";
+
+    /// A local write of `key`, as the engine reports one.
+    fn wrote(key: &str) -> LiveEvent {
+        let id = iroh_docs::sync::RecordIdentifier::new(
+            iroh_docs::NamespaceId::from(&[1u8; 32]),
+            iroh_docs::AuthorId::from(&[2u8; 32]),
+            key,
+        );
+        // A non-empty length: `Record::new` insists a zero-length record carry the hash of
+        // the empty range, and the length is nothing to do with what's under test.
+        let record = iroh_docs::sync::Record::new(iroh_blobs::Hash::from([3u8; 32]), 1, 0);
+        LiveEvent::InsertLocal {
+            entry: iroh_docs::sync::Entry::new(id, record),
+        }
+    }
+
+    #[test]
+    fn only_an_endorsement_wakes_delivery() {
+        assert!(endorsement_written(&wrote("endorse/like:abc")));
+
+        // The one that would feed the loop itself: a pass writes a mark for everything it
+        // delivers, so waking on those means a knock schedules the pass that follows it,
+        // forever.
+        assert!(!endorsement_written(&wrote("deliver/like:abc")));
+        // And the doc carries every other loop's writes. Tallies alone land on a
+        // 30-second cadence, so waking on them is a pass per tally for as long as anyone
+        // is endorsing anything.
+        assert!(!endorsement_written(&wrote("tally/chan:abc")));
+        assert!(!endorsement_written(&wrote(
+            "engagement-log/abc:like:did:dht:x"
+        )));
+
+        // Swarm churn says who we're talking to, not that anything was written.
+        let peer = iroh::PublicKey::from_bytes(&[0u8; 32]).unwrap();
+        assert!(!endorsement_written(&LiveEvent::NeighborUp(peer)));
+    }
 
     fn record(sig: &str, reference: Option<&str>) -> Endorsement {
         Endorsement {

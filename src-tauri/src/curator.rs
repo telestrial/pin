@@ -1227,13 +1227,17 @@ pub async fn curator_start_engagement(
 
 /// How often delivery looks for endorsements nobody has been told about.
 ///
-/// Settled rather than eager: a pass with nothing outstanding is a doc scan and no
-/// network at all, and everything it might deliver was already written locally.
+/// The backstop, not the schedule: an endorsement being written wakes the loop, and this
+/// only covers a signal that never arrived. Long, because a pass with nothing outstanding
+/// is a doc scan and no network at all.
 const DELIVER_CADENCE: std::time::Duration = std::time::Duration::from_secs(5 * 60);
-/// How soon to try again while something is still undelivered. An endorsement its author
-/// hasn't heard is latency a reader can see, so an outstanding pass comes round quickly
-/// instead of waiting out the settled cadence.
+/// How soon to try again while something is still undelivered. Nothing writes an
+/// endorsement a second time to say it still hasn't landed, so an unreachable author is
+/// the one case with no wake behind it.
 const DELIVER_RETRY: std::time::Duration = std::time::Duration::from_secs(30);
+/// How long to hold after a wake. Pinning a channel writes an endorsement per item, and
+/// they should cost one pass between them rather than one each.
+const DELIVER_SETTLE: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// Start the delivery loop — knock this identity's endorsements through to the people
 /// they are about.
@@ -1278,6 +1282,7 @@ pub async fn curator_start_deliver(
             own_did,
             DELIVER_CADENCE,
             DELIVER_RETRY,
+            DELIVER_SETTLE,
             |result| match result {
                 // Quiet when everything has already been delivered, which is the steady
                 // state. Reported when something moved or is still outstanding.

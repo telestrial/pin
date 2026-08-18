@@ -621,14 +621,17 @@ export async function startEngagementLoop(
   )
 }
 
-/** How often delivery looks for endorsements nobody has been told about, and how soon it
- *  tries again while something is still outstanding.
+/** The backstop cadence, the retry while something is still outstanding, and how long to
+ *  hold after a wake.
  *
- *  Settled rather than eager: a pass with nothing undelivered is a doc scan and no network
- *  at all. But an endorsement its author hasn't heard is latency a reader can see, so a
- *  pass that left something outstanding comes round quickly instead. */
+ *  Writing an endorsement wakes the loop, so the cadence only covers a signal that never
+ *  arrived — long, because a pass with nothing undelivered is a doc scan and no network at
+ *  all. The retry is for the one case with no wake behind it: nothing writes an
+ *  endorsement a second time to say it still hasn't reached an unreachable author. The
+ *  settle coalesces a burst, since pinning a channel writes an endorsement per item. */
 const DELIVER_CADENCE_SECS = 5 * 60
 const DELIVER_RETRY_SECS = 30
+const DELIVER_SETTLE_SECS = 2
 
 /** Start the delivery loop — knock this identity's endorsements through to the people
  *  they are about.
@@ -653,6 +656,7 @@ export async function startDeliverLoop(
     appKeyHex,
     DELIVER_CADENCE_SECS,
     DELIVER_RETRY_SECS,
+    DELIVER_SETTLE_SECS,
     (report: string) => onPass?.(report),
   )
 }
