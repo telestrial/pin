@@ -1001,12 +1001,36 @@ fn should_crawl(pass: u32, crawl_every: u32) -> bool {
     crawl_every <= 1 || pass % crawl_every == 0
 }
 
+/// Whether this pass should read the graph as well as fold.
+///
+/// A knock-woken pass folds only. The tick it would otherwise advance is what spaces the
+/// crawl out, so letting knocks drive it would hand somebody else the schedule on which
+/// this identity resolves and downloads every directory in its graph: twenty likes in a
+/// row and a crawl fires. The due crawl isn't lost — the tick hasn't moved, so the next
+/// scheduled pass at that tick still takes it.
+fn crawl_this_pass(ticks: u32, crawl_every: u32, knock_woken: bool) -> bool {
+    !knock_woken && should_crawl(ticks, crawl_every)
+}
+
+/// What ended a wait.
+enum Woke {
+    /// The cadence came round.
+    Scheduled,
+    /// A knock landed.
+    Knock,
+}
+
 /// Pass, wait, repeat — forever.
 ///
-/// Every pass folds; one in `crawl_every` also reads the graph. So a count derived from
-/// local records appears at `cadence`, and the expensive half still runs at
+/// Every pass folds; one in `crawl_every` scheduled passes also reads the graph. So a count
+/// derived from local records appears at `cadence`, and the expensive half still runs at
 /// `cadence * crawl_every`. The first pass crawls, so a fresh start doesn't wait to learn
 /// what it missed while it was down.
+///
+/// A knock wakes it early, because a knock IS the count moving: an out-of-graph like
+/// reaches this identity no other way, and waiting out the cadence to fold one is the last
+/// stretch of delay between someone liking a post and its author showing it. What that
+/// wake does not do is crawl — see `crawl_this_pass`.
 pub async fn run_engagement_loop(
     ctx: EngagementContext,
     own_did: String,
@@ -1015,11 +1039,27 @@ pub async fn run_engagement_loop(
     now_iso: impl Fn() -> String,
     on_pass: impl Fn(Result<EngagementOutcome, String>),
 ) -> ! {
-    let mut pass: u32 = 0;
+    let mut ticks: u32 = 0;
+    let mut knock_woken = false;
     loop {
-        on_pass(engagement_once(&ctx, &own_did, now_iso(), should_crawl(pass, crawl_every)).await);
-        pass = pass.wrapping_add(1);
-        n0_future::time::sleep(cadence).await;
+        let crawl = crawl_this_pass(ticks, crawl_every, knock_woken);
+        on_pass(engagement_once(&ctx, &own_did, now_iso(), crawl).await);
+
+        let scheduled = async {
+            n0_future::time::sleep(cadence).await;
+            Woke::Scheduled
+        };
+        let knocked = async {
+            pin_rpc::wait(&ctx.inbox).await;
+            Woke::Knock
+        };
+        knock_woken = match n0_future::future::race(scheduled, knocked).await {
+            Woke::Scheduled => {
+                ticks = ticks.wrapping_add(1);
+                false
+            }
+            Woke::Knock => true,
+        };
     }
 }
 
@@ -1065,6 +1105,24 @@ mod tests {
             assert!(should_crawl(pass, 0));
             assert!(should_crawl(pass, 1));
         }
+    }
+
+    #[test]
+    fn a_knock_folds_but_never_crawls() {
+        // Otherwise a stranger sets the schedule on which this identity resolves and
+        // downloads every directory in its graph: knocks advance the tick, twenty likes
+        // land, and a crawl fires because somebody else decided it should.
+        assert!(!crawl_this_pass(0, 20, true));
+        assert!(!crawl_this_pass(20, 20, true));
+        // Including the case a knock can't opt out of — every pass crawls here, and a
+        // knock still must not be what triggers one.
+        assert!(!crawl_this_pass(3, 1, true));
+
+        // And the crawl a knock stepped in front of isn't lost: the tick didn't move, so
+        // the next scheduled pass at that same tick still takes it.
+        assert!(crawl_this_pass(0, 20, false));
+        assert!(crawl_this_pass(20, 20, false));
+        assert!(!crawl_this_pass(7, 20, false));
     }
 
     // --- what a knock is worth ---------------------------------------------------

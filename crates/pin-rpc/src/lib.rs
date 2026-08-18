@@ -61,11 +61,11 @@ pub const MAX_FRAME: usize = 64 * 1024;
 
 /// How many knocks may be parked at once.
 ///
-/// The inbox is in memory and nothing drains it yet, so it needs a ceiling: without one
-/// a peer could grow it until the process dies, and there is no reply through which to
-/// signal backpressure. When it is full a knock is DROPPED rather than evicting an older
-/// one — a flooder should not be able to push real knocks out — and the sender's own
-/// retry is what recovers it once the drain has made room.
+/// The inbox is in memory, so it needs a ceiling: without one a peer could grow it until
+/// the process dies, and there is no reply through which to signal backpressure. When it
+/// is full a knock is DROPPED rather than evicting an older one — a flooder should not be
+/// able to push real knocks out — and the sender's own retry is what recovers it once the
+/// drain has made room.
 pub const MAX_INBOX: usize = 1024;
 
 #[derive(Serialize, Deserialize)]
@@ -89,22 +89,60 @@ pub struct Knock {
 /// The `hey` inbox: knocks accepted but not yet reconciled. In-memory — a knock lost to
 /// a restart is one the sender retries. A std mutex (not tokio), since it is only ever
 /// held for a push or a read with no await in between.
-pub type HeyInbox = Arc<Mutex<Vec<Knock>>>;
+///
+/// It carries a signal as well as the knocks, so the loop that drains it can wait to be
+/// told rather than look on a timer. Without one a knock sits until the reconcile cadence
+/// comes round, which is the whole delay between someone liking a post and its author
+/// counting it — and a cadence short enough to hide that would be a poll running forever
+/// for something that happens rarely.
+#[derive(Debug, Clone)]
+pub struct HeyInbox {
+    parked: Arc<Mutex<Vec<Knock>>>,
+    /// Capacity one, and sent with `try_send`. The drain takes everything at once, so one
+    /// pending signal says exactly as much as a hundred would; a full channel means a
+    /// wake is already owed and dropping the extra loses nothing.
+    tell: async_channel::Sender<()>,
+    told: async_channel::Receiver<()>,
+}
 
 /// A fresh, empty inbox.
 pub fn new_inbox() -> HeyInbox {
-    Arc::new(Mutex::new(Vec::new()))
+    let (tell, told) = async_channel::bounded(1);
+    HeyInbox {
+        parked: Arc::new(Mutex::new(Vec::new())),
+        tell,
+        told,
+    }
+}
+
+/// Wait until something is parked.
+///
+/// Returns immediately when a wake is already owed — including one for a knock the
+/// cadence happened to drain first, which costs one extra pass over an empty inbox and
+/// nothing else. The alternative, clearing the signal on drain, would race a knock landing
+/// between the drain and the clear and lose the wake for it.
+///
+/// Safe to drop half-finished, which the caller does on every cadence that wins the race:
+/// the wake is a queued message rather than an edge, so one that arrives while nobody is
+/// waiting stays queued and the next call takes it.
+///
+/// Never returns if the inbox is dropped, which only happens as the engine goes away: the
+/// caller races this against its own cadence, so a dead signal degrades to that cadence
+/// rather than stalling.
+pub async fn wait(inbox: &HeyInbox) {
+    let _ = inbox.told.recv().await;
 }
 
 /// How many knocks are parked — what diagnostics report, and what the drain works
 /// through.
 pub fn queued(inbox: &HeyInbox) -> usize {
-    inbox.lock().map(|i| i.len()).unwrap_or(0)
+    inbox.parked.lock().map(|i| i.len()).unwrap_or(0)
 }
 
 /// Take everything parked, leaving the inbox empty.
 pub fn drain(inbox: &HeyInbox) -> Vec<Knock> {
     inbox
+        .parked
         .lock()
         .map(|mut i| std::mem::take(&mut *i))
         .unwrap_or_default()
@@ -113,7 +151,7 @@ pub fn drain(inbox: &HeyInbox) -> Vec<Knock> {
 /// Drop every parked knock. Used after a synthetic self-test knock so real knocks
 /// start counting from zero.
 pub fn clear(inbox: &HeyInbox) {
-    if let Ok(mut i) = inbox.lock() {
+    if let Ok(mut i) = inbox.parked.lock() {
         i.clear();
     }
 }
@@ -144,13 +182,19 @@ impl HeyHandler {
         let Some(record) = req.record else {
             return false;
         };
-        let Ok(mut inbox) = self.inbox.lock() else {
+        let Ok(mut parked) = self.inbox.parked.lock() else {
             return false;
         };
-        if inbox.len() >= MAX_INBOX {
+        if parked.len() >= MAX_INBOX {
             return false;
         }
-        inbox.push(Knock { record });
+        parked.push(Knock { record });
+        // Released before signalling: the waiter is woken to take this lock, and holding
+        // it across the wake would hand it a lock we still own.
+        drop(parked);
+        // Only after a knock is actually parked, so a wake always has something behind it.
+        // Full means a wake is already owed, which is as much as this one would say.
+        let _ = self.inbox.tell.try_send(());
         true
     }
 }
@@ -208,7 +252,45 @@ mod tests {
         let handler = HeyHandler::new(inbox.clone());
         assert!(handler.accept_knock(&hey_request(&record())));
         assert_eq!(queued(&inbox), 1);
-        assert_eq!(inbox.lock().unwrap()[0].record, record());
+        assert_eq!(inbox.parked.lock().unwrap()[0].record, record());
+    }
+
+    #[test]
+    fn parking_a_knock_owes_the_drain_a_wake() {
+        // What `wait` returns on, checked without a runtime: `try_recv` reads the same
+        // queued message. Without it a knock waits out the reconcile cadence, which is the
+        // last stretch of delay between a like and its author counting it.
+        let inbox = new_inbox();
+        let handler = HeyHandler::new(inbox.clone());
+        assert!(inbox.told.try_recv().is_err(), "nothing owed yet");
+
+        assert!(handler.accept_knock(&hey_request(&record())));
+        assert!(inbox.told.try_recv().is_ok(), "a wake is owed");
+        assert!(inbox.told.try_recv().is_err(), "and only one");
+    }
+
+    #[test]
+    fn a_refused_knock_owes_nothing() {
+        // Signalling before the park would wake the drain over an empty inbox for
+        // anything a stranger sends, parseable or not — a way to make us work that costs
+        // the sender a malformed frame.
+        let inbox = new_inbox();
+        let handler = HeyHandler::new(inbox.clone());
+        assert!(!handler.accept_knock(b"not json"));
+        assert!(!handler.accept_knock(&hey_request(&serde_json::json!(null))));
+        assert!(inbox.told.try_recv().is_err());
+    }
+
+    #[test]
+    fn a_second_knock_needs_no_second_wake() {
+        // Capacity one on purpose: the drain takes everything at once, so a full channel
+        // means a wake is already owed and the extra says nothing. What must not happen is
+        // the send blocking or the knock being refused because of it.
+        let inbox = new_inbox();
+        let handler = HeyHandler::new(inbox.clone());
+        assert!(handler.accept_knock(&hey_request(&record())));
+        assert!(handler.accept_knock(&hey_request(&record())));
+        assert_eq!(queued(&inbox), 2);
     }
 
     #[test]
@@ -218,7 +300,7 @@ mod tests {
         let inbox = new_inbox();
         let handler = HeyHandler::new(inbox.clone());
         handler.accept_knock(&hey_request(&record()));
-        let parked = inbox.lock().unwrap()[0].record.clone();
+        let parked = inbox.parked.lock().unwrap()[0].record.clone();
         assert_eq!(
             serde_json::to_string(&parked).unwrap(),
             serde_json::to_string(&record()).unwrap()
@@ -271,7 +353,7 @@ mod tests {
             handler.accept_knock(&hey_request(&record()));
         }
         handler.accept_knock(&hey_request(&record()));
-        assert_eq!(inbox.lock().unwrap()[0].record["sig"], "first");
+        assert_eq!(inbox.parked.lock().unwrap()[0].record["sig"], "first");
     }
 
     #[test]
