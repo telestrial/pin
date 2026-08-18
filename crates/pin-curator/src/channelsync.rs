@@ -13,6 +13,17 @@
 //! recency guard (see `is_older_than_cached`), and the frontend needs no second path:
 //! whatever renders is already watching that record through the doc's change feed.
 //!
+//! COUNTS RIDE THE SAME IMPORT. A channel's published tallies live in that same replica,
+//! so a subscriber already holding it is pushed a count the moment its author folds one —
+//! where the floor rung has to resolve a pkarr pointer and download a Sia object to learn
+//! the same thing. They land in `tally/<id>:<subject>`, the one address this identity's
+//! screens read, written through the same `cache_tally` the floor writes with, so the
+//! recency guard decides between the two rungs rather than whichever ran last.
+//!
+//! Writes only, though: an author who deletes a tally (an unlike taking a count to zero
+//! removes the record) leaves the cached copy behind, and the floor rung's pass is what
+//! drops it. Counts get faster here; correctness still comes from below.
+//!
 //! That guard matters more here than it looks. A tab resolves through pkarr relays that
 //! lag the DHT by minutes, so its own polling pass can easily find an OLDER manifest
 //! than one that arrived by push. Writing it anyway would un-publish a post. Both
@@ -24,7 +35,7 @@
 //! bound that differs by target — the executor is the caller's business, and pushing
 //! that difference down here is exactly what the shared crate exists to avoid.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::str::FromStr as _;
 use std::time::Duration;
 
@@ -32,9 +43,11 @@ use iroh_blobs::api::Store;
 use iroh_docs::{api::Doc, engine::LiveEvent, store::Query, AuthorId, DocTicket};
 use n0_future::{boxed::BoxStream, StreamExt as _};
 use pin_derive::record_key;
+use pin_engagement::Aggregate;
 
 use crate::channeldoc::{manifest_key, TICKET_PREFIX};
-use crate::{is_older_than_cached, read_record, read_settings, SUB_COLLECTION};
+use crate::engagement::tally_key;
+use crate::{cache_tally, is_older_than_cached, read_record, read_settings, SUB_COLLECTION};
 
 /// Everything a pass needs, gathered by whichever engine is running it.
 pub struct ChannelSyncContext {
@@ -66,6 +79,8 @@ pub struct ChannelSyncOutcome {
     pub pushed: usize,
     /// Pushed manifests refused for being older than what's cached.
     pub stale: usize,
+    /// Published counts cached into `tally/<id>:<subject>` since the last report.
+    pub tallies: usize,
 }
 
 /// One channel this instance is live-syncing.
@@ -107,7 +122,12 @@ async fn reconcile(
         match import_channel(ctx, channel_id, &k).await {
             Ok(Some((doc, stream))) => {
                 events.push(stream);
-                watched.insert((*channel_id).to_string(), Watched { key: k, doc });
+                let w = Watched { key: k, doc };
+                // What a replica already holds is not re-emitted when it is re-imported,
+                // so an instance that restarts would otherwise learn a channel's counts
+                // only when the floor rung next ran.
+                outcome.tallies += scan_tallies(ctx, channel_id, &w).await;
+                watched.insert((*channel_id).to_string(), w);
                 outcome.imported += 1;
             }
             Ok(None) => outcome.unavailable += 1,
@@ -239,6 +259,106 @@ enum Push {
     Nothing,
 }
 
+/// The subject a key names, when that key is a published tally.
+///
+/// A channel's replica carries its manifest and its counts in one keyspace, so the event
+/// stream is routed by what arrived rather than by re-reading everything: an author who
+/// folds fifty subjects at once emits fifty events, and answering each with a full scan
+/// would be quadratic in a channel's own size.
+fn tally_subject(key: &str) -> Option<&str> {
+    key.strip_prefix(&pin_derive::collection_prefix(
+        pin_derive::ENGAGEMENT_COLLECTION,
+    ))
+}
+
+/// The key an event says arrived, for the events that say.
+///
+/// Content-ready carries a hash rather than a key, which is the whole reason the caller
+/// keeps a pending set: an entry can land before the value it points at is downloadable.
+fn arrival_key(event: &LiveEvent) -> Option<String> {
+    match event {
+        LiveEvent::InsertRemote { entry, .. } => {
+            Some(String::from_utf8_lossy(entry.key()).to_string())
+        }
+        _ => None,
+    }
+}
+
+/// Copy one subject's published tally out of a watched replica and into the cache this
+/// identity's screens read.
+///
+/// `NotReady` is the ordinary state between an entry syncing and its content downloading,
+/// and is why it is worth distinguishing from having nothing to do: the caller holds the
+/// subject and retries it when content lands, where treating the two alike would drop the
+/// count until the floor rung next ran.
+async fn push_tally(
+    ctx: &ChannelSyncContext,
+    channel_id: &str,
+    watched: &Watched,
+    subject: &str,
+) -> TallyPush {
+    let Ok(Some(entry)) = watched
+        .doc
+        .get_one(Query::single_latest_per_key().key_exact(tally_key(subject)))
+        .await
+    else {
+        // No such entry: either never published, or withdrawn. Nothing to cache either
+        // way — dropping a cached one is the floor rung's job.
+        return TallyPush::Nothing;
+    };
+    let Ok(bytes) = ctx.blobs.get_bytes(entry.content_hash()).await else {
+        return TallyPush::NotReady;
+    };
+    let Ok(aggregate) = serde_json::from_slice::<Aggregate>(&bytes) else {
+        return TallyPush::Nothing;
+    };
+    if cache_tally(
+        &ctx.doc,
+        &ctx.blobs,
+        ctx.author_id,
+        channel_id,
+        subject,
+        &aggregate,
+    )
+    .await
+    {
+        TallyPush::Cached
+    } else {
+        TallyPush::Nothing
+    }
+}
+
+enum TallyPush {
+    Cached,
+    NotReady,
+    Nothing,
+}
+
+/// Cache every tally a watched replica currently holds. Used at import, where there is no
+/// event to route from.
+async fn scan_tallies(ctx: &ChannelSyncContext, channel_id: &str, watched: &Watched) -> usize {
+    let Ok(subjects) = crate::list_rkeys(
+        &watched.doc,
+        ctx.author_id,
+        pin_derive::ENGAGEMENT_COLLECTION,
+    )
+    .await
+    else {
+        return 0;
+    };
+    let mut cached = 0;
+    for subject in subjects {
+        // A value that hasn't downloaded yet is left to the event that says it has.
+        if matches!(
+            push_tally(ctx, channel_id, watched, &subject).await,
+            TallyPush::Cached
+        ) {
+            cached += 1;
+        }
+    }
+    cached
+}
+
 /// Reconcile subscriptions, then pump pushed manifests until the next reconcile is due —
 /// forever.
 ///
@@ -263,9 +383,14 @@ pub async fn run_channel_sync_loop(
     // there is the only way it gets counted at all.
     let mut pushed = 0usize;
     let mut stale = 0usize;
+    let mut tallies = 0usize;
+    // Subjects whose entry has arrived but whose value hasn't downloaded, by channel.
+    // Retried when content lands, because nothing else would come back for them.
+    let mut pending: HashMap<String, HashSet<String>> = HashMap::new();
 
     loop {
         let result = reconcile(&ctx, &mut watched, &mut events).await;
+        pending.retain(|id, _| watched.contains_key(id));
         // Come back sooner while something is still unwatched. An author's ticket takes
         // a little while to become resolvable after they publish it, so a subscriber
         // that misses it on the first look would otherwise sit out the whole cadence
@@ -277,6 +402,9 @@ pub async fn run_channel_sync_loop(
         on_pass(result.map(|mut o| {
             o.pushed = std::mem::take(&mut pushed);
             o.stale = std::mem::take(&mut stale);
+            // Added to, not assigned: an import scans the replica it just took on, and
+            // that count is already in the outcome.
+            o.tallies += std::mem::take(&mut tallies);
             o
         }));
 
@@ -293,10 +421,47 @@ pub async fn run_channel_sync_loop(
                 let Some(w) = watched.get(&channel_id) else {
                     continue;
                 };
-                match push_manifest(&ctx, &channel_id, w).await {
-                    Push::Wrote => pushed += 1,
-                    Push::Stale => stale += 1,
-                    Push::Nothing => {}
+                let key = arrival_key(&event);
+                match key.as_deref().and_then(tally_subject) {
+                    // A tally landed and the event named it, so nothing else is re-read.
+                    Some(subject) => {
+                        let subject = subject.to_string();
+                        match push_tally(&ctx, &channel_id, w, &subject).await {
+                            TallyPush::Cached => tallies += 1,
+                            TallyPush::NotReady => {
+                                pending
+                                    .entry(channel_id.clone())
+                                    .or_default()
+                                    .insert(subject);
+                            }
+                            TallyPush::Nothing => {}
+                        }
+                    }
+                    // The manifest, or a content event — which says a value downloaded
+                    // without saying whose, and is the only thing that brings a tally
+                    // waiting on its content back.
+                    None => {
+                        match push_manifest(&ctx, &channel_id, w).await {
+                            Push::Wrote => pushed += 1,
+                            Push::Stale => stale += 1,
+                            Push::Nothing => {}
+                        }
+                        for subject in pending.get(&channel_id).cloned().unwrap_or_default() {
+                            let settled = match push_tally(&ctx, &channel_id, w, &subject).await {
+                                TallyPush::Cached => {
+                                    tallies += 1;
+                                    true
+                                }
+                                TallyPush::Nothing => true,
+                                TallyPush::NotReady => false,
+                            };
+                            if settled {
+                                if let Some(set) = pending.get_mut(&channel_id) {
+                                    set.remove(&subject);
+                                }
+                            }
+                        }
+                    }
                 }
             }
             n0_future::time::sleep(wait).await;
@@ -318,6 +483,57 @@ mod tests {
         assert!(is_remote_arrival(&LiveEvent::ContentReady {
             hash: iroh_blobs::Hash::from([7u8; 32]),
         }));
+    }
+
+    /// An entry carrying `key`, as a remote arrival would.
+    fn arrival(key: &str) -> LiveEvent {
+        let id = iroh_docs::sync::RecordIdentifier::new(
+            iroh_docs::NamespaceId::from(&[1u8; 32]),
+            iroh_docs::AuthorId::from(&[2u8; 32]),
+            key,
+        );
+        // A non-empty length: `Record::new` insists a zero-length record carry the hash
+        // of the empty range, and the length is nothing to do with what's under test.
+        let record = iroh_docs::sync::Record::new(iroh_blobs::Hash::from([3u8; 32]), 1, 0);
+        LiveEvent::InsertRemote {
+            from: iroh::PublicKey::from_bytes(&[0u8; 32]).unwrap(),
+            entry: iroh_docs::sync::Entry::new(id, record),
+            content_status: iroh_docs::ContentStatus::Complete,
+        }
+    }
+
+    #[test]
+    fn a_published_tally_routes_to_its_subject() {
+        // The routing that keeps the pump linear: an author folding fifty subjects emits
+        // fifty events, and answering each with a full scan of the replica would be
+        // quadratic in the channel's own size.
+        assert_eq!(tally_subject("engagement/abc"), Some("abc"));
+        // The manifest shares the keyspace, and reading it as a tally would leave the one
+        // record this loop existed to push unwritten.
+        let manifest = String::from_utf8(manifest_key()).unwrap();
+        assert_eq!(tally_subject(&manifest), None);
+        // A near-miss: our own cache lives under a different collection, and the channel
+        // replica never holds one.
+        assert_eq!(tally_subject("tally/chan:abc"), None);
+    }
+
+    #[test]
+    fn an_arrival_names_its_key_but_content_does_not() {
+        // Why the pending set exists. An entry can land before the value it points at is
+        // downloadable, and the event that says the value arrived carries a hash rather
+        // than a key — so a subject caught mid-download has nothing to route on, and
+        // something has to remember it.
+        assert_eq!(
+            arrival_key(&arrival("engagement/abc")).as_deref(),
+            Some("engagement/abc")
+        );
+        assert_eq!(arrival_key(&LiveEvent::PendingContentReady), None);
+        assert_eq!(
+            arrival_key(&LiveEvent::ContentReady {
+                hash: iroh_blobs::Hash::from([7u8; 32]),
+            }),
+            None
+        );
     }
 
     #[test]

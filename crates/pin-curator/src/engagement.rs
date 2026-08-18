@@ -970,7 +970,12 @@ fn reclaimable(previous: Option<&crate::PublishedState>, current: &str) -> Optio
     Some(stale.to_string())
 }
 
-fn tally_key(subject: &str) -> Vec<u8> {
+/// Where one subject's published tally lives inside a channel's own doc.
+///
+/// Shared with the channel-sync loop, which reads the same key out of a replica it holds
+/// as a subscriber. Two spellings of it would put an author's counts somewhere their
+/// readers never look, and nothing would report an error.
+pub(crate) fn tally_key(subject: &str) -> Vec<u8> {
     pin_derive::record_key(pin_derive::ENGAGEMENT_COLLECTION, subject)
 }
 

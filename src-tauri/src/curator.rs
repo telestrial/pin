@@ -933,10 +933,10 @@ pub async fn curator_start_channel_sync(
             Ok(o) => {
                 // Quiet when nothing changed and nothing arrived — the steady state of a
                 // subscriber whose authors are idle.
-                if o.imported > 0 || o.pushed > 0 || o.failed > 0 || o.stale > 0 {
+                if o.imported > 0 || o.pushed > 0 || o.failed > 0 || o.stale > 0 || o.tallies > 0 {
                     println!(
-                        "curator channel sync: imported {} watching {} unavailable {} failed {} pushed {} stale {}",
-                        o.imported, o.watching, o.unavailable, o.failed, o.pushed, o.stale
+                        "curator channel sync: imported {} watching {} unavailable {} failed {} pushed {} stale {} tallies {}",
+                        o.imported, o.watching, o.unavailable, o.failed, o.pushed, o.stale, o.tallies
                     );
                 }
             }
