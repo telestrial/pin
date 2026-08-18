@@ -463,6 +463,7 @@ pub async fn start_channel_sync_loop(
                         "failed": o.failed,
                         "pushed": o.pushed,
                         "stale": o.stale,
+                        "tallies": o.tallies,
                     })
                     .to_string(),
                     Err(e) => serde_json::json!({ "error": e }).to_string(),
