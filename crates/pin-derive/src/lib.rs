@@ -256,6 +256,24 @@ pub fn endorse_rkey(kind: &str, subject: &str) -> String {
     format!("{kind}:{subject}")
 }
 
+/// The kind and subject an endorsement key names, or `None` when it isn't one.
+///
+/// Needed because a DELIVERY mark is filed under this same key, and a mark left with no
+/// endorsement behind it is how the loop knows a gesture was withdrawn — at which point
+/// the key is the only surviving record of what it was about.
+///
+/// Splits at the FIRST separator, since a subject is a base32 hash and carries none. Both
+/// halves are required: a key with no separator would otherwise read as a kind with an
+/// empty subject, and what gets built from that is a signed message withdrawing something
+/// that doesn't exist.
+pub fn parse_endorse_rkey(rkey: &str) -> Option<(&str, &str)> {
+    let (kind, subject) = rkey.split_once(':')?;
+    if kind.is_empty() || subject.is_empty() {
+        return None;
+    }
+    Some((kind, subject))
+}
+
 /// The collection holding what OTHERS have endorsed about this identity's items — the
 /// signed records a published count is folded from.
 ///
@@ -700,6 +718,24 @@ mod tests {
             parse_engagement_log_rkey(&format!("{subject}::{actor}")),
             None
         );
+    }
+
+    #[test]
+    fn an_endorsement_key_round_trips_and_nonsense_does_not_parse() {
+        // The delivery mark shares this key, and a mark with no endorsement behind it is
+        // how a withdrawal is noticed — so this parse is what a signed retraction is built
+        // from, and something half-read here is something signed about the wrong subject.
+        let subject = "f4xlljzqxtqpv7ul6ngkyeafusdwqrirpmhochqyjz2hgz3djo6a";
+        let rkey = endorse_rkey("like", subject);
+        assert_eq!(parse_endorse_rkey(&rkey), Some(("like", subject)));
+
+        // A subject is a base32 hash and carries no separator, so the first one is the
+        // boundary and everything after it is the subject.
+        assert_eq!(parse_endorse_rkey("like:a:b"), Some(("like", "a:b")));
+
+        assert_eq!(parse_endorse_rkey("nocolon"), None);
+        assert_eq!(parse_endorse_rkey(":subject"), None);
+        assert_eq!(parse_endorse_rkey("like:"), None);
     }
 
     #[test]

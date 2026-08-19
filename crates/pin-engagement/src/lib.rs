@@ -52,6 +52,25 @@ pub const KIND_PIN: &str = "pin";
 /// one.
 const SIGNING_DOMAIN: &[u8] = b"pin.engagement.v1";
 
+/// The domain tag a withdrawal signs under.
+///
+/// Different from the endorsement's, and that is the whole point rather than tidiness. A
+/// retraction covers a subset of an endorsement's fields, so under one domain a signature
+/// made over `kind || subject || createdAt` would verify as either — and an attacker
+/// holding somebody's endorsement could replay it as the withdrawal of that same
+/// endorsement, or the reverse. Separate domains make the two signatures disjoint by
+/// construction.
+const RETRACTION_DOMAIN: &[u8] = b"pin.retraction.v1";
+
+/// The wire marker that says a record withdraws rather than asserts.
+///
+/// Explicit, because the alternative is sniffing structure — "no `version` field, so it
+/// must be a retraction" — and this codebase has been bitten twice by inferring meaning
+/// from which fields a serializer happened to emit. Absence means endorsement, since
+/// endorsements are already published in directories without a marker and adding one
+/// would invalidate every signature and every directory already written.
+pub const OP_RETRACT: &str = "retract";
+
 /// A record's plaintext coordinates, present only when its subject is public.
 ///
 /// UNSIGNED, and self-checking instead. A reader recomputes the subject hash from these
@@ -222,6 +241,95 @@ impl Endorsement {
         buf.extend_from_slice(&self.signing_bytes());
         buf.extend_from_slice(&sig);
         Ok(sha256(&buf))
+    }
+}
+
+/// Taking an endorsement back, as something an author can be TOLD.
+///
+/// Withdrawing removes the record from the actor's own directory, and an author who found
+/// it by crawling that directory notices the absence on their next pass. An author who
+/// learned of it by knock has no crawl of us at all — that is what a knock is for — so
+/// they would go on counting it forever. This is the other half of the push route: the
+/// same asymmetry as delivery, in the opposite direction.
+///
+/// Deliberately not an `Endorsement` with a flag. The two have different signing domains
+/// (see `RETRACTION_DOMAIN`), so neither signature can be replayed as the other, and a
+/// retraction covers strictly less: no `version`, because taking a gesture back is not
+/// specific to the wording it was made against, and no `ref`, because a withdrawal must
+/// not reveal a channel the endorsement it withdraws didn't already name.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Retraction {
+    /// The literal `retract`, so a receiver can tell the two apart without guessing from
+    /// which fields are present.
+    pub op: String,
+    /// Which gesture is being withdrawn.
+    pub kind: String,
+    /// Who is withdrawing it. Also the verification key.
+    pub actor: String,
+    /// What it was about — the same subject the endorsement named.
+    pub subject: String,
+    /// When it was withdrawn. Compared against the `createdAt` of the endorsement it
+    /// withdraws, which is what stops a replayed retraction from undoing a gesture the
+    /// actor made again afterwards.
+    #[serde(rename = "createdAt")]
+    pub created_at: String,
+    /// Base64 ed25519 over `signing_bytes`.
+    pub sig: String,
+}
+
+impl Retraction {
+    /// The exact bytes a signature covers. Same construction as an endorsement's — a
+    /// domain tag then length-delimited fields — under a different domain, and without
+    /// `version`.
+    pub fn signing_bytes(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(RETRACTION_DOMAIN.len() + 64);
+        out.extend_from_slice(RETRACTION_DOMAIN);
+        push_field(&mut out, &self.kind);
+        push_field(&mut out, &self.subject);
+        push_field(&mut out, &self.created_at);
+        out
+    }
+
+    /// Build and sign a withdrawal from the identity seed the actor is derived from.
+    pub fn sign(
+        did_dht_seed: &[u8],
+        kind: &str,
+        subject: &str,
+        created_at: &str,
+    ) -> Result<Self, String> {
+        let mut record = Retraction {
+            op: OP_RETRACT.to_string(),
+            kind: kind.to_string(),
+            actor: format!("did:dht:{}", pin_pkarr::public_key_from_seed(did_dht_seed)?),
+            subject: subject.to_string(),
+            created_at: created_at.to_string(),
+            sig: String::new(),
+        };
+        record.sig = pin_pkarr::sign_detached(did_dht_seed, &record.signing_bytes())?;
+        Ok(record)
+    }
+
+    /// Whether this holds up: signed by the identity it names, and saying it is a
+    /// withdrawal.
+    ///
+    /// The `op` check is part of verification rather than of parsing, because a record
+    /// that verifies under this domain but claims to be something else is a record whose
+    /// author and reader disagree about what was signed.
+    pub fn verify(&self) -> Result<(), String> {
+        if self.op != OP_RETRACT {
+            return Err(format!("not a retraction: op is {:?}", self.op));
+        }
+        pin_pkarr::verify_detached(&self.actor, &self.signing_bytes(), &self.sig)
+    }
+
+    /// Whether this withdraws an endorsement made at the given time.
+    ///
+    /// Strictly newer, the same rule an endorsement uses. A withdrawal older than the
+    /// gesture it names is one the actor made and then changed their mind about — they
+    /// endorsed again afterwards — so honouring it would undo a current gesture with a
+    /// stale message. Equal keeps what is held for the same reason.
+    pub fn withdraws(&self, held_created_at: &str) -> bool {
+        self.created_at.as_str() > held_created_at
     }
 }
 
@@ -490,6 +598,80 @@ mod tests {
                 "000000047768656e",                   // len 4, "when"
             )
         );
+    }
+
+    fn withdrawn(kind: &str, when: &str) -> Retraction {
+        Retraction::sign(&SEED, kind, SUBJECT, when).unwrap()
+    }
+
+    #[test]
+    fn a_retraction_signs_the_bytes_it_says_it_does() {
+        // Pinned exactly, like the endorsement's, because these bytes are a contract with
+        // every future reader: a layout that drifted would verify nothing already sent and
+        // would say so only as a signature failure.
+        let r = Retraction {
+            op: OP_RETRACT.into(),
+            kind: "like".into(),
+            actor: "did:dht:ignored".into(),
+            subject: "sub".into(),
+            created_at: "when".into(),
+            sig: String::new(),
+        };
+        let hex: String = r
+            .signing_bytes()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        assert_eq!(
+            hex,
+            concat!(
+                "70696e2e72657472616374696f6e2e7631", // "pin.retraction.v1"
+                "000000046c696b65",                   // len 4, "like"
+                "0000000373756200000004",             // len 3 "sub", len 4
+                "7768656e",                           // "when"
+            )
+        );
+    }
+
+    #[test]
+    fn an_endorsement_cannot_be_replayed_as_the_withdrawal_of_itself() {
+        // The reason the domains differ. Both cover kind, subject and a timestamp, so
+        // under one domain a retraction's signed bytes would be a PREFIX-equal message to
+        // an endorsement's over the same fields — and anyone holding a signed endorsement
+        // could present it as that endorsement being taken back.
+        let e = signed(KIND_LIKE);
+        let r = withdrawn(KIND_LIKE, WHEN);
+        assert_ne!(e.signing_bytes(), r.signing_bytes());
+        assert!(r.signing_bytes().starts_with(b"pin.retraction.v1"));
+
+        // And the signatures don't cross: neither record verifies as the other kind.
+        let crossed = Retraction {
+            sig: e.sig.clone(),
+            ..withdrawn(KIND_LIKE, WHEN)
+        };
+        assert!(crossed.verify().is_err());
+    }
+
+    #[test]
+    fn a_retraction_that_does_not_say_it_is_one_is_refused() {
+        // The marker is checked as part of verification rather than left to the parse: a
+        // record that verifies under this domain while claiming to be something else is
+        // one whose author and reader disagree about what was signed.
+        let mut r = withdrawn(KIND_LIKE, WHEN);
+        assert!(r.verify().is_ok());
+        r.op = "endorse".into();
+        assert!(r.verify().is_err());
+    }
+
+    #[test]
+    fn only_a_strictly_newer_withdrawal_takes_a_gesture_back() {
+        // A withdrawal older than the gesture it names is one the actor changed their
+        // mind about — they endorsed again after sending it — so honouring it would undo
+        // something current with a stale message.
+        let r = withdrawn(KIND_LIKE, WHEN);
+        assert!(r.withdraws("2026-08-11T11:59:59.999Z"));
+        assert!(!r.withdraws("2026-08-11T12:00:00.001Z"));
+        assert!(!r.withdraws(WHEN));
     }
 
     #[test]
