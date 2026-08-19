@@ -148,6 +148,42 @@ pub struct ItemRef {
     pub edited_at: Option<String>,
 }
 
+/// A portal to a post published somewhere else, circulated in one of this identity's
+/// channels.
+///
+/// A reference, never a copy. The item a reader sees is whatever the source author
+/// currently publishes, so an edit shows through — and a retraction shows through as a
+/// gap. That asymmetry is deliberate: continuing to KEEP something its author pulled is
+/// what a library is for, and continuing to BROADCAST it is not.
+///
+/// Addressed by `(did_dht, channel_id, published_at)`, which is this codebase's
+/// logical-post identity — `edit_item` preserves `published_at` while rewriting every
+/// byte-level field, so the address survives an edit for the same reason drift detection,
+/// pin dedup and the engagement subject all key on the same pair.
+///
+/// Carries no key and no object ID, because it carries no bytes: the read capability
+/// comes from the source author's own directory, which is what makes a repost revocable
+/// by the person reposted.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RepostRef {
+    /// The source author's did:dht — the identity whose directory holds the channel's key.
+    #[serde(rename = "didDht")]
+    pub did_dht: String,
+    #[serde(rename = "channelID")]
+    pub channel_id: String,
+    /// The source item's publish time, which is its identity within that channel.
+    #[serde(rename = "publishedAt")]
+    pub published_at: String,
+    /// When it was circulated here. What it sorts by in this channel, and distinct from
+    /// the original's own `published_at`, which is what it sorts by in its own.
+    #[serde(rename = "repostedAt")]
+    pub reposted_at: String,
+    /// The source channel's name as it read when this was made. A display cache so a row
+    /// renders before the portal resolves, never preferred over what a resolve returns.
+    #[serde(rename = "cachedName", skip_serializing_if = "Option::is_none")]
+    pub cached_name: Option<String>,
+}
+
 /// A channel's avatar or cover banner. `mime_type` is stored because Sia's
 /// metadata-via-share is publisher-private, so a reader can't ask what these bytes
 /// are — the manifest has to say.
@@ -188,6 +224,12 @@ pub struct ChannelManifest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
     pub items: Vec<ItemRef>,
+    /// Posts from elsewhere this channel circulates. A sibling array rather than a
+    /// variant of `ItemRef`, because a portal has none of what an item is made of — no
+    /// `item_url`, no type, no bytes — and widening `ItemRef` to hold it would loosen the
+    /// one type every transform here depends on being complete.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reposts: Option<Vec<RepostRef>>,
 }
 
 // --- making and changing a channel ----------------------------------------------
@@ -235,6 +277,7 @@ pub fn create_channel(new: NewChannel, now: &str) -> ChannelManifest {
         cover: new.cover,
         language: None,
         items: Vec::new(),
+        reposts: None,
     }
 }
 
@@ -378,6 +421,50 @@ pub fn append_item(current: &ChannelManifest, item: ItemRef, now: &str) -> Chann
     manifest.published_at = now.to_string();
     manifest.items.insert(0, item);
     manifest
+}
+
+/// Circulate somebody else's post in this channel.
+///
+/// Idempotent in the way the gesture is: a channel already carrying this portal keeps the
+/// one it has, `reposted_at` included, so a repeated click can't quietly move the post in
+/// the channel's ordering. Same reason an endorsement keeps the moment it was made.
+pub fn add_repost(current: &ChannelManifest, repost: RepostRef, now: &str) -> ChannelManifest {
+    let mut manifest = current.clone();
+    manifest.published_at = now.to_string();
+    let reposts = manifest.reposts.get_or_insert_with(Vec::new);
+    if !reposts.iter().any(|r| same_repost(r, &repost)) {
+        reposts.insert(0, repost);
+    }
+    manifest
+}
+
+/// Stop circulating a post here. Nothing to reclaim: a portal never held bytes.
+pub fn remove_repost(
+    current: &ChannelManifest,
+    did_dht: &str,
+    channel_id: &str,
+    published_at: &str,
+    now: &str,
+) -> ChannelManifest {
+    let mut manifest = current.clone();
+    manifest.published_at = now.to_string();
+    if let Some(reposts) = manifest.reposts.as_mut() {
+        reposts.retain(|r| {
+            !(r.did_dht == did_dht && r.channel_id == channel_id && r.published_at == published_at)
+        });
+        // Absent rather than empty, so a channel that never reposted and one that stopped
+        // serialize the same. A manifest is compared for change by stringify-equality.
+        if reposts.is_empty() {
+            manifest.reposts = None;
+        }
+    }
+    manifest
+}
+
+/// Whether two portals name the same post. The address is the triple; `reposted_at` and
+/// the cached name are about this copy of it.
+fn same_repost(a: &RepostRef, b: &RepostRef) -> bool {
+    a.did_dht == b.did_dht && a.channel_id == b.channel_id && a.published_at == b.published_at
 }
 
 /// Retract one published item. Its body and any attachments nothing else references
@@ -644,7 +731,22 @@ mod tests {
             cover: None,
             language: None,
             items,
+            reposts: None,
         }
+    }
+
+    fn repost_at(published_at: &str, reposted_at: &str) -> RepostRef {
+        RepostRef {
+            did_dht: "did:dht:source".to_string(),
+            channel_id: "srcchan".to_string(),
+            published_at: published_at.to_string(),
+            reposted_at: reposted_at.to_string(),
+            cached_name: Some("Their channel".to_string()),
+        }
+    }
+
+    fn repost(published_at: &str) -> RepostRef {
+        repost_at(published_at, NOW)
     }
 
     fn protect(ids: &[&str]) -> HashSet<String> {
@@ -1121,6 +1223,113 @@ mod tests {
     #[test]
     fn retracting_a_channel_that_is_already_gone_enumerates_nothing() {
         let out = enumerate_retract(None, &HashSet::new());
+        assert!(out.object_ids.is_empty());
+        assert!(out.urls.is_empty());
+    }
+
+    // --- reposts ------------------------------------------------------------------
+
+    #[test]
+    fn a_portal_carries_the_names_the_frontend_reads() {
+        let v: Value =
+            serde_json::from_str(&serde_json::to_string(&repost(EARLIER)).unwrap()).unwrap();
+        let mut k: Vec<&str> = v.as_object().unwrap().keys().map(String::as_str).collect();
+        k.sort_unstable();
+        assert_eq!(
+            k,
+            [
+                "cachedName",
+                "channelID",
+                "didDht",
+                "publishedAt",
+                "repostedAt"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_channel_with_no_reposts_omits_the_field() {
+        // Absent, not null and not []: a manifest is compared for change by
+        // stringify-equality, so an empty array where the other side wrote nothing
+        // would read as a change on every pass.
+        let json = serde_json::to_string(&manifest(vec![])).unwrap();
+        assert!(!json.contains("reposts"));
+    }
+
+    #[test]
+    fn a_portal_round_trips_through_json_unchanged() {
+        let before = repost(EARLIER);
+        let after: RepostRef =
+            serde_json::from_str(&serde_json::to_string(&before).unwrap()).unwrap();
+        assert_eq!(before, after);
+    }
+
+    #[test]
+    fn reposting_puts_the_portal_first_and_bumps_the_manifest() {
+        let before = manifest(vec![]);
+        let after = add_repost(&before, repost(EARLIER), NOW);
+        let reposts = after.reposts.as_ref().unwrap();
+        assert_eq!(reposts.len(), 1);
+        assert_eq!(reposts[0].published_at, EARLIER);
+        assert_eq!(after.published_at, NOW);
+    }
+
+    #[test]
+    fn reposting_the_same_post_twice_keeps_the_first_one() {
+        // The gesture is a checkbox, so a repeat is a no-op the user believes they made.
+        // Replacing would move the post in this channel's ordering behind their back.
+        let first = add_repost(&manifest(vec![]), repost_at(EARLIER, EARLIER), EARLIER);
+        let mut again = repost_at(EARLIER, NOW);
+        again.cached_name = Some("Renamed".to_string());
+        let after = add_repost(&first, again, NOW);
+
+        let reposts = after.reposts.as_ref().unwrap();
+        assert_eq!(reposts.len(), 1);
+        assert_eq!(reposts[0].reposted_at, EARLIER);
+    }
+
+    #[test]
+    fn two_posts_from_one_channel_are_two_portals() {
+        // The address is the whole triple, so the same source channel can be reposted
+        // more than once.
+        let first = add_repost(&manifest(vec![]), repost_at(EARLIER, EARLIER), EARLIER);
+        let after = add_repost(&first, repost_at(NOW, NOW), NOW);
+        assert_eq!(after.reposts.as_ref().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn removing_a_portal_leaves_the_others() {
+        let a = add_repost(&manifest(vec![]), repost_at(EARLIER, EARLIER), EARLIER);
+        let b = add_repost(&a, repost_at(NOW, NOW), NOW);
+        let after = remove_repost(&b, "did:dht:source", "srcchan", EARLIER, NOW);
+
+        let reposts = after.reposts.as_ref().unwrap();
+        assert_eq!(reposts.len(), 1);
+        assert_eq!(reposts[0].published_at, NOW);
+    }
+
+    #[test]
+    fn removing_the_last_portal_leaves_the_field_absent() {
+        let before = add_repost(&manifest(vec![]), repost_at(EARLIER, EARLIER), EARLIER);
+        let after = remove_repost(&before, "did:dht:source", "srcchan", EARLIER, NOW);
+        assert!(after.reposts.is_none());
+        assert!(!serde_json::to_string(&after).unwrap().contains("reposts"));
+    }
+
+    #[test]
+    fn removing_a_portal_that_is_not_there_changes_nothing_but_the_stamp() {
+        let before = add_repost(&manifest(vec![]), repost_at(EARLIER, EARLIER), EARLIER);
+        let after = remove_repost(&before, "did:dht:someone-else", "srcchan", EARLIER, NOW);
+        assert_eq!(after.reposts, before.reposts);
+        assert_eq!(after.published_at, NOW);
+    }
+
+    #[test]
+    fn a_portal_holds_no_bytes_to_reclaim() {
+        // The property the whole reference model rests on. A retract enumerates what a
+        // channel was paying to store, and a portal never paid for anything.
+        let before = add_repost(&manifest(vec![]), repost_at(EARLIER, EARLIER), EARLIER);
+        let out = enumerate_retract(Some(&before), &HashSet::new());
         assert!(out.object_ids.is_empty());
         assert!(out.urls.is_empty());
     }

@@ -1,4 +1,5 @@
 import {
+  manifest_add_repost,
   manifest_append_item,
   manifest_build_item,
   manifest_create_channel,
@@ -7,6 +8,7 @@ import {
   manifest_edit_item,
   manifest_enumerate_retract,
   manifest_remove_attachment,
+  manifest_remove_repost,
 } from '../../crates/pin-core/pkg/pin_core.js'
 import {
   channelKeyFromBase64,
@@ -23,6 +25,7 @@ import type {
   Facet,
   ItemRef,
   ItemType,
+  RepostRef,
 } from './types'
 import { ensureWasm } from './wasm'
 
@@ -324,6 +327,42 @@ export async function appendItemToChannel(
     manifest_append_item(
       JSON.stringify(current),
       JSON.stringify(itemRef),
+      stamp(),
+    ),
+  )
+}
+
+// Circulate somebody else's post in one of this identity's channels, as a portal to
+// it rather than a copy of it. `repostedAt` is what the portal sorts by here, so the
+// caller stamps it — the same split as appendItemToChannel, which takes an item that
+// already knows when it was published.
+export async function repostToChannel(
+  current: ChannelManifest,
+  repost: RepostRef,
+): Promise<ChannelManifest> {
+  await ensureWasm()
+  return JSON.parse(
+    manifest_add_repost(
+      JSON.stringify(current),
+      JSON.stringify(repost),
+      stamp(),
+    ),
+  )
+}
+
+// Stop circulating a post here. Nothing to reclaim — a portal never held bytes, which
+// is why this returns a manifest rather than the orphan list every other removal does.
+export async function removeRepostFromChannel(
+  current: ChannelManifest,
+  target: { didDht: string; channelID: string; publishedAt: string },
+): Promise<ChannelManifest> {
+  await ensureWasm()
+  return JSON.parse(
+    manifest_remove_repost(
+      JSON.stringify(current),
+      target.didDht,
+      target.channelID,
+      target.publishedAt,
       stamp(),
     ),
   )

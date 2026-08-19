@@ -263,6 +263,11 @@ export function list_all(): Promise<string>;
 export function list_records(collection: string): Promise<any>;
 
 /**
+ * Circulate somebody else's post in this channel, as a reference to it.
+ */
+export function manifest_add_repost(manifest_json: string, repost_json: string, now: string): string;
+
+/**
  * Add a newly published item to the front of the channel.
  */
 export function manifest_append_item(manifest_json: string, item_json: string, now: string): string;
@@ -307,6 +312,11 @@ export function manifest_enumerate_retract(manifest_json: string, protected_obje
  * Retract a single attachment, leaving the post and its other files in place.
  */
 export function manifest_remove_attachment(manifest_json: string, item_id: string, attachment_url: string, protected_object_ids: string[], now: string): string;
+
+/**
+ * Stop circulating a post here. Nothing to reclaim: a portal never held bytes.
+ */
+export function manifest_remove_repost(manifest_json: string, did_dht: string, channel_id: string, published_at: string, now: string): string;
 
 /**
  * Open (create) the in-memory doc engine, with the namespace + author derived from
@@ -756,6 +766,7 @@ export interface InitOutput {
     readonly import_channel_doc: (a: number, b: number, c: any) => any;
     readonly list_all: () => any;
     readonly list_records: (a: number, b: number) => any;
+    readonly manifest_add_repost: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
     readonly manifest_append_item: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
     readonly manifest_build_item: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
     readonly manifest_create_channel: (a: number, b: number, c: number, d: number) => [number, number, number, number];
@@ -764,6 +775,7 @@ export interface InitOutput {
     readonly manifest_edit_item: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number, number, number];
     readonly manifest_enumerate_retract: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly manifest_remove_attachment: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number, number, number];
+    readonly manifest_remove_repost: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number, number, number];
     readonly open: (a: number, b: number) => any;
     readonly open_channel_doc: (a: number, b: number) => any;
     readonly pinned_collection: () => [number, number];

@@ -1383,6 +1383,40 @@ pub fn manifest_append_item(
     out(&manifest)
 }
 
+/// Circulate somebody else's post in this channel, as a reference to it.
+#[wasm_bindgen]
+pub fn manifest_add_repost(
+    manifest_json: &str,
+    repost_json: &str,
+    now: &str,
+) -> Result<String, JsValue> {
+    let repost: pin_manifest::RepostRef = serde_json::from_str(repost_json)
+        .map_err(|e| JsValue::from_str(&format!("repost is not readable: {e}")))?;
+    out(&pin_manifest::add_repost(
+        &manifest_in(manifest_json)?,
+        repost,
+        now,
+    ))
+}
+
+/// Stop circulating a post here. Nothing to reclaim: a portal never held bytes.
+#[wasm_bindgen]
+pub fn manifest_remove_repost(
+    manifest_json: &str,
+    did_dht: &str,
+    channel_id: &str,
+    published_at: &str,
+    now: &str,
+) -> Result<String, JsValue> {
+    out(&pin_manifest::remove_repost(
+        &manifest_in(manifest_json)?,
+        did_dht,
+        channel_id,
+        published_at,
+        now,
+    ))
+}
+
 /// Retract one item, returning the next manifest and the bytes nothing else references.
 #[wasm_bindgen]
 pub fn manifest_delete_item(

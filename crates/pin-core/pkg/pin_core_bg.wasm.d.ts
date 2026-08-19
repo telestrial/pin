@@ -36,6 +36,7 @@ export const get_record: (a: number, b: number, c: number, d: number) => any;
 export const import_channel_doc: (a: number, b: number, c: any) => any;
 export const list_all: () => any;
 export const list_records: (a: number, b: number) => any;
+export const manifest_add_repost: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
 export const manifest_append_item: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
 export const manifest_build_item: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
 export const manifest_create_channel: (a: number, b: number, c: number, d: number) => [number, number, number, number];
@@ -44,6 +45,7 @@ export const manifest_edit_channel: (a: number, b: number, c: number, d: number,
 export const manifest_edit_item: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number, number, number];
 export const manifest_enumerate_retract: (a: number, b: number, c: number, d: number) => [number, number, number, number];
 export const manifest_remove_attachment: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number, number, number];
+export const manifest_remove_repost: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number, number, number];
 export const open: (a: number, b: number) => any;
 export const open_channel_doc: (a: number, b: number) => any;
 export const pinned_collection: () => [number, number];

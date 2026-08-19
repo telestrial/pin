@@ -96,6 +96,31 @@ export type ItemRef = {
 // Sia per-object key in its fragment; mimeType is stored because Sia
 // metadata-via-share is publisher-private cross-account, so the reader needs
 // it to render; contentHash is the CIDv1 cache key (stable across repack).
+// A portal to a post published somewhere else, circulated in one of this
+// identity's channels.
+//
+// A reference, never a copy. What a reader sees is whatever the source author
+// currently publishes, so an edit shows through — and a retraction shows through
+// as a gap. That asymmetry is deliberate: continuing to KEEP something its author
+// pulled is what a library is for, continuing to BROADCAST it is not.
+//
+// Addressed by (didDht, channelID, publishedAt) — this codebase's logical-post
+// identity, preserved across edits, the same pair drift detection and the
+// engagement subject key on. Carries no K and no objectID because it carries no
+// bytes: the read capability comes from the source author's own directory, which
+// is what makes a repost revocable by the person reposted.
+export type RepostRef = {
+  didDht: string
+  channelID: string
+  publishedAt: string
+  // When it was circulated here — what it sorts by in THIS channel, as distinct
+  // from the original's own publishedAt.
+  repostedAt: string
+  // The source channel's name as it read when this was made. A display cache so a
+  // row renders before the portal resolves; never preferred over a live resolve.
+  cachedName?: string
+}
+
 export type ChannelImage = {
   itemURL: string
   mimeType: string
@@ -138,6 +163,11 @@ export type ChannelManifest = {
   cover?: ChannelImage
   language?: string
   items: ItemRef[]
+  // Posts from elsewhere this channel circulates. A sibling array rather than a
+  // variant of ItemRef: a portal has none of what an item is made of (no itemURL,
+  // no type, no bytes), and widening ItemRef would loosen the one type every
+  // manifest transform depends on being complete.
+  reposts?: RepostRef[]
 }
 
 export type SubscriptionRef = {
