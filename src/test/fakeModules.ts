@@ -72,9 +72,11 @@ function fakePublicKey(seed: Uint8Array): string {
 // faked, because those are the network. Faking the format too would make the cached blob
 // something no other code could open, and a test that checks the cache holds a genuinely
 // sealed manifest would fail against a fake rather than against the code.
+function locatorKeyFor(channelKey: Uint8Array): string {
+  return `loc-${fakePublicKey(channelKey)}`
+}
+
 export function fakeChannelLocatorNativeModule() {
-  const locatorKeyFor = (channelKey: Uint8Array) =>
-    `loc-${fakePublicKey(channelKey)}`
   // A channel's tallies live under their OWN pkarr key, not the manifest's. Modelled
   // that way here too: sharing one key would let a test pass over a arrangement where
   // publishing counts overwrote the pointer to the posts.
@@ -155,6 +157,55 @@ export function publishFakeTallies(
   world.pkarr.set(`eng-${fakePublicKey(channelKey)}`, [
     { name: '_e0', value: `sia://fake/${id}#k=${id}` },
   ])
+}
+
+/** Publish an identity's public directory the way its Curator would, so a test can read
+ *  it back through the path a visitor uses: an unencrypted Sia blob, pointed at by a
+ *  chunked `_dir` record under the did:dht key.
+ *
+ *  Unencrypted for real, because the directory IS public-by-capability — the Sia share
+ *  URL's own fragment is the only key, and that URL is what the pkarr record hands out.
+ *  Only Sia and pkarr are faked. */
+export async function publishFakeDirectory(
+  didDht: string,
+  doc: Record<string, unknown>,
+): Promise<void> {
+  await ensureWasm()
+  const world = getCurrentWorld()
+  const id = world.nextObjectID()
+  world.objects.set(id, {
+    id,
+    bytes: new TextEncoder().encode(JSON.stringify(doc)),
+    createdAt: new Date(),
+  })
+  // Chunked by the REAL Rust splitter, for the same reason the pkarr fake rejoins with
+  // it: the record naming is a contract with whoever reads it, and a hand-written `_dir0`
+  // would be a second definition of that convention living in a test.
+  world.pkarr.set(
+    keyOf(didDht),
+    JSON.parse(
+      pkarr_chunk_txt('_dir', `sia://fake/${id}#k=${id}`),
+    ) as FakeTxt[],
+  )
+}
+
+/** Take a channel's locator off the DHT, the way propagation lag looks to a reader who
+ *  asks too early: the pointer simply is not there. The manifest object is untouched. */
+export function unpublishFakeLocator(channelKey: Uint8Array): void {
+  getCurrentWorld().pkarr.delete(locatorKeyFor(channelKey))
+}
+
+/** Take an identity's directory off the DHT, the way losing the record would. Leaves the
+ *  blob in place: what a visitor cannot do is FIND it. */
+export function unpublishFakeDirectory(didDht: string): void {
+  getCurrentWorld().pkarr.delete(keyOf(didDht))
+}
+
+/** The pkarr key a did:dht names, which is the did with its method prefix taken off. */
+function keyOf(didDht: string): string {
+  return didDht.startsWith('did:dht:')
+    ? didDht.slice('did:dht:'.length)
+    : didDht
 }
 
 export function fakePkarrModule() {
