@@ -35,13 +35,13 @@ const ENDORSE = 'endorse'
 /** What a row shows, and what it can do. */
 export type Engagement = {
   /** Counts by gesture: what the author published, plus this identity's own gesture when
-   *  their fold provably predates it (see {@link showsUncounted}). Zero covers both
-   *  "nobody has" and "no pass has read them yet" — a row shows the same thing for each,
-   *  which is nothing.
+   *  their fold provably predates it (see {@link showsUncounted}), less one it can be
+   *  shown to still include after we took it back (see {@link showsWithdrawn}). Zero
+   *  covers both "nobody has" and "no pass has read them yet" — a row shows the same
+   *  thing for each, which is nothing.
    *
-   *  Not symmetric on withdrawal: taking back a gesture the author HAD already folded
-   *  leaves the count one high until they fold again, because nothing we hold says
-   *  whether their set included us. Unchanged from before this adjustment existed. */
+   *  The two adjustments are mutually exclusive by construction: one needs a record held,
+   *  the other needs none. Neither ever overstates the count. */
   likes: number
   pins: number
   /** Whether THIS identity has liked it: the heart's fill. */
@@ -81,14 +81,63 @@ export function showsUncounted(
   return heldAt > talliedAt
 }
 
+/** Whether the published count still includes a gesture this identity has taken back.
+ *
+ *  The mirror of {@link showsUncounted}, and deliberately the weaker claim of the two.
+ *  Subtracting is only honest with evidence the author's fold actually counted us, and the
+ *  one piece of that evidence a row holds locally is `sampleActors`: it is drawn from the
+ *  same fold as the count, so our own DID appearing there means that count includes us.
+ *  No record held any more, and named in the sample, is a count that is one high.
+ *
+ *  Partial by construction — the sample is five actors — so above that we cannot tell
+ *  whether we were counted, nothing is subtracted, and the row shows what it showed
+ *  before: one high until the author folds again. Sound in both directions, which is the
+ *  point: it never subtracts from a count that didn't include us, and that failure would
+ *  show a row LOWER than the truth over a gesture somebody else made.
+ *
+ *  The complete alternative — remembering the withdrawal locally and subtracting until a
+ *  newer fold arrives — was not taken. It cannot tell a gesture the author counted from
+ *  one whose knock never reached them, so it would read a count too low exactly when
+ *  delivery had failed. A definitive membership test needs an inclusion proof against
+ *  `setRoot`, which is the `audit` verb, and not something a row can do locally. */
+export function showsWithdrawn(
+  myDid: string | null,
+  heldAt: string | null,
+  sampleActors: string[] | undefined,
+): boolean {
+  if (heldAt !== null) return false
+  // Narrows the type rather than deciding anything: a sample of actor DIDs could not name
+  // an absent one either way. It resolves a moment after boot.
+  if (!myDid) return false
+  return (sampleActors ?? []).includes(myDid)
+}
+
+/** What a row shows: the author's count, adjusted by the two things we can prove about it.
+ *
+ *  Floored because the count is another party's data — one naming us in its sample while
+ *  claiming zero must not render as -1. */
+function shown(base: number, added: boolean, removed: boolean): number {
+  return Math.max(0, base + (added ? 1 : 0) - (removed ? 1 : 0))
+}
+
+function sampleOf(tally: Aggregate | null, kind: string): string[] | undefined {
+  return tally?.kinds?.[kind]?.sampleActors
+}
+
 export function useEngagement(item: EndorsedItem): Engagement {
   const storedKeyHex = useAuthStore((s) => s.storedKeyHex)
+  // Read rather than derived: whether a published count counts us is a question about our
+  // own DID, and the sample answers it by naming actors.
+  const myDid = useAuthStore((s) => s.myDidDht)
   const [tally, setTally] = useState<Aggregate | null>(null)
   const [liked, setLiked] = useState(false)
   const [busy, setBusy] = useState(false)
   // Gestures this identity has made that the published count can't have seen yet, so a
   // row can show its own contribution while the author's fold catches up.
   const [mine, setMine] = useState({ like: false, pin: false })
+  // Gestures taken back that the published count can be shown to still include, so a row
+  // can drop its own contribution while the author's fold catches up.
+  const [withdrawn, setWithdrawn] = useState({ like: false, pin: false })
 
   // Destructured so the effect depends on the item's identity rather than on the object,
   // which callers rebuild every render.
@@ -117,6 +166,10 @@ export function useEngagement(item: EndorsedItem): Engagement {
         setMine({
           like: showsUncounted(likedAt, counts?.updatedAt),
           pin: showsUncounted(pinnedAt, counts?.updatedAt),
+        })
+        setWithdrawn({
+          like: showsWithdrawn(myDid, likedAt, sampleOf(counts, 'like')),
+          pin: showsWithdrawn(myDid, pinnedAt, sampleOf(counts, 'pin')),
         })
       } catch {
         // The engine may not be open yet, or a record not downloaded. The next change
@@ -155,7 +208,7 @@ export function useEngagement(item: EndorsedItem): Engagement {
       cancelled = true
       unsub()
     }
-  }, [storedKeyHex, channelID, publishedAt, contentHash, attachment])
+  }, [storedKeyHex, myDid, channelID, publishedAt, contentHash, attachment])
 
   const toggleLike = useCallback(() => {
     if (!storedKeyHex || busy) return
@@ -172,6 +225,10 @@ export function useEngagement(item: EndorsedItem): Engagement {
     // A record written now is stamped now, so it is certainly newer than any tally that
     // exists — and having withdrawn one, there is nothing of ours left to add.
     setMine((m) => ({ ...m, like: next }))
+    // The subtraction is deliberately NOT optimistic. Deleting the record is a local doc
+    // write, so the change feed announces it and `refresh` re-reads within a tick — and
+    // the heart has already emptied, so the gesture doesn't read as failed in the way an
+    // unmoved count would. One less piece of state that can disagree with the doc.
     setBusy(true)
     void (async () => {
       try {
@@ -204,8 +261,8 @@ export function useEngagement(item: EndorsedItem): Engagement {
   ])
 
   return {
-    likes: countOf(tally, 'like') + (mine.like ? 1 : 0),
-    pins: countOf(tally, 'pin') + (mine.pin ? 1 : 0),
+    likes: shown(countOf(tally, 'like'), mine.like, withdrawn.like),
+    pins: shown(countOf(tally, 'pin'), mine.pin, withdrawn.pin),
     liked,
     toggleLike,
     busy,

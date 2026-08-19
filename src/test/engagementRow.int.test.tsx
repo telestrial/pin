@@ -20,6 +20,7 @@ import {
 } from '../../crates/pin-core/pkg/pin_core.js'
 import { EngagementRow } from '../components/engagement/EngagementRow'
 import type { ItemRef } from '../core/types'
+import { useAuthStore } from '../stores/auth'
 import { fakeDocStore as docStore } from './fakeModules'
 import {
   createFakeApp,
@@ -48,14 +49,25 @@ const INPUT = {
   channel: { authorHandle: '', channelID: CHANNEL_ID, name: 'A channel' },
 }
 
-/** Put counts in the cache the way the Curator's loops would. */
-function cacheCounts(kinds: Record<string, number>) {
+/** This identity's own did:dht, which the fake harness doesn't derive. Production sets it
+ *  from the AppKey a moment after connect, so a row normally knows its own DID; without it
+ *  a published sample can't be read as naming us. */
+const ME = 'did:dht:me'
+
+/** Put counts in the cache the way the Curator's loops would. `samples` is the author's
+ *  published sample of who is in each backing set — five actors at most in a real fold, and
+ *  PER KIND, because a sample shared across gestures would make them interchangeable and
+ *  hide a subtraction applied to the wrong one. */
+function cacheCounts(
+  kinds: Record<string, number>,
+  samples: Record<string, string[]> = {},
+) {
   const subject = engagement_subject(CHANNEL_ID, PUBLISHED_AT, undefined)
   const aggregate = {
     kinds: Object.fromEntries(
       Object.entries(kinds).map(([kind, count]) => [
         kind,
-        { count, setRoot: `root-${kind}`, sampleActors: [] },
+        { count, setRoot: `root-${kind}`, sampleActors: samples[kind] ?? [] },
       ]),
     ),
     updatedAt: PUBLISHED_AT,
@@ -100,6 +112,70 @@ describe('integration: the engagement row', () => {
       'title',
       expect.stringMatching(/pin|retract/i),
     )
+  })
+
+  it('drops its own gesture off a count that still names it', async () => {
+    // The gap this closes: taking back a gesture the author had already folded used to
+    // leave their count one high on your own screen until they folded again.
+    mountAs(
+      createFakeApp().createAccount({
+        did: 'did:plc:reader3',
+        handle: 'reader3.test',
+      }),
+    )
+    useAuthStore.setState({ myDidDht: ME })
+    // Named in the like's sample and holding no record: the author counted us, and we
+    // have since taken it back. Deliberately NOT named in the pin's — one subtraction due
+    // and one not is what makes the two gestures distinguishable, so a subtraction applied
+    // to the wrong one fails here instead of leaving a row that looks entirely plausible.
+    cacheCounts({ like: 3, pin: 2 }, { like: [ME], pin: ['did:dht:someone'] })
+
+    render(<EngagementRow input={INPUT} />)
+
+    // Two 2s: the like count came down to meet the pin count, which is untouched.
+    // `getByText` would throw on the pair, which is itself the shape being asserted.
+    await waitFor(() => expect(screen.getAllByText('2')).toHaveLength(2))
+    expect(screen.queryByText('3')).not.toBeInTheDocument()
+    expect(screen.queryByText('1')).not.toBeInTheDocument()
+  })
+
+  it('leaves a count alone when the sample cannot say whether it counted us', async () => {
+    mountAs(
+      createFakeApp().createAccount({
+        did: 'did:plc:reader4',
+        handle: 'reader4.test',
+      }),
+    )
+    useAuthStore.setState({ myDidDht: ME })
+    // Above five endorsements we are not in the sample, so absence from it is evidence of
+    // nothing. Showing one high is the safe direction; subtracting here would render a
+    // count LOWER than the truth over somebody else's gesture.
+    cacheCounts({ like: 3 }, { like: ['did:dht:someone'] })
+
+    render(<EngagementRow input={INPUT} />)
+
+    await waitFor(() => expect(screen.getByText('3')).toBeInTheDocument())
+  })
+
+  it('never renders a negative count from a tally that contradicts itself', async () => {
+    // A count is another party's data. One naming us in its sample while claiming zero
+    // cannot both be true, and the subtraction must not turn it into a "-1".
+    mountAs(
+      createFakeApp().createAccount({
+        did: 'did:plc:reader5',
+        handle: 'reader5.test',
+      }),
+    )
+    useAuthStore.setState({ myDidDht: ME })
+    cacheCounts({ like: 0 }, { like: [ME] })
+
+    render(<EngagementRow input={INPUT} />)
+
+    await waitFor(() =>
+      expect(screen.getByTitle(/^Like$/i)).toBeInTheDocument(),
+    )
+    expect(screen.queryByText('-1')).not.toBeInTheDocument()
+    expect(screen.queryByText('0')).not.toBeInTheDocument()
   })
 
   it('shows nothing at all where there is no count', async () => {
