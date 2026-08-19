@@ -146,6 +146,24 @@ export async function writeEndorsement(
   return true
 }
 
+/** When this identity's own endorsement of an item was made, or null when it holds none.
+ *
+ *  Presence and time in one read, because a row wants both: whether to fill the gesture,
+ *  and whether the author's published count can have seen it yet. A record that won't
+ *  parse reads as absent, the same as everywhere else here. */
+export async function heldEndorsedAt(
+  kind: EndorsementKind,
+  item: EndorsedItem,
+): Promise<string | null> {
+  const [coll, rkey] = await Promise.all([
+    collection(),
+    endorsementRkey(kind, item),
+  ])
+  const held = decodeHeld(await getRecord(coll, rkey))
+  if (!held) return null
+  return typeof held.createdAt === 'string' ? held.createdAt : ''
+}
+
 /** A stored record, or null when there is none or it won't parse. Unreadable counts as
  *  absent: better to rewrite a record we can't verify than to leave one we can't account
  *  for in a count. */
