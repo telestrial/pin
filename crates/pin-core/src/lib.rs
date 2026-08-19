@@ -797,6 +797,7 @@ pub async fn start_deliver_loop(
             std::time::Duration::from_secs(cadence_secs as u64),
             std::time::Duration::from_secs(retry_secs as u64),
             std::time::Duration::from_secs(settle_secs as u64),
+            || js_sys::Date::new_0().to_iso_string().into(),
             |result| {
                 let report = match result {
                     Ok(o) => serde_json::json!({
@@ -805,6 +806,8 @@ pub async fn start_deliver_loop(
                         "unreachable": o.unreachable,
                         "noTarget": o.no_target,
                         "own": o.own,
+                        "retracted": o.retracted,
+                        "retractFailed": o.retract_failed,
                         "dropped": o.dropped,
                     })
                     .to_string(),

@@ -1283,6 +1283,7 @@ pub async fn curator_start_deliver(
             DELIVER_CADENCE,
             DELIVER_RETRY,
             DELIVER_SETTLE,
+            now_iso,
             |result| match result {
                 // Quiet when everything has already been delivered, which is the steady
                 // state. Reported when something moved or is still outstanding.
@@ -1290,10 +1291,23 @@ pub async fn curator_start_deliver(
                     // `no_target` is reported too: an endorsement with nobody to knock is
                     // the quietest possible failure — the loop is running, finding work,
                     // and doing nothing with it — so a pass that hits one has to say so.
-                    if o.delivered > 0 || o.unreachable > 0 || o.dropped > 0 || o.no_target > 0 {
+                    if o.delivered > 0
+                        || o.unreachable > 0
+                        || o.dropped > 0
+                        || o.no_target > 0
+                        || o.retracted > 0
+                        || o.retract_failed > 0
+                    {
                         println!(
-                            "curator deliver: delivered {} already {} unreachable {} no-target {} own {} dropped {}",
-                            o.delivered, o.already, o.unreachable, o.no_target, o.own, o.dropped
+                            "curator deliver: delivered {} already {} unreachable {} no-target {} own {} | withdrawn: told {} unreachable {} forgotten {}",
+                            o.delivered,
+                            o.already,
+                            o.unreachable,
+                            o.no_target,
+                            o.own,
+                            o.retracted,
+                            o.retract_failed,
+                            o.dropped
                         );
                     }
                 }
@@ -1342,7 +1356,7 @@ pub async fn curator_deliver_probe(
         app_key,
     };
     let outcome = sia
-        .run(move |_| async move { pin_curator::deliver_once(&ctx, &own_did).await })
+        .run(move |_| async move { pin_curator::deliver_once(&ctx, &own_did, &now_iso()).await })
         .await?;
     serde_json::to_string(&outcome).map_err(|e| format!("encode: {e}"))
 }
