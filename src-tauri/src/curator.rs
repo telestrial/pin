@@ -1199,20 +1199,29 @@ pub async fn curator_start_engagement(
                         + o.knocks_rejected
                         + o.knocks_not_ours
                         + o.stale_knocks;
+                    // Withdrawals likewise, and for the same reason: one arriving is the
+                    // only way an out-of-graph count ever comes down.
+                    let withdrawals = o.retractions_applied
+                        + o.retractions_rejected
+                        + o.retractions_not_ours
+                        + o.retractions_ignored;
                     if o.added > 0
                         || o.withdrawn > 0
                         || o.unreachable > 0
                         || o.rejected > 0
                         || knocks > 0
+                        || withdrawals > 0
                         || o.published > 0
                         || o.publish_failed > 0
                     {
                         println!(
-                            "curator engagement: reached {} unreachable {} added {} withdrawn {} tallies {} cleared {} rejected {} not-ours {} published {} publish-failed {} | knocks: accepted {} rejected {} not-ours {} stale {}",
+                            "curator engagement: reached {} unreachable {} added {} withdrawn {} tallies {} cleared {} rejected {} not-ours {} published {} publish-failed {} | knocks: accepted {} rejected {} not-ours {} stale {} | withdrawals: applied {} rejected {} not-ours {} ignored {}",
                             o.reached, o.unreachable, o.added, o.withdrawn, o.tallies,
                             o.cleared, o.rejected, o.not_ours, o.published,
                             o.publish_failed, o.knocked, o.knocks_rejected,
-                            o.knocks_not_ours, o.stale_knocks
+                            o.knocks_not_ours, o.stale_knocks, o.retractions_applied,
+                            o.retractions_rejected, o.retractions_not_ours,
+                            o.retractions_ignored
                         );
                     }
                 }

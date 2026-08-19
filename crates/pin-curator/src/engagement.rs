@@ -53,7 +53,7 @@ use iroh_docs::{
     api::{Doc, DocsApi},
     AuthorId, Capability, NamespaceSecret,
 };
-use pin_engagement::{Aggregate, Endorsement};
+use pin_engagement::{Aggregate, Endorsement, Retraction};
 
 use crate::{read_record, read_settings, SettingsView};
 
@@ -119,6 +119,20 @@ pub struct EngagementOutcome {
     pub knocks_rejected: usize,
     /// Knocks about a subject this identity doesn't publish.
     pub knocks_not_ours: usize,
+    /// Held records removed because their actor said so. The out-of-graph half of a
+    /// withdrawal: `withdrawn` covers a record gone from a directory we READ, which never
+    /// happens for an actor whose directory this identity has no reason to read.
+    pub retractions_applied: usize,
+    /// Retractions whose signature or `op` didn't hold up. Counted apart from
+    /// `knocks_rejected` for the same reason that one is counted apart from `rejected`:
+    /// a forged withdrawal is an attempt to take down somebody else's count, which is a
+    /// different thing to watch than a forged endorsement.
+    pub retractions_rejected: usize,
+    /// Retractions about a subject this identity doesn't publish.
+    pub retractions_not_ours: usize,
+    /// Retractions there was nothing to apply: no record held, older than what is held, or
+    /// contradicted by the actor's own directory this pass. All ordinary, none an error.
+    pub retractions_ignored: usize,
     /// Channels whose tallies were republished to Sia and the DHT — the floor rung, and
     /// the only copy a reader without a live replica ever sees. Zero on a quiet pass:
     /// the publish is fingerprinted on the counts themselves.
@@ -493,6 +507,88 @@ fn knock_verdict(
     }
 }
 
+/// What arrived in a knock. One route carries both, so the receiver has to say which.
+enum Knocked {
+    Endorse(Endorsement),
+    Retract(Retraction),
+}
+
+/// Which of the two a knock's payload is.
+///
+/// Decided by the `op` field, which exists for exactly this and nothing else — NOT by
+/// trying one parse and falling back to the other. The shapes do happen to be mutually
+/// exclusive today (an endorsement requires `version`, a retraction requires `op`), but
+/// that is a property of two structs that will keep changing, and this codebase has been
+/// bitten twice by inferring meaning from which fields happened to be present.
+fn classify_knock(value: serde_json::Value) -> Option<Knocked> {
+    let retraction = value.get("op").and_then(|v| v.as_str()) == Some(pin_engagement::OP_RETRACT);
+    if retraction {
+        serde_json::from_value::<Retraction>(value)
+            .ok()
+            .map(Knocked::Retract)
+    } else {
+        serde_json::from_value::<Endorsement>(value)
+            .ok()
+            .map(Knocked::Endorse)
+    }
+}
+
+/// What a knocked withdrawal is worth once it has been looked at.
+#[derive(Debug, PartialEq, Eq)]
+enum RetractionVerdict {
+    /// Signed, ours, and newer than the record it names — remove it.
+    Accept,
+    /// Not signed by the identity it names, or not claiming to be a withdrawal.
+    Rejected,
+    /// About something this identity doesn't publish.
+    NotOurs,
+    /// Nothing to remove: no record held under that key at all.
+    Nothing,
+    /// A record IS held, but this doesn't withdraw it — it is older, so the actor made the
+    /// gesture again afterwards, or the actor's own directory still lists it.
+    Stale,
+}
+
+/// Whether a knocked withdrawal should remove the record it names.
+///
+/// Same order as `knock_verdict` and for the same reasons, with one difference at the end:
+/// a withdrawal is only worth anything against a record actually held, so "nothing held"
+/// is its own answer rather than the open door it is for an endorsement.
+///
+/// `crawled` is whether this pass read that very endorsement from the actor's own
+/// directory. If it did, the withdrawal is ignored — not because a directory is more
+/// truthful than a signed message, but because `found` is written back at the end of this
+/// pass, so honouring the push here would delete a record this same pass then restores.
+/// Their directory catching up is what makes the withdrawal stick, and for the actors this
+/// exists to serve there is no directory being read at all.
+fn retraction_verdict(
+    record: &Retraction,
+    subjects: &SubjectTable,
+    crawled: bool,
+    held_created_at: Option<&str>,
+) -> RetractionVerdict {
+    if record.verify().is_err() {
+        return RetractionVerdict::Rejected;
+    }
+    if !subjects.contains_key(&record.subject) {
+        return RetractionVerdict::NotOurs;
+    }
+    if crawled {
+        return RetractionVerdict::Stale;
+    }
+    match held_created_at {
+        None => RetractionVerdict::Nothing,
+        Some(held) if record.withdraws(held) => RetractionVerdict::Accept,
+        Some(_) => RetractionVerdict::Stale,
+    }
+}
+
+/// The log key a withdrawal names. Same three coordinates an endorsement is keyed by, so
+/// the two must agree — a withdrawal that computed a different key would remove nothing.
+fn retraction_log_key(record: &Retraction) -> String {
+    pin_derive::engagement_log_rkey(&record.subject, &record.kind, &record.actor)
+}
+
 /// One pass: read the graph, take what was knocked through, hold what's verified and
 /// ours, withdraw what's gone, and republish every tally that moved.
 /// `crawl` says whether to go and read the graph's directories this pass.
@@ -627,34 +723,84 @@ pub async fn engagement_once(
 
     // Then what was knocked through. After the crawl, so a record read from its actor's
     // own directory this pass is already in `found` and takes precedence.
+    // Records a withdrawal removed, keyed the way the log is, with the subject whose tally
+    // then has to move. Kept rather than acted on twice: the reconcile below walks the same
+    // held list and must not count a second withdrawal for what has already gone.
+    let mut retracted: BTreeMap<String, String> = BTreeMap::new();
     for knock in knocks {
-        let Ok(record) = serde_json::from_value::<Endorsement>(knock.record) else {
-            outcome.knocks_rejected += 1;
-            continue;
-        };
-        let key = log_key(&record);
-        let held_at = held_created_at(ctx, &key).await;
-        match knock_verdict(
-            &record,
-            &subjects,
-            found.contains_key(&key),
-            held_at.as_deref(),
-        ) {
-            KnockVerdict::Accept => {
-                found.insert(key, record);
-                outcome.knocked += 1;
+        match classify_knock(knock.record) {
+            Some(Knocked::Endorse(record)) => {
+                let key = log_key(&record);
+                let held_at = held_created_at(ctx, &key).await;
+                match knock_verdict(
+                    &record,
+                    &subjects,
+                    found.contains_key(&key),
+                    held_at.as_deref(),
+                ) {
+                    KnockVerdict::Accept => {
+                        found.insert(key, record);
+                        outcome.knocked += 1;
+                    }
+                    KnockVerdict::Rejected => outcome.knocks_rejected += 1,
+                    KnockVerdict::NotOurs => outcome.knocks_not_ours += 1,
+                    KnockVerdict::Stale => outcome.stale_knocks += 1,
+                }
             }
-            KnockVerdict::Rejected => outcome.knocks_rejected += 1,
-            KnockVerdict::NotOurs => outcome.knocks_not_ours += 1,
-            KnockVerdict::Stale => outcome.stale_knocks += 1,
+            Some(Knocked::Retract(record)) => {
+                let key = retraction_log_key(&record);
+                let held_at = held_created_at(ctx, &key).await;
+                match retraction_verdict(
+                    &record,
+                    &subjects,
+                    found.contains_key(&key),
+                    held_at.as_deref(),
+                ) {
+                    RetractionVerdict::Accept => {
+                        // A failed delete leaves the record held and the count high, and
+                        // there is nothing here to retry with: the sender's mark went when
+                        // the knock landed. The crawl is the backstop where there is one,
+                        // and out of graph there isn't — so it is counted as ignored rather
+                        // than applied, which is at least an honest number.
+                        if crate::delete_record(
+                            &ctx.doc,
+                            ctx.author_id,
+                            pin_derive::ENGAGEMENT_LOG_COLLECTION,
+                            &key,
+                        )
+                        .await
+                        .is_ok()
+                        {
+                            retracted.insert(key, record.subject.clone());
+                            outcome.retractions_applied += 1;
+                        } else {
+                            outcome.retractions_ignored += 1;
+                        }
+                    }
+                    RetractionVerdict::Rejected => outcome.retractions_rejected += 1,
+                    RetractionVerdict::NotOurs => outcome.retractions_not_ours += 1,
+                    RetractionVerdict::Nothing | RetractionVerdict::Stale => {
+                        outcome.retractions_ignored += 1
+                    }
+                }
+            }
+            // A payload that is neither. Counted with the knocks because that is what it
+            // arrived as, and there is no telling which of the two it was trying to be.
+            None => outcome.knocks_rejected += 1,
         }
     }
 
     // Reconcile the held log against what this pass saw. `held` was listed before the
     // crawl, and nothing has written to that collection since.
     let mut touched: BTreeSet<String> = found.values().map(|r| r.subject.clone()).collect();
+    // A withdrawal moves a count the same way anything else does: only a re-fold brings it
+    // down, and only a touched subject is re-folded.
+    touched.extend(retracted.values().cloned());
     let found_keys: BTreeSet<String> = found.keys().cloned().collect();
     for rkey in &held {
+        if retracted.contains_key(rkey) {
+            continue;
+        }
         let Some(subject) = withdrawal(rkey, &found_keys, &reached) else {
             continue;
         };
@@ -1194,6 +1340,146 @@ mod tests {
         assert_eq!(
             knock_verdict(&knocked(SUBJECT, WHEN), &ours(SUBJECT), false, Some(WHEN)),
             KnockVerdict::Stale
+        );
+    }
+
+    // --- what a withdrawal is worth ----------------------------------------------
+
+    fn withdrawn_of(subject: &str, when: &str) -> Retraction {
+        Retraction::sign(&SEED, pin_engagement::KIND_LIKE, subject, when).unwrap()
+    }
+
+    fn withdrawn(when: &str) -> Retraction {
+        withdrawn_of(SUBJECT, when)
+    }
+
+    #[test]
+    fn a_signed_withdrawal_of_something_we_hold_is_applied() {
+        // The gap this closes: out of graph, delivery is the only thing that ever ADDED
+        // the count, so without this nothing can ever take it away and an unlike is
+        // invisible to that author permanently.
+        assert_eq!(
+            retraction_verdict(
+                &withdrawn("2026-08-16T13:00:00.000Z"),
+                &ours(SUBJECT),
+                false,
+                Some(WHEN)
+            ),
+            RetractionVerdict::Accept
+        );
+    }
+
+    #[test]
+    fn a_forged_withdrawal_is_rejected() {
+        // Worth more to an attacker than a forged endorsement: this one takes somebody
+        // else's count down.
+        let mut forged = withdrawn("2026-08-16T13:00:00.000Z");
+        forged.sig = pin_crypto::b64_encode(&[0u8; 64]);
+        assert_eq!(
+            retraction_verdict(&forged, &ours(SUBJECT), false, Some(WHEN)),
+            RetractionVerdict::Rejected
+        );
+    }
+
+    #[test]
+    fn a_withdrawal_that_does_not_say_it_is_one_is_rejected() {
+        // `op` is outside the signed bytes, so the signature still holds here and only the
+        // check inside `verify` stands between us and acting on a record whose author and
+        // reader disagree about what it was.
+        let mut mislabelled = withdrawn("2026-08-16T13:00:00.000Z");
+        mislabelled.op = "endorse".into();
+        assert_eq!(
+            retraction_verdict(&mislabelled, &ours(SUBJECT), false, Some(WHEN)),
+            RetractionVerdict::Rejected
+        );
+    }
+
+    #[test]
+    fn a_withdrawal_about_somebody_elses_item_is_not_ours() {
+        // Signed over the other subject, not swapped afterwards: `subject` is inside the
+        // signed bytes, so mutating it makes this a forgery and verification — which comes
+        // first, deliberately — answers before ownership is ever considered.
+        assert_eq!(
+            retraction_verdict(
+                &withdrawn_of("other", "2026-08-16T13:00:00.000Z"),
+                &ours(SUBJECT),
+                false,
+                Some(WHEN)
+            ),
+            RetractionVerdict::NotOurs
+        );
+    }
+
+    #[test]
+    fn a_withdrawal_with_nothing_held_removes_nothing() {
+        // The ordinary duplicate: the sender retries until the knock lands, and the second
+        // one arrives after the first already took the record out.
+        assert_eq!(
+            retraction_verdict(
+                &withdrawn("2026-08-16T13:00:00.000Z"),
+                &ours(SUBJECT),
+                false,
+                None
+            ),
+            RetractionVerdict::Nothing
+        );
+    }
+
+    #[test]
+    fn a_withdrawal_older_than_the_gesture_it_names_is_ignored() {
+        // They took it back and then did it again. Honouring the older message would undo
+        // a gesture that currently stands.
+        assert_eq!(
+            retraction_verdict(
+                &withdrawn("2026-08-16T11:00:00.000Z"),
+                &ours(SUBJECT),
+                false,
+                Some(WHEN)
+            ),
+            RetractionVerdict::Stale
+        );
+        // Equal is not newer, for the same reason.
+        assert_eq!(
+            retraction_verdict(&withdrawn(WHEN), &ours(SUBJECT), false, Some(WHEN)),
+            RetractionVerdict::Stale
+        );
+    }
+
+    #[test]
+    fn a_withdrawal_the_directory_still_contradicts_is_ignored() {
+        // Not a judgement about which is more truthful: `found` is written back at the end
+        // of this pass, so acting on the push would delete a record this same pass restores.
+        assert_eq!(
+            retraction_verdict(
+                &withdrawn("2026-08-16T13:00:00.000Z"),
+                &ours(SUBJECT),
+                true,
+                Some(WHEN)
+            ),
+            RetractionVerdict::Stale
+        );
+    }
+
+    #[test]
+    fn the_two_kinds_of_knock_are_told_apart_by_what_they_say_they_are() {
+        let endorse = serde_json::to_value(knocked(SUBJECT, WHEN)).unwrap();
+        let retract = serde_json::to_value(withdrawn(WHEN)).unwrap();
+        assert!(matches!(classify_knock(endorse), Some(Knocked::Endorse(_))));
+        assert!(matches!(classify_knock(retract), Some(Knocked::Retract(_))));
+        // And a withdrawal is never read as the thing it withdraws, which is what an
+        // endorsement-first parse with a fallback would eventually get wrong.
+        let mut lying = withdrawn(WHEN);
+        lying.op = "endorse".into();
+        assert!(classify_knock(serde_json::to_value(lying).unwrap()).is_none());
+    }
+
+    #[test]
+    fn a_withdrawal_and_the_gesture_it_withdraws_agree_on_one_log_key() {
+        // If these ever disagreed a withdrawal would verify, be accepted, and remove
+        // nothing — the count would stay up with no failure anywhere to say why.
+        assert_eq!(
+            retraction_log_key(&withdrawn(WHEN)),
+            log_key(&knocked(SUBJECT, WHEN))
         );
     }
 
