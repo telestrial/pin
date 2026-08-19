@@ -1,6 +1,20 @@
 import { describe, expect, it, vi } from 'vitest'
-import { buildHomeFeed, type FetchChannel } from './feed'
-import type { ChannelManifest, ItemRef, SubscriptionRef } from './types'
+import {
+  buildHomeFeed,
+  contributingChannelOf,
+  entriesForManifest,
+  type FetchChannel,
+  feedTimeOf,
+  portalKey,
+  portalsIn,
+  type ResolvedPortalEntry,
+} from './feed'
+import type {
+  ChannelManifest,
+  ItemRef,
+  RepostRef,
+  SubscriptionRef,
+} from './types'
 
 function sub(overrides: Partial<SubscriptionRef> = {}): SubscriptionRef {
   return {
@@ -239,5 +253,192 @@ describe('buildHomeFeed', () => {
       'AAAA',
       true,
     )
+  })
+})
+
+// --- portals ------------------------------------------------------------------
+//
+// A portal is a post from somewhere else appearing in a channel that circulates it,
+// so every question the collation asks has two possible answers — the original's or
+// the circulator's — and each one has a place where only one of them is right.
+
+const SOURCE = 'did:dht:sourceauthor'
+
+function repost(overrides: Partial<RepostRef> = {}): RepostRef {
+  return {
+    didDht: SOURCE,
+    channelID: 'srcchannel000001',
+    publishedAt: '2026-05-01T09:00:00.000Z',
+    repostedAt: '2026-06-01T09:00:00.000Z',
+    ...overrides,
+  }
+}
+
+/** A portal that has been read, as the collation receives it. */
+function resolved(
+  target: RepostRef,
+  overrides: Partial<ResolvedPortalEntry> = {},
+): Record<string, ResolvedPortalEntry> {
+  return {
+    [portalKey(target)]: {
+      item: item(target.publishedAt),
+      channel: {
+        authorHandle: '',
+        authorDidDht: target.didDht,
+        channelID: target.channelID,
+        name: 'Their channel',
+      },
+      ...overrides,
+    },
+  }
+}
+
+describe('entriesForManifest', () => {
+  it('shows a portal under the original identity, naming who circulated it', async () => {
+    const target = repost()
+    const entries = entriesForManifest(
+      sub(),
+      manifest('My channel', [], { reposts: [target] }),
+      resolved(target),
+    )
+
+    expect(entries).toHaveLength(1)
+    // Whose post it is.
+    expect(entries[0].channel.channelID).toBe('srcchannel000001')
+    expect(entries[0].channel.authorDidDht).toBe(SOURCE)
+    // Who put it here.
+    expect(entries[0].repost?.channel.channelID).toBe('alicechannel0001')
+    expect(entries[0].repost?.at).toBe('2026-06-01T09:00:00.000Z')
+  })
+
+  it('leaves out a portal that has not resolved', async () => {
+    const entries = entriesForManifest(
+      sub(),
+      manifest('My channel', [item('2026-05-02T00:00:00.000Z')], {
+        reposts: [repost()],
+      }),
+      {},
+    )
+    // The channel's own post still shows: one unread portal does not cost the rest.
+    expect(entries).toHaveLength(1)
+    expect(entries[0].repost).toBeUndefined()
+  })
+
+  it('carries a channel own items and its portals together', async () => {
+    const target = repost()
+    const entries = entriesForManifest(
+      sub(),
+      manifest('My channel', [item('2026-05-02T00:00:00.000Z')], {
+        reposts: [target],
+      }),
+      resolved(target),
+    )
+    expect(entries).toHaveLength(2)
+  })
+})
+
+describe('feedTimeOf', () => {
+  it('places a portal when it was circulated', async () => {
+    // Otherwise reposting a year-old post drops it a year down the feed, where the
+    // gesture may as well not have happened.
+    const target = repost({
+      publishedAt: '2025-01-01T00:00:00.000Z',
+      repostedAt: '2026-06-01T09:00:00.000Z',
+    })
+    const [entry] = entriesForManifest(
+      sub(),
+      manifest('My channel', [], { reposts: [target] }),
+      resolved(target),
+    )
+    expect(feedTimeOf(entry)).toBe('2026-06-01T09:00:00.000Z')
+  })
+
+  it('places an ordinary post when it was published', async () => {
+    const [entry] = entriesForManifest(
+      sub(),
+      manifest('My channel', [item('2026-05-02T00:00:00.000Z')]),
+    )
+    expect(feedTimeOf(entry)).toBe('2026-05-02T00:00:00.000Z')
+  })
+})
+
+describe('contributingChannelOf', () => {
+  it('names the circulating channel for a portal', async () => {
+    // The one that has it in its manifest, which is the one that can take it down.
+    const target = repost()
+    const [entry] = entriesForManifest(
+      sub(),
+      manifest('My channel', [], { reposts: [target] }),
+      resolved(target),
+    )
+    expect(contributingChannelOf(entry).channelID).toBe('alicechannel0001')
+  })
+
+  it('names the channel itself for an ordinary post', async () => {
+    const [entry] = entriesForManifest(
+      sub(),
+      manifest('My channel', [item('2026-05-02T00:00:00.000Z')]),
+    )
+    expect(contributingChannelOf(entry).channelID).toBe('alicechannel0001')
+  })
+})
+
+describe('portalsIn', () => {
+  it('counts one post circulated by two channels once', async () => {
+    // Two portals, one thing to read. Without the dedup a popular post would be
+    // fetched once per channel carrying it.
+    const target = repost()
+    const found = portalsIn({
+      a: manifest('A', [], { reposts: [target] }),
+      b: manifest('B', [], { reposts: [{ ...target, repostedAt: 'later' }] }),
+    })
+    expect(found).toHaveLength(1)
+  })
+
+  it('keeps two different posts from one source apart', async () => {
+    const found = portalsIn({
+      a: manifest('A', [], {
+        reposts: [
+          repost(),
+          repost({ publishedAt: '2026-05-05T00:00:00.000Z' }),
+        ],
+      }),
+    })
+    expect(found).toHaveLength(2)
+  })
+
+  it('finds nothing in channels that circulate nothing', async () => {
+    expect(
+      portalsIn({ a: manifest('A', [item('2026-05-02T00:00:00.000Z')]) }),
+    ).toHaveLength(0)
+  })
+})
+
+describe('buildHomeFeed with portals', () => {
+  it('interleaves a repost by when it was circulated', async () => {
+    const target = repost({
+      publishedAt: '2025-01-01T00:00:00.000Z',
+      repostedAt: '2026-05-15T00:00:00.000Z',
+    })
+    const fetcher: FetchChannel = async () =>
+      manifest(
+        'My channel',
+        [item('2026-05-10T00:00:00.000Z'), item('2026-05-20T00:00:00.000Z')],
+        { reposts: [target] },
+      )
+
+    const result = await buildHomeFeed(
+      [sub()],
+      fetcher,
+      {},
+      false,
+      resolved(target),
+    )
+
+    expect(result.entries.map(feedTimeOf)).toEqual([
+      '2026-05-20T00:00:00.000Z',
+      '2026-05-15T00:00:00.000Z',
+      '2026-05-10T00:00:00.000Z',
+    ])
   })
 })

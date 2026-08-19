@@ -1,11 +1,22 @@
 import { create } from 'zustand'
 import {
   buildHomeFeed,
+  contributingChannelOf,
+  entriesForManifest,
   type FeedEntry,
   type FeedFetchError,
   type FetchChannel,
+  portalKey,
+  portalsIn,
+  type ResolvedPortalEntry,
 } from '../core/feed'
 import type { ChannelManifest, SubscriptionRef } from '../core/types'
+import {
+  channelOfSource,
+  type PortalOutcome,
+  type PortalResolver,
+  targetOf,
+} from '../lib/repost'
 
 // Channels are read via the locator (pkarr → Sia). That reader needs the Sia
 // sdk, so App injects it (useChannelReader) once connected. Until then reads
@@ -15,10 +26,55 @@ import type { ChannelManifest, SubscriptionRef } from '../core/types'
 export const notReady: FetchChannel = () =>
   Promise.reject(new Error('channel reader not initialized'))
 
+// Portals resolved this session, keyed by `portalKey`.
+//
+// In memory rather than in the doc, deliberately for now: the directory read inside a
+// resolve IS the check that a source author still advertises the channel, and that is
+// the only reason un-advertising takes a repost down. A cache that outlived the session
+// would have to keep asking anyway, so persisting it is a later optimization with its
+// own shape rather than a free win.
+type PortalCache = Record<string, PortalOutcome>
+
+/** What the collation can actually render: the resolved ones, under the original's
+ *  identity. Rebuilt per collation, which is a handful of entries at friend scale. */
+function renderable(
+  portals: PortalCache,
+): Record<string, ResolvedPortalEntry | undefined> {
+  const out: Record<string, ResolvedPortalEntry> = {}
+  for (const [key, outcome] of Object.entries(portals)) {
+    if (outcome.state === 'resolved') {
+      out[key] = {
+        item: outcome.item,
+        channel: channelOfSource(outcome.source),
+      }
+    }
+  }
+  return out
+}
+
+/** Whether a portal is still worth a read.
+ *
+ *  A retract is the only final answer: the address is `(author, channel, publishedAt)`
+ *  and a re-publish takes a new publishedAt, so nothing will ever appear at that one
+ *  again. Everything else can come back — an un-advertised channel can be advertised
+ *  again, and an unreachable one is the network rather than an answer — but neither is
+ *  re-read here on a timer. They get another chance the next time a pass runs.
+ *
+ *  A portal already in hand is left alone: re-reading a post that is showing correctly
+ *  spends three network round trips to learn nothing. Following the author's edits is
+ *  the accelerant rung's job, not this one's. */
+function worthAsking(known: PortalOutcome | undefined): boolean {
+  return known === undefined || known.state !== 'deleted'
+}
+
 type FeedState = {
   entries: FeedEntry[]
   errors: FeedFetchError[]
   manifests: Record<string, ChannelManifest>
+  // What each portal in those manifests turned out to be. Read by a row so the owner
+  // of a channel can be told which of theirs has gone dead, and by the resolution pass
+  // so it knows what is still worth asking about.
+  portals: PortalCache
   loading: boolean
   lastRefreshedAt: string | null
   // How channels are read. Defaults to a not-ready reject; App injects the
@@ -31,6 +87,14 @@ type FeedState = {
   // it off for background/boot loads that should take the fast path.
   refresh: (subscriptions: SubscriptionRef[], fresh?: boolean) => Promise<void>
   refreshChannel: (sub: SubscriptionRef, fresh?: boolean) => Promise<void>
+  // Read the portals the current manifests name, and re-collate once they answer.
+  // Separate from `refresh` because these are reads of OTHER people's channels along
+  // their own floor rung, and holding the feed on the slowest stranger would keep every
+  // post off the screen.
+  resolvePortals: (
+    resolver: PortalResolver,
+    subscriptions: SubscriptionRef[],
+  ) => Promise<void>
   // Reflect a manifest already in hand (e.g. just committed to the locator by
   // the author) — rebuild the channel's entries + cache the manifest, no read.
   applyManifest: (sub: SubscriptionRef, manifest: ChannelManifest) => void
@@ -43,6 +107,7 @@ export const useFeedStore = create<FeedState>()((set, get) => ({
   entries: [],
   errors: [],
   manifests: {},
+  portals: {},
   loading: false,
   lastRefreshedAt: null,
   channelReader: notReady,
@@ -63,6 +128,7 @@ export const useFeedStore = create<FeedState>()((set, get) => ({
       get().channelReader,
       get().manifests,
       fresh,
+      renderable(get().portals),
     )
     set({
       entries: result.entries,
@@ -88,25 +154,52 @@ export const useFeedStore = create<FeedState>()((set, get) => ({
       )
     }
   },
+  resolvePortals: async (resolver, subscriptions) => {
+    const known = get().portals
+    const pending = portalsIn(get().manifests).filter((r) =>
+      worthAsking(known[portalKey(r)]),
+    )
+    if (pending.length === 0) return
+
+    const answers = await Promise.all(
+      pending.map(async (repost) => {
+        const outcome = await resolver.resolve(targetOf(repost))
+        return [portalKey(repost), outcome] as const
+      }),
+    )
+
+    set((s) => {
+      const portals = { ...s.portals }
+      for (const [key, outcome] of answers) {
+        // A failed read never displaces a post already in hand. It says nothing about
+        // that post, and letting it clear one would make a slow DHT look to a reader
+        // exactly like the author having retracted it.
+        if (outcome.state === 'unreachable' && portals[key]) continue
+        portals[key] = outcome
+      }
+      // Collate again: a portal reaches the feed through its channel's manifest, and
+      // no manifest has changed — only what its portals turned out to be.
+      const shown = renderable(portals)
+      const entries = subscriptions.flatMap((sub) => {
+        const manifest = s.manifests[sub.channelID]
+        return manifest ? entriesForManifest(sub, manifest, shown) : []
+      })
+      return { portals, entries }
+    })
+  },
   applyManifest: (sub, manifest) =>
     set((s) => {
-      const others = s.entries.filter(
-        (e) =>
-          !(
-            e.channel.authorHandle === sub.authorHandle &&
-            e.channel.channelID === sub.channelID
-          ),
-      )
-      const fresh: FeedEntry[] = manifest.items.map((item) => ({
-        item,
-        channel: {
-          authorHandle: sub.authorHandle,
-          authorDidDht: sub.didDht,
-          channelID: sub.channelID,
-          name: manifest.name,
-          avatar: manifest.avatar,
-        },
-      }))
+      // What this channel contributed, which for a portal is the channel circulating
+      // it rather than the one that wrote it. Matching on `e.channel` would leave a
+      // portal behind as a duplicate every time its channel updated.
+      const others = s.entries.filter((e) => {
+        const from = contributingChannelOf(e)
+        return !(
+          from.authorHandle === sub.authorHandle &&
+          from.channelID === sub.channelID
+        )
+      })
+      const fresh = entriesForManifest(sub, manifest, renderable(s.portals))
       return {
         entries: [...others, ...fresh],
         manifests: { ...s.manifests, [sub.channelID]: manifest },
@@ -120,7 +213,12 @@ export const useFeedStore = create<FeedState>()((set, get) => ({
     set((s) => {
       const { [channelID]: _, ...remainingManifests } = s.manifests
       return {
-        entries: s.entries.filter((e) => e.channel.channelID !== channelID),
+        // What this channel contributed. A portal in some OTHER channel that happens to
+        // point at this one stays: it is reachable through the author's directory, not
+        // through a subscription this identity just dropped.
+        entries: s.entries.filter(
+          (e) => contributingChannelOf(e).channelID !== channelID,
+        ),
         errors: s.errors.filter((e) => e.channelID !== channelID),
         manifests: remainingManifests,
       }
@@ -130,6 +228,7 @@ export const useFeedStore = create<FeedState>()((set, get) => ({
       entries: [],
       errors: [],
       manifests: {},
+      portals: {},
       loading: false,
       lastRefreshedAt: null,
     }),

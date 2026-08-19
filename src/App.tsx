@@ -17,6 +17,7 @@ import { useCuratorAutostart } from './lib/hooks/useCuratorAutostart'
 import { useCuratorLoops } from './lib/hooks/useCuratorLoops'
 import { useHandleFollowReconciliation } from './lib/hooks/useHandleFollowReconciliation'
 import { usePinDocsMirror } from './lib/hooks/usePinDocsMirror'
+import { usePortalResolution } from './lib/hooks/usePortalResolution'
 import { useRendezvousSync } from './lib/hooks/useRendezvousSync'
 import { useSettingsDocsMirror } from './lib/hooks/useSettingsDocsMirror'
 import { useSettingsSync } from './lib/hooks/useSettingsSync'
@@ -78,6 +79,7 @@ export default function App() {
   usePinDocsMirror()
   useSnapshotPointer()
   useChannelReader()
+  usePortalResolution()
   useSubscriptionPull()
   useCuratorLoops()
   // Ladder rung 1 (live-sync): the author serves each owned channel as a doc and

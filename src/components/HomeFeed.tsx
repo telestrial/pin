@@ -1,5 +1,5 @@
 import { useEffect, useMemo } from 'react'
-import type { FeedEntry } from '../core/feed'
+import { type FeedEntry, feedTimeOf } from '../core/feed'
 import type { ItemRef } from '../core/types'
 import { useIdentityName } from '../lib/hooks/useIdentityName'
 import { renderPostBody } from '../lib/markdown'
@@ -38,7 +38,10 @@ export function HomeFeed({
 
   const sortedEntries = useMemo(() => {
     return [...entries].sort((a, b) => {
-      const cmp = a.item.publishedAt.localeCompare(b.item.publishedAt)
+      // A reposted post arrives when it was circulated, not when it was written —
+      // otherwise something reposted today lands wherever it was published, which for
+      // an old post is out of sight.
+      const cmp = feedTimeOf(a).localeCompare(feedTimeOf(b))
       return sortOrder === 'oldest' ? cmp : -cmp
     })
   }, [entries, sortOrder])

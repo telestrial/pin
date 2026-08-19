@@ -1,5 +1,9 @@
 import { useEffect, useMemo } from 'react'
-import type { FeedEntry } from '../../core/feed'
+import {
+  contributingChannelOf,
+  type FeedEntry,
+  feedTimeOf,
+} from '../../core/feed'
 import type { ChannelImage } from '../../core/types'
 import { useChannelClaim } from '../../lib/hooks/useChannelClaim'
 import { useIdentityName } from '../../lib/hooks/useIdentityName'
@@ -75,13 +79,15 @@ export function ChannelView({
   }, [sub, manifest, refreshChannel])
 
   const channelEntries = useMemo(() => {
-    const filtered = entries.filter(
-      (e) =>
-        e.channel.authorHandle === authorHandle &&
-        e.channel.channelID === channelID,
-    )
+    // What this channel PUBLISHED, which includes the posts it circulates. A portal
+    // carries the original author's identity on `channel`, so matching on that would
+    // leave a channel's own reposts off its own page.
+    const filtered = entries.filter((e) => {
+      const from = contributingChannelOf(e)
+      return from.authorHandle === authorHandle && from.channelID === channelID
+    })
     filtered.sort((a, b) => {
-      const cmp = a.item.publishedAt.localeCompare(b.item.publishedAt)
+      const cmp = feedTimeOf(a).localeCompare(feedTimeOf(b))
       return sortOrder === 'oldest' ? cmp : -cmp
     })
     return filtered

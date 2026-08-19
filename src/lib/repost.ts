@@ -30,6 +30,7 @@
 // a deleted post is permanent, because a re-publish would get a new publishedAt and so a
 // new address, where an un-advertised channel can be advertised again.
 
+import type { FeedChannel } from '../core/feed'
 import type { SiaClient } from '../core/siaClient'
 import type {
   ChannelImage,
@@ -162,5 +163,20 @@ export function makePortalResolver(client: SiaClient): PortalResolver {
         },
       }
     },
+  }
+}
+
+/** A resolved source, as the feed presents it. A portal shows the post under the
+ *  ORIGINAL channel's identity, and that identity is did:dht-native — the source is
+ *  reached through their directory, which has no atproto handle in it. Empty handle is
+ *  what a did:dht subscription already carries, so a portal row and a subscribed row
+ *  render through the same path. */
+export function channelOfSource(source: PortalSource): FeedChannel {
+  return {
+    authorHandle: '',
+    authorDidDht: source.authorDidDht,
+    channelID: source.channelID,
+    name: source.name,
+    avatar: source.avatar,
   }
 }
