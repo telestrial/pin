@@ -106,6 +106,9 @@ async function withOwnChannel(app: ReturnType<typeof createFakeApp>) {
 
 const repostButton = () => screen.getByRole('button', { name: 'Repost' })
 
+const pickOne = (name: RegExp) =>
+  userEvent.click(screen.getByRole('menuitemcheckbox', { name }))
+
 describe('integration: the repost gesture', () => {
   let app: ReturnType<typeof createFakeApp>
 
@@ -179,6 +182,26 @@ describe('integration: the repost gesture', () => {
     })
   })
 
+  it('marks the gesture as pressed once any channel carries it', async () => {
+    // The semantic half of the icon lighting up. The colour is a class string and not
+    // worth asserting; this is the part a screen reader depends on and the part that
+    // would silently stop being true.
+    const { mine } = await withOwnChannel(app)
+    knowSourceIsPublic()
+
+    render(<EngagementRow input={INPUT} entry={theirPost()} />)
+    expect(repostButton()).toHaveAttribute('aria-pressed', 'false')
+
+    await userEvent.click(repostButton())
+    await pickOne(/My channel/)
+    await waitFor(async () => {
+      expect(
+        (await resolveChannelViaLocator(mine.channelKey))?.reposts,
+      ).toHaveLength(1)
+    })
+    expect(repostButton()).toHaveAttribute('aria-pressed', 'true')
+  })
+
   it('shows which of your channels already carry it', async () => {
     const { mine } = await withOwnChannel(app)
     knowSourceIsPublic()
@@ -211,16 +234,19 @@ describe('integration: the repost gesture', () => {
     expect(screen.queryByRole('button', { name: 'Repost' })).toBeNull()
   })
 
-  it('offers nothing when this identity has no channel of its own', async () => {
+  it('keeps the gesture and says why, with no channel of its own', async () => {
+    // Taking the button away would take the COUNT with it, and the count is everybody's
+    // — it says nothing about whether this identity can repost.
     const me = app.createAccount({ did: 'did:plc:me', handle: 'me.test' })
     mountAs(me)
     knowSourceIsPublic()
 
     render(<EngagementRow input={INPUT} entry={theirPost()} />)
-    expect(screen.queryByRole('button', { name: 'Repost' })).toBeNull()
+    await userEvent.click(repostButton())
+    expect(screen.getByText(/Create a channel to repost/)).toBeInTheDocument()
   })
 
-  it('does not offer to circulate a post into the channel it is already in', async () => {
+  it('does not offer the channel a post is already in', async () => {
     // Self-repost is allowed — posting to one voice and circulating through another is
     // a headline use — but a channel cannot repost into itself.
     const me = app.createAccount({ did: 'did:plc:me', handle: 'me.test' })
@@ -262,8 +288,14 @@ describe('integration: the repost gesture', () => {
       />,
     )
     // The only channel this identity owns is the one holding the post, so there is
-    // nowhere left to send it.
-    expect(screen.queryByRole('button', { name: 'Repost' })).toBeNull()
+    // nowhere left to send it — which the menu says rather than the gesture disappearing.
+    await userEvent.click(repostButton())
+    expect(
+      screen.getByText(/No other channel to repost this to/),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole('menuitemcheckbox', { name: /My channel/ }),
+    ).toBeNull()
   })
 })
 
@@ -454,5 +486,63 @@ describe('integration: the repost count', () => {
 
     render(<EngagementRow input={INPUT} entry={theirPost()} />)
     expect(screen.queryByText('0')).toBeNull()
+  })
+})
+
+describe('integration: circulating your own post', () => {
+  let app: ReturnType<typeof createFakeApp>
+
+  beforeEach(() => {
+    resetAllStores()
+    docStore.clear()
+    app = createFakeApp()
+  })
+
+  it('offers your other channels for a post in one of them', async () => {
+    // Posting to one voice and circulating through another is a headline use of
+    // channel-as-voice, so a post in your own channel carries the gesture like any other.
+    const { me, first, second } = await withTwoChannels(app)
+    await publishTextPost(me, first, 'my own post')
+    const published = await resolveChannelViaLocator(first.channelKey)
+    if (!published) throw new Error('not resolvable')
+    useFeedStore.getState().setManifest(first.channelID, published)
+
+    const mine: FeedEntry = {
+      item: published.items[0],
+      channel: {
+        authorHandle: '',
+        authorDidDht: 'did:dht:me',
+        channelID: first.channelID,
+        name: 'First channel',
+      },
+    }
+    render(
+      <EngagementRow
+        input={{
+          item: mine.item,
+          channel: {
+            authorHandle: '',
+            channelID: first.channelID,
+            name: 'First channel',
+          },
+        }}
+        entry={mine}
+      />,
+    )
+
+    await userEvent.click(repostButton())
+    // The other one is offered; the one it is already in is not.
+    expect(
+      screen.getByRole('menuitemcheckbox', { name: /Second channel/ }),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole('menuitemcheckbox', { name: /First channel/ }),
+    ).toBeNull()
+
+    await pick(/Second channel/)
+    await waitFor(async () => {
+      const after = await resolveChannelViaLocator(second.channelKey)
+      expect(after?.reposts).toHaveLength(1)
+    })
   })
 })

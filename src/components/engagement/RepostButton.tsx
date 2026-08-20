@@ -92,10 +92,13 @@ export function RepostButton({
     }
   }, [open])
 
-  // Nothing to point at, or nowhere to point it from.
-  if (!target || !client || channels.length === 0) return null
+  // Nothing to point at. Every other reason to be unable to repost — no channel of your
+  // own, only the channel the post is already in — is something the menu says, because a
+  // gesture that vanishes takes its COUNT with it, and the count is everybody's.
+  if (!target) return null
 
   const carrying = channels.filter((c) => c.carries).length
+  const ownsAny = useAuthStore.getState().myChannels.length > 0
 
   // How many of this identity's channels will carry the post once `c` is toggled. Read
   // from what was on screen rather than re-read afterwards, so the answer is about the
@@ -140,7 +143,8 @@ export function RepostButton({
   }
 
   const toggle = async (c: (typeof channels)[number]) => {
-    if (busy) return
+    // The button is disabled without a client, so this is belt: publishing needs Sia.
+    if (busy || !client) return
     setBusy(c.channelID)
     try {
       if (c.carries) {
@@ -187,12 +191,21 @@ export function RepostButton({
         title={carrying > 0 ? 'Circulating this' : 'Repost'}
         aria-haspopup="menu"
         aria-expanded={open}
+        aria-pressed={carrying > 0}
         aria-label="Repost"
-        className={`p-1 cursor-pointer transition-all duration-300 ${
+        // Green means you circulate it, and the lit state borrows the pin's treatment:
+        // dimmed at rest, waking within the owned-green family as you reach for it.
+        //
+        // The UNLIT state is the heart's rather than the pin's. A pin is light green even
+        // when unpinned because its axis is custody, and an unpinned item is still
+        // offering custody. Circulating has no such reading — you do or you don't — so an
+        // untouched recycle is neutral, the way an unliked heart is.
+        className={`p-1 cursor-pointer transition-all duration-300 disabled:cursor-default disabled:opacity-50 ${
           carrying > 0
-            ? 'text-green-600 opacity-80 hover:opacity-100'
+            ? 'text-green-700 opacity-50 hover:opacity-100 hover:text-green-600'
             : 'text-neutral-400 hover:text-green-600'
         }`}
+        disabled={!client}
       >
         <Recycle className="size-5" strokeWidth={1.5} aria-hidden="true" />
       </button>
@@ -209,6 +222,13 @@ export function RepostButton({
           <p className="px-3 py-1 text-xs uppercase tracking-wide text-neutral-500">
             Repost to
           </p>
+          {channels.length === 0 && (
+            <p className="px-3 py-1.5 text-sm text-neutral-500">
+              {ownsAny
+                ? 'No other channel to repost this to.'
+                : 'Create a channel to repost.'}
+            </p>
+          )}
           {channels.map((c) => (
             <button
               key={c.channelID}
