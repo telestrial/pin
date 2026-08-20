@@ -3,6 +3,7 @@ import {
   contributingChannelOf,
   type FeedEntry,
   feedTimeOf,
+  portalKey,
 } from '../../core/feed'
 import type { ChannelImage } from '../../core/types'
 import { useChannelClaim } from '../../lib/hooks/useChannelClaim'
@@ -17,6 +18,7 @@ import { ChannelPinButton } from '../pin/ChannelPinButton'
 import { PinIcon } from '../pin/PinIcon'
 import { ChannelAvatar } from './ChannelAvatar'
 import { ChannelOwnerMenu } from './ChannelOwnerMenu'
+import { DeadRepost } from './DeadRepost'
 
 export function ChannelView({
   authorHandle,
@@ -52,10 +54,16 @@ export function ChannelView({
   )
   const sortOrder = useAuthStore((s) => s.feedSortOrder)
   const setSortOrder = useAuthStore((s) => s.setFeedSortOrder)
-  const isOwned = useAuthStore((s) =>
-    s.myChannels.some((c) => c.channelID === channelID),
+  // The owned channel itself, not just whether it is owned: removing a dead portal is a
+  // write, and a write needs the channel's key. myChannels is the authority on that —
+  // the owner's own subscription carries the same key, but only because owners
+  // auto-subscribe, which is a fact about a different store.
+  const owned = useAuthStore((s) =>
+    s.myChannels.find((c) => c.channelID === channelID),
   )
+  const isOwned = owned !== undefined
   const entries = useFeedStore((s) => s.entries)
+  const portals = useFeedStore((s) => s.portals)
   const loading = useFeedStore((s) => s.loading)
   const refreshChannel = useFeedStore((s) => s.refreshChannel)
   const manifest = useFeedStore((s) => s.manifests[channelID])
@@ -92,6 +100,27 @@ export function ChannelView({
     })
     return filtered
   }, [entries, authorHandle, channelID, sortOrder])
+
+  // Portals in THIS channel with nothing at the other end, for its owner only. They
+  // produce no feed entry — a resolution that failed contributes nothing — so they are
+  // gathered from the manifest and placed by the same clock the entries use.
+  const deadReposts = useMemo(() => {
+    if (!isOwned) return []
+    return (manifest?.reposts ?? [])
+      .map((repost) => ({ repost, state: portals[portalKey(repost)]?.state }))
+      .filter(
+        (
+          d,
+        ): d is {
+          repost: (typeof d)['repost']
+          state: 'deleted' | 'unavailable'
+        } => d.state === 'deleted' || d.state === 'unavailable',
+      )
+      .sort((a, b) => {
+        const cmp = a.repost.repostedAt.localeCompare(b.repost.repostedAt)
+        return sortOrder === 'oldest' ? cmp : -cmp
+      })
+  }, [isOwned, manifest, portals, sortOrder])
 
   const channelName =
     manifest?.name ??
@@ -305,10 +334,18 @@ export function ChannelView({
               </div>
             </div>
 
-            {channelEntries.length === 0 ? (
+            {channelEntries.length === 0 && deadReposts.length === 0 ? (
               <p className="text-neutral-500 text-sm">No items yet.</p>
             ) : (
               <ul className="divide-y divide-neutral-200/80">
+                {deadReposts.map((dead) => (
+                  <DeadRepost
+                    key={`dead:${portalKey(dead.repost)}`}
+                    channel={{ channelID, channelKey: owned?.channelKey ?? '' }}
+                    repost={dead.repost}
+                    state={dead.state}
+                  />
+                ))}
                 {channelEntries.map((entry) => (
                   <FeedRow
                     key={`${entry.channel.channelID}:${entry.item.publishedAt}`}
