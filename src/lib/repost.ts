@@ -1,25 +1,34 @@
 // Resolving a portal: turning a repost reference into the post it names.
 //
-// A portal carries no bytes and no key — only an address — so reading one walks the
-// source author's own floor rung, the same one a subscriber walks and the same one that
-// works with the author offline:
+// A portal carries no bytes and no key — only an address — so reading one has to find K
+// first. Two ways, and the order matters:
 //
-//   did:dht -> `_dir` -> their directory blob -> K for that channel
-//           -> the channel's K-derived locator -> the manifest -> the item, by publishedAt
+//   1. WHAT THE READER ALREADY HOLDS. Subscribed to that channel, or its owner? Then K is
+//      in hand and usually the manifest is too, and the answer needs no network at all.
+//   2. THE AUTHOR'S OWN FLOOR RUNG, for a channel this identity has no relationship with:
+//        did:dht -> `_dir` -> their directory blob -> K
+//                -> the channel's K-derived locator -> the manifest -> the item
 //
-// Three DHT resolves and three Sia reads, and none of it needs the author online. Cost
-// scales with DISTINCT SOURCES rather than with portal count: ten portals into one
-// channel share one directory read and one manifest read, which is what the per-pass
-// memo below is for.
+// Rung 2 is three DHT resolves and three Sia reads, and none of it needs the author
+// online. Cost there scales with DISTINCT SOURCES rather than with portal count — ten
+// portals into one channel share one directory read and one manifest read, which is what
+// the per-pass memo below is for.
 //
-// ## The directory read is the revocation check
+// ## Why holding K comes first, and what that means for revocation
 //
-// A repost is revocable by the person reposted — un-advertise the channel and every
-// portal to it goes dark — and that only holds because K is fetched from their directory
-// rather than remembered from when the portal was made. So the directory read can be made
-// CHEAP but not skipped: a resolver memoizes it for the length of one pass, and a new pass
-// asks again. A cache that outlived the pass would have to stay revalidation-shaped
-// (keep K to render, still ask the directory) rather than skip-shaped.
+// A repost is revocable by the person reposted: un-advertise the channel and every portal
+// to it goes dark. That works because rung 2 fetches K from their directory rather than
+// remembering it from when the portal was made — so the directory read is the revocation
+// check, can be made cheap, and must not be cached away. A cache that outlived a pass
+// would have to stay revalidation-shaped (keep K to render, still ask the directory)
+// rather than skip-shaped.
+//
+// But it revokes DISCOVERY, not access to somebody already holding K. A subscriber was
+// given the key and can read the channel whether or not it is still advertised, so asking
+// the author's directory about a channel this reader is subscribed to answers the wrong
+// question — and answers it wrongly, since a directory that is merely stale would report
+// a post the reader can plainly see as unavailable. Hence rung 1, which is also why a
+// portal to your OWN post resolves with no network at all.
 //
 // ## Absence has two forms and they are not interchangeable
 //
@@ -89,6 +98,22 @@ export function targetOf(repost: RepostRef): PortalTarget {
   }
 }
 
+/** A channel this identity already has a relationship with: subscribed to it, or its
+ *  owner. Both mean K was handed over, which is the whole of what rung 2 goes looking
+ *  for. */
+export type HeldChannel = {
+  channelKey: string
+  /** The manifest already in hand, when there is one. Present for anything the feed has
+   *  loaded, which makes the read free rather than merely cheap. */
+  manifest?: ChannelManifest
+}
+
+/** What this identity holds for a portal's source, or null when it holds nothing.
+ *
+ *  Injected rather than read from the stores here, so this module stays testable and off
+ *  the store graph — the same seam `FetchChannel` uses. */
+export type HeldChannels = (target: PortalTarget) => HeldChannel | null
+
 export type PortalResolver = {
   resolve: (target: PortalTarget) => Promise<PortalOutcome>
 }
@@ -102,7 +127,10 @@ export type PortalResolver = {
  *
  *  Promises are memoized rather than results, so two portals into one channel resolved
  *  concurrently share the one read instead of racing two. */
-export function makePortalResolver(client: SiaClient): PortalResolver {
+export function makePortalResolver(
+  client: SiaClient,
+  held: HeldChannels = () => null,
+): PortalResolver {
   const directories = new Map<
     string,
     Promise<Awaited<ReturnType<typeof resolveIdentityDoc>> | undefined>
@@ -130,6 +158,16 @@ export function makePortalResolver(client: SiaClient): PortalResolver {
 
   return {
     async resolve(target: PortalTarget): Promise<PortalOutcome> {
+      // Rung 1: already holding K. Never `unavailable` from here — that state means the
+      // author is not sharing this channel with us, and they demonstrably are.
+      const mine = held(target)
+      if (mine) {
+        const source = mine.manifest ?? (await manifest(mine.channelKey))
+        if (!source) return { state: 'unreachable' }
+        return found(target, source, mine.channelKey)
+      }
+
+      // Rung 2: no relationship with this channel, so ask its author.
       const doc = await directory(target.didDht)
       // Unread and read-as-absent are the same to us here: a directory that is missing
       // entirely is the author unreachable, not the author saying anything.
@@ -145,23 +183,33 @@ export function makePortalResolver(client: SiaClient): PortalResolver {
       // the DHT looks exactly like this, so it must not read as a retract.
       if (!source) return { state: 'unreachable' }
 
-      const item = source.items.find(
-        (i) => i.publishedAt === target.publishedAt,
-      )
-      if (!item) return { state: 'deleted' }
+      return found(target, source, advertised.key, advertised.name)
+    },
+  }
+}
 
-      return {
-        state: 'resolved',
-        item,
-        source: {
-          channelID: target.channelID,
-          channelKey: advertised.key,
-          // What their manifest says now, over what the portal cached when it was made.
-          name: source.name || advertised.name,
-          avatar: source.avatar,
-          authorDidDht: target.didDht,
-        },
-      }
+/** The item a portal names inside a manifest now in hand, or the news that it is gone.
+ *
+ *  Shared by both rungs, because from here they are the same question and answering it
+ *  twice is how they would come to differ. */
+function found(
+  target: PortalTarget,
+  source: ChannelManifest,
+  channelKey: string,
+  advertisedName?: string,
+): PortalOutcome {
+  const item = source.items.find((i) => i.publishedAt === target.publishedAt)
+  if (!item) return { state: 'deleted' }
+  return {
+    state: 'resolved',
+    item,
+    source: {
+      channelID: target.channelID,
+      channelKey,
+      // What their manifest says now, over what a directory or a portal cached earlier.
+      name: source.name || advertisedName || '',
+      avatar: source.avatar,
+      authorDidDht: target.didDht,
     },
   }
 }

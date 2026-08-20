@@ -28,7 +28,7 @@ import {
   commitChannelManifest,
   resolveChannelViaLocator,
 } from '../lib/channelLocator'
-import { makePortalResolver, targetOf } from '../lib/repost'
+import { type HeldChannels, makePortalResolver, targetOf } from '../lib/repost'
 import {
   publishFakeDirectory,
   unpublishFakeDirectory,
@@ -205,3 +205,102 @@ async function resolveOrThrow(channel: Channel) {
   if (!manifest) throw new Error('channel not resolvable')
   return manifest
 }
+
+describe('integration: resolving a portal into a channel the reader already holds', () => {
+  let app: ReturnType<typeof createFakeApp>
+  let author: FakeAccount
+  let reader: FakeAccount
+
+  beforeEach(() => {
+    resetAllStores()
+    app = createFakeApp()
+    author = app.createAccount({ did: 'did:src', handle: 'src' })
+    reader = app.createAccount({ did: 'did:reader', handle: 'reader' })
+  })
+
+  /** The reader's own K for that channel, which is what a subscription is. */
+  function subscribedTo(channel: Channel): HeldChannels {
+    return ({ channelID }) =>
+      channelID === channel.channelID
+        ? { channelKey: channel.channelKey }
+        : null
+  }
+
+  it('reads it with no directory at all', async () => {
+    // A subscriber holds K. Asking the author's directory for it answers a question
+    // nobody asked, and this is the case where doing so gets it WRONG.
+    const { channel, item } = await aChannelWorthReposting(author)
+    unpublishFakeDirectory(SOURCE_DID)
+
+    const outcome = await makePortalResolver(
+      reader.client,
+      subscribedTo(channel),
+    ).resolve(portal(channel.channelID, item))
+
+    expect(outcome.state).toBe('resolved')
+  })
+
+  it('reads it even when the author advertises nothing', async () => {
+    // THE BUG. Un-advertising revokes DISCOVERY, not access for somebody who was already
+    // given the key — and a directory merely lagging behind looks identical from here.
+    // Reporting this as unavailable told a reposter their own post had gone.
+    const { channel, item } = await aChannelWorthReposting(author)
+    await advertise([])
+
+    const outcome = await makePortalResolver(
+      reader.client,
+      subscribedTo(channel),
+    ).resolve(portal(channel.channelID, item))
+
+    expect(outcome.state).toBe('resolved')
+  })
+
+  it('still reports a retract, which holding K cannot argue with', async () => {
+    const { channel, item } = await aChannelWorthReposting(author)
+    const current = await resolveOrThrow(channel)
+    const { manifest } = await deletePublishedItem(current, item.id)
+    await commitChannelManifest(
+      author.client,
+      FAKE_APP_KEY_HEX,
+      channel.channelID,
+      channel.channelKey,
+      manifest,
+    )
+
+    const outcome = await makePortalResolver(
+      reader.client,
+      subscribedTo(channel),
+    ).resolve(portal(channel.channelID, item))
+
+    expect(outcome.state).toBe('deleted')
+  })
+
+  it('reads a manifest already in hand without touching the network', async () => {
+    // Which is what makes a portal to one of your OWN posts free.
+    const { channel, item } = await aChannelWorthReposting(author)
+    const inHand = await resolveOrThrow(channel)
+    unpublishFakeDirectory(SOURCE_DID)
+    unpublishFakeLocator(channelKeyFromBase64(channel.channelKey))
+
+    const downloads = vi.spyOn(reader.client, 'downloadItem')
+    const outcome = await makePortalResolver(reader.client, () => ({
+      channelKey: channel.channelKey,
+      manifest: inHand,
+    })).resolve(portal(channel.channelID, item))
+
+    expect(outcome.state).toBe('resolved')
+    expect(downloads).not.toHaveBeenCalled()
+  })
+
+  it('falls to the author for a channel it holds nothing for', async () => {
+    // The two rungs coexist: holding nothing is the case the directory read is for.
+    const { channel, item } = await aChannelWorthReposting(author)
+    await advertise([])
+
+    const outcome = await makePortalResolver(reader.client, () => null).resolve(
+      portal(channel.channelID, item),
+    )
+
+    expect(outcome.state).toBe('unavailable')
+  })
+})

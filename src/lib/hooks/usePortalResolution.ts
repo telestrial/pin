@@ -15,7 +15,26 @@ import { useEffect, useRef } from 'react'
 import { portalsIn } from '../../core/feed'
 import { useAuthStore } from '../../stores/auth'
 import { useFeedStore } from '../../stores/feed'
-import { makePortalResolver } from '../repost'
+import { type HeldChannels, makePortalResolver } from '../repost'
+
+/** What this identity already holds for a portal's source: K, and the manifest when the
+ *  feed has one.
+ *
+ *  A subscription or ownership both mean the key was handed over, which is the whole of
+ *  what a directory read goes looking for — so a portal into a channel this reader already
+ *  follows needs no network, and cannot be reported as unavailable by a directory that has
+ *  merely gone stale. */
+function heldChannels(): HeldChannels {
+  const auth = useAuthStore.getState()
+  const manifests = useFeedStore.getState().manifests
+  return ({ channelID }) => {
+    const key =
+      auth.subscriptions.find((s) => s.channelID === channelID)?.channelKey ??
+      auth.myChannels.find((c) => c.channelID === channelID)?.channelKey
+    if (!key) return null
+    return { channelKey: key, manifest: manifests[channelID] }
+  }
+}
 
 export function usePortalResolution() {
   const client = useAuthStore((s) => s.client)
@@ -51,7 +70,7 @@ export function usePortalResolution() {
           // That memo is what makes ten portals into one channel cost one directory
           // read; keeping it any longer would start skipping the directory read that
           // tells us whether the author still advertises the channel at all.
-          const resolver = makePortalResolver(client)
+          const resolver = makePortalResolver(client, heldChannels())
           const subs = useAuthStore.getState().subscriptions
           await useFeedStore.getState().resolvePortals(resolver, subs)
         } while (again.current && !cancelled)
