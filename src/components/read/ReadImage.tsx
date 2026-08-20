@@ -1,3 +1,4 @@
+import type { FeedEntry } from '../../core/feed'
 import type { ItemRef } from '../../core/types'
 import { useItemBlobURL } from '../../lib/hooks/useItemBytes'
 import type { PinInput } from '../../stores/pin'
@@ -11,6 +12,7 @@ export function ReadImage({
   sidebar,
   rightSidebar,
   pinInput,
+  entry,
   onEdit,
 }: {
   item: ItemRef
@@ -20,6 +22,9 @@ export function ReadImage({
   sidebar: React.ReactNode
   rightSidebar: React.ReactNode
   pinInput: PinInput
+  // The feed entry this page was opened from, when there was one. Carries what
+  // the pin input does not: whether the post can be circulated, and by whom.
+  entry?: FeedEntry
   onEdit?: () => void
 }) {
   const { url: imgURL, error } = useItemBlobURL(
@@ -51,7 +56,7 @@ export function ReadImage({
                   Edit
                 </button>
               )}
-              <EngagementRow input={pinInput} />
+              <EngagementRow input={pinInput} entry={entry} />
             </div>
           </div>
 

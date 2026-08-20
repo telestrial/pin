@@ -1,3 +1,4 @@
+import { Recycle } from 'lucide-react'
 import { useEffect, useMemo } from 'react'
 import { type FeedEntry, feedTimeOf } from '../core/feed'
 import type { ItemRef } from '../core/types'
@@ -225,6 +226,43 @@ function PostBody({
   )
 }
 
+// Who put this post here, when it is not the channel that wrote it.
+//
+// Above the post rather than inside it, because everything below belongs to the original
+// author — the name, the avatar, the body, the counts. This one line is the only part of
+// a portal row that is about the person circulating it, and on their own channel page it
+// is the only thing distinguishing a repost from something they wrote.
+function RepostedBy({
+  repost,
+  onHandleClick,
+}: {
+  repost: NonNullable<FeedEntry['repost']>
+  onHandleClick: (handle: string) => void
+}) {
+  const { channel } = repost
+  const identityName = useIdentityName(channel.authorDidDht ?? '')
+  const name = channel.authorDidDht ? identityName : channel.authorHandle
+  const id = channel.authorDidDht || channel.authorHandle
+  if (!id) return null
+
+  return (
+    <div className="flex items-center gap-1.5 text-xs text-neutral-500 mb-1">
+      <Recycle className="size-3.5 shrink-0" strokeWidth={1.5} aria-hidden />
+      <span>Reposted by</span>
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation()
+          onHandleClick(id)
+        }}
+        className="truncate hover:underline cursor-pointer"
+      >
+        @{name}
+      </button>
+    </div>
+  )
+}
+
 export function FeedRow({
   entry,
   onItemClick,
@@ -268,6 +306,9 @@ export function FeedRow({
         }}
         className="py-4 px-2 -mx-2 rounded hover:bg-neutral-50 cursor-pointer transition-colors"
       >
+        {entry.repost && (
+          <RepostedBy repost={entry.repost} onHandleClick={onHandleClick} />
+        )}
         <div className="flex gap-3">
           <button
             type="button"
@@ -325,6 +366,7 @@ export function FeedRow({
               onHandleClick={onHandleClick}
             />
             <EngagementRow
+              entry={entry}
               input={{
                 item,
                 channel: {

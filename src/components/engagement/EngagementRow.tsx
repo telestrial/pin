@@ -1,7 +1,11 @@
 import { Heart } from 'lucide-react'
+import type { FeedEntry } from '../../core/feed'
 import { useEngagement } from '../../lib/hooks/useEngagement'
+import { repostTargetFor } from '../../lib/repost'
+import { useFeedStore } from '../../stores/feed'
 import type { PinInput } from '../../stores/pin'
 import { PinButton } from '../pin/PinButton'
+import { RepostButton } from './RepostButton'
 
 // The gestures an item carries, and what they add up to.
 //
@@ -10,6 +14,11 @@ import { PinButton } from '../pin/PinButton'
 // your OWN post it is a retract — but it now stands beside a count, because a pin is a
 // redundancy count before it is a popularity one: publishing makes you pin #1, and the
 // number falling to zero would mean nobody is paying to keep the bytes alive.
+//
+// The recycle beside them is the third gesture and the only one that publishes: it puts
+// a reference to this post into one of your own channels. Its count is how many of YOUR
+// channels carry it, which is a different question from the two beside it — those count
+// everybody.
 //
 // A count of zero shows nothing. Absent and zero mean the same thing to a reader, and one
 // of them is far the more common: most items are unendorsed, and an item whose channel no
@@ -21,7 +30,17 @@ function Count({ n }: { n: number }) {
   return <span className="text-xs tabular-nums text-neutral-500">{n}</span>
 }
 
-export function EngagementRow({ input }: { input: PinInput }) {
+export function EngagementRow({
+  input,
+  entry,
+}: {
+  input: PinInput
+  // Present wherever the post came out of the feed, which is everywhere a repost makes
+  // sense. Absent on a library item, which has no channel to be circulated out of.
+  entry?: FeedEntry
+}) {
+  const manifests = useFeedStore((s) => s.manifests)
+  const repostTarget = entry ? repostTargetFor(entry, manifests) : null
   const { likes, pins, liked, toggleLike, busy } = useEngagement({
     channelID: input.channel.channelID,
     publishedAt: input.item.publishedAt,
@@ -65,6 +84,8 @@ export function EngagementRow({ input }: { input: PinInput }) {
         <Count n={pins} />
         <PinButton input={input} />
       </div>
+
+      <RepostButton target={repostTarget} sourceName={entry?.channel.name} />
     </div>
   )
 }

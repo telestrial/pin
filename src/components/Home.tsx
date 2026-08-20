@@ -554,6 +554,9 @@ export function Home() {
         },
       },
       onEdit,
+      // So the page's gestures match the row's — a post that can be circulated from the
+      // feed can be circulated from its own page.
+      entry: view.entry,
     }
     if (item.type === 'image') return <ReadImage {...readerProps} />
     if (item.type === 'audio') return <ReadAudio {...readerProps} />

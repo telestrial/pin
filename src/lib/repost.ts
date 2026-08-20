@@ -30,7 +30,7 @@
 // a deleted post is permanent, because a re-publish would get a new publishedAt and so a
 // new address, where an un-advertised channel can be advertised again.
 
-import type { FeedChannel } from '../core/feed'
+import type { FeedChannel, FeedEntry } from '../core/feed'
 import type { SiaClient } from '../core/siaClient'
 import type {
   ChannelImage,
@@ -178,5 +178,47 @@ export function channelOfSource(source: PortalSource): FeedChannel {
     channelID: source.channelID,
     name: source.name,
     avatar: source.avatar,
+  }
+}
+
+/** The address to circulate for a post shown in the feed, or null when it cannot be
+ *  circulated.
+ *
+ *  Two conditions, and the second is the interesting one.
+ *
+ *  The source author has to be NAMED, because a portal is `(didDht, channelID,
+ *  publishedAt)` and there is nothing to point at without the first. A pre-did:dht
+ *  channel carries no such name.
+ *
+ *  And the source channel has to be PUBLIC. Reposting out of an unlisted channel would
+ *  publish its existence to the reposter's subscribers, which is the one property that
+ *  tier has — and it would not work anyway, since the portal's read capability comes from
+ *  the author's directory and an unlisted channel is deliberately not in it. Twitter and
+ *  Mastodon both refuse the same thing for the same reason. So the refusal is honest
+ *  rather than enforced: hiding the gesture says out loud what the mechanism would do
+ *  silently.
+ *
+ *  A post ALREADY reaching the feed through a portal is public by construction — it was
+ *  read out of an author's directory, and only public channels are advertised there. That
+ *  is also why reposting a repost points at the original: an entry's `channel` is whose
+ *  post it is, never who passed it along, so the address never accumulates a chain.
+ *
+ *  Unknown reads as no. Being unable to tell whether a channel is unlisted is not a
+ *  reason to treat it as public. */
+export function repostTargetFor(
+  entry: FeedEntry,
+  manifests: Readonly<Record<string, ChannelManifest | undefined>>,
+): PortalTarget | null {
+  const { authorDidDht, channelID } = entry.channel
+  if (!authorDidDht) return null
+
+  const advertised = entry.repost !== undefined
+  const known = manifests[channelID]
+  if (!advertised && known?.visibility !== 'public') return null
+
+  return {
+    didDht: authorDidDht,
+    channelID,
+    publishedAt: entry.item.publishedAt,
   }
 }

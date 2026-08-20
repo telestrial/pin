@@ -1,3 +1,4 @@
+import type { FeedEntry } from '../../core/feed'
 import type { ItemRef } from '../../core/types'
 import { useItemBlobURL } from '../../lib/hooks/useItemBytes'
 import type { PinInput } from '../../stores/pin'
@@ -11,6 +12,7 @@ export function ReadVideo({
   sidebar,
   rightSidebar,
   pinInput,
+  entry,
 }: {
   item: ItemRef
   channelName: string
@@ -19,6 +21,9 @@ export function ReadVideo({
   sidebar: React.ReactNode
   rightSidebar: React.ReactNode
   pinInput: PinInput
+  // The feed entry this page was opened from, when there was one. Carries what
+  // the pin input does not: whether the post can be circulated, and by whom.
+  entry?: FeedEntry
 }) {
   const { url: videoURL, error } = useItemBlobURL(
     item.itemURL,
@@ -39,7 +44,7 @@ export function ReadVideo({
             >
               {backLabel}
             </button>
-            <EngagementRow input={pinInput} />
+            <EngagementRow input={pinInput} entry={entry} />
           </div>
 
           <header className="space-y-1">

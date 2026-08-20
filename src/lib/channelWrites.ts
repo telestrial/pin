@@ -17,10 +17,12 @@ import {
   editChannel,
   editItem,
   removeAttachmentFromItem,
+  removeRepostFromChannel,
+  repostToChannel,
   unpinChannel,
 } from '../core/channels'
 import type { SiaClient } from '../core/siaClient'
-import type { ChannelManifest, ItemRef } from '../core/types'
+import type { ChannelManifest, ItemRef, RepostRef } from '../core/types'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
 import {
@@ -33,6 +35,7 @@ import {
   clearPublished,
   readPublished,
 } from './publishState'
+import type { PortalTarget } from './repost'
 
 type Channel = { channelID: string; channelKey: string }
 
@@ -267,6 +270,54 @@ export async function removeAttachment(
   )
   reflectInFeed(channel.channelID, result.manifest)
   return result
+}
+
+// Circulate somebody else's post in one of this identity's channels.
+//
+// Awaited to the same bar as any other channel write: when this resolves, the Sia object
+// and the DHT pointer are both live and a subscriber can read it. A repost is a publish,
+// and the gesture that makes one is entitled to fail visibly rather than to look like it
+// worked.
+//
+// No bytes move. The portal is an address, and the post it names stays where its author
+// put it — which is what lets their edit show through, their retraction show through as a
+// gap, and their un-advertising take it back down.
+export async function repostInChannel(
+  client: SiaClient,
+  channel: Channel,
+  repost: RepostRef,
+): Promise<ChannelManifest> {
+  const current = await loadCurrentManifest(channel)
+  const manifest = await repostToChannel(current, repost)
+  await commitChannelManifest(
+    client,
+    appKey(),
+    channel.channelID,
+    channel.channelKey,
+    manifest,
+  )
+  reflectInFeed(channel.channelID, manifest)
+  return manifest
+}
+
+// Stop circulating a post here. Nothing to reclaim — a portal never held bytes, so unlike
+// every other removal on a channel this frees nothing and journals nothing.
+export async function unrepostFromChannel(
+  client: SiaClient,
+  channel: Channel,
+  target: PortalTarget,
+): Promise<ChannelManifest> {
+  const current = await loadCurrentManifest(channel)
+  const manifest = await removeRepostFromChannel(current, target)
+  await commitChannelManifest(
+    client,
+    appKey(),
+    channel.channelID,
+    channel.channelKey,
+    manifest,
+  )
+  reflectInFeed(channel.channelID, manifest)
+  return manifest
 }
 
 // Retract a whole channel. Idempotent: if the locator can't be resolved (already
