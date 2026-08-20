@@ -37,8 +37,13 @@ import {
 /** The gestures that produce an endorsement.
  *
  *  Open on the wire — a reader folds the kinds it understands and ignores the rest — but
- *  a closed union here, because these are the ones this app can currently make. */
-export type EndorsementKind = 'like' | 'pin'
+ *  a closed union here, because these are the ones this app can currently make.
+ *
+ *  All three are ACTOR-keyed, which is what each count means. A repost is one endorsement
+ *  however many of your channels carry the post: the number is reposters rather than
+ *  reposts, the same way a like is likers. Which of your own channels carry it is a
+ *  different question, and one only you can answer. */
+export type EndorsementKind = 'like' | 'pin' | 'repost'
 
 /** What an endorsement is about, from the caller's side. `contentHash` is the version it
  *  is made against; the subject itself survives an edit, so this is what records that the

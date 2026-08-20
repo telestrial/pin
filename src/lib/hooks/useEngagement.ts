@@ -44,6 +44,10 @@ export type Engagement = {
    *  the other needs none. Neither ever overstates the count. */
   likes: number
   pins: number
+  /** How many identities circulate it, which is not the same as how many channels do:
+   *  an endorsement is per actor, so reposting one post into three of your own channels
+   *  is one reposter. */
+  reposts: number
   /** Whether THIS identity has liked it: the heart's fill. */
   liked: boolean
   toggleLike: () => void
@@ -134,10 +138,14 @@ export function useEngagement(item: EndorsedItem): Engagement {
   const [busy, setBusy] = useState(false)
   // Gestures this identity has made that the published count can't have seen yet, so a
   // row can show its own contribution while the author's fold catches up.
-  const [mine, setMine] = useState({ like: false, pin: false })
+  const [mine, setMine] = useState({ like: false, pin: false, repost: false })
   // Gestures taken back that the published count can be shown to still include, so a row
   // can drop its own contribution while the author's fold catches up.
-  const [withdrawn, setWithdrawn] = useState({ like: false, pin: false })
+  const [withdrawn, setWithdrawn] = useState({
+    like: false,
+    pin: false,
+    repost: false,
+  })
 
   // Destructured so the effect depends on the item's identity rather than on the object,
   // which callers rebuild every render.
@@ -155,10 +163,11 @@ export function useEngagement(item: EndorsedItem): Engagement {
 
     const refresh = async () => {
       try {
-        const [counts, likedAt, pinnedAt] = await Promise.all([
+        const [counts, likedAt, pinnedAt, repostedAt] = await Promise.all([
           readTally(storedKeyHex, target),
           heldEndorsedAt('like', target),
           heldEndorsedAt('pin', target),
+          heldEndorsedAt('repost', target),
         ])
         if (cancelled) return
         setTally(counts)
@@ -166,10 +175,12 @@ export function useEngagement(item: EndorsedItem): Engagement {
         setMine({
           like: showsUncounted(likedAt, counts?.updatedAt),
           pin: showsUncounted(pinnedAt, counts?.updatedAt),
+          repost: showsUncounted(repostedAt, counts?.updatedAt),
         })
         setWithdrawn({
           like: showsWithdrawn(myDid, likedAt, sampleOf(counts, 'like')),
           pin: showsWithdrawn(myDid, pinnedAt, sampleOf(counts, 'pin')),
+          repost: showsWithdrawn(myDid, repostedAt, sampleOf(counts, 'repost')),
         })
       } catch {
         // The engine may not be open yet, or a record not downloaded. The next change
@@ -263,6 +274,7 @@ export function useEngagement(item: EndorsedItem): Engagement {
   return {
     likes: shown(countOf(tally, 'like'), mine.like, withdrawn.like),
     pins: shown(countOf(tally, 'pin'), mine.pin, withdrawn.pin),
+    reposts: shown(countOf(tally, 'repost'), mine.repost, withdrawn.repost),
     liked,
     toggleLike,
     busy,

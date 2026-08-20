@@ -41,7 +41,7 @@ export function EngagementRow({
 }) {
   const manifests = useFeedStore((s) => s.manifests)
   const repostTarget = entry ? repostTargetFor(entry, manifests) : null
-  const { likes, pins, liked, toggleLike, busy } = useEngagement({
+  const { likes, pins, reposts, liked, toggleLike, busy } = useEngagement({
     channelID: input.channel.channelID,
     publishedAt: input.item.publishedAt,
     contentHash: input.item.contentHash,
@@ -85,7 +85,12 @@ export function EngagementRow({
         <PinButton input={input} />
       </div>
 
-      <RepostButton target={repostTarget} sourceName={entry?.channel.name} />
+      <RepostButton
+        target={repostTarget}
+        sourceName={entry?.channel.name}
+        contentHash={input.item.contentHash}
+        count={reposts}
+      />
     </div>
   )
 }

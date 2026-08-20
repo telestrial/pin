@@ -19,6 +19,11 @@ vi.mock('../lib/docs', async () =>
   (await import('./fakeModules')).fakeDocsModule(),
 )
 
+import {
+  endorsement_verify,
+  engagement_subject,
+  tally_rkey,
+} from '../../crates/pin-core/pkg/pin_core.js'
 import { EngagementRow } from '../components/engagement/EngagementRow'
 import type { FeedEntry } from '../core/feed'
 import { resolveChannelViaLocator } from '../lib/channelLocator'
@@ -259,5 +264,195 @@ describe('integration: the repost gesture', () => {
     // The only channel this identity owns is the one holding the post, so there is
     // nowhere left to send it.
     expect(screen.queryByRole('button', { name: 'Repost' })).toBeNull()
+  })
+})
+
+// --- the endorsement behind the count ----------------------------------------------
+//
+// A repost is ONE endorsement however many of your channels carry the post, because an
+// endorsement is per actor: the number a reader sees is reposters, not reposts. So it
+// turns on with the first channel and off with the last, and the two channels in between
+// change nothing about it.
+
+const repostRecords = () =>
+  [...docStore.keys()].filter((k) => k.startsWith('endorse/repost:'))
+
+/** Sign in with two channels, so "first" and "last" are distinguishable. */
+async function withTwoChannels(app: ReturnType<typeof createFakeApp>) {
+  const me = app.createAccount({ did: 'did:plc:me', handle: 'me.test' })
+  const first = await authorCreateChannel(me, { name: 'First channel' })
+  const second = await authorCreateChannel(me, { name: 'Second channel' })
+  mountAs(me, {
+    myChannels: [
+      {
+        channelID: first.channelID,
+        channelKey: first.channelKey,
+        name: 'First channel',
+      },
+      {
+        channelID: second.channelID,
+        channelKey: second.channelKey,
+        name: 'Second channel',
+      },
+    ],
+  })
+  useFeedStore.getState().setManifest(first.channelID, first.manifest)
+  useFeedStore.getState().setManifest(second.channelID, second.manifest)
+  return { me, first, second }
+}
+
+const pick = (name: RegExp) =>
+  userEvent.click(screen.getByRole('menuitemcheckbox', { name }))
+
+describe('integration: the endorsement behind a repost count', () => {
+  let app: ReturnType<typeof createFakeApp>
+
+  beforeEach(() => {
+    resetAllStores()
+    docStore.clear()
+    app = createFakeApp()
+  })
+
+  it('records one endorsement for the first channel to carry it', async () => {
+    await withTwoChannels(app)
+    knowSourceIsPublic()
+
+    render(<EngagementRow input={INPUT} entry={theirPost()} />)
+    await userEvent.click(repostButton())
+    await pick(/First channel/)
+
+    await waitFor(() => expect(repostRecords()).toHaveLength(1))
+  })
+
+  it('records no second endorsement for a second channel', async () => {
+    // Reposting into three of your own channels is still one reposter.
+    await withTwoChannels(app)
+    knowSourceIsPublic()
+
+    render(<EngagementRow input={INPUT} entry={theirPost()} />)
+    await userEvent.click(repostButton())
+    await pick(/First channel/)
+    await waitFor(() => expect(repostRecords()).toHaveLength(1))
+    await pick(/Second channel/)
+    await waitFor(() =>
+      expect(
+        screen.getByRole('menuitemcheckbox', { name: /Second channel/ }),
+      ).toHaveAttribute('aria-checked', 'true'),
+    )
+
+    expect(repostRecords()).toHaveLength(1)
+  })
+
+  it('keeps the endorsement while any channel still carries it', async () => {
+    await withTwoChannels(app)
+    knowSourceIsPublic()
+
+    render(<EngagementRow input={INPUT} entry={theirPost()} />)
+    await userEvent.click(repostButton())
+    await pick(/First channel/)
+    await pick(/Second channel/)
+    await waitFor(() =>
+      expect(
+        screen.getByRole('menuitemcheckbox', { name: /Second channel/ }),
+      ).toHaveAttribute('aria-checked', 'true'),
+    )
+
+    await pick(/First channel/)
+    await waitFor(() =>
+      expect(
+        screen.getByRole('menuitemcheckbox', { name: /First channel/ }),
+      ).toHaveAttribute('aria-checked', 'false'),
+    )
+    expect(repostRecords()).toHaveLength(1)
+  })
+
+  it('withdraws the endorsement with the last channel', async () => {
+    await withTwoChannels(app)
+    knowSourceIsPublic()
+
+    render(<EngagementRow input={INPUT} entry={theirPost()} />)
+    await userEvent.click(repostButton())
+    await pick(/First channel/)
+    await waitFor(() => expect(repostRecords()).toHaveLength(1))
+
+    await pick(/First channel/)
+    await waitFor(() => expect(repostRecords()).toHaveLength(0))
+  })
+
+  it('signs a record a fold would count', async () => {
+    // The same bar as a like: the fold verifies every record it counts, so one this
+    // identity cannot be shown to have made is one that will never appear in a tally.
+    await withTwoChannels(app)
+    knowSourceIsPublic()
+
+    render(<EngagementRow input={INPUT} entry={theirPost()} />)
+    await userEvent.click(repostButton())
+    await pick(/First channel/)
+    await waitFor(() => expect(repostRecords()).toHaveLength(1))
+
+    const stored = docStore.get(repostRecords()[0])
+    if (!stored) throw new Error('no record')
+    const record = new TextDecoder().decode(stored)
+    expect(JSON.parse(record).kind).toBe('repost')
+    expect(() => endorsement_verify(record)).not.toThrow()
+  })
+})
+
+// --- what the number beside the recycle means -------------------------------------
+
+/** Put a repost count in the cache the way the Curator's loops would. */
+function cacheRepostCount(n: number) {
+  const subject = engagement_subject(SRC_CHANNEL, POST_AT, undefined)
+  docStore.set(
+    `tally/${tally_rkey(SRC_CHANNEL, subject)}`,
+    new TextEncoder().encode(
+      JSON.stringify({
+        kinds: { repost: { count: n, setRoot: 'root', sampleActors: [] } },
+        updatedAt: '2099-01-01T00:00:00.000Z',
+      }),
+    ),
+  )
+}
+
+describe('integration: the repost count', () => {
+  let app: ReturnType<typeof createFakeApp>
+
+  beforeEach(() => {
+    resetAllStores()
+    docStore.clear()
+    app = createFakeApp()
+  })
+
+  it('shows how many identities circulate it, not how many of your channels do', async () => {
+    // The distinction the whole actor-keyed model rests on. Your own channels are the
+    // checkmarks in the menu; the number is everybody, and it comes from the author's
+    // published tally the same way the heart's and the pin's do.
+    await withTwoChannels(app)
+    knowSourceIsPublic()
+    cacheRepostCount(7)
+
+    render(<EngagementRow input={INPUT} entry={theirPost()} />)
+    await waitFor(() => expect(screen.getByText('7')).toBeInTheDocument())
+
+    await userEvent.click(repostButton())
+    await pick(/First channel/)
+    await waitFor(() =>
+      expect(
+        screen.getByRole('menuitemcheckbox', { name: /First channel/ }),
+      ).toHaveAttribute('aria-checked', 'true'),
+    )
+
+    // Still the author's number. One of two channels carrying it is not the count.
+    expect(screen.getByText('7')).toBeInTheDocument()
+    expect(screen.queryByText('1')).toBeNull()
+  })
+
+  it('shows nothing when nobody circulates it', async () => {
+    // Absent and zero read the same to a reader, and absent is by far the more common.
+    await withTwoChannels(app)
+    knowSourceIsPublic()
+
+    render(<EngagementRow input={INPUT} entry={theirPost()} />)
+    expect(screen.queryByText('0')).toBeNull()
   })
 })

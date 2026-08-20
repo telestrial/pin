@@ -108,9 +108,9 @@ pub struct SubjectRef {
 /// acronyms.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct Endorsement {
-    /// What was asserted: `like`, `pin`, or something a future version added. Open by
-    /// design — a reader folds the kinds it understands and ignores the rest, so a new
-    /// gesture needs no coordinated upgrade.
+    /// What was asserted: `like`, `pin`, `repost`, or something a future version added.
+    /// Open by design — a reader folds the kinds it understands and ignores the rest, so a
+    /// new gesture needs no coordinated upgrade.
     pub kind: String,
     /// Who asserted it, as a `did:dht:` string. Also the verification key.
     pub actor: String,

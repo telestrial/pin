@@ -3,6 +3,12 @@ import { useEffect, useRef, useState } from 'react'
 import { portalKey } from '../../core/feed'
 import type { RepostRef } from '../../core/types'
 import { repostInChannel, unrepostFromChannel } from '../../lib/channelWrites'
+import {
+  deleteEndorsement,
+  type EndorsedItem,
+  referenceAuthorFor,
+  writeEndorsement,
+} from '../../lib/engagement'
 import type { PortalTarget } from '../../lib/repost'
 import { useAuthStore } from '../../stores/auth'
 import { useFeedStore } from '../../stores/feed'
@@ -47,14 +53,23 @@ function useOwnChannels(target: PortalTarget | null) {
 export function RepostButton({
   target,
   sourceName,
+  contentHash,
+  count,
 }: {
-  /** The post to circulate, or null when it cannot be — see `useRepostTarget`. */
+  /** The post to circulate, or null when it cannot be — see `repostTargetFor`. */
   target: PortalTarget | null
   /** The source channel's name, cached on the portal so a row renders before it
    *  resolves. */
   sourceName?: string
+  /** The version this endorsement stands against, for the record's `version` field. */
+  contentHash?: string
+  /** How many identities circulate it, from the author's published tally — the same
+   *  number the heart and the pin show, and NOT how many of your own channels carry it.
+   *  Those are the checkmarks in the menu. */
+  count: number
 }) {
   const client = useAuthStore((s) => s.client)
+  const appKeyHex = useAuthStore((s) => s.storedKeyHex)
   const addToast = useToastStore((s) => s.addToast)
   const channels = useOwnChannels(target)
   const [open, setOpen] = useState(false)
@@ -82,6 +97,48 @@ export function RepostButton({
 
   const carrying = channels.filter((c) => c.carries).length
 
+  // How many of this identity's channels will carry the post once `c` is toggled. Read
+  // from what was on screen rather than re-read afterwards, so the answer is about the
+  // change just made rather than about whatever else has since synced in.
+  const carriedAfter = (c: (typeof channels)[number]) =>
+    carrying + (c.carries ? -1 : 1)
+
+  const item: EndorsedItem = {
+    channelID: target.channelID,
+    publishedAt: target.publishedAt,
+    contentHash,
+  }
+
+  // Assert or withdraw this identity's repost of the post. Which side of zero the channel
+  // count lands on is the whole condition — writing is already idempotent, since
+  // `writeEndorsement` skips a record that says exactly this, so a second channel needs no
+  // special case here. Only the withdrawal does, and it gets one by being the other branch.
+  //
+  // Best-effort and after the publish: the portal is already live, so a doc write that
+  // fails costs a count rather than the repost, and the next toggle rewrites it.
+  //
+  // The reference comes from the shared rule every gesture uses. Deriving it from the
+  // target instead would be MORE navigable for a portal-sourced post — provably public,
+  // author named — and would also be a second rule: two endorsements of one item
+  // disagreeing about the reference each read the other as stale and rewrite it, forever.
+  const syncEndorsement = async (carried: number) => {
+    if (!appKeyHex) return
+    try {
+      if (carried > 0) {
+        await writeEndorsement(
+          appKeyHex,
+          'repost',
+          item,
+          await referenceAuthorFor(item.channelID),
+        )
+      } else {
+        await deleteEndorsement(appKeyHex, 'repost', item)
+      }
+    } catch (e) {
+      console.warn('repost endorsement write failed:', e)
+    }
+  }
+
   const toggle = async (c: (typeof channels)[number]) => {
     if (busy) return
     setBusy(c.channelID)
@@ -96,6 +153,14 @@ export function RepostButton({
         }
         await repostInChannel(client, c, repost)
       }
+      // The endorsement is about this IDENTITY, not about the channel, so it turns on the
+      // first of your channels to carry the post and off with the last. Reposting into
+      // three of them is one reposter.
+      //
+      // After the publish rather than beside it: a count is worth less than the post, and
+      // the store is only right about which channels carry it once the manifest has
+      // landed.
+      await syncEndorsement(carriedAfter(c))
     } catch (e) {
       // A publish that didn't land has to say so. The menu reads its state from the
       // manifest, so it corrects itself — what a reader would otherwise be left with is
@@ -110,10 +175,8 @@ export function RepostButton({
 
   return (
     <div ref={wrapper} className="relative flex items-center gap-1">
-      {carrying > 0 && (
-        <span className="text-xs tabular-nums text-neutral-500">
-          {carrying}
-        </span>
+      {count > 0 && (
+        <span className="text-xs tabular-nums text-neutral-500">{count}</span>
       )}
       <button
         type="button"
