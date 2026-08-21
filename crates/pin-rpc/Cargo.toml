@@ -19,3 +19,9 @@ async-channel = "2"
 iroh = "1.0.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+[dev-dependencies]
+# A hand-built runtime for the two-endpoint wire tests: the accept path is the one part
+# of this crate that a pure test can't reach, and refusing a knock is a wire behavior.
+# No `macros` feature, so nothing here needs tokio-macros.
+tokio = { version = "1", features = ["rt-multi-thread", "time"] }

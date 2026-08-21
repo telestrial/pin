@@ -18,24 +18,29 @@
 //! access request for a private channel) needs no change here to pass through. The same
 //! posture the identity loop takes when it publishes endorsements verbatim.
 //!
-//! **The reply is empty, and that is not the same as having none.** A knock rides one
-//! bidirectional stream: the dialer writes and finishes, the receiver reads, parks, and
-//! closes its side without writing a byte. The sender's read completing is what tells it
-//! the frame was consumed.
+//! **The reply is empty, and it means custody.** A knock rides one bidirectional stream:
+//! the dialer writes and finishes, and the receiver reads and closes its side without
+//! writing a byte — but only if it parked the knock. If it did not, it RESETS the stream,
+//! so the sender's read fails. Acknowledged means we have it and the sender is done;
+//! anything else means draw no conclusion and come back.
 //!
-//! It was unidirectional first, and that was wrong. `finish()` closes the LOCAL side of a
-//! stream; it says nothing about the peer having read anything. A sender that finished and
-//! immediately closed the connection tore the stream down underneath the receiver's read,
-//! which failed — so knocks were counted as delivered and silently never arrived. With
-//! nothing coming back there was no way for a sender to know better.
+//! It was unidirectional first, and that was wrong twice over. `finish()` closes the LOCAL
+//! side of a stream and says nothing about the peer having read anything, so a sender that
+//! finished and immediately closed the connection tore the stream down underneath the
+//! receiver's read — knocks counted as delivered that never arrived. Making it
+//! bidirectional fixed the tear-down and left the second half: the reply acknowledged
+//! unconditionally, so a knock dropped for a full inbox was reported as landed and never
+//! retried. Out-of-graph engagement has no other route, so that is a count permanently
+//! short.
 //!
-//! What the original reasoning was protecting still holds, because an empty close is not a
-//! response frame. It carries no bytes, so there is nothing to read; the receiver closes
-//! IDENTICALLY whether it parked the knock or discarded it, so acceptance can't be
-//! inferred; and it happens before any verification — that is the reconcile loop's job,
-//! minutes later — so its timing reveals nothing about what we decided. All a sender
-//! learns is that we were up and read the stream, which a completed QUIC handshake already
-//! told it.
+//! Refusal is deliberately indistinguishable from unreachability — a reset reads the same
+//! as an offline node, a bad network, or a relay dropping the connection. So withholding
+//! the ack is the backpressure signal, and it is the hook a sanction would hang on without
+//! introducing any state a prober could observe. What the original silence was protecting
+//! survives: the reply carries no bytes, and it is decided before anything is verified
+//! (that is the reconcile loop's job, minutes later), so it reveals nothing about whether a
+//! signature checked, whether the subject was ours, or whether a count moved. The only
+//! thing a sender learns is whether we took the frame, which is the only thing it needs.
 //!
 //! Accepting-and-parking is deliberately the whole job. The reconcile loop is what
 //! drains the inbox — verify the signature, match the subject against what this identity
@@ -49,7 +54,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use iroh::endpoint::Connection;
+use iroh::endpoint::{Connection, VarInt};
 use iroh::protocol::{AcceptError, ProtocolHandler};
 use serde::{Deserialize, Serialize};
 
@@ -62,11 +67,17 @@ pub const MAX_FRAME: usize = 64 * 1024;
 /// How many knocks may be parked at once.
 ///
 /// The inbox is in memory, so it needs a ceiling: without one a peer could grow it until
-/// the process dies, and there is no reply through which to signal backpressure. When it
-/// is full a knock is DROPPED rather than evicting an older one — a flooder should not be
-/// able to push real knocks out — and the sender's own retry is what recovers it once the
+/// the process dies. When it is full a knock is DROPPED rather than evicting an older one
+/// — a flooder should not be able to push real knocks out — and the stream is refused
+/// rather than acknowledged, so the sender keeps it outstanding and comes back once the
 /// drain has made room.
 pub const MAX_INBOX: usize = 1024;
+
+/// Sent when a knock is refused, to reset the stream rather than close it cleanly.
+///
+/// The code itself is never read: a sender only needs its read to fail, and reading a
+/// reason out of a refusal would be a response frame by another name.
+const REFUSED: VarInt = VarInt::from_u32(1);
 
 #[derive(Serialize, Deserialize)]
 struct Request {
@@ -170,8 +181,8 @@ impl HeyHandler {
     /// Take one request frame. Returns whether it was parked.
     ///
     /// Pure over the inbox, so it is directly testable without a network. The return
-    /// value is for tests and diagnostics — nothing is sent back to the knocker, whether
-    /// this succeeded or not.
+    /// value is what the handler answers on: parked is acknowledged, anything else — a
+    /// frame we can't read, a full inbox — is refused.
     pub fn accept_knock(&self, request: &[u8]) -> bool {
         let Ok(req) = serde_json::from_slice::<Request>(request) else {
             return false;
@@ -212,11 +223,18 @@ impl ProtocolHandler for HeyHandler {
                 .read_to_end(MAX_FRAME)
                 .await
                 .map_err(AcceptError::from_err)?;
-            // A frame we can't use is dropped in silence, the same as one we can. Telling
-            // a knocker which it was is the oracle this protocol declines to be — so the
-            // close below happens either way, and before anything is verified.
-            self.accept_knock(&request);
-            send.finish().map_err(AcceptError::from_err)?;
+            // Answered on custody alone, and decided here rather than after the drain
+            // verifies anything — so the one bit a knocker can read is whether we took
+            // the frame, never what we made of it.
+            if self.accept_knock(&request) {
+                send.finish().map_err(AcceptError::from_err)?;
+            } else {
+                // Withholding the ack has to be a deliberate act: dropping a `SendStream`
+                // finishes it, so omission would still acknowledge. Resetting is what
+                // makes the sender's read fail, which is how it knows to keep the knock
+                // outstanding and try again.
+                let _ = send.reset(REFUSED);
+            }
         }
     }
 }
@@ -244,6 +262,61 @@ mod tests {
             "createdAt": "2026-08-11T12:00:00.000Z",
             "sig": "Zm9vYmFy",
         })
+    }
+
+    /// Drive one real knock over one real connection, and report whether the SENDER's
+    /// read completed — which is the whole of what it has to go on.
+    ///
+    /// Two local endpoints with no relay and no discovery, so this needs nothing off the
+    /// machine. It is here because the accept path is the one part of this crate a pure
+    /// test cannot reach, and whether a refusal reaches the sender is a wire behavior:
+    /// dropping a `SendStream` finishes it, so an implementation that meant to withhold
+    /// the ack by omission would pass every test above this one.
+    fn knock_acknowledged(prefill: usize) -> bool {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let inbox = new_inbox();
+            for _ in 0..prefill {
+                inbox
+                    .parked
+                    .lock()
+                    .unwrap()
+                    .push(Knock { record: record() });
+            }
+
+            let server = iroh::Endpoint::bind(iroh::endpoint::presets::Minimal)
+                .await
+                .unwrap();
+            let addr = server.addr();
+            let router = iroh::protocol::Router::builder(server)
+                .accept(ALPN, HeyHandler::new(inbox))
+                .spawn();
+
+            let client = iroh::Endpoint::bind(iroh::endpoint::presets::Minimal)
+                .await
+                .unwrap();
+            let conn = client.connect(addr, ALPN).await.unwrap();
+            let (mut send, mut recv) = conn.open_bi().await.unwrap();
+            send.write_all(&hey_request(&record())).await.unwrap();
+            send.finish().unwrap();
+            let acknowledged = recv.read_to_end(MAX_FRAME).await.is_ok();
+
+            conn.close(0u32.into(), b"bye");
+            router.shutdown().await.ok();
+            acknowledged
+        })
+    }
+
+    #[test]
+    fn a_parked_knock_is_acknowledged() {
+        assert!(knock_acknowledged(0));
+    }
+
+    #[test]
+    fn a_knock_refused_for_a_full_inbox_reaches_the_sender_as_a_failure() {
+        // The one that matters: acknowledging this would have the sender record it as
+        // delivered and never come back, and out-of-graph engagement has no second route.
+        assert!(!knock_acknowledged(MAX_INBOX));
     }
 
     #[test]

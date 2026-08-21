@@ -303,8 +303,11 @@ async fn knock(
 /// The wait is the point. `finish()` closes our side of the stream and says nothing about
 /// the peer having read it, so a sender that finished and closed the connection would tear
 /// the stream down underneath the receiver's read — marking knocks delivered that never
-/// arrived. The receiver closes its (empty) side once it has parked the frame, so this read
-/// completing is what makes the delivery mark honest.
+/// arrived. The receiver closes its (empty) side once it has parked the frame, and resets
+/// the stream when it hasn't, so this read completing is what makes the delivery mark
+/// honest: a refusal reads as a failure here, no mark is written, and the next pass tries
+/// again — the next endpoint first, since another instance of the same identity may have
+/// room where this one had none.
 async fn send_knock(conn: &iroh::endpoint::Connection, frame: &[u8]) -> bool {
     let Ok((mut send, mut recv)) = conn.open_bi().await else {
         return false;
