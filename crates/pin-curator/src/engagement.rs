@@ -821,7 +821,7 @@ pub async fn engagement_once(
 
     // The comment lane's half of the same drain. Its own collection and its own addresses,
     // so nothing above and nothing below touches what it writes.
-    let (comments, commented_on) =
+    let (comments, commented_on, comments_reached) =
         crate::comments::take_in(ctx, own_did, &subjects, comment_knocks, &comments_at).await;
     outcome.comments = comments;
 
@@ -901,10 +901,14 @@ pub async fn engagement_once(
         // The log IS the backing set a count asserts, so it is what a count is folded from.
         // `found` keeps its job of deciding what the log should say; it just stops standing
         // in for the log afterwards.
-        let records = log_records_for(ctx, subject).await;
+        let gestures = log_records_for(ctx, subject).await;
+        // Comments are counted by the same fold: `kind` drives it, so a `comment` tally
+        // appears beside the others with its own set and its own root, and a row reads one
+        // record for every number it shows.
+        let commented = crate::comments::held_for(ctx, subject).await;
 
         let channel_doc = open_channel_doc(ctx, channel_id).await?;
-        if records.is_empty() {
+        if gestures.is_empty() && commented.is_empty() {
             // Nothing endorses it any more. The tally goes rather than sitting at zero:
             // a reader treats an absent tally and a zero one the same, and one fewer
             // record is one fewer thing to sync.
@@ -922,13 +926,14 @@ pub async fn engagement_once(
         // shortcut: byte-identical bytes are a STRONGER proof their endorsements still stand
         // than downloading and re-parsing would be. So retention stops being the thing that
         // makes a pass expensive.
-        let all_reached = records.iter().all(|r| reached.contains(&r.actor));
+        let all_reached = all_confirmed(&gestures, &reached, &commented, &comments_reached);
         let retention = if all_reached {
             Some(now_iso.clone())
         } else {
             held_retention(ctx, &channel_doc, subject).await
         };
 
+        let records: Vec<Endorsement> = gestures.into_iter().chain(commented).collect();
         let aggregate = pin_engagement::fold(&records, retention, now_iso.clone())?;
         let bytes = serde_json::to_vec(&aggregate).map_err(|e| format!("encode tally: {e}"))?;
         channel_doc
@@ -968,6 +973,24 @@ pub async fn engagement_once(
     }
 
     Ok(outcome)
+}
+
+/// Whether every record behind one subject had its actor confirmed this pass.
+///
+/// Per lane, because the two are read from different blobs: an actor whose directory was
+/// confirmed may still have had their comments download fail, and one set standing in for
+/// both would stamp a retention check that never ran. That field is published to say how
+/// stale the check is, so overstating it is the one thing it must not do.
+fn all_confirmed(
+    gestures: &[Endorsement],
+    reached: &BTreeSet<String>,
+    commented: &[Endorsement],
+    comments_reached: &BTreeSet<String>,
+) -> bool {
+    gestures.iter().all(|r| reached.contains(&r.actor))
+        && commented
+            .iter()
+            .all(|r| comments_reached.contains(&r.actor))
 }
 
 /// Whether a held record should be withdrawn, and the subject whose tally then moves.
@@ -1388,6 +1411,44 @@ mod tests {
 
     fn withdrawn(when: &str) -> Retraction {
         withdrawn_of(SUBJECT, when)
+    }
+
+    #[test]
+    fn a_retention_stamp_needs_both_lanes_confirmed() {
+        let liked =
+            Endorsement::sign(&[1u8; 32], pin_engagement::KIND_LIKE, "s", "v", "t", None).unwrap();
+        let said = Endorsement::sign_comment(&[2u8; 32], "s", "v", "t", None, "words").unwrap();
+        let both: BTreeSet<String> = [liked.actor.clone(), said.actor.clone()]
+            .into_iter()
+            .collect();
+        let only_liker: BTreeSet<String> = [liked.actor.clone()].into_iter().collect();
+        let only_commenter: BTreeSet<String> = [said.actor.clone()].into_iter().collect();
+
+        assert!(all_confirmed(
+            &[liked.clone()],
+            &both,
+            &[said.clone()],
+            &both
+        ));
+
+        // A commenter whose blob failed while their directory read fine. Stamping this as
+        // checked would publish a claim about a read that never happened.
+        assert!(!all_confirmed(
+            &[liked.clone()],
+            &both,
+            &[said.clone()],
+            &only_liker
+        ));
+        // And the reverse: the comment lane reached them, the gesture lane did not.
+        assert!(!all_confirmed(
+            &[liked.clone()],
+            &only_commenter,
+            &[said.clone()],
+            &both
+        ));
+
+        // Nothing to confirm is confirmed.
+        assert!(all_confirmed(&[], &BTreeSet::new(), &[], &BTreeSet::new()));
     }
 
     #[test]

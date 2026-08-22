@@ -345,6 +345,44 @@ pub(crate) async fn own(ctx: &EngagementContext) -> Vec<Endorsement> {
     out
 }
 
+/// Whether a held key belongs to one subject.
+///
+/// By PARSING rather than by a prefix match, so a subject that happens to be a prefix of
+/// another cannot pull in its records.
+fn folds_into(rkey: &str, subject: &str) -> bool {
+    matches!(pin_derive::parse_comment_log_rkey(rkey), Some((s, _, _)) if s == subject)
+}
+
+/// Every comment this identity holds about one subject.
+///
+/// A scan of the log, which is keyed subject-first for exactly this. Unreadable entries are
+/// skipped rather than failing the read: one bad record must not take a whole conversation
+/// with it.
+pub(crate) async fn held_for(ctx: &EngagementContext, subject: &str) -> Vec<Endorsement> {
+    let rkeys = crate::list_rkeys(&ctx.doc, ctx.author_id, pin_derive::COMMENT_LOG_COLLECTION)
+        .await
+        .unwrap_or_default();
+
+    let mut out = Vec::new();
+    for rkey in rkeys.iter().filter(|k| folds_into(k, subject)) {
+        let Ok(Some(raw)) = read_record(
+            &ctx.doc,
+            &ctx.blobs,
+            ctx.author_id,
+            pin_derive::COMMENT_LOG_COLLECTION,
+            rkey,
+        )
+        .await
+        else {
+            continue;
+        };
+        if let Ok(record) = serde_json::from_slice::<Endorsement>(&raw) {
+            out.push(record);
+        }
+    }
+    out
+}
+
 /// Whether a held comment should go, and the subject whose conversation then moves.
 ///
 /// Gone only when the actor who wrote it was READ this pass and it was not among what they
@@ -364,15 +402,16 @@ pub(crate) fn withdrawal(
 
 /// Bring this identity's held comments up to date: what it wrote, what the graph published,
 /// and what was knocked at it.
-///
-/// Answers with the subjects whose conversation moved, which is what the fold re-reads.
+/// Answers with the subjects whose conversation moved, and the actors whose comments were
+/// read — the second because a retention stamp may only claim what was actually confirmed,
+/// and being reachable for endorsements says nothing about the separate blob.
 pub async fn take_in(
     ctx: &EngagementContext,
     own_did: &str,
     subjects: &SubjectTable,
     knocks: Vec<serde_json::Value>,
     at: &BTreeMap<String, CommentsAt>,
-) -> (CommentsOutcome, BTreeSet<String>) {
+) -> (CommentsOutcome, BTreeSet<String>, BTreeSet<String>) {
     let mut outcome = CommentsOutcome::default();
     let mut touched = BTreeSet::new();
     // Keyed the way the log is, so two records about one address resolve to one write.
@@ -516,7 +555,7 @@ pub async fn take_in(
         .await;
     }
 
-    (outcome, touched)
+    (outcome, touched, reached)
 }
 
 #[cfg(test)]
@@ -537,6 +576,18 @@ mod tests {
 
     fn actors(of: &[&str]) -> BTreeSet<String> {
         of.iter().map(|a| a.to_string()).collect()
+    }
+
+    #[test]
+    fn a_held_key_folds_into_its_own_subject_only() {
+        // By parsing, not by prefix: a subject that is a prefix of another would otherwise
+        // pull that one's comments into its conversation and its count.
+        let c = comment(WHEN, "words");
+        let rkey = log_key(&c);
+        assert!(folds_into(&rkey, SUBJECT));
+        assert!(!folds_into(&rkey, &SUBJECT[..20]));
+        assert!(!folds_into(&rkey, "another"));
+        assert!(!folds_into("nonsense", SUBJECT));
     }
 
     #[test]

@@ -1404,6 +1404,27 @@ mod tests {
     }
 
     #[test]
+    fn comments_and_gestures_tally_side_by_side() {
+        // One fold, one aggregate: `kind` drives it, so a comment count appears beside the
+        // gestures with its own set and its own root, and a row reads one record for every
+        // number it shows.
+        let mut records = set(3, KIND_LIKE);
+        records.push(
+            Endorsement::sign_comment(&[7u8; 32], SUBJECT, VERSION, WHEN, None, "said so").unwrap(),
+        );
+        let agg = fold(&records, None, WHEN.into()).unwrap();
+
+        assert_eq!(agg.kinds[KIND_LIKE].count, 3);
+        assert_eq!(agg.kinds[KIND_COMMENT].count, 1);
+        // Separate sets, so an auditor cannot be handed one lane's records for the other's
+        // claim.
+        assert_ne!(
+            agg.kinds[KIND_LIKE].set_root,
+            agg.kinds[KIND_COMMENT].set_root
+        );
+    }
+
+    #[test]
     fn several_comments_from_one_actor_all_count() {
         // A gesture is a singleton per actor, so the fold has never had to hold two records
         // from one — a comment is where that stops being true, and counting commenters
