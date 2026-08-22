@@ -704,6 +704,51 @@ pub struct Aggregate {
     pub updated_at: String,
 }
 
+/// How many of one subject's comments get published.
+///
+/// A replication bound rather than an opinion about conversation. The published conversation
+/// is one entry in the channel's doc, which syncs in full to every subscriber — so what this
+/// caps is what a reader downloads to open a post, and a body ceiling alone would still let
+/// one busy post push megabytes at everybody.
+///
+/// The cap is applied where a subject's comments are GATHERED, so the count and the
+/// conversation are made of the same set: a tally claiming more than the conversation shows
+/// would be a number whose backing set the holder had, in part, chosen not to produce.
+pub const MAX_CONVERSATION: usize = 100;
+
+/// One subject's published conversation: the signed comments themselves.
+///
+/// Verbatim, so a reader verifies each one against the actor's own key rather than trusting
+/// whoever published the page it appears on. That is the same reason a directory carries
+/// endorsements untouched, and it is what makes an integrated comment attributable to the
+/// person who wrote it instead of to the host who displays it.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct Conversation {
+    pub comments: Vec<Endorsement>,
+    #[serde(rename = "updatedAt")]
+    pub updated_at: String,
+}
+
+/// The comments of one subject that get published, newest first, and how many were left out.
+///
+/// Newest first because that is the half of a long thread anybody reads, and deterministic
+/// because two instances of the same identity holding the same log must publish the same set
+/// — otherwise they would take turns rewriting one entry with different roots. Ties break on
+/// the signature, which is what separates two records that agree on every other field.
+///
+/// The count of what was dropped is returned rather than discarded: a cap nobody is told
+/// about reads as complete.
+pub fn newest_comments(mut records: Vec<Endorsement>) -> (Vec<Endorsement>, usize) {
+    records.sort_by(|a, b| {
+        b.created_at
+            .cmp(&a.created_at)
+            .then_with(|| b.sig.cmp(&a.sig))
+    });
+    let dropped = records.len().saturating_sub(MAX_CONVERSATION);
+    records.truncate(MAX_CONVERSATION);
+    (records, dropped)
+}
+
 /// Fold a set of VERIFIED records for one subject into its published tally.
 ///
 /// Verification is the caller's — it happens once, when a record arrives — and this must
@@ -1401,6 +1446,74 @@ mod tests {
             agg.kinds[KIND_LIKE].retention_checked_at,
             Some(WHEN.to_string())
         );
+    }
+
+    #[test]
+    fn a_conversation_publishes_the_newest_and_says_how_many_it_left() {
+        // A cap nobody is told about reads as complete, so the number that did not fit comes
+        // back with the ones that did.
+        let many: Vec<Endorsement> = (0..MAX_CONVERSATION + 5)
+            .map(|i| {
+                let when = format!("2026-08-22T12:00:{:02}.000Z", i % 60);
+                Endorsement::sign_comment(
+                    &[(i % 200) as u8 + 1; 32],
+                    SUBJECT,
+                    VERSION,
+                    &when,
+                    None,
+                    "words",
+                )
+                .unwrap()
+            })
+            .collect();
+        let (published, dropped) = newest_comments(many);
+        assert_eq!(published.len(), MAX_CONVERSATION);
+        assert_eq!(dropped, 5);
+    }
+
+    #[test]
+    fn a_short_conversation_is_published_whole() {
+        let three: Vec<Endorsement> = ["a", "b", "c"]
+            .iter()
+            .enumerate()
+            .map(|(i, body)| {
+                let when = format!("2026-08-22T12:0{i}:00.000Z");
+                Endorsement::sign_comment(&SEED, SUBJECT, VERSION, &when, None, body).unwrap()
+            })
+            .collect();
+        let (published, dropped) = newest_comments(three);
+        assert_eq!(dropped, 0);
+        // Newest first: the half of a long thread anybody reads.
+        assert_eq!(published[0].body.as_deref(), Some("c"));
+        assert_eq!(published[2].body.as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn one_log_publishes_one_set_whatever_order_it_is_read_in() {
+        // Two instances of the same identity write this entry, so a set that depended on read
+        // order would have them taking turns publishing different roots for one subject.
+        let mut records: Vec<Endorsement> = (0..6)
+            .map(|i| {
+                let when = format!("2026-08-22T12:0{i}:00.000Z");
+                Endorsement::sign_comment(&[(i + 1) as u8; 32], SUBJECT, VERSION, &when, None, "w")
+                    .unwrap()
+            })
+            .collect();
+        let forwards = newest_comments(records.clone()).0;
+        records.reverse();
+        assert_eq!(forwards, newest_comments(records).0);
+    }
+
+    #[test]
+    fn two_comments_agreeing_on_everything_signed_still_order() {
+        // Same subject, same instant, different actors — so `createdAt` cannot separate them
+        // and the signature has to.
+        let a = Endorsement::sign_comment(&[11u8; 32], SUBJECT, VERSION, WHEN, None, "w").unwrap();
+        let b = Endorsement::sign_comment(&[12u8; 32], SUBJECT, VERSION, WHEN, None, "w").unwrap();
+        assert_eq!(a.created_at, b.created_at);
+        let one = newest_comments(vec![a.clone(), b.clone()]).0;
+        let other = newest_comments(vec![b, a]).0;
+        assert_eq!(one, other);
     }
 
     #[test]

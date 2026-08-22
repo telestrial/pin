@@ -46,7 +46,7 @@ use pin_derive::record_key;
 use pin_engagement::Aggregate;
 
 use crate::channeldoc::{manifest_key, TICKET_PREFIX};
-use crate::engagement::tally_key;
+use crate::engagement::{conversation_key, tally_key};
 use crate::{cache_tally, is_older_than_cached, read_record, read_settings, SUB_COLLECTION};
 
 /// Everything a pass needs, gathered by whichever engine is running it.
@@ -81,6 +81,8 @@ pub struct ChannelSyncOutcome {
     pub stale: usize,
     /// Published counts cached into `tally/<id>:<subject>` since the last report.
     pub tallies: usize,
+    /// Published conversations cached into `thread/<id>:<subject>` since the last report.
+    pub threads: usize,
 }
 
 /// One channel this instance is live-syncing.
@@ -259,6 +261,29 @@ enum Push {
     Nothing,
 }
 
+/// What an arriving key names, when it names anything.
+///
+/// A channel's replica carries its manifest, its counts and its conversations in one
+/// keyspace, so an event is routed by what arrived rather than by re-reading everything.
+enum Named<'a> {
+    Tally(&'a str),
+    Conversation(&'a str),
+}
+
+fn named(key: &str) -> Option<Named<'_>> {
+    if let Some(subject) = tally_subject(key) {
+        return Some(Named::Tally(subject));
+    }
+    conversation_subject(key).map(Named::Conversation)
+}
+
+/// The subject a key names, when that key is a published conversation.
+fn conversation_subject(key: &str) -> Option<&str> {
+    key.strip_prefix(&pin_derive::collection_prefix(
+        pin_derive::CONVERSATION_COLLECTION,
+    ))
+}
+
 /// The subject a key names, when that key is a published tally.
 ///
 /// A channel's replica carries its manifest and its counts in one keyspace, so the event
@@ -291,6 +316,46 @@ fn arrival_key(event: &LiveEvent) -> Option<String> {
 /// and is why it is worth distinguishing from having nothing to do: the caller holds the
 /// subject and retries it when content lands, where treating the two alike would drop the
 /// count until the floor rung next ran.
+/// Copy one subject's published conversation out of a watched replica and into the cache.
+///
+/// The same three answers a tally push gives, and for the same reason: an entry can sync
+/// before its content is downloadable, and treating that as nothing to do would leave the
+/// words missing until the floor rung next ran.
+async fn push_conversation(
+    ctx: &ChannelSyncContext,
+    channel_id: &str,
+    watched: &Watched,
+    subject: &str,
+) -> TallyPush {
+    let Ok(Some(entry)) = watched
+        .doc
+        .get_one(Query::single_latest_per_key().key_exact(conversation_key(subject)))
+        .await
+    else {
+        return TallyPush::Nothing;
+    };
+    let Ok(bytes) = ctx.blobs.get_bytes(entry.content_hash()).await else {
+        return TallyPush::NotReady;
+    };
+    let Ok(conversation) = serde_json::from_slice::<pin_engagement::Conversation>(&bytes) else {
+        return TallyPush::Nothing;
+    };
+    if crate::cache_thread(
+        &ctx.doc,
+        &ctx.blobs,
+        ctx.author_id,
+        channel_id,
+        subject,
+        &conversation,
+    )
+    .await
+    {
+        TallyPush::Cached
+    } else {
+        TallyPush::Nothing
+    }
+}
+
 async fn push_tally(
     ctx: &ChannelSyncContext,
     channel_id: &str,
@@ -384,6 +449,7 @@ pub async fn run_channel_sync_loop(
     let mut pushed = 0usize;
     let mut stale = 0usize;
     let mut tallies = 0usize;
+    let mut threads = 0usize;
     // Subjects whose entry has arrived but whose value hasn't downloaded, by channel.
     // Retried when content lands, because nothing else would come back for them.
     let mut pending: HashMap<String, HashSet<String>> = HashMap::new();
@@ -405,6 +471,7 @@ pub async fn run_channel_sync_loop(
             // Added to, not assigned: an import scans the replica it just took on, and
             // that count is already in the outcome.
             o.tallies += std::mem::take(&mut tallies);
+            o.threads += std::mem::take(&mut threads);
             o
         }));
 
@@ -422,12 +489,25 @@ pub async fn run_channel_sync_loop(
                     continue;
                 };
                 let key = arrival_key(&event);
-                match key.as_deref().and_then(tally_subject) {
-                    // A tally landed and the event named it, so nothing else is re-read.
-                    Some(subject) => {
+                match key.as_deref().and_then(named) {
+                    // A count landed and the event named it, so nothing else is re-read.
+                    Some(Named::Tally(subject)) => {
                         let subject = subject.to_string();
                         match push_tally(&ctx, &channel_id, w, &subject).await {
                             TallyPush::Cached => tallies += 1,
+                            TallyPush::NotReady => {
+                                pending
+                                    .entry(channel_id.clone())
+                                    .or_default()
+                                    .insert(subject);
+                            }
+                            TallyPush::Nothing => {}
+                        }
+                    }
+                    Some(Named::Conversation(subject)) => {
+                        let subject = subject.to_string();
+                        match push_conversation(&ctx, &channel_id, w, &subject).await {
+                            TallyPush::Cached => threads += 1,
                             TallyPush::NotReady => {
                                 pending
                                     .entry(channel_id.clone())
@@ -447,9 +527,22 @@ pub async fn run_channel_sync_loop(
                             Push::Nothing => {}
                         }
                         for subject in pending.get(&channel_id).cloned().unwrap_or_default() {
-                            let settled = match push_tally(&ctx, &channel_id, w, &subject).await {
+                            // Both, because a pending subject records that SOMETHING for it
+                            // wasn't downloadable yet and not which. Each retry is a local
+                            // lookup that answers Nothing when there is nothing there.
+                            let mut settled = match push_tally(&ctx, &channel_id, w, &subject).await
+                            {
                                 TallyPush::Cached => {
                                     tallies += 1;
+                                    true
+                                }
+                                TallyPush::Nothing => true,
+                                TallyPush::NotReady => false,
+                            };
+                            settled &= match push_conversation(&ctx, &channel_id, w, &subject).await
+                            {
+                                TallyPush::Cached => {
+                                    threads += 1;
                                     true
                                 }
                                 TallyPush::Nothing => true,
@@ -500,6 +593,19 @@ mod tests {
             entry: iroh_docs::sync::Entry::new(id, record),
             content_status: iroh_docs::ContentStatus::Complete,
         }
+    }
+
+    #[test]
+    fn a_published_conversation_routes_to_its_subject() {
+        // Its own collection beside the counts, so a row that wants a number reads a small
+        // entry and only opening a post pulls the words.
+        assert!(matches!(
+            named("conversation/abc"),
+            Some(Named::Conversation("abc"))
+        ));
+        assert!(matches!(named("engagement/abc"), Some(Named::Tally("abc"))));
+        assert!(named("thread/chan:abc").is_none());
+        assert!(named("tally/chan:abc").is_none());
     }
 
     #[test]

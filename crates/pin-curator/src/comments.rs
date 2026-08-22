@@ -74,6 +74,12 @@ pub struct CommentsOutcome {
     pub unreachable: usize,
     /// Comments removed because the actor who wrote them no longer publishes them.
     pub withdrawn: usize,
+    /// Subjects whose conversation was republished.
+    pub published: usize,
+    /// Comments held but left out of what was published, the subject having more than one
+    /// entry can carry. Reported rather than swallowed: a cap nobody is told about reads as
+    /// complete.
+    pub dropped: usize,
 }
 
 /// Whether a knocked payload belongs to this lane.

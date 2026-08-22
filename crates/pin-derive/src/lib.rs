@@ -413,6 +413,27 @@ pub fn parse_engagement_log_rkey(rkey: &str) -> Option<(&str, &str, &str)> {
 /// delivers a new post.
 pub const ENGAGEMENT_COLLECTION: &str = "engagement";
 
+/// The collection holding the published CONVERSATION for each subject, in the CHANNEL's doc.
+///
+/// Beside the tally rather than inside it, because the two are read at different moments: a
+/// feed row wants the count and nothing else, and merging them would make every row in a feed
+/// carry every comment body in it. Opening a post is where the words are wanted.
+pub const CONVERSATION_COLLECTION: &str = "conversation";
+
+/// The collection where a conversation is cached for READING, in this identity's own doc.
+///
+/// The same pairing `TALLY_COLLECTION` has with `ENGAGEMENT_COLLECTION`, and for the same
+/// reason: a screen cannot reach a channel's own replica, so the Curator lands both rungs at
+/// one address in the doc the frontend already reads.
+pub const THREAD_COLLECTION: &str = "thread";
+
+/// The rkey for one cached conversation: the channel, then the subject.
+///
+/// Keyed exactly as a cached tally is, so dropping a channel's cache wholesale takes both.
+pub fn thread_rkey(channel_id: &str, subject: &str) -> String {
+    format!("{channel_id}:{subject}")
+}
+
 /// The collection where a tally is cached for READING, in this identity's own doc.
 ///
 /// The published tally lives in the channel's doc ([`ENGAGEMENT_COLLECTION`]) and, for
@@ -753,6 +774,12 @@ mod tests {
         // And the crawl's cache is a third thing again: what we last READ, versus what we
         // hold and what we publish. Sharing a name with either would make a prefix scan
         // for one return the others.
+        // The published pair and the cached pair, each of which shares a keyspace with the
+        // other member of its own doc: a collision would make a conversation overwrite a
+        // count.
+        assert_ne!(CONVERSATION_COLLECTION, ENGAGEMENT_COLLECTION);
+        assert_ne!(THREAD_COLLECTION, TALLY_COLLECTION);
+        assert_ne!(CONVERSATION_COLLECTION, THREAD_COLLECTION);
         assert_ne!(CRAWL_COLLECTION, ENGAGEMENT_LOG_COLLECTION);
         assert_ne!(CRAWL_COLLECTION, ENGAGEMENT_COLLECTION);
     }

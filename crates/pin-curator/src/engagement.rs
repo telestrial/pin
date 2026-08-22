@@ -905,7 +905,12 @@ pub async fn engagement_once(
         // Comments are counted by the same fold: `kind` drives it, so a `comment` tally
         // appears beside the others with its own set and its own root, and a row reads one
         // record for every number it shows.
-        let commented = crate::comments::held_for(ctx, subject).await;
+        // Capped where they are GATHERED, so the count and the conversation are made of one
+        // set: a tally claiming more than the conversation shows would be a number whose
+        // backing set the holder had in part chosen not to produce.
+        let (commented, dropped) =
+            pin_engagement::newest_comments(crate::comments::held_for(ctx, subject).await);
+        outcome.comments.dropped += dropped;
 
         let channel_doc = open_channel_doc(ctx, channel_id).await?;
         if gestures.is_empty() && commented.is_empty() {
@@ -913,7 +918,11 @@ pub async fn engagement_once(
             // a reader treats an absent tally and a zero one the same, and one fewer
             // record is one fewer thing to sync.
             let _ = channel_doc.del(ctx.author_id, tally_key(subject)).await;
+            let _ = channel_doc
+                .del(ctx.author_id, conversation_key(subject))
+                .await;
             crate::clear_cached_tally(&ctx.doc, ctx.author_id, channel_id, subject).await;
+            crate::clear_cached_thread(&ctx.doc, ctx.author_id, channel_id, subject).await;
             outcome.cleared += 1;
             continue;
         }
@@ -933,7 +942,10 @@ pub async fn engagement_once(
             held_retention(ctx, &channel_doc, subject).await
         };
 
-        let records: Vec<Endorsement> = gestures.into_iter().chain(commented).collect();
+        let records: Vec<Endorsement> = gestures
+            .into_iter()
+            .chain(commented.iter().cloned())
+            .collect();
         let aggregate = pin_engagement::fold(&records, retention, now_iso.clone())?;
         let bytes = serde_json::to_vec(&aggregate).map_err(|e| format!("encode tally: {e}"))?;
         channel_doc
@@ -954,6 +966,37 @@ pub async fn engagement_once(
         )
         .await;
         outcome.tallies += 1;
+
+        // The words, in their own entry. An empty conversation is a deletion rather than an
+        // empty list, for the reason an empty tally is: a reader treats absent and empty the
+        // same, and a subject with likes and no comments should not sync one.
+        if commented.is_empty() {
+            let _ = channel_doc
+                .del(ctx.author_id, conversation_key(subject))
+                .await;
+            crate::clear_cached_thread(&ctx.doc, ctx.author_id, channel_id, subject).await;
+        } else {
+            let conversation = pin_engagement::Conversation {
+                comments: commented,
+                updated_at: now_iso.clone(),
+            };
+            let bytes = serde_json::to_vec(&conversation)
+                .map_err(|e| format!("encode conversation: {e}"))?;
+            channel_doc
+                .set_bytes(ctx.author_id, conversation_key(subject), bytes)
+                .await
+                .map_err(|e| format!("publish conversation: {e}"))?;
+            crate::cache_thread(
+                &ctx.doc,
+                &ctx.blobs,
+                ctx.author_id,
+                channel_id,
+                subject,
+                &conversation,
+            )
+            .await;
+            outcome.comments.published += 1;
+        }
     }
 
     // Then the floor, for every owned channel rather than only the ones that moved.
@@ -1183,6 +1226,11 @@ fn reclaimable(previous: Option<&crate::PublishedState>, current: &str) -> Optio
 /// readers never look, and nothing would report an error.
 pub(crate) fn tally_key(subject: &str) -> Vec<u8> {
     pin_derive::record_key(pin_derive::ENGAGEMENT_COLLECTION, subject)
+}
+
+/// Where one subject's published conversation sits in its channel's doc.
+pub(crate) fn conversation_key(subject: &str) -> Vec<u8> {
+    pin_derive::record_key(pin_derive::CONVERSATION_COLLECTION, subject)
 }
 
 /// Open one of this identity's channel docs. Idempotent, and the same derivation the

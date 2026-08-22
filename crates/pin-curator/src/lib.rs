@@ -290,6 +290,56 @@ pub(crate) async fn cache_tally(
 
 /// Drop one subject's cached tally, for a subject nothing endorses any more. Absent and
 /// zero read the same to a screen, so the record goes rather than sitting at zero.
+/// Cache one subject's published conversation where this identity's screens read it.
+///
+/// Newer-wins on `updatedAt`, the same guard the cached tally takes: the accelerant rung and
+/// the floor rung both land here, and the floor can arrive holding an older fold.
+pub(crate) async fn cache_thread(
+    doc: &Doc,
+    blobs: &Store,
+    author_id: AuthorId,
+    channel_id: &str,
+    subject: &str,
+    conversation: &pin_engagement::Conversation,
+) -> bool {
+    let rkey = pin_derive::thread_rkey(channel_id, subject);
+    let held = read_record(doc, blobs, author_id, pin_derive::THREAD_COLLECTION, &rkey)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|bytes| serde_json::from_slice::<pin_engagement::Conversation>(&bytes).ok());
+    if held.as_ref() == Some(conversation) {
+        return false;
+    }
+    if let Some(h) = &held {
+        if h.updated_at > conversation.updated_at {
+            return false;
+        }
+    }
+    let Ok(bytes) = serde_json::to_vec(conversation) else {
+        return false;
+    };
+    write_record(doc, author_id, pin_derive::THREAD_COLLECTION, &rkey, bytes)
+        .await
+        .is_ok()
+}
+
+/// Drop a cached conversation, for a subject nobody comments on any more.
+pub(crate) async fn clear_cached_thread(
+    doc: &Doc,
+    author_id: AuthorId,
+    channel_id: &str,
+    subject: &str,
+) {
+    let _ = delete_record(
+        doc,
+        author_id,
+        pin_derive::THREAD_COLLECTION,
+        &pin_derive::thread_rkey(channel_id, subject),
+    )
+    .await;
+}
+
 pub(crate) async fn clear_cached_tally(
     doc: &Doc,
     author_id: AuthorId,
