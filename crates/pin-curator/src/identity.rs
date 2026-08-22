@@ -7,6 +7,12 @@
 //!   `_ns`   — this identity's doc namespace, so a peer knows which doc to sync.
 //!   `_iroh` — every live endpoint this identity can be dialed at.
 //!
+//! The directory also points at a second blob holding this identity's comments. They live
+//! apart from it because of size: an endorsement is a few hundred bytes and stays there,
+//! while a comment carries its words inline, and this blob is fetched to draw a display
+//! name in a feed row. One extra Sia read buys it, and it lands on the crawl rather than on
+//! anything a screen waits for.
+//!
 //! ONE writer, which is the point. This used to be two: the Curator published
 //! `_iroh`/`_ns` once at startup, and a React effect published `_dir` a few seconds
 //! later — as a whole-packet overwrite, so on desktop the Curator's half was erased
@@ -33,10 +39,13 @@ use crate::{live_instances, read_record, read_settings, PublishedState, Settings
 /// The directory document's schema version. Must match `DIRECTORY_DOC_VERSION` in
 /// `src/core/identityDoc.ts` — a reader checks it and rejects anything else.
 ///
-/// 3 added `endorsements`. A reader is strict about this, so old published directories
-/// stop resolving until their author republishes — which every identity's own loop does
-/// within one cadence.
-pub const DIRECTORY_DOC_VERSION: u32 = 3;
+/// 3 added `endorsements`; 4 added `commentsURL`. A reader is strict about this, so old
+/// published directories stop resolving until their author republishes — which every
+/// identity's own loop does within one cadence.
+pub const DIRECTORY_DOC_VERSION: u32 = 4;
+
+/// The comments blob's schema version, checked by whoever downloads it.
+pub const COMMENTS_DOC_VERSION: u32 = 1;
 
 /// TXT prefixes in the published packet.
 pub(crate) const DIR_PREFIX: &str = "_dir";
@@ -46,6 +55,10 @@ pub(crate) const IROH_PREFIX: &str = "_iroh";
 /// Where this identity's directory publish state lives, so the superseded blob gets
 /// reclaimed like any other supersede.
 const DIRECTORY_RKEY: &str = "directory";
+
+/// Where the comments blob's publish state lives. Its own rkey, so the two blobs supersede
+/// independently: a comment written while the profile stands still replaces one object.
+const COMMENTS_RKEY: &str = "comments";
 
 /// How many endpoints to advertise.
 ///
@@ -99,6 +112,10 @@ pub struct IdentityOutcome {
     pub dialable: usize,
     /// Whether there was nothing to advertise, so nothing was published.
     pub empty: bool,
+    /// Whether the comments blob was re-uploaded. Its own flag because it supersedes on its
+    /// own schedule: a comment written while the profile stands still moves this and not
+    /// `uploaded`, and vice versa.
+    pub comments_uploaded: bool,
 }
 
 /// One advertised public channel: enough for a resolver to read it — the channelID
@@ -144,6 +161,18 @@ struct DirectoryDoc {
     /// anyway.
     #[serde(default)]
     endorsements: Vec<serde_json::Value>,
+    /// Where this identity's comments are, when there are any.
+    ///
+    /// A pointer rather than the records, on the size argument in the module docs. Absent
+    /// while nothing has been commented, which is also what makes the extra read
+    /// conditional: a crawl fetches this blob for everyone and the comments blob only for
+    /// identities that have written some.
+    #[serde(
+        rename = "commentsURL",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    comments_url: Option<String>,
     #[serde(rename = "updatedAt")]
     updated_at: String,
 }
@@ -210,6 +239,172 @@ async fn own_endorsements(ctx: &IdentityContext) -> Vec<serde_json::Value> {
     out
 }
 
+/// This identity's comments, as published.
+///
+/// Versioned like the directory and for the same reason: a reader that guessed at the shape
+/// would fail as a parse error somewhere further along.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct CommentsDoc {
+    version: u32,
+    /// Signed records, verbatim and opaque — the same posture the directory takes with
+    /// endorsements. Each verifies on its own, so a partial or reordered read still holds.
+    comments: Vec<serde_json::Value>,
+}
+
+/// This identity's own comment records, read out of the doc in key order.
+///
+/// Sorted so the fingerprint below is stable, exactly as `own_endorsements` is: unordered
+/// iteration would make every pass look like a change and re-upload the blob.
+async fn own_comments(ctx: &IdentityContext) -> Vec<serde_json::Value> {
+    let mut rkeys = crate::list_rkeys(&ctx.doc, ctx.author_id, pin_derive::COMMENT_COLLECTION)
+        .await
+        .unwrap_or_default();
+    rkeys.sort();
+
+    let mut out = Vec::with_capacity(rkeys.len());
+    for rkey in rkeys {
+        let Ok(Some(raw)) = read_record(
+            &ctx.doc,
+            &ctx.blobs,
+            ctx.author_id,
+            pin_derive::COMMENT_COLLECTION,
+            &rkey,
+        )
+        .await
+        else {
+            continue;
+        };
+        if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&raw) {
+            out.push(value);
+        }
+    }
+    out
+}
+
+/// A stable fingerprint of a comments blob's content.
+fn comments_fingerprint(doc: &CommentsDoc) -> String {
+    serde_json::to_value(doc)
+        .unwrap_or(serde_json::Value::Null)
+        .to_string()
+}
+
+/// What a pass worked out about the comments blob, to be applied once the packet naming it
+/// is live.
+///
+/// Split from the doing for ordering. The bytes go up FIRST, so a pointer never names an
+/// object that failed to land; the state record and the reclaim go LAST, after the packet,
+/// so a failed publish leaves the previous generation both alive and still accounted for. A
+/// state record written early would strand the object it superseded — the next pass would
+/// match the new fingerprint and never learn there was an older one.
+#[derive(Default)]
+struct CommentsPublish {
+    /// The pointer for the directory to carry.
+    url: Option<String>,
+    /// What to record about the blob just uploaded.
+    state: Option<PublishedState>,
+    /// Whether to forget the state entirely, the last comment having gone.
+    clear: bool,
+    /// The object nothing will point at once the packet is published.
+    superseded: Option<String>,
+    uploaded: bool,
+}
+
+/// What one pass needs to do about the comments blob, decided before anything is uploaded.
+///
+/// Separated from the doing so it can be tested without a Sia session or a doc, the same
+/// reason `accept_knock` is pure over its inbox. What it decides is small and easy to get
+/// backwards — whether an object is given up, and which object.
+#[derive(Debug, PartialEq, Eq)]
+enum CommentsPlan {
+    /// No comments and none published. Nothing to point at, nothing to reclaim.
+    Nothing,
+    /// What is published still matches. Carry the pointer as it stands.
+    Keep(String),
+    /// The last comment went. Publish no pointer and give up the object.
+    Drop(String),
+    /// Upload these bytes under this fingerprint, superseding whatever was held.
+    Upload {
+        bytes: Vec<u8>,
+        fp: String,
+        superseded: Option<String>,
+    },
+}
+
+fn plan_comments(
+    held: Option<PublishedState>,
+    records: Vec<serde_json::Value>,
+) -> Result<CommentsPlan, String> {
+    if records.is_empty() {
+        // A positive answer rather than an absence: the records were read and there are
+        // none, which is exactly what deleting a last comment should do.
+        return Ok(match held {
+            Some(h) => CommentsPlan::Drop(h.id),
+            None => CommentsPlan::Nothing,
+        });
+    }
+
+    let doc = CommentsDoc {
+        version: COMMENTS_DOC_VERSION,
+        comments: records,
+    };
+    let fp = comments_fingerprint(&doc);
+    // A matching fingerprint with no URL beside it cannot be pointed at, so it re-uploads.
+    if let Some(h) = &held {
+        if h.fp.as_deref() == Some(fp.as_str()) {
+            if let Some(url) = &h.url {
+                return Ok(CommentsPlan::Keep(url.clone()));
+            }
+        }
+    }
+
+    Ok(CommentsPlan::Upload {
+        bytes: serde_json::to_vec(&doc).map_err(|e| format!("encode comments: {e}"))?,
+        fp,
+        superseded: held.map(|h| h.id),
+    })
+}
+
+/// Carry out the plan as far as the bytes go, leaving the record and the reclaim to the
+/// caller — see `CommentsPublish` for why those wait.
+async fn publish_comments(
+    ctx: &IdentityContext,
+    published_key: &[u8; 32],
+    records: Vec<serde_json::Value>,
+) -> Result<CommentsPublish, String> {
+    let held = read_published(ctx, published_key, COMMENTS_RKEY).await;
+    match plan_comments(held, records)? {
+        CommentsPlan::Nothing => Ok(CommentsPublish::default()),
+        CommentsPlan::Keep(url) => Ok(CommentsPublish {
+            url: Some(url),
+            ..Default::default()
+        }),
+        CommentsPlan::Drop(id) => Ok(CommentsPublish {
+            clear: true,
+            superseded: Some(id),
+            ..Default::default()
+        }),
+        CommentsPlan::Upload {
+            bytes,
+            fp,
+            superseded,
+        } => {
+            let up = ctx.sia.upload_item(bytes, None).await?;
+            Ok(CommentsPublish {
+                url: Some(up.item_url.clone()),
+                state: Some(PublishedState {
+                    id: up.id,
+                    url: Some(up.item_url),
+                    older_id: None,
+                    fp: Some(fp),
+                }),
+                clear: false,
+                superseded,
+                uploaded: true,
+            })
+        }
+    }
+}
+
 /// A stable fingerprint of the directory's CONTENT — everything but `updatedAt`, which
 /// moves on every pass and would otherwise make every pass look like a change.
 fn fingerprint(doc: &DirectoryDoc) -> String {
@@ -229,8 +424,10 @@ fn has_anything(doc: &DirectoryDoc) -> bool {
         || !doc.follows.is_empty()
         || !doc.handle_follows.is_empty()
         // An identity that has only ever endorsed things still has something to publish:
-        // without it, nobody could ever count what they endorsed.
+        // without it, nobody could ever count what they endorsed. Same for one that has
+        // only ever commented — an unpublished pointer is a comment no crawl can confirm.
         || !doc.endorsements.is_empty()
+        || doc.comments_url.is_some()
 }
 
 /// One pass: assemble, upload if the content moved, and publish the packet.
@@ -244,6 +441,12 @@ pub async fn publish_identity_once(
     now_secs: u64,
 ) -> Result<IdentityOutcome, String> {
     let settings = read_settings(&ctx.doc, &ctx.blobs, ctx.author_id, &ctx.app_key).await?;
+    let published_key = pin_derive::published_key(&ctx.app_key);
+
+    let mut outcome = IdentityOutcome::default();
+    let comments = publish_comments(ctx, &published_key, own_comments(ctx).await).await?;
+    outcome.comments_uploaded = comments.uploaded;
+
     let doc = DirectoryDoc {
         version: DIRECTORY_DOC_VERSION,
         profile: settings.profile.clone(),
@@ -251,17 +454,16 @@ pub async fn publish_identity_once(
         follows: settings.follows.clone(),
         handle_follows: settings.handle_follows.clone(),
         endorsements: own_endorsements(ctx).await,
+        comments_url: comments.url.clone(),
         updated_at: now_iso,
     };
 
-    let mut outcome = IdentityOutcome::default();
     if !has_anything(&doc) {
         outcome.empty = true;
         return Ok(outcome);
     }
 
-    let published_key = pin_derive::published_key(&ctx.app_key);
-    let held = read_published(ctx, &published_key).await;
+    let held = read_published(ctx, &published_key, DIRECTORY_RKEY).await;
     let fp = fingerprint(&doc);
 
     // Reuse the existing blob when the content hasn't moved; otherwise mint a new one
@@ -317,10 +519,30 @@ pub async fn publish_identity_once(
     )
     .await;
 
-    // Reclaim the blob we just replaced. No grace window, unlike a channel manifest:
-    // the directory is read on demand by a visitor rather than polled, and a reader
+    if let Some(state) = &comments.state {
+        crate::write_published(
+            &ctx.doc,
+            ctx.author_id,
+            &published_key,
+            COMMENTS_RKEY,
+            state,
+        )
+        .await;
+    }
+    if comments.clear {
+        let _ = crate::delete_record(
+            &ctx.doc,
+            ctx.author_id,
+            pin_derive::PUBLISHED_COLLECTION,
+            COMMENTS_RKEY,
+        )
+        .await;
+    }
+
+    // Reclaim the blobs nothing points at any more. No grace window, unlike a channel
+    // manifest: these are read on demand by a visitor rather than polled, and a reader
     // mid-resolve holds the URL they already fetched.
-    if let Some(old) = superseded {
+    for old in [superseded, comments.superseded].into_iter().flatten() {
         let _ = ctx.sia.delete_object(&old).await;
     }
     Ok(outcome)
@@ -336,13 +558,17 @@ fn settled(outcome: &Result<IdentityOutcome, String>) -> bool {
     matches!(outcome, Ok(o) if o.published && o.dialable > 0)
 }
 
-async fn read_published(ctx: &IdentityContext, key: &[u8; 32]) -> Option<PublishedState> {
+async fn read_published(
+    ctx: &IdentityContext,
+    key: &[u8; 32],
+    rkey: &str,
+) -> Option<PublishedState> {
     let raw = read_record(
         &ctx.doc,
         &ctx.blobs,
         ctx.author_id,
         PUBLISHED_COLLECTION,
-        DIRECTORY_RKEY,
+        rkey,
     )
     .await
     .ok()
@@ -401,6 +627,7 @@ mod tests {
             follows: Vec::new(),
             handle_follows: Vec::new(),
             endorsements: Vec::new(),
+            comments_url: None,
             updated_at: "2026-08-06T12:00:00.000Z".into(),
         }
     }
@@ -408,8 +635,21 @@ mod tests {
     // Captured from the TypeScript implementation this replaces, before it was
     // changed. Round-tripping our own output would pass while disagreeing with every
     // reader in the network about what a directory document looks like.
+    //
+    // Still the v3 strings, compared against with only the version number substituted. That
+    // is the claim worth pinning about v4: the schema gained one OPTIONAL field and nothing
+    // else moved, so every other key, its order and its form are byte-identical to what the
+    // frontend wrote. Editing these literals would assert far less.
     const FULL: &str = r#"{"version":3,"profile":{"$type":"dev.sia.pin.profile","username":"john","displayName":"John Williams","bio":"builds things","avatarURL":"sia://avatar#encryption_key=a","coverURL":"sia://cover#encryption_key=b","updatedAt":"2026-08-06T12:00:00.000Z"},"channels":[{"channelID":"chan-one","key":"AAAA","name":"First"},{"channelID":"chan-two","key":"BBBB","name":"Second"}],"follows":[{"didDht":"did:dht:aaa","channelID":"c1","name":"Theirs"},{"didDht":"did:dht:bbb","channelID":"c2"}],"handleFollows":["did:dht:ccc","did:dht:ddd"],"endorsements":[],"updatedAt":"2026-08-06T12:00:00.000Z"}"#;
     const EMPTY_PROFILE: &str = r#"{"version":3,"profile":null,"channels":[],"follows":[],"handleFollows":[],"endorsements":[],"updatedAt":"2026-08-06T12:00:00.000Z"}"#;
+
+    /// The captured v3 form at the current version, for the reason above.
+    fn at_current_version(captured: &str) -> String {
+        captured.replace(
+            r#""version":3"#,
+            &format!(r#""version":{DIRECTORY_DOC_VERSION}"#),
+        )
+    }
 
     #[test]
     fn a_full_directory_serializes_exactly_as_the_frontend_did() {
@@ -440,6 +680,7 @@ mod tests {
             ],
             handle_follows: vec!["did:dht:ccc".into(), "did:dht:ddd".into()],
             endorsements: Vec::new(),
+            comments_url: None,
             updated_at: "2026-08-06T12:00:00.000Z".into(),
         };
         // Compared as parsed values, not as bytes. A directory document is PARSED by
@@ -451,7 +692,7 @@ mod tests {
         // compared by `JSON.stringify` equality, so their key order is load-bearing.)
         let got: serde_json::Value =
             serde_json::from_str(&serde_json::to_string(&d).unwrap()).unwrap();
-        let want: serde_json::Value = serde_json::from_str(FULL).unwrap();
+        let want: serde_json::Value = serde_json::from_str(&at_current_version(FULL)).unwrap();
         assert_eq!(got, want);
     }
 
@@ -463,8 +704,182 @@ mod tests {
         // also pins the top-level field order against the captured original.
         assert_eq!(
             serde_json::to_string(&doc(None, Vec::new())).unwrap(),
-            EMPTY_PROFILE
+            at_current_version(EMPTY_PROFILE)
         );
+    }
+
+    #[test]
+    fn a_comments_pointer_is_absent_until_there_is_one() {
+        // Absent rather than null, so a directory from an identity that has never commented
+        // is byte-identical to the v3 form it grew out of — which is what the two captured
+        // vectors above are then still able to check.
+        let none = serde_json::to_string(&doc(None, Vec::new())).unwrap();
+        assert!(!none.contains("commentsURL"));
+
+        let mut with = doc(None, Vec::new());
+        with.comments_url = Some("sia://comments#encryption_key=k".into());
+        let json = serde_json::to_string(&with).unwrap();
+        // Named exactly, and placed after the endorsements it sits beside. A field name is a
+        // contract no compiler checks, and this codebase has shipped a URL under a name
+        // nothing read.
+        assert!(json.contains(
+            r#""endorsements":[],"commentsURL":"sia://comments#encryption_key=k","updatedAt""#
+        ));
+    }
+
+    #[test]
+    fn a_comment_alone_is_worth_publishing() {
+        // An identity with no profile, no channels and no follows still has to publish once
+        // it has commented: an unpublished pointer is a comment no crawl can confirm, and
+        // retention checking reads absence as withdrawal.
+        let mut d = doc(None, Vec::new());
+        assert!(!has_anything(&d));
+        d.comments_url = Some("sia://comments#encryption_key=k".into());
+        assert!(has_anything(&d));
+    }
+
+    fn state(id: &str, url: Option<&str>, fp: Option<&str>) -> PublishedState {
+        PublishedState {
+            id: id.into(),
+            url: url.map(str::to_string),
+            older_id: None,
+            fp: fp.map(str::to_string),
+        }
+    }
+
+    fn one_comment() -> Vec<serde_json::Value> {
+        vec![serde_json::json!({"kind": "comment", "body": "hi"})]
+    }
+
+    #[test]
+    fn a_last_comment_going_gives_up_the_object() {
+        // The pointer has to come out of the directory before the bytes go, so the object is
+        // handed back for the caller to reclaim AFTER the packet is published rather than
+        // deleted here. A reader resolving in between would otherwise find the pointer alive
+        // and the object gone.
+        assert_eq!(
+            plan_comments(
+                Some(state("obj-1", Some("sia://a"), Some("fp"))),
+                Vec::new()
+            )
+            .unwrap(),
+            CommentsPlan::Drop("obj-1".into())
+        );
+    }
+
+    #[test]
+    fn no_comments_and_nothing_published_does_nothing() {
+        assert_eq!(
+            plan_comments(None, Vec::new()).unwrap(),
+            CommentsPlan::Nothing
+        );
+    }
+
+    #[test]
+    fn an_unchanged_blob_is_pointed_at_where_it_is() {
+        // The whole reason a fingerprint is stored: a pass that changed nothing costs one
+        // signed packet, never a fresh Sia object.
+        let doc = CommentsDoc {
+            version: COMMENTS_DOC_VERSION,
+            comments: one_comment(),
+        };
+        let fp = comments_fingerprint(&doc);
+        assert_eq!(
+            plan_comments(
+                Some(state("obj-1", Some("sia://a"), Some(&fp))),
+                one_comment()
+            )
+            .unwrap(),
+            CommentsPlan::Keep("sia://a".into())
+        );
+    }
+
+    #[test]
+    fn a_changed_blob_supersedes_the_one_held() {
+        let plan = plan_comments(
+            Some(state("obj-1", Some("sia://a"), Some("stale"))),
+            one_comment(),
+        )
+        .unwrap();
+        match plan {
+            CommentsPlan::Upload {
+                superseded, bytes, ..
+            } => {
+                assert_eq!(superseded, Some("obj-1".into()));
+                assert!(String::from_utf8(bytes).unwrap().contains(r#""version":1"#));
+            }
+            other => panic!("expected an upload, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_matching_fingerprint_with_no_url_re_uploads() {
+        // State from a pass that recorded an id and never a URL. Pointing at nothing would
+        // publish a directory whose comments pointer is absent while the records exist, so
+        // the blob is uploaded again rather than trusted.
+        let doc = CommentsDoc {
+            version: COMMENTS_DOC_VERSION,
+            comments: one_comment(),
+        };
+        let fp = comments_fingerprint(&doc);
+        assert!(matches!(
+            plan_comments(Some(state("obj-1", None, Some(&fp))), one_comment()).unwrap(),
+            CommentsPlan::Upload { .. }
+        ));
+    }
+
+    #[test]
+    fn the_two_blobs_this_module_publishes_supersede_independently() {
+        // They share the publish-state collection with the settings snapshot, and a shared
+        // rkey would make two blobs reclaim each other's object.
+        let keys = [
+            DIRECTORY_RKEY,
+            COMMENTS_RKEY,
+            pin_derive::PUBLISHED_SETTINGS_RKEY,
+        ];
+        let unique: std::collections::HashSet<&str> = keys.iter().copied().collect();
+        assert_eq!(unique.len(), keys.len());
+    }
+
+    #[test]
+    fn a_comments_blob_fingerprints_on_its_records() {
+        // What decides whether a pass re-uploads. Two records in one order and the other
+        // must differ, or a comment could be added and the blob left alone.
+        let one = CommentsDoc {
+            version: COMMENTS_DOC_VERSION,
+            comments: vec![serde_json::json!({"a": 1}), serde_json::json!({"b": 2})],
+        };
+        let same = CommentsDoc {
+            version: COMMENTS_DOC_VERSION,
+            comments: vec![serde_json::json!({"a": 1}), serde_json::json!({"b": 2})],
+        };
+        let fewer = CommentsDoc {
+            version: COMMENTS_DOC_VERSION,
+            comments: vec![serde_json::json!({"a": 1})],
+        };
+        assert_eq!(comments_fingerprint(&one), comments_fingerprint(&same));
+        assert_ne!(comments_fingerprint(&one), comments_fingerprint(&fewer));
+    }
+
+    #[test]
+    fn a_comments_blob_carries_its_version_and_its_records_verbatim() {
+        let record = serde_json::json!({
+            "kind": "comment",
+            "actor": "did:dht:someone",
+            "subject": "f4xlljzqxtqpv7ul6ngkyeafusdwqrirpmhochqyjz2hgz3djo6a",
+            "version": "bafkreiabc",
+            "createdAt": "2026-08-22T12:00:00.000Z",
+            "body": "worth saying",
+            "sig": "AAAA",
+        });
+        let json = serde_json::to_string(&CommentsDoc {
+            version: COMMENTS_DOC_VERSION,
+            comments: vec![record.clone()],
+        })
+        .unwrap();
+        let back: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(back["version"], COMMENTS_DOC_VERSION);
+        assert_eq!(back["comments"][0], record);
     }
 
     #[test]
@@ -594,6 +1009,7 @@ mod tests {
             endpoints: if dialable > 0 { dialable } else { 1 },
             dialable,
             empty,
+            comments_uploaded: false,
         })
     }
 

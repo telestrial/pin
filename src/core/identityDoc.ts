@@ -10,7 +10,7 @@ import type { FollowEdge } from './types'
 // public — 06-02). Obscure channels are deliberately ABSENT — they're only reachable
 // via their own K-derived locator, so resolving an identity never enumerates them.
 
-export const DIRECTORY_DOC_VERSION = 3
+export const DIRECTORY_DOC_VERSION = 4
 
 // One advertised public channel: enough for a resolver to read it — the channelID +
 // its key K (public channels' K is shareable by definition) → derive the channel's
@@ -47,5 +47,13 @@ export type DirectoryDoc = {
   // Opaque here on purpose: the shape is pin-engagement's, and a reader that needs to
   // interpret one verifies it through pin-core rather than trusting this type.
   endorsements?: unknown[]
+  // Where this identity's comments are, when there are any. A pointer rather than the
+  // records, unlike endorsements above: a comment carries its words inline, so the blob
+  // grows with what somebody has said, and this one gets fetched to draw a display name in
+  // a feed row. One extra Sia read buys them, and it falls on a crawl rather than on
+  // anything a screen is waiting for.
+  //
+  // Absent while nothing has been commented, which is what keeps the extra read conditional.
+  commentsURL?: string
   updatedAt: string
 }
