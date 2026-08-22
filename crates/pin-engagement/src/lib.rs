@@ -43,6 +43,32 @@ pub const KIND_LIKE: &str = "like";
 /// are being paid for", which is Pin's whole thesis stated as a figure.
 pub const KIND_PIN: &str = "pin";
 
+/// A repost: circulating the thing in one of your own channels. Actor-keyed like the
+/// others, so the figure is reposters rather than reposts.
+pub const KIND_REPOST: &str = "repost";
+
+/// A comment: the one kind whose payload is the point rather than its existence.
+///
+/// Post-shaped — text, plus attachments the commenter goes on carrying — addressed at a
+/// subject. The host integrates the words into their own channel and keeps the signed
+/// record as the receipt, exactly as they keep a like's. Which is why this is a `kind` on
+/// the same envelope rather than a record type of its own: `kind` is inside the signed
+/// bytes, so a like's signature can never be replayed as a comment's.
+pub const KIND_COMMENT: &str = "comment";
+
+/// The ceiling on a comment's body, in BYTES rather than characters.
+///
+/// An allocation bound, not a UX limit — a composer is free to insist on far less. The
+/// host publishes a comment's words into their own channel, so a body is bytes the SENDER
+/// chose and the RECEIVER pays for, which is the one thing a knock must never get to do
+/// without limit. Bytes because bytes are what get allocated; counting characters would
+/// leave the real figure a factor of four away.
+///
+/// Raising it later is safe, since every record already under it stays valid. Lowering it
+/// invalidates records that were legitimate when they were signed, so it is a one-way door
+/// in practice.
+pub const MAX_BODY_BYTES: usize = 4096;
+
 /// The domain tag every signed message starts with.
 ///
 /// Not decoration. The same identity key signs pkarr packets, and an unprefixed message
@@ -61,6 +87,12 @@ const SIGNING_DOMAIN: &[u8] = b"pin.engagement.v1";
 /// endorsement, or the reverse. Separate domains make the two signatures disjoint by
 /// construction.
 const RETRACTION_DOMAIN: &[u8] = b"pin.retraction.v1";
+
+/// The signed-bytes tag for a comment's body.
+const TAG_BODY: &str = "body";
+
+/// The signed-bytes tag for the record a retraction names.
+const TAG_TARGET: &str = "target";
 
 /// The wire marker that says a record withdraws rather than asserts.
 ///
@@ -133,6 +165,17 @@ pub struct Endorsement {
     /// Rust name differs because `ref` is a keyword.
     #[serde(default, rename = "ref", skip_serializing_if = "Option::is_none")]
     pub reference: Option<SubjectRef>,
+    /// A comment's text, INLINE and inside the signature. Absent on every other kind.
+    ///
+    /// Inline rather than behind a pointer, on arithmetic: this record is ~300 bytes and so
+    /// is a 280-character comment, so a pointer would buy an upload against Sia's 1-byte
+    /// floor, a slab, a share URL, and a second fetch per comment for every reader. Inline
+    /// also gets three things a pointer cannot — the words are tamper-evident because they
+    /// are signed, they arrive whole in a knock so a stranger's comment is one exchange,
+    /// and they cannot dangle, where a pointed-at body is deletable out from under a record
+    /// the host is displaying.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
 }
 
 /// Append a length-prefixed field. Length-delimited rather than separated, so no field's
@@ -140,6 +183,26 @@ pub struct Endorsement {
 fn push_field(out: &mut Vec<u8>, value: &str) {
     out.extend_from_slice(&(value.len() as u32).to_be_bytes());
     out.extend_from_slice(value.as_bytes());
+}
+
+/// Append an OPTIONAL field, naming itself.
+///
+/// Absent appends NOTHING, which is what makes a new field back-compatible: a record
+/// signed before the field existed produces byte-identical bytes, so nothing already
+/// published stops verifying. Present appends the tag and then the value, and the length
+/// prefixes mean neither can be mistaken for a longer version of the field before it.
+///
+/// THE TAG IS THE LOAD-BEARING PART, and it is why this is not `push_field` behind an `if`.
+/// Two untagged optional trailing fields are ambiguous: with `body` and some later `name`
+/// both optional, a record carrying only the name and a record carrying only a body of the
+/// same text append exactly the same bytes — so a signed name claim would verify as a
+/// comment body, and the reverse. Tagging makes them disjoint by construction, which is
+/// what lets this layout keep gaining fields without ever needing a v2.
+fn push_tagged(out: &mut Vec<u8>, tag: &str, value: Option<&str>) {
+    if let Some(v) = value {
+        push_field(out, tag);
+        push_field(out, v);
+    }
 }
 
 impl Endorsement {
@@ -157,6 +220,10 @@ impl Endorsement {
     /// signature, so authenticity is already bound to it; including the string would add
     /// a normalization hazard — prefixed `did:dht:x` against bare `x` — with nothing
     /// gained. `ref` is not covered either, for the reason on `SubjectRef`.
+    ///
+    /// `body` IS covered, as a tagged optional trailing field — see `push_tagged` for why
+    /// the tag rather than a bare append. A record without one signs exactly the bytes it
+    /// signed before the field existed.
     pub fn signing_bytes(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(SIGNING_DOMAIN.len() + 64);
         out.extend_from_slice(SIGNING_DOMAIN);
@@ -164,10 +231,11 @@ impl Endorsement {
         push_field(&mut out, &self.subject);
         push_field(&mut out, &self.version);
         push_field(&mut out, &self.created_at);
+        push_tagged(&mut out, TAG_BODY, self.body.as_deref());
         out
     }
 
-    /// Build and sign a record from the identity seed the actor is derived from.
+    /// Build and sign a gesture from the identity seed the actor is derived from.
     pub fn sign(
         did_dht_seed: &[u8],
         kind: &str,
@@ -175,6 +243,52 @@ impl Endorsement {
         version: &str,
         created_at: &str,
         reference: Option<SubjectRef>,
+    ) -> Result<Self, String> {
+        Self::signed(
+            did_dht_seed,
+            kind,
+            subject,
+            version,
+            created_at,
+            reference,
+            None,
+        )
+    }
+
+    /// Build and sign a comment.
+    ///
+    /// Its own constructor rather than a `body: Option<&str>` on `sign`, because a comment
+    /// REQUIRES a body: taking `&str` here makes that a fact about the type instead of a
+    /// check somebody has to remember, and it keeps every gesture call site free of a
+    /// `None` that means nothing to it.
+    pub fn sign_comment(
+        did_dht_seed: &[u8],
+        subject: &str,
+        version: &str,
+        created_at: &str,
+        reference: Option<SubjectRef>,
+        body: &str,
+    ) -> Result<Self, String> {
+        Self::signed(
+            did_dht_seed,
+            KIND_COMMENT,
+            subject,
+            version,
+            created_at,
+            reference,
+            Some(body),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn signed(
+        did_dht_seed: &[u8],
+        kind: &str,
+        subject: &str,
+        version: &str,
+        created_at: &str,
+        reference: Option<SubjectRef>,
+        body: Option<&str>,
     ) -> Result<Self, String> {
         let mut record = Endorsement {
             kind: kind.to_string(),
@@ -184,9 +298,20 @@ impl Endorsement {
             created_at: created_at.to_string(),
             sig: String::new(),
             reference,
+            body: body.map(str::to_string),
         };
         record.sig = pin_pkarr::sign_detached(did_dht_seed, &record.signing_bytes())?;
         Ok(record)
+    }
+
+    /// This comment's own identity: what addresses it, what engagement on it names, and
+    /// what a repost portal into it carries.
+    ///
+    /// Meaningless on a gesture, which is a singleton at its address and so needs no
+    /// discriminator — that singleton is exactly what a comment breaks, since one actor
+    /// can leave several on one subject.
+    pub fn comment_id(&self) -> String {
+        pin_crypto::comment_subject(&self.actor, &self.created_at)
     }
 
     /// Whether this record holds up: signed by the identity it claims, and consistent
@@ -195,6 +320,7 @@ impl Endorsement {
     /// One call rather than two, because the failure mode of forgetting half of it is
     /// counting a forgery. Costs no network — see the crate docs.
     pub fn verify(&self) -> Result<(), String> {
+        self.check_shape()?;
         pin_pkarr::verify_detached(&self.actor, &self.signing_bytes(), &self.sig)?;
         if let Some(r) = &self.reference {
             let expected = match &r.attachment {
@@ -206,6 +332,35 @@ impl Endorsement {
             }
         }
         Ok(())
+    }
+
+    /// Whether the payload is what the kind says it is.
+    ///
+    /// Ahead of the signature check deliberately: an oversized body is refused without
+    /// spending an ed25519 verification on it, and the whole point of the limit is to not
+    /// do work proportional to what a sender chose.
+    ///
+    /// The known gestures are held to carrying NO body, because allowing one would take a
+    /// like from ~300 bytes to a possible 4 KiB in the log — a thirteenfold amplification
+    /// for a record whose entire content is its own existence. Unknown kinds are left alone
+    /// on purpose: the fold ignores what it does not understand, so a rule here would make
+    /// this crate the thing that has to ship before anyone can add a kind that carries
+    /// something.
+    fn check_shape(&self) -> Result<(), String> {
+        match self.kind.as_str() {
+            KIND_COMMENT => match self.body.as_deref() {
+                None | Some("") => Err("a comment carries no body".into()),
+                Some(body) if body.len() > MAX_BODY_BYTES => Err(format!(
+                    "body is {} bytes, over the {MAX_BODY_BYTES} byte limit",
+                    body.len()
+                )),
+                Some(_) => Ok(()),
+            },
+            KIND_LIKE | KIND_PIN | KIND_REPOST if self.body.is_some() => {
+                Err(format!("a {} carries a body", self.kind))
+            }
+            _ => Ok(()),
+        }
     }
 
     /// Whether this record supersedes one already held for the same actor and subject.
@@ -275,27 +430,68 @@ pub struct Retraction {
     pub created_at: String,
     /// Base64 ed25519 over `signing_bytes`.
     pub sig: String,
+    /// WHICH record is being withdrawn, when the address alone does not say.
+    ///
+    /// A gesture is a singleton per `(subject, kind)`, so "retract my like on S" is
+    /// unambiguous and this stays absent. A comment is not: one actor can leave several on
+    /// one subject, so a withdrawal has to name the one it means, by that comment's own id.
+    ///
+    /// It also makes replay harmless rather than defended-against. `withdraws` exists
+    /// because a singleton reuses its address, so a stale retraction could undo a gesture
+    /// the actor made again afterwards. A named record cannot come back — commenting again
+    /// produces a different id — so re-sending a retraction can only re-withdraw something
+    /// already gone, which is idempotent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
 }
 
 impl Retraction {
     /// The exact bytes a signature covers. Same construction as an endorsement's — a
     /// domain tag then length-delimited fields — under a different domain, and without
-    /// `version`.
+    /// `version`. `target` rides as a tagged optional field for the same reason `body`
+    /// does on an endorsement, and is absent on every withdrawal written before it existed.
     pub fn signing_bytes(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(RETRACTION_DOMAIN.len() + 64);
         out.extend_from_slice(RETRACTION_DOMAIN);
         push_field(&mut out, &self.kind);
         push_field(&mut out, &self.subject);
         push_field(&mut out, &self.created_at);
+        push_tagged(&mut out, TAG_TARGET, self.target.as_deref());
         out
     }
 
-    /// Build and sign a withdrawal from the identity seed the actor is derived from.
+    /// Build and sign a withdrawal of a gesture, which its address alone identifies.
     pub fn sign(
         did_dht_seed: &[u8],
         kind: &str,
         subject: &str,
         created_at: &str,
+    ) -> Result<Self, String> {
+        Self::signed(did_dht_seed, kind, subject, created_at, None)
+    }
+
+    /// Build and sign the withdrawal of ONE comment, named by its id.
+    pub fn sign_comment_withdrawal(
+        did_dht_seed: &[u8],
+        subject: &str,
+        created_at: &str,
+        comment_id: &str,
+    ) -> Result<Self, String> {
+        Self::signed(
+            did_dht_seed,
+            KIND_COMMENT,
+            subject,
+            created_at,
+            Some(comment_id),
+        )
+    }
+
+    fn signed(
+        did_dht_seed: &[u8],
+        kind: &str,
+        subject: &str,
+        created_at: &str,
+        target: Option<&str>,
     ) -> Result<Self, String> {
         let mut record = Retraction {
             op: OP_RETRACT.to_string(),
@@ -304,6 +500,7 @@ impl Retraction {
             subject: subject.to_string(),
             created_at: created_at.to_string(),
             sig: String::new(),
+            target: target.map(str::to_string),
         };
         record.sig = pin_pkarr::sign_detached(did_dht_seed, &record.signing_bytes())?;
         Ok(record)
@@ -528,18 +725,34 @@ pub fn fold(
 
     let mut kinds = std::collections::BTreeMap::new();
     for (kind, mut group) in by_kind {
-        group.sort_by(|a, b| a.actor.cmp(&b.actor));
+        // By actor, then by timestamp. The tiebreak is what keeps this a TOTAL order once
+        // comments exist: a gesture is one record per actor so it never reaches the second
+        // key, but an actor can leave several comments on one subject, and two instances of
+        // the same identity ordering them differently would publish two different roots for
+        // one set.
+        group.sort_by(|a, b| {
+            a.actor
+                .cmp(&b.actor)
+                .then_with(|| a.created_at.cmp(&b.created_at))
+        });
         let leaves: Vec<[u8; 32]> = group.iter().map(|r| r.leaf()).collect::<Result<_, _>>()?;
         kinds.insert(
             kind,
             KindTally {
                 count: group.len(),
                 set_root: hex(&merkle_root(&leaves)),
-                sample_actors: group
-                    .iter()
-                    .take(SAMPLE_ACTORS)
-                    .map(|r| r.actor.clone())
-                    .collect(),
+                sample_actors: group.iter().map(|r| r.actor.clone()).fold(
+                    Vec::new(),
+                    |mut acc, actor| {
+                        // Deduplicated, because the field names ACTORS and a comment kind
+                        // can hold several records from one. Sorted input, so equality with
+                        // the last is the whole test.
+                        if acc.len() < SAMPLE_ACTORS && acc.last() != Some(&actor) {
+                            acc.push(actor);
+                        }
+                        acc
+                    },
+                ),
                 retention_checked_at: retention_checked_at.clone(),
             },
         );
@@ -583,6 +796,7 @@ mod tests {
             created_at: "when".into(),
             sig: String::new(),
             reference: None,
+            body: None,
         };
         let hex: String = e
             .signing_bytes()
@@ -598,6 +812,175 @@ mod tests {
                 "000000047768656e",                   // len 4, "when"
             )
         );
+    }
+
+    #[test]
+    fn a_comment_signs_its_body_as_a_tagged_trailing_field() {
+        // Pinned like the gesture layout above, and for one more reason: the TAG is what
+        // keeps a second optional field from being confusable with this one, so a refactor
+        // that dropped it would leave every signature verifying while quietly reopening
+        // that hole.
+        let c = Endorsement {
+            kind: KIND_COMMENT.into(),
+            actor: "did:dht:ignored".into(),
+            subject: "sub".into(),
+            version: "ver".into(),
+            created_at: "when".into(),
+            sig: String::new(),
+            reference: None,
+            body: Some("hi".into()),
+        };
+        let hex: String = c
+            .signing_bytes()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        assert_eq!(hex, "70696e2e656e676167656d656e742e763100000007636f6d6d656e740000000373756200000003766572000000047768656e00000004626f6479000000026869");
+    }
+
+    #[test]
+    fn an_absent_optional_field_appends_nothing() {
+        // The whole back-compat claim, stated directly rather than only implied by the
+        // pinned vector: adding an optional field cannot change what an older record signs.
+        let mut with = Vec::new();
+        push_tagged(&mut with, TAG_BODY, None);
+        assert!(with.is_empty());
+    }
+
+    #[test]
+    fn two_optional_fields_holding_the_same_text_are_not_interchangeable() {
+        // THE reason for the tag. Untagged, a record carrying only field A and a record
+        // carrying only field B would append identical bytes — so a signature over one
+        // would verify as the other, and a future signed name claim would be replayable as
+        // a comment body.
+        let mut a = Vec::new();
+        let mut b = Vec::new();
+        push_tagged(&mut a, TAG_BODY, Some("x"));
+        push_tagged(&mut b, TAG_TARGET, Some("x"));
+        assert_ne!(a, b);
+    }
+
+    fn commented(body: &str) -> Endorsement {
+        Endorsement::sign_comment(&SEED, SUBJECT, VERSION, WHEN, None, body).unwrap()
+    }
+
+    #[test]
+    fn a_signed_comment_verifies_and_carries_its_words() {
+        let c = commented("worth saying");
+        assert!(c.verify().is_ok());
+        assert_eq!(c.kind, KIND_COMMENT);
+        assert_eq!(c.body.as_deref(), Some("worth saying"));
+    }
+
+    #[test]
+    fn a_comment_stripped_of_its_body_stops_verifying() {
+        // The body is INSIDE the signature, which is what makes an integrated comment
+        // tamper-evident: a host publishes the words, so anyone who could alter them in
+        // flight could put words in the commenter's mouth.
+        let mut c = commented("as written");
+        c.body = Some("as edited".into());
+        assert!(c.verify().is_err());
+    }
+
+    #[test]
+    fn a_comment_with_no_body_is_not_a_comment() {
+        // SIGNED as a comment with no body, rather than a signed comment with the body
+        // taken off afterwards. The mutating version passes whatever the shape rule says,
+        // because removing a signed field breaks the signature — so it would be a test of
+        // `verify_detached` wearing this test's name.
+        let bodiless =
+            Endorsement::sign(&SEED, KIND_COMMENT, SUBJECT, VERSION, WHEN, None).unwrap();
+        assert!(bodiless.check_shape().is_err());
+        assert!(bodiless.verify().is_err());
+
+        let empty = Endorsement::sign_comment(&SEED, SUBJECT, VERSION, WHEN, None, "").unwrap();
+        assert!(empty.check_shape().is_err());
+        assert!(empty.verify().is_err());
+    }
+
+    #[test]
+    fn a_body_over_the_limit_is_refused() {
+        // An allocation bound: the host publishes these words into their own channel, so
+        // the size of one is the sender choosing what the receiver pays for.
+        let ok = commented(&"x".repeat(MAX_BODY_BYTES));
+        assert!(ok.verify().is_ok());
+        let too_big = commented(&"x".repeat(MAX_BODY_BYTES + 1));
+        assert!(too_big.verify().is_err());
+    }
+
+    #[test]
+    fn a_gesture_carrying_a_body_is_refused_and_an_unknown_kind_is_not() {
+        // Bodies on the known gestures would take a like from ~300 bytes to a possible
+        // 4 KiB for a record whose only content is that it exists. Signed WITH the body, so
+        // the signature is valid and the shape rule is the only thing that can reject it.
+        let fat_like = Endorsement::signed(
+            &SEED,
+            KIND_LIKE,
+            SUBJECT,
+            VERSION,
+            WHEN,
+            None,
+            Some("smuggled"),
+        )
+        .unwrap();
+        assert!(fat_like.check_shape().is_err());
+        assert!(fat_like.verify().is_err());
+
+        // An unknown kind is left alone deliberately, so a future one can carry a payload
+        // without this crate shipping first.
+        let future = Endorsement::signed(
+            &SEED,
+            "applaud",
+            SUBJECT,
+            VERSION,
+            WHEN,
+            None,
+            Some("allowed"),
+        )
+        .unwrap();
+        assert!(future.check_shape().is_ok());
+        assert!(future.verify().is_ok());
+    }
+
+    #[test]
+    fn a_comment_id_distinguishes_two_comments_by_one_actor() {
+        // The singleton a gesture relies on is exactly what a comment breaks: three
+        // comments on one post from one person have to be three records, not one.
+        let first = commented("first");
+        let second = Endorsement::sign_comment(
+            &SEED,
+            SUBJECT,
+            VERSION,
+            "2026-08-22T13:00:00.000Z",
+            None,
+            "second",
+        )
+        .unwrap();
+        assert_ne!(first.comment_id(), second.comment_id());
+        assert_eq!(
+            first.comment_id(),
+            commented("different words").comment_id()
+        );
+    }
+
+    #[test]
+    fn a_comment_withdrawal_names_the_record_it_takes_back() {
+        let c = commented("regretted");
+        let r = Retraction::sign_comment_withdrawal(
+            &SEED,
+            SUBJECT,
+            "2026-08-22T14:00:00.000Z",
+            &c.comment_id(),
+        )
+        .unwrap();
+        assert!(r.verify().is_ok());
+        assert_eq!(r.target.as_deref(), Some(c.comment_id().as_str()));
+
+        // A withdrawal that named nothing would be ambiguous across several comments on one
+        // subject, so the two must not sign the same bytes.
+        let untargeted =
+            Retraction::sign(&SEED, KIND_COMMENT, SUBJECT, "2026-08-22T14:00:00.000Z").unwrap();
+        assert_ne!(r.signing_bytes(), untargeted.signing_bytes());
     }
 
     fn withdrawn(kind: &str, when: &str) -> Retraction {
@@ -616,6 +999,7 @@ mod tests {
             subject: "sub".into(),
             created_at: "when".into(),
             sig: String::new(),
+            target: None,
         };
         let hex: String = r
             .signing_bytes()
@@ -693,6 +1077,7 @@ mod tests {
             created_at: String::new(),
             sig: String::new(),
             reference: None,
+            body: None,
         };
         let mut b = a.clone();
         b.kind = "a".into();
@@ -1016,6 +1401,46 @@ mod tests {
             agg.kinds[KIND_LIKE].retention_checked_at,
             Some(WHEN.to_string())
         );
+    }
+
+    #[test]
+    fn several_comments_from_one_actor_all_count() {
+        // A gesture is a singleton per actor, so the fold has never had to hold two records
+        // from one — a comment is where that stops being true, and counting commenters
+        // instead of comments would show 1 where a thread has three.
+        let seed = [9u8; 32];
+        let comments: Vec<Endorsement> = ["first", "second", "third"]
+            .iter()
+            .enumerate()
+            .map(|(i, body)| {
+                let when = format!("2026-08-22T1{i}:00:00.000Z");
+                Endorsement::sign_comment(&seed, SUBJECT, VERSION, &when, None, body).unwrap()
+            })
+            .collect();
+
+        let agg = fold(&comments, None, WHEN.into()).unwrap();
+        assert_eq!(agg.kinds[KIND_COMMENT].count, 3);
+        // One actor wrote all three, and the field names actors.
+        assert_eq!(agg.kinds[KIND_COMMENT].sample_actors.len(), 1);
+    }
+
+    #[test]
+    fn one_actors_comments_commit_in_a_stable_order() {
+        // The timestamp tiebreak. Sorting by actor alone leaves three records from one
+        // identity in whatever order the input arrived, so two instances of the same
+        // identity would publish two different roots for one set — and an auditor's proofs
+        // would fail against an honest holder.
+        let seed = [8u8; 32];
+        let mut comments: Vec<Endorsement> = (0..3)
+            .map(|i| {
+                let when = format!("2026-08-22T1{i}:00:00.000Z");
+                Endorsement::sign_comment(&seed, SUBJECT, VERSION, &when, None, "words").unwrap()
+            })
+            .collect();
+        let forwards = fold(&comments, None, WHEN.into()).unwrap();
+        comments.reverse();
+        let backwards = fold(&comments, None, WHEN.into()).unwrap();
+        assert_eq!(forwards, backwards);
     }
 
     #[test]

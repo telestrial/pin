@@ -150,6 +150,39 @@ pub fn attachment_subject(channel_id: &str, published_at: &str, content_hash: &s
     base32_encode(&hasher.finalize())
 }
 
+/// The identity of one comment: a hash over who wrote it and when they say they did.
+///
+/// Three consumers and one derivation, which is the sign it sits on the right grain — it
+/// ADDRESSES the record (in the commenter's own collection and in the host's log), it is
+/// the SUBJECT of engagement on the comment, and it is the coordinate a repost portal
+/// names. The same one-identity-three-consumers property `(channelID, publishedAt)` has
+/// for a post.
+///
+/// Derived from the RECORD, never from where it was published, and that is the whole
+/// point. A host integrates a comment into their own channel, so the tempting alternative
+/// is to give it a coordinate there — but a host-assigned identity is a REASSIGNABLE one,
+/// and re-integrating under a fresh coordinate would orphan every like on it. The same
+/// power this codebase refused when it declined a `logicalID` for posts.
+///
+/// Domain-tagged, unlike the two above, because it takes the same NUMBER of fields with
+/// the same separator: without the tag, `comment_subject(a, b)` and
+/// `engagement_subject(a, b)` are the same digest, and two derivations that can collide
+/// is exactly what the signing domains elsewhere in this codebase exist to prevent.
+///
+/// Not a secret, and unlike a post's subject it is not trying to be: it names a comment
+/// whose author is in the clear in the record anyway. What it buys is a SEPARATOR-FREE
+/// identifier of fixed length, which is what makes it safe to put in a key beside a
+/// timestamp and a DID — both of which carry colons of their own.
+pub fn comment_subject(actor: &str, created_at: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"comment");
+    hasher.update([SUBJECT_SEPARATOR]);
+    hasher.update(actor.as_bytes());
+    hasher.update([SUBJECT_SEPARATOR]);
+    hasher.update(created_at.as_bytes());
+    base32_encode(&hasher.finalize())
+}
+
 /// Base64 (standard alphabet, padded) — the encoding used wherever bytes have to
 /// travel through JSON that both implementations read.
 ///
@@ -394,6 +427,37 @@ mod tests {
             engagement_subject("", ""),
             "ny2axhh7wn5jrhffittlw6akfr4jahj7wm3tq5ufcgrqmf5puaoq"
         );
+    }
+
+    #[test]
+    fn a_comment_subject_is_not_an_engagement_subject_over_the_same_strings() {
+        // Both hash two fields with the same separator, so without the domain tag these
+        // would be the same digest — and a comment id colliding with a post's subject
+        // would merge a comment's engagement into the post's.
+        assert_ne!(
+            comment_subject("did:dht:alice", "2026-08-22T12:00:00.000Z"),
+            engagement_subject("did:dht:alice", "2026-08-22T12:00:00.000Z")
+        );
+    }
+
+    #[test]
+    fn a_comment_subject_carries_no_separator_and_is_fixed_length() {
+        // What it is FOR, beyond naming: it goes in a doc key next to a subject, where a
+        // raw `createdAt` could not — an ISO timestamp is full of colons and the keys
+        // either side of it split on colons.
+        let id = comment_subject("did:dht:alice", "2026-08-22T12:00:00.000Z");
+        assert_eq!(id.len(), 52);
+        assert!(!id.contains(':'));
+        assert!(id
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || ('2'..='7').contains(&c)));
+    }
+
+    #[test]
+    fn a_comment_subject_separates_its_two_fields() {
+        // Concatenating without the separator would make (actor "ab", when "c") and
+        // (actor "a", when "bc") the same comment.
+        assert_ne!(comment_subject("ab", "c"), comment_subject("a", "bc"));
     }
 
     #[test]

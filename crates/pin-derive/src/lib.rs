@@ -274,6 +274,58 @@ pub fn parse_endorse_rkey(rkey: &str) -> Option<(&str, &str)> {
     Some((kind, subject))
 }
 
+/// The collection holding the comments this identity has WRITTEN — one signed record each,
+/// which the publish loop puts in the object the directory points at.
+///
+/// Its own collection rather than a third key shape inside `endorse`, and the reason is the
+/// shape of the shipped keys rather than tidiness. `endorse_rkey` is `{kind}:{subject}` and
+/// a comment needs a per-record discriminator, so sharing the space would mean one parser
+/// guessing between two layouts — and both parse functions here already carry warnings that
+/// a plausible misparse is worse than a failing one, because what reads these decides what
+/// to DELETE. Separate collections cost a constant and keep each parser knowing one shape.
+pub const COMMENT_COLLECTION: &str = "comment";
+
+/// The collection holding comments OTHERS have written on this identity's items — the
+/// signed records the published conversation is folded from.
+///
+/// The counterpart of `ENGAGEMENT_LOG_COLLECTION` and a rebuildable cache in exactly the
+/// same sense: every record in here came from its commenter's own published object and can
+/// be re-read from there. Which is also why a moderation decision can never live in here —
+/// the crawl would re-add what it dropped.
+pub const COMMENT_LOG_COLLECTION: &str = "comment-log";
+
+/// The rkey for one comment, on either side: the subject it is about, then the comment's
+/// own id.
+///
+/// Subject first so a prefix scan gathers one item's whole conversation, which is how it is
+/// folded and how it is rendered.
+///
+/// The id rather than `(actor, createdAt)` spelled out, and this is the reason the id exists
+/// in the form it does: a DID carries colons and so does an ISO timestamp, so a key holding
+/// both could not be split back apart. The id is base32 over exactly those two fields — one
+/// separator-free token, fixed length, and computable by anyone holding the record.
+///
+/// No actor in the key, unlike the endorsement log. There the actor is what enforces one
+/// record per person; here several from one person is the point, and the id already
+/// distinguishes them — it is derived from the actor, so a collision across actors would
+/// take a hash collision rather than a naming clash.
+pub fn comment_rkey(subject: &str, comment_id: &str) -> String {
+    format!("{subject}:{comment_id}")
+}
+
+/// Split a comment key back into its subject and its comment id.
+///
+/// At the FIRST separator, and both halves required — a key with no separator would
+/// otherwise read as a subject with an empty id, and what gets built from that is a
+/// withdrawal naming nothing.
+pub fn parse_comment_rkey(rkey: &str) -> Option<(&str, &str)> {
+    let (subject, id) = rkey.split_once(':')?;
+    if subject.is_empty() || id.is_empty() {
+        return None;
+    }
+    Some((subject, id))
+}
+
 /// The collection holding what OTHERS have endorsed about this identity's items — the
 /// signed records a published count is folded from.
 ///
@@ -736,6 +788,62 @@ mod tests {
         assert_eq!(parse_endorse_rkey("nocolon"), None);
         assert_eq!(parse_endorse_rkey(":subject"), None);
         assert_eq!(parse_endorse_rkey("like:"), None);
+    }
+
+    /// A comment id, as pin-crypto mints them. Opaque here on purpose: this crate builds
+    /// keys out of the token and never derives it, so literals say that more honestly than
+    /// a call across a dependency this crate does not otherwise need.
+    const ALICE_AT_NOON: &str = "pcuo7dgvhdlgkmqk6dqxvxqxrvpwbeh7kfxvcmtzegkkxpn2xtxq";
+    const ALICE_A_SECOND_LATER: &str = "gvpwgllvvmubfzhcbhqfhvbhbjbfy3d5npmnsofc7uh6heunbtqa";
+
+    #[test]
+    fn a_comment_key_round_trips_and_nonsense_does_not_parse() {
+        let subject = "f4xlljzqxtqpv7ul6ngkyeafusdwqrirpmhochqyjz2hgz3djo6a";
+        let id = ALICE_AT_NOON;
+        let rkey = comment_rkey(subject, &id);
+        assert_eq!(parse_comment_rkey(&rkey), Some((subject, id)));
+
+        assert_eq!(parse_comment_rkey("nocolon"), None);
+        assert_eq!(parse_comment_rkey(":id"), None);
+        assert_eq!(parse_comment_rkey("subject:"), None);
+    }
+
+    #[test]
+    fn a_comment_key_holds_exactly_one_separator() {
+        // Why the key carries an ID rather than the actor and timestamp it is derived from:
+        // a DID carries two colons and an ISO timestamp carries two more, so a key spelling
+        // them out could not be split back apart at all. Both halves here are base32.
+        let rkey = comment_rkey(
+            "f4xlljzqxtqpv7ul6ngkyeafusdwqrirpmhochqyjz2hgz3djo6a",
+            ALICE_AT_NOON,
+        );
+        assert_eq!(rkey.matches(':').count(), 1);
+    }
+
+    #[test]
+    fn one_actors_two_comments_on_one_subject_are_two_keys() {
+        // The singleton that `endorse_rkey` relies on, deliberately broken: a second comment
+        // landing on the first one's key is the shipped collision bug repeated.
+        let subject = "f4xlljzqxtqpv7ul6ngkyeafusdwqrirpmhochqyjz2hgz3djo6a";
+        let first = ALICE_AT_NOON;
+        let second = ALICE_A_SECOND_LATER;
+        assert_ne!(
+            comment_rkey(subject, &first),
+            comment_rkey(subject, &second)
+        );
+    }
+
+    #[test]
+    fn a_comment_key_cannot_be_read_as_an_endorsement_key() {
+        // They live in different collections, so this is belt-and-braces — but the delivery
+        // mark is keyed by whichever rkey was sent, and a comment key parsed as an
+        // endorsement key would yield a kind of 52 base32 characters. Better that it cannot
+        // masquerade at all.
+        let subject = "f4xlljzqxtqpv7ul6ngkyeafusdwqrirpmhochqyjz2hgz3djo6a";
+        let rkey = comment_rkey(subject, ALICE_AT_NOON);
+        let (kind, _) = parse_endorse_rkey(&rkey).unwrap();
+        assert_ne!(kind, "comment");
+        assert_eq!(kind, subject);
     }
 
     #[test]
