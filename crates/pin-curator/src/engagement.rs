@@ -405,31 +405,43 @@ async fn held_created_at(ctx: &EngagementContext, rkey: &str) -> Option<String> 
         .map(|e| e.created_at)
 }
 
-/// One actor's current endorsements, downloaded from their published directory.
+/// One actor's current endorsements, plus where their comments are, from one download of
+/// their published directory.
+///
+/// Both halves out of one read deliberately. The comments live in a blob of their own, and
+/// the only thing that says where is this document — so a comment lane resolving and
+/// downloading the directory for itself would double the Sia reads for every actor in the
+/// graph, and those are the slow, flaky half of a pass.
 ///
 /// Errors mean "couldn't read", which is what keeps their held records alive. An actor who
 /// has published a directory with no endorsements returns an empty list — a real answer,
 /// and the one that withdraws.
-async fn download_endorsements(
+async fn download_directory(
     ctx: &EngagementContext,
     did: &str,
     url: &str,
-) -> Result<Vec<Endorsement>, String> {
+) -> Result<(Vec<Endorsement>, crate::comments::CommentsAt), String> {
     let bytes = ctx.sia.download_item(url).await?;
     let doc: serde_json::Value =
         serde_json::from_slice(&bytes).map_err(|e| format!("{did}: directory: {e}"))?;
 
+    // Read, so a directory naming no blob is a positive "they have none" — see
+    // `comments::comments_at` for why that distinction is kept where it can be tested.
+    let comments = crate::comments::comments_at(&doc);
+
     let Some(list) = doc.get("endorsements").and_then(|v| v.as_array()) else {
         // A directory from before endorsements existed, or one with none. Either way the
         // answer is "none", which is a successful read.
-        return Ok(Vec::new());
+        return Ok((Vec::new(), comments));
     };
     // Skip anything that won't parse rather than failing the actor: one malformed record
     // must not make everything else they endorsed unreadable.
-    Ok(list
-        .iter()
-        .filter_map(|v| serde_json::from_value::<Endorsement>(v.clone()).ok())
-        .collect())
+    Ok((
+        list.iter()
+            .filter_map(|v| serde_json::from_value::<Endorsement>(v.clone()).ok())
+            .collect(),
+        comments,
+    ))
 }
 
 /// This identity's OWN endorsements, read straight out of the doc.
@@ -639,6 +651,10 @@ pub async fn engagement_once(
     let mut found: BTreeMap<String, Endorsement> = BTreeMap::new();
     // Actors whose directory we actually read. Only these can withdraw anything.
     let mut reached: BTreeSet<String> = BTreeSet::new();
+    // Where each of those actors keeps their comments, as this pass found out. Absent from
+    // the map means their directory was not read, which the comment lane must not mistake
+    // for an answer.
+    let mut comments_at: BTreeMap<String, crate::comments::CommentsAt> = BTreeMap::new();
 
     // Ourselves first, locally.
     reached.insert(own_did.to_string());
@@ -692,17 +708,21 @@ pub async fn engagement_once(
             let rkeys = held_by_actor.get(did.as_str()).cloned().unwrap_or_default();
             let records = held_endorsements(ctx, &rkeys).await;
             reached.insert(did.clone());
+            // Their comments pointer lives IN the directory, so a directory that hasn't
+            // moved means the blob hasn't either.
+            comments_at.insert(did.clone(), crate::comments::CommentsAt::Unchanged);
             outcome.skipped += 1;
             all.push((did, records));
             continue;
         }
 
-        match download_endorsements(ctx, &did, &mark.url).await {
-            Ok(records) => {
+        match download_directory(ctx, &did, &mark.url).await {
+            Ok((records, where_comments_are)) => {
                 // After the parse, never before: a mark written on a failed read would skip
                 // this actor forever with nothing in hand.
                 write_crawl_mark(ctx, &did, &mark).await;
                 reached.insert(did.clone());
+                comments_at.insert(did.clone(), where_comments_are);
                 all.push((did, records));
             }
             Err(_) => outcome.unreachable += 1,
@@ -802,7 +822,7 @@ pub async fn engagement_once(
     // The comment lane's half of the same drain. Its own collection and its own addresses,
     // so nothing above and nothing below touches what it writes.
     let (comments, commented_on) =
-        crate::comments::take_knocks(ctx, &subjects, comment_knocks).await;
+        crate::comments::take_in(ctx, own_did, &subjects, comment_knocks, &comments_at).await;
     outcome.comments = comments;
 
     // Reconcile the held log against what this pass saw. `held` was listed before the

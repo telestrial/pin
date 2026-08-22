@@ -285,6 +285,34 @@ pub fn parse_endorse_rkey(rkey: &str) -> Option<(&str, &str)> {
 /// to DELETE. Separate collections cost a constant and keep each parser knowing one shape.
 pub const COMMENT_COLLECTION: &str = "comment";
 
+/// The rkey for one HELD comment: the subject, then the comment's own id, then whose it is.
+///
+/// The actor is here and absent from `comment_rkey` for the same reason the two gesture keys
+/// differ: your own collection holds only your own records, and the log holds everybody's.
+/// Recovering it from the record instead would cost a read per held comment on every crawl,
+/// and the reconcile needs it for every one of them — an actor can only withdraw a comment
+/// if their own published blob was read this pass.
+///
+/// The actor goes last because a `did:dht:…` carries colons of its own, so it is the only
+/// field that can absorb the remainder. Both fields before it are base32 and carry none.
+pub fn comment_log_rkey(subject: &str, comment_id: &str, actor: &str) -> String {
+    format!("{subject}:{comment_id}:{actor}")
+}
+
+/// Split a held comment's key back into its subject, its id and its actor.
+///
+/// The actor still has to look like a DID, for the reason `parse_engagement_log_rkey` gives:
+/// a key missing its middle field parses successfully and wrongly, and what reads this
+/// decides what to DELETE.
+pub fn parse_comment_log_rkey(rkey: &str) -> Option<(&str, &str, &str)> {
+    let (subject, rest) = rkey.split_once(':')?;
+    let (id, actor) = rest.split_once(':')?;
+    if subject.is_empty() || id.is_empty() || !actor.starts_with("did:") {
+        return None;
+    }
+    Some((subject, id, actor))
+}
+
 /// The collection holding comments OTHERS have written on this identity's items — the
 /// signed records the published conversation is folded from.
 ///
@@ -458,6 +486,14 @@ pub const PULL_COLLECTION: &str = "pull";
 /// re-signed against an edited item is a different assertion and has to be delivered
 /// again; a mark that only said "sent" could never tell the two apart.
 pub const DELIVER_COLLECTION: &str = "deliver";
+
+/// The collection recording, per actor, the comments blob this identity last read of theirs.
+///
+/// Apart from `CRAWL_COLLECTION` deliberately, even though one directory read serves both.
+/// A directory mark written after its endorsements parsed would make the next pass skip that
+/// actor — and if the comments download had failed in between, their comments would be
+/// treated as read-and-absent, which is withdrawal by a read that never happened.
+pub const COMMENT_CRAWL_COLLECTION: &str = "comment-crawl";
 
 /// The collection recording which of this identity's COMMENTS have been delivered, keyed by
 /// the comment's own rkey.
@@ -804,6 +840,39 @@ mod tests {
     /// a call across a dependency this crate does not otherwise need.
     const ALICE_AT_NOON: &str = "pcuo7dgvhdlgkmqk6dqxvxqxrvpwbeh7kfxvcmtzegkkxpn2xtxq";
     const ALICE_A_SECOND_LATER: &str = "gvpwgllvvmubfzhcbhqfhvbhbjbfy3d5npmnsofc7uh6heunbtqa";
+
+    #[test]
+    fn a_held_comment_key_round_trips_and_nonsense_does_not_parse() {
+        let subject = "f4xlljzqxtqpv7ul6ngkyeafusdwqrirpmhochqyjz2hgz3djo6a";
+        let actor = "did:dht:yg4gcfmzy6zzgqmhw6ftnjqwbxpxbrujmn7jkgn5b3njfvqwzqto";
+        let rkey = comment_log_rkey(subject, ALICE_AT_NOON, actor);
+        assert_eq!(
+            parse_comment_log_rkey(&rkey),
+            Some((subject, ALICE_AT_NOON, actor))
+        );
+
+        // A key missing its middle field: the id would read as the actor and the parse would
+        // succeed, which is worse than failing when what reads this decides what to delete.
+        assert_eq!(
+            parse_comment_log_rkey(&format!("{subject}:{ALICE_AT_NOON}")),
+            None
+        );
+        assert_eq!(parse_comment_log_rkey("nocolon"), None);
+        assert_eq!(
+            parse_comment_log_rkey(&format!(":{ALICE_AT_NOON}:{actor}")),
+            None
+        );
+    }
+
+    #[test]
+    fn a_held_comment_key_gives_the_actor_back_whole() {
+        // A DID carries colons, so it has to be last. Reading it back is what the reconcile
+        // needs, and getting a truncated one would compare against an actor who was never
+        // reached.
+        let actor = "did:dht:yg4gcfmzy6zzgqmhw6ftnjqwbxpxbrujmn7jkgn5b3njfvqwzqto";
+        let rkey = comment_log_rkey("subject", ALICE_AT_NOON, actor);
+        assert_eq!(parse_comment_log_rkey(&rkey).unwrap().2, actor);
+    }
 
     #[test]
     fn a_comment_key_round_trips_and_nonsense_does_not_parse() {
