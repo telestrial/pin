@@ -40,7 +40,7 @@ use iroh::{Endpoint, EndpointAddr};
 use iroh_blobs::api::Store;
 use iroh_docs::{api::Doc, engine::LiveEvent, AuthorId};
 use n0_future::StreamExt as _;
-use pin_engagement::Endorsement;
+use pin_engagement::{Endorsement, Retraction};
 
 use crate::{read_record, read_settings, InstanceAddr, SettingsView};
 
@@ -53,6 +53,58 @@ const DIAL_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// How long the whole knock gets once a connection is open.
 const KNOCK_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// The two kinds of record this loop delivers, and where each keeps its marks.
+///
+/// Separate keyspaces on both sides. A mark is keyed by the record's own rkey, and the two
+/// shapes are `{kind}:{subject}` and `{subject}:{id}` — both a pair around one colon, so a
+/// parser told to guess between them would sometimes read a 52-character subject as a kind.
+/// What gets built from a misread key here is a SIGNED withdrawal of something else, which
+/// is worse than a parse that fails.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+enum Lane {
+    /// like, pin, repost — one record per subject per kind.
+    Gestures,
+    /// Comments, which break that singleton: one actor, several records on one subject.
+    Comments,
+}
+
+impl Lane {
+    const ALL: [Lane; 2] = [Lane::Gestures, Lane::Comments];
+
+    fn records(self) -> &'static str {
+        match self {
+            Lane::Gestures => pin_derive::ENDORSE_COLLECTION,
+            Lane::Comments => pin_derive::COMMENT_COLLECTION,
+        }
+    }
+
+    fn marks(self) -> &'static str {
+        match self {
+            Lane::Gestures => pin_derive::DELIVER_COLLECTION,
+            Lane::Comments => pin_derive::COMMENT_DELIVER_COLLECTION,
+        }
+    }
+
+    /// The withdrawal a mark left without its record calls for, built from the key alone —
+    /// by now the key is the only surviving description of what went.
+    ///
+    /// `None` for a key this lane cannot read, which is forgotten rather than retried.
+    fn withdrawal(self, seed: &[u8], rkey: &str, now_iso: &str) -> Option<Retraction> {
+        match self {
+            Lane::Gestures => {
+                let (kind, subject) = pin_derive::parse_endorse_rkey(rkey)?;
+                Retraction::sign(seed, kind, subject, now_iso).ok()
+            }
+            Lane::Comments => {
+                // Named, because a subject alone is ambiguous once one actor can have
+                // several comments on it.
+                let (subject, id) = pin_derive::parse_comment_rkey(rkey)?;
+                Retraction::sign_comment_withdrawal(seed, subject, now_iso, id).ok()
+            }
+        }
+    }
+}
 
 /// Everything a delivery pass needs.
 pub struct DeliverContext {
@@ -228,21 +280,15 @@ async fn subscribed_subjects(
     table
 }
 
-/// This identity's endorsements, by rkey.
-async fn own_endorsements(ctx: &DeliverContext) -> BTreeMap<String, Endorsement> {
-    let rkeys = crate::list_rkeys(&ctx.doc, ctx.author_id, pin_derive::ENDORSE_COLLECTION)
+/// This identity's records in one lane, by rkey.
+async fn own_records(ctx: &DeliverContext, lane: Lane) -> BTreeMap<String, Endorsement> {
+    let rkeys = crate::list_rkeys(&ctx.doc, ctx.author_id, lane.records())
         .await
         .unwrap_or_default();
     let mut out = BTreeMap::new();
     for rkey in rkeys {
-        let Ok(Some(raw)) = read_record(
-            &ctx.doc,
-            &ctx.blobs,
-            ctx.author_id,
-            pin_derive::ENDORSE_COLLECTION,
-            &rkey,
-        )
-        .await
+        let Ok(Some(raw)) =
+            read_record(&ctx.doc, &ctx.blobs, ctx.author_id, lane.records(), &rkey).await
         else {
             continue;
         };
@@ -333,15 +379,43 @@ pub async fn deliver_once(
     now_iso: &str,
 ) -> Result<DeliverOutcome, String> {
     let settings = read_settings(&ctx.doc, &ctx.blobs, ctx.author_id, &ctx.app_key).await?;
-    let records = own_endorsements(ctx).await;
     let mut outcome = DeliverOutcome::default();
 
     // Built lazily: it opens every cached manifest, and a pass with nothing undelivered —
-    // which is most of them — needs no table at all.
+    // which is most of them — needs no table at all. Shared across the lanes, since a
+    // comment and a like on one post resolve to the same author.
     let mut subjects: Option<HashMap<String, String>> = None;
 
+    for lane in Lane::ALL {
+        deliver_lane(
+            ctx,
+            lane,
+            own_did,
+            now_iso,
+            &settings,
+            &mut subjects,
+            &mut outcome,
+        )
+        .await;
+    }
+    Ok(outcome)
+}
+
+/// One lane's pass: deliver what is undelivered, then tell people about what went.
+#[allow(clippy::too_many_arguments)]
+async fn deliver_lane(
+    ctx: &DeliverContext,
+    lane: Lane,
+    own_did: &str,
+    now_iso: &str,
+    settings: &SettingsView,
+    subjects: &mut Option<HashMap<String, String>>,
+    outcome: &mut DeliverOutcome,
+) {
+    let records = own_records(ctx, lane).await;
+
     for (rkey, record) in &records {
-        let held = read_mark(ctx, rkey).await;
+        let held = read_mark(ctx, lane, rkey).await;
         let mut step = DeliverStep {
             rkey: rkey.clone(),
             target: None,
@@ -356,7 +430,7 @@ pub async fn deliver_once(
         }
 
         if subjects.is_none() {
-            subjects = Some(subscribed_subjects(ctx, &settings).await);
+            *subjects = Some(subscribed_subjects(ctx, settings).await);
         }
         let Some(target) = target_for(record, subjects.as_ref().expect("just built")) else {
             outcome.no_target += 1;
@@ -389,6 +463,7 @@ pub async fn deliver_once(
         if sent {
             write_mark(
                 ctx,
+                lane,
                 rkey,
                 &DeliverMark {
                     sig: record.sig.clone(),
@@ -398,17 +473,16 @@ pub async fn deliver_once(
             .await;
             outcome.delivered += 1;
         } else {
-            // No mark: an undelivered endorsement stays undelivered, and the next pass
-            // tries again. Recording a knock that didn't land would lose it for good.
+            // No mark: an undelivered record stays undelivered, and the next pass tries
+            // again. Recording a knock that didn't land would lose it for good.
             outcome.unreachable += 1;
         }
     }
 
-    let orphans = retract_orphans(ctx, &records, now_iso).await;
-    outcome.retracted = orphans.retracted;
-    outcome.retract_failed = orphans.failed;
-    outcome.dropped = orphans.dropped;
-    Ok(outcome)
+    let orphans = retract_orphans(ctx, lane, &records, now_iso).await;
+    outcome.retracted += orphans.retracted;
+    outcome.retract_failed += orphans.failed;
+    outcome.dropped += orphans.dropped;
 }
 
 /// What became of the marks with no endorsement behind them.
@@ -419,18 +493,20 @@ struct Orphans {
     dropped: usize,
 }
 
-/// What a mark left without its endorsement is worth telling somebody about.
+/// Who to tell that a record went, and what to tell them.
 ///
 /// `None` when there is nothing to say or nobody to say it to — a mark written before
-/// targets were recorded, or a key that doesn't name a gesture. Those are forgotten, since
+/// targets were recorded, or a key this lane cannot read. Those are forgotten, since
 /// retrying something that can never be built would keep the mark forever.
 fn withdrawal_from<'a>(
-    rkey: &'a str,
+    lane: Lane,
+    seed: &[u8],
+    rkey: &str,
     mark: Option<&'a DeliverMark>,
-) -> Option<(&'a str, &'a str, &'a str)> {
+    now_iso: &str,
+) -> Option<(&'a str, Retraction)> {
     let target = mark?.target.as_deref()?;
-    let (kind, subject) = pin_derive::parse_endorse_rkey(rkey)?;
-    Some((target, kind, subject))
+    Some((target, lane.withdrawal(seed, rkey, now_iso)?))
 }
 
 /// Tell the authors of withdrawn endorsements that they were withdrawn.
@@ -448,10 +524,11 @@ fn withdrawal_from<'a>(
 /// The subject and kind come from the mark's own key, since by now they exist nowhere else.
 async fn retract_orphans(
     ctx: &DeliverContext,
+    lane: Lane,
     records: &BTreeMap<String, Endorsement>,
     now_iso: &str,
 ) -> Orphans {
-    let marks = crate::list_rkeys(&ctx.doc, ctx.author_id, pin_derive::DELIVER_COLLECTION)
+    let marks = crate::list_rkeys(&ctx.doc, ctx.author_id, lane.marks())
         .await
         .unwrap_or_default();
     let seed = pin_derive::did_dht_seed(&ctx.app_key);
@@ -461,19 +538,15 @@ async fn retract_orphans(
         if records.contains_key(&rkey) {
             continue;
         }
-        let held = read_mark(ctx, &rkey).await;
-        let Some((target, kind, subject)) = withdrawal_from(&rkey, held.as_ref()) else {
-            if forget_mark(ctx, &rkey).await {
+        let held = read_mark(ctx, lane, &rkey).await;
+        // Stamped now, since when it was withdrawn was never observed. Later is the safe
+        // direction: a withdrawal is honoured only if it is newer than the record it
+        // names, so noticing late can only make it more clearly newer.
+        let Some((target, record)) = withdrawal_from(lane, &seed, &rkey, held.as_ref(), now_iso)
+        else {
+            if forget_mark(ctx, lane, &rkey).await {
                 out.dropped += 1;
             }
-            continue;
-        };
-
-        // Stamped now rather than when the gesture was withdrawn, which we never observed.
-        // Later is the safe direction: a withdrawal is honoured only if it is newer than
-        // the endorsement it names, so noticing late can only make it more clearly newer.
-        let Ok(record) = pin_engagement::Retraction::sign(&seed, kind, subject, now_iso) else {
-            out.failed += 1;
             continue;
         };
         let Ok(value) = serde_json::to_value(&record) else {
@@ -481,8 +554,8 @@ async fn retract_orphans(
             continue;
         };
 
-        let endpoints = resolve_endpoints(&target).await;
-        if knock(ctx, &endpoints, &value).await && forget_mark(ctx, &rkey).await {
+        let endpoints = resolve_endpoints(target).await;
+        if knock(ctx, &endpoints, &value).await && forget_mark(ctx, lane, &rkey).await {
             out.retracted += 1;
         } else {
             out.failed += 1;
@@ -491,68 +564,51 @@ async fn retract_orphans(
     out
 }
 
-async fn forget_mark(ctx: &DeliverContext, rkey: &str) -> bool {
-    crate::delete_record(
-        &ctx.doc,
-        ctx.author_id,
-        pin_derive::DELIVER_COLLECTION,
-        rkey,
-    )
-    .await
-    .is_ok()
+async fn forget_mark(ctx: &DeliverContext, lane: Lane, rkey: &str) -> bool {
+    crate::delete_record(&ctx.doc, ctx.author_id, lane.marks(), rkey)
+        .await
+        .is_ok()
 }
 
-async fn read_mark(ctx: &DeliverContext, rkey: &str) -> Option<DeliverMark> {
-    let raw = read_record(
-        &ctx.doc,
-        &ctx.blobs,
-        ctx.author_id,
-        pin_derive::DELIVER_COLLECTION,
-        rkey,
-    )
-    .await
-    .ok()??;
+async fn read_mark(ctx: &DeliverContext, lane: Lane, rkey: &str) -> Option<DeliverMark> {
+    let raw = read_record(&ctx.doc, &ctx.blobs, ctx.author_id, lane.marks(), rkey)
+        .await
+        .ok()??;
     serde_json::from_slice(&raw).ok()
 }
 
-async fn write_mark(ctx: &DeliverContext, rkey: &str, mark: &DeliverMark) {
+async fn write_mark(ctx: &DeliverContext, lane: Lane, rkey: &str, mark: &DeliverMark) {
     let Ok(bytes) = serde_json::to_vec(mark) else {
         return;
     };
-    let _ = crate::write_record(
-        &ctx.doc,
-        ctx.author_id,
-        pin_derive::DELIVER_COLLECTION,
-        rkey,
-        bytes,
-    )
-    .await;
+    let _ = crate::write_record(&ctx.doc, ctx.author_id, lane.marks(), rkey, bytes).await;
 }
 
-/// Whether an event says this identity endorsed something.
+/// Whether an event says this identity endorsed or commented on something.
 ///
 /// Both directions count. A local write is this instance's own click; a remote one is
-/// another instance of the same identity syncing in an endorsement it may not have been
-/// in a position to deliver itself, and whichever instance is up should carry it.
+/// another instance of the same identity syncing in a record it may not have been in a
+/// position to deliver itself, and whichever instance is up should carry it.
 ///
 /// Everything else in the doc — tallies, the engagement log, this loop's own delivery
 /// marks — is other work, and waking on it would run a pass per doc write. The marks
 /// matter most: waking on those is a loop feeding itself.
-fn endorsement_written(event: &LiveEvent) -> bool {
+fn deliverable_written(event: &LiveEvent) -> bool {
     let key = match event {
         LiveEvent::InsertLocal { entry } => entry.key(),
         LiveEvent::InsertRemote { entry, .. } => entry.key(),
         _ => return false,
     };
-    String::from_utf8_lossy(key).starts_with(&pin_derive::collection_prefix(
-        pin_derive::ENDORSE_COLLECTION,
-    ))
+    let key = String::from_utf8_lossy(key);
+    Lane::ALL
+        .iter()
+        .any(|lane| key.starts_with(&pin_derive::collection_prefix(lane.records())))
 }
 
 /// What ended a wait.
 enum Woke {
-    /// An endorsement was written, so there is something new to deliver.
-    Endorsement,
+    /// A record was written, so there is something new to deliver.
+    Written,
     /// The cadence came round.
     Timeout,
     /// The doc's stream closed and will not wake us again.
@@ -598,7 +654,7 @@ pub async fn run_deliver_loop(
                 let woken = async {
                     loop {
                         match stream.next().await {
-                            Some(Ok(ev)) if endorsement_written(&ev) => return Woke::Endorsement,
+                            Some(Ok(ev)) if deliverable_written(&ev) => return Woke::Written,
                             Some(_) => continue,
                             None => return Woke::Ended,
                         }
@@ -616,7 +672,7 @@ pub async fn run_deliver_loop(
             }
         };
         match woke {
-            Woke::Endorsement => n0_future::time::sleep(settle).await,
+            Woke::Written => n0_future::time::sleep(settle).await,
             Woke::Timeout => {}
             // Dropped rather than re-polled: a closed stream yields `None` forever, so
             // racing it again would return instantly and turn the cadence into a spin.
@@ -647,24 +703,28 @@ mod tests {
     }
 
     #[test]
-    fn only_an_endorsement_wakes_delivery() {
-        assert!(endorsement_written(&wrote("endorse/like:abc")));
+    fn only_a_deliverable_record_wakes_delivery() {
+        assert!(deliverable_written(&wrote("endorse/like:abc")));
+        // Both lanes, or a comment would wait out a whole cadence — and a comment is a
+        // thing a person just wrote, sitting on somebody else's post.
+        assert!(deliverable_written(&wrote("comment/abc:def")));
+        assert!(!deliverable_written(&wrote("comment-deliver/abc:def")));
 
         // The one that would feed the loop itself: a pass writes a mark for everything it
         // delivers, so waking on those means a knock schedules the pass that follows it,
         // forever.
-        assert!(!endorsement_written(&wrote("deliver/like:abc")));
+        assert!(!deliverable_written(&wrote("deliver/like:abc")));
         // And the doc carries every other loop's writes. Tallies alone land on a
         // 30-second cadence, so waking on them is a pass per tally for as long as anyone
         // is endorsing anything.
-        assert!(!endorsement_written(&wrote("tally/chan:abc")));
-        assert!(!endorsement_written(&wrote(
+        assert!(!deliverable_written(&wrote("tally/chan:abc")));
+        assert!(!deliverable_written(&wrote(
             "engagement-log/abc:like:did:dht:x"
         )));
 
         // Swarm churn says who we're talking to, not that anything was written.
         let peer = iroh::PublicKey::from_bytes(&[0u8; 32]).unwrap();
-        assert!(!endorsement_written(&LiveEvent::NeighborUp(peer)));
+        assert!(!deliverable_written(&LiveEvent::NeighborUp(peer)));
     }
 
     fn record(sig: &str, reference: Option<&str>) -> Endorsement {
@@ -692,16 +752,59 @@ mod tests {
         }
     }
 
+    const SEED: [u8; 32] = [3u8; 32];
+    const WHEN: &str = "2026-08-22T12:00:00.000Z";
+    const SUBJECT_HASH: &str = "f4xlljzqxtqpv7ul6ngkyeafusdwqrirpmhochqyjz2hgz3djo6a";
+
     #[test]
     fn an_orphaned_mark_says_who_to_tell_and_what_about() {
-        // The mark outlives the endorsement, so by the time a withdrawal is noticed this
-        // key and this target are the only surviving record of what the gesture was.
-        let subject = "f4xlljzqxtqpv7ul6ngkyeafusdwqrirpmhochqyjz2hgz3djo6a";
-        let rkey = pin_derive::endorse_rkey("like", subject);
-        assert_eq!(
-            withdrawal_from(&rkey, Some(&mark("sig-a"))),
-            Some(("did:dht:author", "like", subject))
-        );
+        // The mark outlives the record, so by the time a withdrawal is noticed this key and
+        // this target are the only surviving description of what went.
+        let rkey = pin_derive::endorse_rkey("like", SUBJECT_HASH);
+        let held = mark("sig-a");
+        let (target, record) =
+            withdrawal_from(Lane::Gestures, &SEED, &rkey, Some(&held), WHEN).unwrap();
+        assert_eq!(target, "did:dht:author");
+        assert_eq!(record.kind, "like");
+        assert_eq!(record.subject, SUBJECT_HASH);
+        // A gesture is a singleton at its address, so there is nothing to name.
+        assert_eq!(record.target, None);
+        assert!(record.verify().is_ok());
+    }
+
+    #[test]
+    fn an_orphaned_comment_mark_names_the_comment_that_went() {
+        // The reason the lanes are separate. One actor can leave several comments on one
+        // subject, so a withdrawal naming only the subject would be ambiguous across them —
+        // and this key is all that is left to build it from.
+        let id = "pcuo7dgvhdlgkmqk6dqxvxqxrvpwbeh7kfxvcmtzegkkxpn2xtxq";
+        let rkey = pin_derive::comment_rkey(SUBJECT_HASH, id);
+        let held = mark("sig-a");
+        let (target, record) =
+            withdrawal_from(Lane::Comments, &SEED, &rkey, Some(&held), WHEN).unwrap();
+        assert_eq!(target, "did:dht:author");
+        assert_eq!(record.kind, pin_engagement::KIND_COMMENT);
+        assert_eq!(record.subject, SUBJECT_HASH);
+        assert_eq!(record.target.as_deref(), Some(id));
+        assert!(record.verify().is_ok());
+    }
+
+    #[test]
+    fn each_lane_reads_its_own_key_shape() {
+        // Both shapes are a pair around one colon, so either parses as the other. A comment
+        // key read as a gesture key yields a KIND of 52 base32 characters and a subject of
+        // the comment id — a signed withdrawal of something that was never endorsed.
+        let id = "pcuo7dgvhdlgkmqk6dqxvxqxrvpwbeh7kfxvcmtzegkkxpn2xtxq";
+        let comment_key = pin_derive::comment_rkey(SUBJECT_HASH, id);
+        let misread = Lane::Gestures
+            .withdrawal(&SEED, &comment_key, WHEN)
+            .unwrap();
+        assert_eq!(misread.kind, SUBJECT_HASH);
+        assert_ne!(misread.subject, SUBJECT_HASH);
+
+        // Which is why they never share a keyspace.
+        assert_ne!(Lane::Gestures.marks(), Lane::Comments.marks());
+        assert_ne!(Lane::Gestures.records(), Lane::Comments.records());
     }
 
     #[test]
@@ -713,12 +816,14 @@ mod tests {
             sig: "sig-a".into(),
             target: None,
         };
-        assert_eq!(withdrawal_from(&rkey, Some(&legacy)), None);
-        assert_eq!(withdrawal_from(&rkey, None), None);
+        assert!(withdrawal_from(Lane::Gestures, &SEED, &rkey, Some(&legacy), WHEN).is_none());
+        assert!(withdrawal_from(Lane::Gestures, &SEED, &rkey, None, WHEN).is_none());
 
-        // And a key that names no gesture: signing a withdrawal from a half-read key
-        // would assert something about a subject that doesn't exist.
-        assert_eq!(withdrawal_from("nocolon", Some(&mark("sig-a"))), None);
+        // And a key neither lane can read: signing a withdrawal from a half-read key would
+        // assert something about a subject that doesn't exist.
+        for lane in Lane::ALL {
+            assert!(withdrawal_from(lane, &SEED, "nocolon", Some(&mark("sig-a")), WHEN).is_none());
+        }
     }
 
     #[test]

@@ -459,6 +459,15 @@ pub const PULL_COLLECTION: &str = "pull";
 /// again; a mark that only said "sent" could never tell the two apart.
 pub const DELIVER_COLLECTION: &str = "deliver";
 
+/// The collection recording which of this identity's COMMENTS have been delivered, keyed by
+/// the comment's own rkey.
+///
+/// Its own collection for the reason the records have one: a mark is keyed by the rkey that
+/// was sent, and the two shapes are `{kind}:{subject}` and `{subject}:{id}`. Sharing the
+/// space would leave the orphan sweep guessing which it was looking at — and what it builds
+/// from a misread key is a SIGNED withdrawal of something else.
+pub const COMMENT_DELIVER_COLLECTION: &str = "comment-deliver";
+
 /// The collection where each of this identity's live instances registers itself,
 /// keyed by its iroh node id.
 ///
