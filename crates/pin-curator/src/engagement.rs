@@ -140,10 +140,12 @@ pub struct EngagementOutcome {
     /// Channels whose floor publish failed. Retried next pass, and it will be: the
     /// fingerprint doesn't advance until one succeeds.
     pub publish_failed: usize,
+    /// What the comment lane did with its half of the same drain.
+    pub comments: crate::comments::CommentsOutcome,
 }
 
 /// Where a subject lives, so its tally reaches the right channel's doc.
-type SubjectTable = HashMap<String, String>;
+pub(crate) type SubjectTable = HashMap<String, String>;
 
 /// Every subject this identity publishes: one per post, one per attachment.
 ///
@@ -461,7 +463,7 @@ async fn own_endorsements(ctx: &EngagementContext) -> Vec<Endorsement> {
 
 /// What a knocked record is worth once it has been looked at.
 #[derive(Debug, PartialEq, Eq)]
-enum KnockVerdict {
+pub(crate) enum KnockVerdict {
     /// Signed, ours, and newer than anything held — take it.
     Accept,
     /// Not signed by the identity it names, or its coordinates don't hash to its subject.
@@ -485,7 +487,7 @@ enum KnockVerdict {
 /// `crawled` is whether this pass already read this record from the actor's own
 /// directory. If it did, that reading wins outright: it came from the source, this pass,
 /// and no timestamp comparison can improve on it.
-fn knock_verdict(
+pub(crate) fn knock_verdict(
     record: &Endorsement,
     subjects: &SubjectTable,
     crawled: bool,
@@ -508,7 +510,7 @@ fn knock_verdict(
 }
 
 /// What arrived in a knock. One route carries both, so the receiver has to say which.
-enum Knocked {
+pub(crate) enum Knocked {
     Endorse(Endorsement),
     Retract(Retraction),
 }
@@ -520,7 +522,7 @@ enum Knocked {
 /// exclusive today (an endorsement requires `version`, a retraction requires `op`), but
 /// that is a property of two structs that will keep changing, and this codebase has been
 /// bitten twice by inferring meaning from which fields happened to be present.
-fn classify_knock(value: serde_json::Value) -> Option<Knocked> {
+pub(crate) fn classify_knock(value: serde_json::Value) -> Option<Knocked> {
     let retraction = value.get("op").and_then(|v| v.as_str()) == Some(pin_engagement::OP_RETRACT);
     if retraction {
         serde_json::from_value::<Retraction>(value)
@@ -535,7 +537,7 @@ fn classify_knock(value: serde_json::Value) -> Option<Knocked> {
 
 /// What a knocked withdrawal is worth once it has been looked at.
 #[derive(Debug, PartialEq, Eq)]
-enum RetractionVerdict {
+pub(crate) enum RetractionVerdict {
     /// Signed, ours, and newer than the record it names — remove it.
     Accept,
     /// Not signed by the identity it names, or not claiming to be a withdrawal.
@@ -561,7 +563,7 @@ enum RetractionVerdict {
 /// pass, so honouring the push here would delete a record this same pass then restores.
 /// Their directory catching up is what makes the withdrawal stick, and for the actors this
 /// exists to serve there is no directory being read at all.
-fn retraction_verdict(
+pub(crate) fn retraction_verdict(
     record: &Retraction,
     subjects: &SubjectTable,
     crawled: bool,
@@ -614,12 +616,19 @@ pub async fn engagement_once(
 
     // Emptied whatever happens to them. A knock left parked would be re-examined every
     // pass forever, and the inbox has a ceiling it would eventually reach.
-    let knocks = pin_rpc::drain(&ctx.inbox);
+    //
+    // ONE drain, split by lane. `pin-rpc` never parses a record, so both kinds arrive here
+    // together; two drains over one inbox would mean whichever ran second found the other's
+    // knocks already gone.
+    let (comment_knocks, knocks): (Vec<_>, Vec<_>) = pin_rpc::drain(&ctx.inbox)
+        .into_iter()
+        .map(|k| k.record)
+        .partition(crate::comments::is_comment);
 
     if subjects.is_empty() {
         // Nothing published, so nothing can be endorsed — including by knock. Not a
         // failure, and not a reason to hold on to what was knocked.
-        outcome.not_ours = knocks.len();
+        outcome.not_ours = knocks.len() + comment_knocks.len();
         return Ok(outcome);
     }
 
@@ -728,7 +737,7 @@ pub async fn engagement_once(
     // held list and must not count a second withdrawal for what has already gone.
     let mut retracted: BTreeMap<String, String> = BTreeMap::new();
     for knock in knocks {
-        match classify_knock(knock.record) {
+        match classify_knock(knock) {
             Some(Knocked::Endorse(record)) => {
                 let key = log_key(&record);
                 let held_at = held_created_at(ctx, &key).await;
@@ -790,9 +799,17 @@ pub async fn engagement_once(
         }
     }
 
+    // The comment lane's half of the same drain. Its own collection and its own addresses,
+    // so nothing above and nothing below touches what it writes.
+    let (comments, commented_on) =
+        crate::comments::take_knocks(ctx, &subjects, comment_knocks).await;
+    outcome.comments = comments;
+
     // Reconcile the held log against what this pass saw. `held` was listed before the
     // crawl, and nothing has written to that collection since.
     let mut touched: BTreeSet<String> = found.values().map(|r| r.subject.clone()).collect();
+    // A subject somebody commented on is a subject whose published counts moved.
+    touched.extend(commented_on);
     // A withdrawal moves a count the same way anything else does: only a re-fold brings it
     // down, and only a touched subject is re-folded.
     touched.extend(retracted.values().cloned());

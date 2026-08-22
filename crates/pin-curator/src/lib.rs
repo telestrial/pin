@@ -70,6 +70,7 @@ use pin_engagement::Aggregate;
 
 mod channeldoc;
 mod channelsync;
+mod comments;
 mod deliver;
 mod engagement;
 mod identity;
