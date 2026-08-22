@@ -10,11 +10,16 @@
 // has not answered yet shows nothing, which is also what a reader sees for one that came
 // back deleted or unavailable — the distinction only matters to the channel's owner, who
 // is the only one who can act on it.
+//
+// A source's published counts are cached on the way past, for the same reason its manifest
+// is read here: no loop covers a channel this identity has no relationship with, so this
+// pass is what puts numbers beside a portal's row.
 
 import { useEffect, useRef } from 'react'
 import { portalsIn } from '../../core/feed'
 import { useAuthStore } from '../../stores/auth'
 import { useFeedStore } from '../../stores/feed'
+import { warmChannelTallies } from '../channelTallies'
 import { type HeldChannels, makePortalResolver } from '../repost'
 
 /** What this identity already holds for a portal's source: K, and the manifest when the
@@ -38,6 +43,7 @@ function heldChannels(): HeldChannels {
 
 export function usePortalResolution() {
   const client = useAuthStore((s) => s.client)
+  const appKeyHex = useAuthStore((s) => s.storedKeyHex)
   const manifests = useFeedStore((s) => s.manifests)
   // A pass in flight, and whether the world moved while it ran. Without the second
   // flag a manifest arriving mid-pass would wait for whatever changes next, which for
@@ -70,7 +76,17 @@ export function usePortalResolution() {
           // That memo is what makes ten portals into one channel cost one directory
           // read; keeping it any longer would start skipping the directory read that
           // tells us whether the author still advertises the channel at all.
-          const resolver = makePortalResolver(client, heldChannels())
+          const resolver = makePortalResolver(
+            client,
+            heldChannels(),
+            (channelID, channelKey) => {
+              if (!appKeyHex) return
+              // Unawaited, like every other read of a channel's counts: the posts are
+              // what the row is waiting on, and counts arriving a moment behind them is
+              // the ordinary shape of this.
+              void warmChannelTallies(appKeyHex, channelID, channelKey)
+            },
+          )
           const subs = useAuthStore.getState().subscriptions
           await useFeedStore.getState().resolvePortals(resolver, subs)
         } while (again.current && !cancelled)
@@ -87,5 +103,5 @@ export function usePortalResolution() {
     return () => {
       cancelled = true
     }
-  }, [client, wanted])
+  }, [client, appKeyHex, wanted])
 }

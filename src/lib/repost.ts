@@ -30,6 +30,16 @@
 // a post the reader can plainly see as unavailable. Hence rung 1, which is also why a
 // portal to your OWN post resolves with no network at all.
 //
+// ## Counts come from the same rung the post did
+//
+// A row's counts are read from this identity's own doc, and what fills that cache is a
+// pass over a channel it has a relationship with — the pull loop for a subscription, the
+// engagement loop for one it owns. A portal into a stranger's channel has neither, so
+// nothing would ever write counts for it and the row would render bare beside a post that
+// plainly has them. Rung 2 is therefore also where the channel's published counts get
+// cached, for exactly the reason it is where the manifest gets read: no pass covers this
+// channel, so this read is the only one there is.
+//
 // ## Absence has two forms and they are not interchangeable
 //
 // Reading nothing is never the same as reading that there is nothing — the mistake this
@@ -114,6 +124,14 @@ export type HeldChannel = {
  *  the store graph — the same seam `FetchChannel` uses. */
 export type HeldChannels = (target: PortalTarget) => HeldChannel | null
 
+/** Cache one source channel's published counts, so a portal row shows the numbers a
+ *  subscriber's row shows.
+ *
+ *  Injected for the same reason `held` is, and called only from rung 2: a channel this
+ *  identity already holds has its counts on the way through the ordinary subscribed path,
+ *  so warming there would spend a DHT resolve and a Sia read on work already done. */
+export type WarmTallies = (channelID: string, channelKey: string) => void
+
 export type PortalResolver = {
   resolve: (target: PortalTarget) => Promise<PortalOutcome>
 }
@@ -130,12 +148,16 @@ export type PortalResolver = {
 export function makePortalResolver(
   client: SiaClient,
   held: HeldChannels = () => null,
+  warm: WarmTallies = () => {},
 ): PortalResolver {
   const directories = new Map<
     string,
     Promise<Awaited<ReturnType<typeof resolveIdentityDoc>> | undefined>
   >()
   const manifests = new Map<string, Promise<ChannelManifest | null>>()
+  // Counts are per channel rather than per post, so ten portals into one source want one
+  // read of them — the same amortization the two memos above are for.
+  const warmed = new Set<string>()
 
   // undefined = the read failed (unreachable); null = read fine, nothing published.
   const directory = (didDht: string) => {
@@ -183,7 +205,14 @@ export function makePortalResolver(
       // the DHT looks exactly like this, so it must not read as a retract.
       if (!source) return { state: 'unreachable' }
 
-      return found(target, source, advertised.key, advertised.name)
+      const outcome = found(target, source, advertised.key, advertised.name)
+      // Only for a portal that resolved: the other outcomes have no row to put numbers
+      // beside, and a channel that could not be read is not one to go asking about.
+      if (outcome.state === 'resolved' && !warmed.has(target.channelID)) {
+        warmed.add(target.channelID)
+        warm(target.channelID, advertised.key)
+      }
+      return outcome
     },
   }
 }

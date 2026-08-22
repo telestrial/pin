@@ -28,9 +28,12 @@ import {
   commitChannelManifest,
   resolveChannelViaLocator,
 } from '../lib/channelLocator'
+import { readTally, warmChannelTallies } from '../lib/channelTallies'
 import { type HeldChannels, makePortalResolver, targetOf } from '../lib/repost'
 import {
+  fakeDocStore as docStore,
   publishFakeDirectory,
+  publishFakeTallies,
   unpublishFakeDirectory,
   unpublishFakeLocator,
 } from './fakeModules'
@@ -302,5 +305,120 @@ describe('integration: resolving a portal into a channel the reader already hold
     )
 
     expect(outcome.state).toBe('unavailable')
+  })
+})
+
+describe('integration: a portal brings the source’s counts with it', () => {
+  let app: ReturnType<typeof createFakeApp>
+  let author: FakeAccount
+  let reader: FakeAccount
+
+  beforeEach(() => {
+    resetAllStores()
+    docStore.clear()
+    app = createFakeApp()
+    author = app.createAccount({ did: 'did:src', handle: 'src' })
+    reader = app.createAccount({ did: 'did:reader', handle: 'reader' })
+  })
+
+  /** What the source author's own fold published about one of their posts. */
+  async function theyCount(channel: Channel, item: ItemRef, count: number) {
+    const { engagement_subject } = await import(
+      '../../crates/pin-core/pkg/pin_core.js'
+    )
+    publishFakeTallies(channelKeyFromBase64(channel.channelKey), {
+      [engagement_subject(channel.channelID, item.publishedAt, undefined)]: {
+        kinds: {
+          like: { count, setRoot: 'root-a', sampleActors: ['did:dht:bob'] },
+        },
+        updatedAt: item.publishedAt,
+      },
+    })
+  }
+
+  /** A resolver warming counts for real, plus the reads to wait on. A row reads the
+   *  cache rather than the callback, so a test has to let the write land. */
+  function warming(held: HeldChannels = () => null) {
+    const reads: Promise<void>[] = []
+    const resolver = makePortalResolver(
+      reader.client,
+      held,
+      (channelID, channelKey) => {
+        reads.push(warmChannelTallies(FAKE_APP_KEY_HEX, channelID, channelKey))
+      },
+    )
+    return { resolver, reads, settled: () => Promise.all(reads) }
+  }
+
+  it('caches them for a channel it holds nothing for', async () => {
+    // The gap: no loop this identity runs covers a stranger's channel, so nothing else
+    // would ever write its counts and the row would render bare beside a post whose
+    // counts are plainly published.
+    const { channel, item } = await aChannelWorthReposting(author)
+    await theyCount(channel, item, 3)
+
+    const { resolver, settled } = warming()
+    const outcome = await resolver.resolve(portal(channel.channelID, item))
+    await settled()
+
+    expect(outcome.state).toBe('resolved')
+    // Read by the item the way a row does, and under the ORIGINAL's channel — which is
+    // whose post a portal renders, and so whose subject its counts are filed under.
+    const tally = await readTally(FAKE_APP_KEY_HEX, {
+      channelID: channel.channelID,
+      publishedAt: item.publishedAt,
+    })
+    expect(tally?.kinds.like?.count).toBe(3)
+  })
+
+  it('reads one channel’s counts once for many portals into it', async () => {
+    const { channel, item } = await aChannelWorthReposting(author)
+    const second = await publishTextPost(author, channel, 'and this one')
+
+    const { resolver, reads } = warming()
+    await Promise.all([
+      resolver.resolve(portal(channel.channelID, item)),
+      resolver.resolve(portal(channel.channelID, second)),
+    ])
+
+    // Counts are published per channel rather than per post, so one read serves both
+    // rows — the same amortization the directory and manifest memos are for.
+    expect(reads).toHaveLength(1)
+  })
+
+  it('leaves a channel it already holds to the pass that covers it', async () => {
+    // A subscription's counts arrive through the pull loop and an owned channel's
+    // through the engagement loop. Reading them here would spend a DHT resolve and a
+    // Sia download on work already done.
+    const { channel, item } = await aChannelWorthReposting(author)
+
+    const { resolver, reads } = warming(() => ({
+      channelKey: channel.channelKey,
+    }))
+    const outcome = await resolver.resolve(portal(channel.channelID, item))
+
+    expect(outcome.state).toBe('resolved')
+    expect(reads).toHaveLength(0)
+  })
+
+  it('asks for none when the post it names is gone', async () => {
+    // The manifest WAS read here, so the channel is reachable and the cheap condition
+    // would fire — but a retracted post has no row, and counts are for a row.
+    const { channel, item } = await aChannelWorthReposting(author)
+    const current = await resolveOrThrow(channel)
+    const { manifest } = await deletePublishedItem(current, item.id)
+    await commitChannelManifest(
+      author.client,
+      FAKE_APP_KEY_HEX,
+      channel.channelID,
+      channel.channelKey,
+      manifest,
+    )
+
+    const { resolver, reads } = warming()
+    const outcome = await resolver.resolve(portal(channel.channelID, item))
+
+    expect(outcome.state).toBe('deleted')
+    expect(reads).toHaveLength(0)
   })
 })
