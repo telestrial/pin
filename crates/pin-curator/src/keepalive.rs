@@ -60,6 +60,10 @@ pub struct KeepAliveOutcome {
     pub tallies_refreshed: usize,
     /// Channels whose tallies republish failed. Retried next pass, like the rest.
     pub tallies_failed: usize,
+    /// Channels whose conversations pointer was re-signed.
+    pub conversations_refreshed: usize,
+    /// Channels whose conversations republish failed. Retried next pass, like the rest.
+    pub conversations_failed: usize,
     /// What happened to the settings locator, reported separately from the channel
     /// counts: "3 refreshed" would otherwise say nothing about whether the one pointer
     /// that recovers a whole account is still alive.
@@ -117,6 +121,16 @@ pub async fn keep_alive_once(ctx: &KeepAliveContext) -> Result<KeepAliveOutcome,
             match pin_channel::republish_tallies_pointer(&k, &url).await {
                 Ok(()) => outcome.tallies_refreshed += 1,
                 Err(_) => outcome.tallies_failed += 1,
+            }
+        }
+
+        // And the conversations pointer, on the same terms and for the same reason. Its own
+        // record, so a channel with counts and no comments keeps one alive and not the other.
+        let conversation_rkey = pin_derive::published_conversation_rkey(&owned.channel_id);
+        if let Some(url) = read_published_url(ctx, &published_key, &conversation_rkey).await {
+            match pin_channel::republish_conversations_pointer(&k, &url).await {
+                Ok(()) => outcome.conversations_refreshed += 1,
+                Err(_) => outcome.conversations_failed += 1,
             }
         }
     }

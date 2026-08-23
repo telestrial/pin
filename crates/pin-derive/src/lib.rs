@@ -95,6 +95,14 @@ pub const CHANNEL_DOC_TICKET_INFO: &[u8] = b"pin:channel-doc:v1";
 /// locator: sharing one record would mean every tally publish rewrote the manifest
 /// pointer, and every keep-alive rewrote the tally pointer.
 pub const ENGAGEMENT_LOCATOR_INFO: &[u8] = b"pin:engagement:v1";
+/// HKDF `info` for the pkarr key carrying a channel's published conversations. K-derived
+/// like the counts, so the audience for the words is exactly the audience for the post.
+///
+/// Its own pointer rather than riding the tallies', because the two move at different rates
+/// and cost different amounts to move. A count changes whenever anybody likes anything, and
+/// each change re-uploads the whole object — so sharing one would re-upload every comment
+/// body in a channel every time somebody tapped a heart.
+pub const CONVERSATION_LOCATOR_INFO: &[u8] = b"pin:conversation:v1";
 /// HKDF `info` for the pkarr key holding the pointer to your settings snapshot.
 pub const SETTINGS_LOCATOR_INFO: &[u8] = b"pin:settings-locator:v1";
 /// The TXT-record prefix the settings locator's pointer is chunked under. Here rather
@@ -156,6 +164,11 @@ pub fn channel_doc_ticket_seed(channel_key: &[u8]) -> [u8; 32] {
 /// The pkarr seed for a channel's published tallies, from its channel key K.
 pub fn engagement_locator_seed(channel_key: &[u8]) -> [u8; 32] {
     hkdf32(channel_key, ENGAGEMENT_LOCATOR_INFO)
+}
+
+/// The pkarr seed for a channel's published-conversations pointer.
+pub fn conversation_locator_seed(channel_key: &[u8]) -> [u8; 32] {
+    hkdf32(channel_key, CONVERSATION_LOCATOR_INFO)
 }
 
 /// The pkarr seed for your settings-snapshot pointer.
@@ -554,6 +567,12 @@ pub fn published_channel_rkey(channel_id: &str) -> String {
 /// so the object reclaimed would be one a reader could still be resolving.
 pub fn published_engagement_rkey(channel_id: &str) -> String {
     format!("engagement:{channel_id}")
+}
+
+/// The rkey for one channel's published-conversations state. Its own, so the two objects
+/// supersede independently.
+pub fn published_conversation_rkey(channel_id: &str) -> String {
+    format!("conversation:{channel_id}")
 }
 
 /// The rkey for the settings snapshot's publish state — which Sia object the settings
@@ -1093,6 +1112,7 @@ mod tests {
             channel_doc_seed(&ikm, "chan"),
             channel_doc_ticket_seed(&ikm),
             engagement_locator_seed(&ikm),
+            conversation_locator_seed(&ikm),
             settings_locator_seed(&ikm),
             rendezvous_seed(&ikm),
             rendezvous_instance_seed(&ikm, "inst"),

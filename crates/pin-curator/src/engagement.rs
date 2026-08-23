@@ -1008,6 +1008,11 @@ pub async fn engagement_once(
         let Some(k) = pin_crypto::channel_key_from_base64(&owned.channel_key) else {
             continue;
         };
+        match publish_channel_conversations(ctx, &owned.channel_id, &k).await {
+            Ok(true) => outcome.comments.published_floor += 1,
+            Ok(false) => {}
+            Err(_) => outcome.comments.floor_failed += 1,
+        }
         match publish_channel_tallies(ctx, &owned.channel_id, &k).await {
             Ok(true) => outcome.published += 1,
             Ok(false) => {}
@@ -1111,6 +1116,118 @@ async fn read_tallies(
         }
     }
     Ok(map)
+}
+
+/// Every conversation a channel currently publishes, read back out of its own replica.
+///
+/// From the doc rather than re-gathered, for the reason `read_tallies` gives: the doc holds
+/// what was last written for every subject, including ones this pass never touched, so the
+/// floor and the replica agree by construction instead of by two gathers agreeing.
+async fn read_conversations(
+    ctx: &EngagementContext,
+    channel_doc: &Doc,
+) -> Result<BTreeMap<String, pin_engagement::Conversation>, String> {
+    let subjects = crate::list_rkeys(
+        channel_doc,
+        ctx.author_id,
+        pin_derive::CONVERSATION_COLLECTION,
+    )
+    .await?;
+    let mut map = BTreeMap::new();
+    for subject in subjects {
+        let Ok(Some(entry)) = channel_doc
+            .get_one(
+                iroh_docs::store::Query::single_latest_per_key()
+                    .key_exact(conversation_key(&subject)),
+            )
+            .await
+        else {
+            continue;
+        };
+        let Ok(bytes) = ctx.blobs.get_bytes(entry.content_hash()).await else {
+            continue;
+        };
+        if let Ok(conversation) = serde_json::from_slice::<pin_engagement::Conversation>(&bytes) {
+            map.insert(subject, conversation);
+        }
+    }
+    Ok(map)
+}
+
+/// A fingerprint of what a channel's conversations SAY, ignoring when they were said to.
+///
+/// Over the signatures, because a signature covers the body — so it identifies a comment's
+/// content exactly, and two passes that read the same records fingerprint the same however
+/// often `updatedAt` moves. Fingerprinting the map verbatim would mint a fresh Sia object
+/// every cadence for every channel anyone has ever commented on.
+fn conversation_substance(
+    map: &BTreeMap<String, pin_engagement::Conversation>,
+) -> Result<String, String> {
+    let stripped: BTreeMap<&str, Vec<&str>> = map
+        .iter()
+        .map(|(subject, conversation)| {
+            (
+                subject.as_str(),
+                conversation
+                    .comments
+                    .iter()
+                    .map(|c| c.sig.as_str())
+                    .collect(),
+            )
+        })
+        .collect();
+    let json = serde_json::to_string(&stripped).map_err(|e| format!("fingerprint: {e}"))?;
+    Ok(pin_crypto::content_hash(json.as_bytes()))
+}
+
+/// Publish one channel's conversations where anyone holding its key can read them.
+///
+/// The words' floor, and the same shape the counts' is: fingerprinted on substance, keep-2
+/// on reclaim, and self-gating so calling it when nothing moved costs one local read.
+pub async fn publish_channel_conversations(
+    ctx: &EngagementContext,
+    channel_id: &str,
+    channel_key: &[u8; 32],
+) -> Result<bool, String> {
+    let channel_doc = open_channel_doc(ctx, channel_id).await?;
+    let map = read_conversations(ctx, &channel_doc).await?;
+
+    let rkey = pin_derive::published_conversation_rkey(channel_id);
+    let published_key = pin_derive::published_key(&ctx.app_key);
+    let previous =
+        crate::read_published(&ctx.doc, &ctx.blobs, ctx.author_id, &published_key, &rkey).await;
+    if map.is_empty() && previous.is_none() {
+        return Ok(false);
+    }
+
+    let fingerprint = conversation_substance(&map)?;
+    if previous.as_ref().and_then(|p| p.fp.as_deref()) == Some(fingerprint.as_str()) {
+        return Ok(false);
+    }
+
+    let json = serde_json::to_string(&map).map_err(|e| format!("encode conversations: {e}"))?;
+    let published = pin_channel::publish_conversations(&ctx.sia, channel_key, &json).await?;
+
+    crate::write_published(
+        &ctx.doc,
+        ctx.author_id,
+        &published_key,
+        &rkey,
+        &crate::PublishedState {
+            id: published.object_id.clone(),
+            url: Some(published.item_url),
+            older_id: previous.as_ref().map(|p| p.id.clone()),
+            fp: Some(fingerprint),
+        },
+    )
+    .await;
+
+    // Keep-2, as the manifest and the tallies do: a pointer takes seconds to propagate, so
+    // the generation just superseded may still be what a reader mid-resolve is holding.
+    if let Some(old) = reclaimable(previous.as_ref(), &published.object_id) {
+        let _ = ctx.sia.delete_object(&old).await;
+    }
+    Ok(true)
 }
 
 /// A fingerprint of what a channel's tallies assert.
@@ -1459,6 +1576,39 @@ mod tests {
 
     fn withdrawn(when: &str) -> Retraction {
         withdrawn_of(SUBJECT, when)
+    }
+
+    #[test]
+    fn a_conversation_fingerprint_ignores_when_it_was_folded() {
+        // Otherwise every cadence mints a fresh Sia object for every channel anyone has ever
+        // commented on. The signature covers the body, so it identifies content exactly.
+        let one = Endorsement::sign_comment(&[4u8; 32], "s", "v", "t", None, "said").unwrap();
+        let mut map = BTreeMap::new();
+        map.insert(
+            "s".to_string(),
+            pin_engagement::Conversation {
+                comments: vec![one.clone()],
+                updated_at: "2026-08-22T12:00:00.000Z".into(),
+            },
+        );
+        let first = conversation_substance(&map).unwrap();
+
+        map.get_mut("s").unwrap().updated_at = "2026-08-22T13:00:00.000Z".into();
+        assert_eq!(conversation_substance(&map).unwrap(), first);
+
+        // And it does move when what was said moves.
+        let two = Endorsement::sign_comment(&[5u8; 32], "s", "v", "t", None, "and this").unwrap();
+        map.get_mut("s").unwrap().comments.push(two);
+        assert_ne!(conversation_substance(&map).unwrap(), first);
+    }
+
+    #[test]
+    fn the_two_floors_publish_under_their_own_state() {
+        // One rkey for both would make each publish reclaim the other's object.
+        assert_ne!(
+            pin_derive::published_engagement_rkey("chan"),
+            pin_derive::published_conversation_rkey("chan")
+        );
     }
 
     #[test]

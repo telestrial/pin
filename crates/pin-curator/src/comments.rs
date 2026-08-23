@@ -80,6 +80,12 @@ pub struct CommentsOutcome {
     /// entry can carry. Reported rather than swallowed: a cap nobody is told about reads as
     /// complete.
     pub dropped: usize,
+    /// Channels whose conversations reached Sia and the DHT — the floor, and the only copy a
+    /// reader without a live replica ever sees.
+    pub published_floor: usize,
+    /// Channels whose floor publish failed. Retried next pass, and it will be: the
+    /// fingerprint does not advance until one succeeds.
+    pub floor_failed: usize,
 }
 
 /// Whether a knocked payload belongs to this lane.

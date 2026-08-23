@@ -29,6 +29,11 @@ const POINTER_PREFIX: &str = "_c";
 /// so a shared name would be safe — distinct anyway, because a record that says what it
 /// holds is worth more than one byte saved.
 const TALLIES_PREFIX: &str = "_e";
+/// The TXT prefix a channel's conversations pointer is chunked under.
+///
+/// Distinct from every other prefix even though each pointer lives under its own pkarr key,
+/// so a packet's records name one thing whichever key it was found beneath.
+const CONVERSATIONS_PREFIX: &str = "_v";
 
 /// Where a published manifest ended up.
 ///
@@ -84,6 +89,13 @@ fn tallies_pointer(channel_key: &[u8; 32]) -> Pointer {
     Pointer {
         seed: pin_derive::engagement_locator_seed(channel_key),
         prefix: TALLIES_PREFIX,
+    }
+}
+
+fn conversations_pointer(channel_key: &[u8; 32]) -> Pointer {
+    Pointer {
+        seed: pin_derive::conversation_locator_seed(channel_key),
+        prefix: CONVERSATIONS_PREFIX,
     }
 }
 
@@ -220,6 +232,37 @@ pub async fn publish_tallies(
     seal_and_point(sia, channel_key, tallies_pointer(channel_key), tallies_json).await
 }
 
+/// Seal a channel's conversations under K, upload them, and point at them.
+///
+/// The floor for the words, as `publish_tallies` is for the numbers: everyone who can read
+/// a channel holds K, and most of them hold no replica of its doc.
+pub async fn publish_conversations(
+    sia: &pin_sia::Session,
+    channel_key: &[u8; 32],
+    conversations_json: &str,
+) -> Result<Published, String> {
+    seal_and_point(
+        sia,
+        channel_key,
+        conversations_pointer(channel_key),
+        conversations_json,
+    )
+    .await
+}
+
+/// Re-sign a channel's CURRENT conversations pointer to refresh its TTL.
+pub async fn republish_conversations_pointer(
+    channel_key: &[u8; 32],
+    item_url: &str,
+) -> Result<(), String> {
+    repoint(conversations_pointer(channel_key), item_url).await
+}
+
+/// Where a channel's conversations currently are, without fetching them.
+pub async fn resolve_conversations_url(channel_key: &[u8; 32]) -> Result<Option<String>, String> {
+    resolve_pointer(conversations_pointer(channel_key)).await
+}
+
 /// Re-sign a channel's CURRENT tallies pointer to refresh its TTL.
 ///
 /// Takes the URL rather than resolving it first, for the same reason
@@ -252,6 +295,17 @@ pub async fn fetch_tallies(
     open_blob(channel_key, &blob)
 }
 
+/// Download and open a channel's conversations at a URL already resolved for it.
+pub async fn fetch_conversations(
+    sia: &pin_sia::Session,
+    channel_key: &[u8; 32],
+    item_url: &str,
+) -> Result<String, String> {
+    let ciphertext = sia.download_item(item_url).await?;
+    let blob = String::from_utf8(ciphertext).map_err(|_| "conversations blob is not UTF-8")?;
+    open_blob(channel_key, &blob)
+}
+
 /// Read a channel's tallies from K alone.
 ///
 /// `Ok(None)` means nothing is published there, which is ordinary and common: a channel
@@ -279,6 +333,28 @@ pub fn open_blob(channel_key: &[u8; 32], blob: &str) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_channels_three_pointers_are_separate_records() {
+        // Each is a pkarr record of its own, and a shared key would make publishing one
+        // overwrite another: a conversation publish would take the manifest pointer with it,
+        // and the channel would stop resolving for everybody.
+        let k = [3u8; 32];
+        let all = [
+            super::manifest_pointer(&k),
+            super::tallies_pointer(&k),
+            super::conversations_pointer(&k),
+        ];
+        for i in 0..all.len() {
+            for j in (i + 1)..all.len() {
+                assert_ne!(all[i].seed, all[j].seed, "pointers {i} and {j} share a key");
+                assert_ne!(
+                    all[i].prefix, all[j].prefix,
+                    "pointers {i} and {j} share a prefix"
+                );
+            }
+        }
+    }
+
     use super::*;
 
     // These descriptors cross to the frontend as JSON and are deserialized straight into
