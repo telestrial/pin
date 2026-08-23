@@ -5,6 +5,7 @@ import type { ItemRef } from '../../core/types'
 import { formatBytes } from '../../lib/format'
 import { useAuthStore } from '../../stores/auth'
 import type { PinInput } from '../../stores/pin'
+import { CommentThread } from '../engagement/CommentThread'
 import { EngagementRow } from '../engagement/EngagementRow'
 
 export function ReadFile({
@@ -127,6 +128,15 @@ export function ReadFile({
             )}
           </div>
         </article>
+        {/* Under the post, and only on a channel that takes comments — the component
+            decides that for itself, so every reader page asks the same way. */}
+        <CommentThread
+          item={{
+            channelID: pinInput.channel.channelID,
+            publishedAt: item.publishedAt,
+            contentHash: item.contentHash,
+          }}
+        />
         {rightSidebar}
       </div>
     </div>

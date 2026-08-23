@@ -9,6 +9,7 @@ import { useAuthStore } from '../../stores/auth'
 import { useFeedStore } from '../../stores/feed'
 import { type PinInput, usePinStore } from '../../stores/pin'
 import { AttachmentGrid } from '../AttachmentMedia'
+import { CommentThread } from '../engagement/CommentThread'
 import { EngagementRow } from '../engagement/EngagementRow'
 
 export function ReadText({
@@ -204,6 +205,15 @@ export function ReadText({
             )}
           </footer>
         </article>
+        {/* Under the post, and only on a channel that takes comments — the component
+            decides that for itself, so every reader page asks the same way. */}
+        <CommentThread
+          item={{
+            channelID: pinInput.channel.channelID,
+            publishedAt: item.publishedAt,
+            contentHash: item.contentHash,
+          }}
+        />
         {rightSidebar}
       </div>
     </div>

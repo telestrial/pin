@@ -5,6 +5,7 @@ import { installAppBridge } from '../../lib/appBridge'
 import { APP_SANDBOX } from '../../lib/constants'
 import { useItemBytes } from '../../lib/hooks/useItemBytes'
 import type { PinInput } from '../../stores/pin'
+import { CommentThread } from '../engagement/CommentThread'
 import { EngagementRow } from '../engagement/EngagementRow'
 
 export function ReadApp({
@@ -113,6 +114,15 @@ export function ReadApp({
             </div>
           )}
         </article>
+        {/* Under the post, and only on a channel that takes comments — the component
+            decides that for itself, so every reader page asks the same way. */}
+        <CommentThread
+          item={{
+            channelID: pinInput.channel.channelID,
+            publishedAt: item.publishedAt,
+            contentHash: item.contentHash,
+          }}
+        />
         {rightSidebar}
       </div>
     </div>

@@ -2,6 +2,7 @@ import type { FeedEntry } from '../../core/feed'
 import type { ItemRef } from '../../core/types'
 import { useItemBlobURL } from '../../lib/hooks/useItemBytes'
 import type { PinInput } from '../../stores/pin'
+import { CommentThread } from '../engagement/CommentThread'
 import { EngagementRow } from '../engagement/EngagementRow'
 
 export function ReadVideo({
@@ -75,6 +76,15 @@ export function ReadVideo({
             />
           )}
         </article>
+        {/* Under the post, and only on a channel that takes comments — the component
+            decides that for itself, so every reader page asks the same way. */}
+        <CommentThread
+          item={{
+            channelID: pinInput.channel.channelID,
+            publishedAt: item.publishedAt,
+            contentHash: item.contentHash,
+          }}
+        />
         {rightSidebar}
       </div>
     </div>
