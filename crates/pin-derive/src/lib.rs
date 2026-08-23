@@ -521,6 +521,15 @@ pub const PULL_COLLECTION: &str = "pull";
 /// again; a mark that only said "sent" could never tell the two apart.
 pub const DELIVER_COLLECTION: &str = "deliver";
 
+/// The collection recording which Sia object holds each of this identity's own comment
+/// bodies, keyed by the comment's own rkey.
+///
+/// A mark that OUTLIVES the record, like a delivery mark and for the same reason: a comment
+/// deleted from the doc takes its `bodyURL` with it, and this is then the only surviving
+/// thing that knows which object was minted for it. Without it a withdrawn comment leaks its
+/// object, since nothing left would name what to reclaim.
+pub const COMMENT_OBJECT_COLLECTION: &str = "comment-object";
+
 /// The collection recording, per actor, the comments blob this identity last read of theirs.
 ///
 /// Apart from `CRAWL_COLLECTION` deliberately, even though one directory read serves both.

@@ -36,6 +36,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use iroh_blobs::api::Store;
+use iroh_docs::{api::Doc, AuthorId};
 use pin_engagement::{Endorsement, Retraction};
 
 use crate::engagement::{
@@ -327,6 +329,161 @@ pub(crate) async fn crawl(
         }
     }
     (records, reached)
+}
+
+/// What one minting pass did.
+#[derive(Debug, Default, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct MintOutcome {
+    /// Comment bodies given an object of their own this pass.
+    pub minted: usize,
+    /// Bodies that could not be uploaded. Retried next pass; the comment still reads, it
+    /// just cannot be taken custody of yet.
+    pub failed: usize,
+    /// Objects reclaimed because the comment they held was withdrawn.
+    pub reclaimed: usize,
+}
+
+/// What object a comment's body was minted as. Keyed by the comment's own rkey and kept in
+/// its own collection, so it OUTLIVES the record: a withdrawn comment takes its `bodyURL`
+/// with it, and this is then the only thing that knows what to reclaim.
+#[derive(serde::Serialize, serde::Deserialize, PartialEq, Eq, Debug)]
+struct BodyObject {
+    id: String,
+}
+
+/// Whether a comment still needs an object minting for its body.
+///
+/// Only a comment with words and no object yet. A record that already carries one is left
+/// alone — minting again would mean a second object for the same bytes and a pin pointed at
+/// whichever the last pass happened to write.
+fn needs_minting(record: &Endorsement) -> bool {
+    record
+        .body
+        .as_deref()
+        .is_some_and(|body| !body.is_empty() && record.body_url.is_none())
+}
+
+/// Give each of this identity's comments a Sia object of its own, and reclaim the objects of
+/// the ones withdrawn.
+///
+/// Here rather than where a comment is WRITTEN, and that is the point: the URL sits outside
+/// the signature, so attaching it later needs no re-signing — which keeps writing a comment
+/// a single local doc write with no session, no flaky leg, and no window where an upload
+/// succeeded and the record that names it did not. This runs where the credentials already
+/// are, which is where anything needing them belongs.
+///
+/// Best-effort per comment. A body that will not upload leaves the comment readable and
+/// merely un-pinnable, and the next pass tries again.
+pub async fn mint_bodies(
+    doc: &Doc,
+    blobs: &Store,
+    author_id: AuthorId,
+    sia: &pin_sia::Session,
+) -> MintOutcome {
+    let mut outcome = MintOutcome::default();
+    let rkeys = crate::list_rkeys(doc, author_id, pin_derive::COMMENT_COLLECTION)
+        .await
+        .unwrap_or_default();
+
+    for rkey in &rkeys {
+        let Ok(Some(raw)) =
+            read_record(doc, blobs, author_id, pin_derive::COMMENT_COLLECTION, rkey).await
+        else {
+            continue;
+        };
+        let Ok(record) = serde_json::from_slice::<Endorsement>(&raw) else {
+            continue;
+        };
+        if !needs_minting(&record) {
+            continue;
+        }
+        let body = record.body.clone().unwrap_or_default();
+
+        // Bytes first, then the record that names them — the ordering every create in this
+        // codebase takes. A failure here leaves the comment exactly as it was.
+        let Ok(up) = sia.upload_item(body.into_bytes(), None).await else {
+            outcome.failed += 1;
+            continue;
+        };
+
+        let mut minted = record;
+        minted.body_url = Some(up.item_url);
+        let Ok(bytes) = serde_json::to_vec(&minted) else {
+            outcome.failed += 1;
+            continue;
+        };
+        if crate::write_record(doc, author_id, pin_derive::COMMENT_COLLECTION, rkey, bytes)
+            .await
+            .is_err()
+        {
+            outcome.failed += 1;
+            continue;
+        }
+        // The mark after the record, so the thing that says what to reclaim is never written
+        // for an object nothing points at.
+        if let Ok(mark) = serde_json::to_vec(&BodyObject { id: up.id }) {
+            let _ = crate::write_record(
+                doc,
+                author_id,
+                pin_derive::COMMENT_OBJECT_COLLECTION,
+                rkey,
+                mark,
+            )
+            .await;
+        }
+        outcome.minted += 1;
+    }
+
+    outcome.reclaimed = reclaim_withdrawn(doc, blobs, author_id, sia, &rkeys).await;
+    outcome
+}
+
+/// Delete the objects of comments that are gone, and forget their marks.
+///
+/// Positive identification, never deny-by-absence: a mark is acted on only because the
+/// comment it names was LOOKED FOR in this identity's own doc and found missing — a local
+/// read that cannot fail into looking empty the way a network one can.
+async fn reclaim_withdrawn(
+    doc: &Doc,
+    blobs: &Store,
+    author_id: AuthorId,
+    sia: &pin_sia::Session,
+    live: &[String],
+) -> usize {
+    let marks = crate::list_rkeys(doc, author_id, pin_derive::COMMENT_OBJECT_COLLECTION)
+        .await
+        .unwrap_or_default();
+    let live: BTreeSet<&str> = live.iter().map(String::as_str).collect();
+    let mut reclaimed = 0;
+
+    for rkey in marks {
+        if live.contains(rkey.as_str()) {
+            continue;
+        }
+        let Ok(Some(raw)) = read_record(
+            doc,
+            blobs,
+            author_id,
+            pin_derive::COMMENT_OBJECT_COLLECTION,
+            &rkey,
+        )
+        .await
+        else {
+            continue;
+        };
+        let Ok(mark) = serde_json::from_slice::<BodyObject>(&raw) else {
+            continue;
+        };
+        // The mark goes only once the object has, or a failed delete would be forgotten and
+        // the object left with nothing that knows about it.
+        if sia.delete_object(&mark.id).await.is_ok() {
+            let _ =
+                crate::delete_record(doc, author_id, pin_derive::COMMENT_OBJECT_COLLECTION, &rkey)
+                    .await;
+            reclaimed += 1;
+        }
+    }
+    reclaimed
 }
 
 /// This identity's own comments, read straight out of the doc.
@@ -712,6 +869,24 @@ mod tests {
             url: "sia://blob".into(),
             epoch: COMMENT_EPOCH + 1,
         })));
+    }
+
+    #[test]
+    fn only_a_comment_with_words_and_no_object_needs_one() {
+        let plain = comment(WHEN, "said so");
+        assert!(needs_minting(&plain));
+
+        // Already minted. Minting again would mean a second object for the same bytes and a
+        // pin pointed at whichever the last pass happened to write.
+        let mut minted = plain.clone();
+        minted.body_url = Some("sia://body#encryption_key=k".into());
+        assert!(!needs_minting(&minted));
+
+        // Nothing to mint. A gesture has no payload, which is the whole reason custody is
+        // for content and not for signals.
+        let like =
+            Endorsement::sign(&SEED, pin_engagement::KIND_LIKE, SUBJECT, "v", WHEN, None).unwrap();
+        assert!(!needs_minting(&like));
     }
 
     #[test]

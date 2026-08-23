@@ -742,6 +742,7 @@ mod tests {
                 attachment: None,
             }),
             body: None,
+            body_url: None,
         }
     }
 

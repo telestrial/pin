@@ -176,6 +176,27 @@ pub struct Endorsement {
     /// the host is displaying.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub body: Option<String>,
+    /// Where the same words sit as a Sia object of their own — a CUSTODY handle, never the
+    /// read path.
+    ///
+    /// The words render from `body`, so nothing needs this to display a comment. What it
+    /// buys is that a comment can be PINNED: taking custody means paying to keep specific
+    /// bytes alive, and bytes inside an aggregate blob that is superseded on every write
+    /// have no address anyone can hold. Minting one makes a comment content in the same
+    /// sense a post is, and makes its author pin #1 on it for the same reason an author is
+    /// pin #1 on their own post — publishing put the bytes in their own scope.
+    ///
+    /// UNSIGNED, and self-checking instead: a reader hashes what it fetched and compares it
+    /// to the `body` the signature covers, so a swapped URL is detectable without putting a
+    /// URL inside the signed bytes. That matters because repack rewrites URLs while
+    /// preserving plaintext — signing one would make the commenter's own repack invalidate
+    /// every comment they had ever written.
+    ///
+    /// Absent until the actor's own Curator has minted it, and absent forever on a comment
+    /// whose author never ran one. A reader shows the words either way and offers custody
+    /// only when there is something to take custody of.
+    #[serde(rename = "bodyURL", default, skip_serializing_if = "Option::is_none")]
+    pub body_url: Option<String>,
 }
 
 /// Append a length-prefixed field. Length-delimited rather than separated, so no field's
@@ -299,6 +320,7 @@ impl Endorsement {
             sig: String::new(),
             reference,
             body: body.map(str::to_string),
+            body_url: None,
         };
         record.sig = pin_pkarr::sign_detached(did_dht_seed, &record.signing_bytes())?;
         Ok(record)
@@ -842,6 +864,7 @@ mod tests {
             sig: String::new(),
             reference: None,
             body: None,
+            body_url: None,
         };
         let hex: String = e
             .signing_bytes()
@@ -874,6 +897,7 @@ mod tests {
             sig: String::new(),
             reference: None,
             body: Some("hi".into()),
+            body_url: None,
         };
         let hex: String = c
             .signing_bytes()
@@ -985,6 +1009,33 @@ mod tests {
         .unwrap();
         assert!(future.check_shape().is_ok());
         assert!(future.verify().is_ok());
+    }
+
+    #[test]
+    fn a_body_url_sits_outside_the_signature() {
+        // Which is what lets the actor's own Curator attach one after the fact, with no
+        // re-signing — and what stops the commenter's own repack, which rewrites URLs while
+        // preserving plaintext, from invalidating every comment they ever wrote.
+        let c = commented("said so");
+        let mut with_url = c.clone();
+        with_url.body_url = Some("sia://body#encryption_key=k".into());
+        assert_eq!(c.signing_bytes(), with_url.signing_bytes());
+        assert!(with_url.verify().is_ok());
+        // Same leaf too, so attaching one moves no published root.
+        assert_eq!(c.leaf().unwrap(), with_url.leaf().unwrap());
+    }
+
+    #[test]
+    fn a_swapped_body_url_is_caught_by_the_words_it_claims() {
+        // Unsigned, so it is self-checking instead: a reader hashes what it fetched and
+        // compares against the body the signature covers.
+        let c = commented("as written");
+        assert_eq!(c.body.as_deref(), Some("as written"));
+        // The check a reader makes, stated as the property it rests on: the body is signed,
+        // so bytes that don't match it are not this comment's whatever URL named them.
+        let mut tampered = c.clone();
+        tampered.body = Some("as swapped".into());
+        assert!(tampered.verify().is_err());
     }
 
     #[test]
@@ -1123,6 +1174,7 @@ mod tests {
             sig: String::new(),
             reference: None,
             body: None,
+            body_url: None,
         };
         let mut b = a.clone();
         b.kind = "a".into();

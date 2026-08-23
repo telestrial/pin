@@ -116,6 +116,8 @@ pub struct IdentityOutcome {
     /// own schedule: a comment written while the profile stands still moves this and not
     /// `uploaded`, and vice versa.
     pub comments_uploaded: bool,
+    /// What minting comment bodies into objects of their own did.
+    pub bodies: crate::comments::MintOutcome,
 }
 
 /// One advertised public channel: enough for a resolver to read it — the channelID
@@ -444,6 +446,10 @@ pub async fn publish_identity_once(
     let published_key = pin_derive::published_key(&ctx.app_key);
 
     let mut outcome = IdentityOutcome::default();
+    // Bodies get their objects before the blob that carries them is assembled, so a comment
+    // reaches a reader already pinnable rather than becoming so a pass later.
+    outcome.bodies =
+        crate::comments::mint_bodies(&ctx.doc, &ctx.blobs, ctx.author_id, &ctx.sia).await;
     let comments = publish_comments(ctx, &published_key, own_comments(ctx).await).await?;
     outcome.comments_uploaded = comments.uploaded;
 
@@ -1010,6 +1016,7 @@ mod tests {
             dialable,
             empty,
             comments_uploaded: false,
+            bodies: Default::default(),
         })
     }
 
