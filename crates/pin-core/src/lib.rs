@@ -1329,6 +1329,26 @@ pub fn channel_open_blob(channel_key: &[u8], blob: &str) -> Result<String, JsVal
 /// holding the one it last read learns from this alone that the counts haven't moved and
 /// skips the download.
 #[wasm_bindgen]
+pub async fn channel_resolve_conversations_url(
+    channel_key: &[u8],
+) -> Result<Option<String>, JsValue> {
+    pin_channel::resolve_conversations_url(&key32(channel_key)?)
+        .await
+        .map_err(je)
+}
+
+/// Download and open a channel's conversations at a URL already resolved for it.
+#[wasm_bindgen]
+pub async fn channel_fetch_conversations(
+    channel_key: &[u8],
+    item_url: String,
+) -> Result<String, JsValue> {
+    pin_channel::fetch_conversations(&sia(), &key32(channel_key)?, &item_url)
+        .await
+        .map_err(je)
+}
+
+#[wasm_bindgen]
 pub async fn channel_resolve_tallies_url(channel_key: &[u8]) -> Result<Option<String>, JsValue> {
     pin_channel::resolve_tallies_url(&key32(channel_key)?)
         .await
@@ -1668,6 +1688,43 @@ pub fn tally_collection() -> String {
 #[wasm_bindgen]
 pub fn tally_rkey(channel_id: &str, subject: &str) -> String {
     pin_derive::tally_rkey(channel_id, subject)
+}
+
+/// The collection where a subject's conversation is cached for reading.
+#[wasm_bindgen]
+pub fn thread_collection() -> String {
+    pin_derive::THREAD_COLLECTION.to_string()
+}
+
+/// Where one subject's conversation is cached. From Rust for the reason `tally_rkey` is:
+/// the Curator's loops write these records and the frontend reads them, and an address
+/// spelled twice would have one side writing where the other never looks.
+#[wasm_bindgen]
+pub fn thread_rkey(channel_id: &str, subject: &str) -> String {
+    pin_derive::thread_rkey(channel_id, subject)
+}
+
+/// The collection holding the comments this identity has written.
+#[wasm_bindgen]
+pub fn comment_collection() -> String {
+    pin_derive::COMMENT_COLLECTION.to_string()
+}
+
+/// Where one of this identity's own comments lives, by the subject it is about and its own
+/// id.
+#[wasm_bindgen]
+pub fn comment_rkey(subject: &str, comment_id: &str) -> String {
+    pin_derive::comment_rkey(subject, comment_id)
+}
+
+/// A comment's own identity: a hash over who wrote it and when.
+///
+/// Derived from the record rather than from where a host publishes it, so nobody can
+/// reassign it and orphan the engagement on it. Exposed because the frontend addresses a
+/// comment it just wrote and has to reach the same address the Curator will.
+#[wasm_bindgen]
+pub fn comment_subject(actor: &str, created_at: &str) -> String {
+    pin_crypto::comment_subject(actor, created_at)
 }
 
 /// The subject an endorsement of this item names — the hash a count is keyed by, so a

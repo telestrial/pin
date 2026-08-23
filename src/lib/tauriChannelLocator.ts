@@ -29,6 +29,15 @@ export async function makeTauriChannelLocator() {
         itemURL,
       }),
 
+    resolveConversationsUrl: async (channelKey: Uint8Array) =>
+      (await invoke<string | null>('channel_resolve_conversations_url', {
+        channelKey: [...channelKey],
+      })) ?? null,
+    fetchConversations: (channelKey: Uint8Array, itemURL: string) =>
+      invoke<string>('channel_fetch_conversations', {
+        channelKey: [...channelKey],
+        itemUrl: itemURL,
+      }),
     resolveTalliesUrl: async (channelKey: Uint8Array) =>
       (await invoke<string | null>('channel_resolve_tallies_url', {
         channelKey: Array.from(channelKey),

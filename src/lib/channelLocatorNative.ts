@@ -25,11 +25,13 @@
 // session, no network — so the wasm path is correct on both platforms.
 
 import {
+  channel_fetch_conversations,
   channel_fetch_tallies,
   channel_open_blob,
   channel_publish,
   channel_republish_pointer,
   channel_resolve,
+  channel_resolve_conversations_url,
   channel_resolve_tallies_url,
 } from '../../crates/pin-core/pkg/pin_core.js'
 import { ensureWasm } from '../core/wasm'
@@ -58,6 +60,8 @@ interface ChannelLocatorTransport {
   republishPointer(channelKey: Uint8Array, itemURL: string): Promise<void>
   resolveTalliesUrl(channelKey: Uint8Array): Promise<string | null>
   fetchTallies(channelKey: Uint8Array, itemURL: string): Promise<string>
+  resolveConversationsUrl(channelKey: Uint8Array): Promise<string | null>
+  fetchConversations(channelKey: Uint8Array, itemURL: string): Promise<string>
 }
 
 let transportP: Promise<ChannelLocatorTransport> | null = null
@@ -97,6 +101,14 @@ async function buildTransport(): Promise<ChannelLocatorTransport> {
     fetchTallies: async (channelKey, itemURL) => {
       await ensureWasm()
       return channel_fetch_tallies(channelKey, itemURL)
+    },
+    resolveConversationsUrl: async (channelKey) => {
+      await ensureWasm()
+      return (await channel_resolve_conversations_url(channelKey)) ?? null
+    },
+    fetchConversations: async (channelKey, itemURL) => {
+      await ensureWasm()
+      return channel_fetch_conversations(channelKey, itemURL)
     },
   }
 }
@@ -143,6 +155,22 @@ export async function fetchTallies(
   itemURL: string,
 ): Promise<string> {
   return (await transport()).fetchTallies(channelKey, itemURL)
+}
+
+/** Where a channel's conversations currently are, without fetching them. */
+export async function resolveConversationsUrl(
+  channelKey: Uint8Array,
+): Promise<string | null> {
+  return (await transport()).resolveConversationsUrl(channelKey)
+}
+
+/** Download and open a channel's conversations at a URL already resolved for it, returning
+ *  the subject-to-conversation map as JSON. */
+export async function fetchConversations(
+  channelKey: Uint8Array,
+  itemURL: string,
+): Promise<string> {
+  return (await transport()).fetchConversations(channelKey, itemURL)
 }
 
 /** Open a sealed manifest blob with K, returning its JSON. The path a CACHED copy takes,

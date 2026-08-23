@@ -43,6 +43,11 @@ export class IntoUnderlyingSource {
 export function channel_doc_namespaces(): any;
 
 /**
+ * Download and open a channel's conversations at a URL already resolved for it.
+ */
+export function channel_fetch_conversations(channel_key: Uint8Array, item_url: string): Promise<string>;
+
+/**
  * Download and open a channel's tallies at a URL already resolved for it. Returns the
  * subject-to-tally map as JSON.
  */
@@ -87,7 +92,29 @@ export function channel_resolve(channel_key: Uint8Array): Promise<string | undef
  * holding the one it last read learns from this alone that the counts haven't moved and
  * skips the download.
  */
+export function channel_resolve_conversations_url(channel_key: Uint8Array): Promise<string | undefined>;
+
 export function channel_resolve_tallies_url(channel_key: Uint8Array): Promise<string | undefined>;
+
+/**
+ * The collection holding the comments this identity has written.
+ */
+export function comment_collection(): string;
+
+/**
+ * Where one of this identity's own comments lives, by the subject it is about and its own
+ * id.
+ */
+export function comment_rkey(subject: string, comment_id: string): string;
+
+/**
+ * A comment's own identity: a hash over who wrote it and when.
+ *
+ * Derived from the record rather than from where a host publishes it, so nobody can
+ * reassign it and orphan the engagement on it. Exposed because the frontend addresses a
+ * comment it just wrote and has to reach the same address the Curator will.
+ */
+export function comment_subject(actor: string, created_at: string): string;
 
 /**
  * A plaintext content fingerprint (CIDv1, raw codec, SHA-256).
@@ -727,18 +754,35 @@ export function tally_collection(): string;
  */
 export function tally_rkey(channel_id: string, subject: string): string;
 
+/**
+ * The collection where a subject's conversation is cached for reading.
+ */
+export function thread_collection(): string;
+
+/**
+ * Where one subject's conversation is cached. From Rust for the reason `tally_rkey` is:
+ * the Curator's loops write these records and the frontend reads them, and an address
+ * spelled twice would have one side writing where the other never looks.
+ */
+export function thread_rkey(channel_id: string, subject: string): string;
+
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly channel_doc_namespaces: () => [number, number, number];
+    readonly channel_fetch_conversations: (a: number, b: number, c: number, d: number) => any;
     readonly channel_fetch_tallies: (a: number, b: number, c: number, d: number) => any;
     readonly channel_id: (a: number, b: number) => [number, number, number, number];
     readonly channel_open_blob: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly channel_publish: (a: number, b: number, c: number, d: number) => any;
     readonly channel_republish_pointer: (a: number, b: number, c: number, d: number) => any;
     readonly channel_resolve: (a: number, b: number) => any;
+    readonly channel_resolve_conversations_url: (a: number, b: number) => any;
     readonly channel_resolve_tallies_url: (a: number, b: number) => any;
+    readonly comment_collection: () => [number, number];
+    readonly comment_rkey: (a: number, b: number, c: number, d: number) => [number, number];
+    readonly comment_subject: (a: number, b: number, c: number, d: number) => [number, number];
     readonly content_hash: (a: number, b: number) => [number, number];
     readonly decrypt_for_channel: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly decrypt_settings: (a: number, b: number, c: number, d: number) => [number, number, number, number];
@@ -830,6 +874,8 @@ export interface InitOutput {
     readonly subscribe_doc_changes: (a: any) => any;
     readonly tally_collection: () => [number, number];
     readonly tally_rkey: (a: number, b: number, c: number, d: number) => [number, number];
+    readonly thread_collection: () => [number, number];
+    readonly thread_rkey: (a: number, b: number, c: number, d: number) => [number, number];
     readonly start: () => void;
     readonly __wbg_intounderlyingbytesource_free: (a: number, b: number) => void;
     readonly intounderlyingbytesource_autoAllocateChunkSize: (a: number) => number;

@@ -82,6 +82,10 @@ export function fakeChannelLocatorNativeModule() {
   // publishing counts overwrote the pointer to the posts.
   const talliesKeyFor = (channelKey: Uint8Array) =>
     `eng-${fakePublicKey(channelKey)}`
+  // And conversations under a third key, for the same reason: a shared one would let a test
+  // pass over an arrangement where publishing the words overwrote the pointer to the counts.
+  const conversationsKeyFor = (channelKey: Uint8Array) =>
+    `cnv-${fakePublicKey(channelKey)}`
 
   return {
     publishLocator: async (channelKey: Uint8Array, manifestJson: string) => {
@@ -135,7 +139,40 @@ export function fakeChannelLocatorNativeModule() {
       if (!bytes) throw new Error(`Object not found: ${itemURL}`)
       return decrypt_for_channel(channelKey, new TextDecoder().decode(bytes))
     },
+
+    resolveConversationsUrl: async (channelKey: Uint8Array) =>
+      getCurrentWorld()
+        .pkarr.get(conversationsKeyFor(channelKey))
+        ?.find((r) => r.name === '_v0')?.value ?? null,
+
+    fetchConversations: async (channelKey: Uint8Array, itemURL: string) => {
+      const world = getCurrentWorld()
+      const id = itemURL.slice('sia://fake/'.length, itemURL.indexOf('#'))
+      const bytes = world.objects.get(id)?.bytes
+      if (!bytes) throw new Error(`Object not found: ${itemURL}`)
+      return decrypt_for_channel(channelKey, new TextDecoder().decode(bytes))
+    },
   }
+}
+
+/** Publish a channel's conversations the way its author's Curator would. Sealed under K for
+ *  real, like the counts — only Sia and pkarr are faked. */
+export function publishFakeConversations(
+  channelKey: Uint8Array,
+  conversations: Record<string, unknown>,
+): void {
+  const world = getCurrentWorld()
+  const id = world.nextObjectID()
+  world.objects.set(id, {
+    id,
+    bytes: new TextEncoder().encode(
+      encrypt_for_channel(channelKey, JSON.stringify(conversations)),
+    ),
+    createdAt: new Date(),
+  })
+  world.pkarr.set(`cnv-${fakePublicKey(channelKey)}`, [
+    { name: '_v0', value: `sia://fake/${id}#k=${id}` },
+  ])
 }
 
 /** Publish a channel's counts the way its author's Curator would, so a test can read

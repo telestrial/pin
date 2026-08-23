@@ -60,6 +60,32 @@ pub async fn channel_republish_pointer(
         .await
 }
 
+/// Where a channel's conversations currently are, without fetching them.
+#[tauri::command]
+pub async fn channel_resolve_conversations_url(
+    state: tauri::State<'_, SiaState>,
+    channel_key: Vec<u8>,
+) -> Result<Option<String>, String> {
+    let key = key32(&channel_key)?;
+    state
+        .run(move |_| async move { pin_channel::resolve_conversations_url(&key).await })
+        .await
+}
+
+/// Download and open a channel's conversations at a URL already resolved for it, returning
+/// the subject-to-conversation map as JSON.
+#[tauri::command]
+pub async fn channel_fetch_conversations(
+    state: tauri::State<'_, SiaState>,
+    channel_key: Vec<u8>,
+    item_url: String,
+) -> Result<String, String> {
+    let key = key32(&channel_key)?;
+    state
+        .run(move |s| async move { pin_channel::fetch_conversations(&s, &key, &item_url).await })
+        .await
+}
+
 /// Where a channel's tallies currently are, without fetching them. Needs no session,
 /// like `channel_republish_pointer`, and runs here for the same reason.
 #[tauri::command]

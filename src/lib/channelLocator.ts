@@ -14,6 +14,7 @@ import { channelKeyFromBase64, encryptForChannel } from '../core/crypto'
 import type { FetchChannel } from '../core/feed'
 import type { SiaClient } from '../core/siaClient'
 import { CHANNEL_MANIFEST_VERSION, type ChannelManifest } from '../core/types'
+import { warmChannelConversations } from './channelConversations'
 import {
   openBlob,
   publishLocator,
@@ -262,11 +263,12 @@ export function makeCachingLocatorReader(
     if (!ownedChannelIDs.has(channelID)) {
       void cacheSubscribedManifest(appKeyHex, channelID, resolved.ciphertext)
     }
-    // Counts travel with the channel they belong to: a read that had to go to the network
-    // for the posts is exactly the read whose counts aren't cached either. Owned channels
-    // included — the engagement loop fills their cache, and a screen open before it has
-    // run would otherwise show a post with no counts beside it.
+    // Counts and conversations travel with the channel they belong to: a read that had to
+    // go to the network for the posts is exactly the read whose engagement isn't cached
+    // either. Owned channels included — the engagement loop fills their cache, and a screen
+    // open before it has run would otherwise show a post with nothing beside it.
     void warmChannelTallies(appKeyHex, channelID, channelKey)
+    void warmChannelConversations(appKeyHex, channelID, channelKey)
     return resolved.manifest
   }
 }

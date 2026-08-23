@@ -19,6 +19,7 @@ import { useEffect, useRef } from 'react'
 import { portalsIn } from '../../core/feed'
 import { useAuthStore } from '../../stores/auth'
 import { useFeedStore } from '../../stores/feed'
+import { warmChannelConversations } from '../channelConversations'
 import { warmChannelTallies } from '../channelTallies'
 import { type HeldChannels, makePortalResolver } from '../repost'
 
@@ -81,10 +82,11 @@ export function usePortalResolution() {
             heldChannels(),
             (channelID, channelKey) => {
               if (!appKeyHex) return
-              // Unawaited, like every other read of a channel's counts: the posts are
+              // Unawaited, like every other read of a channel's engagement: the posts are
               // what the row is waiting on, and counts arriving a moment behind them is
               // the ordinary shape of this.
               void warmChannelTallies(appKeyHex, channelID, channelKey)
+              void warmChannelConversations(appKeyHex, channelID, channelKey)
             },
           )
           const subs = useAuthStore.getState().subscriptions

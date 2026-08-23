@@ -30,7 +30,7 @@
 // a post the reader can plainly see as unavailable. Hence rung 1, which is also why a
 // portal to your OWN post resolves with no network at all.
 //
-// ## Counts come from the same rung the post did
+// ## Counts and comments come from the same rung the post did
 //
 // A row's counts are read from this identity's own doc, and what fills that cache is a
 // pass over a channel it has a relationship with — the pull loop for a subscription, the
@@ -124,13 +124,13 @@ export type HeldChannel = {
  *  the store graph — the same seam `FetchChannel` uses. */
 export type HeldChannels = (target: PortalTarget) => HeldChannel | null
 
-/** Cache one source channel's published counts, so a portal row shows the numbers a
- *  subscriber's row shows.
+/** Cache what one source channel publishes about its posts — counts and conversations —
+ *  so a portal row shows what a subscriber's row shows.
  *
  *  Injected for the same reason `held` is, and called only from rung 2: a channel this
- *  identity already holds has its counts on the way through the ordinary subscribed path,
- *  so warming there would spend a DHT resolve and a Sia read on work already done. */
-export type WarmTallies = (channelID: string, channelKey: string) => void
+ *  identity already holds has its engagement on the way through the ordinary subscribed
+ *  path, so warming there would spend DHT resolves and Sia reads on work already done. */
+export type WarmChannel = (channelID: string, channelKey: string) => void
 
 export type PortalResolver = {
   resolve: (target: PortalTarget) => Promise<PortalOutcome>
@@ -148,7 +148,7 @@ export type PortalResolver = {
 export function makePortalResolver(
   client: SiaClient,
   held: HeldChannels = () => null,
-  warm: WarmTallies = () => {},
+  warm: WarmChannel = () => {},
 ): PortalResolver {
   const directories = new Map<
     string,
