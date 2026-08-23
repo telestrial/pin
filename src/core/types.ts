@@ -162,6 +162,14 @@ export type ChannelManifest = {
   avatar?: ChannelImage
   cover?: ChannelImage
   language?: string
+  // Whether this channel takes comments. Here rather than in settings because a
+  // READER needs it — it decides whether a post offers somewhere to reply, and a
+  // reader holds the manifest and nothing else of the author's. Turning them on
+  // is therefore an ordinary channel edit, published the way a rename is.
+  //
+  // Absent reads as OFF, so every channel that existed before the field is one
+  // with comments off: the calm shape stays available rather than contradicted.
+  comments?: boolean
   items: ItemRef[]
   // Posts from elsewhere this channel circulates. A sibling array rather than a
   // variant of ItemRef: a portal has none of what an item is made of (no itemURL,

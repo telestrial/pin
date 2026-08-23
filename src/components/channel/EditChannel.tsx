@@ -37,6 +37,9 @@ export function EditChannel({
 
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
+  // Absent on the manifest reads as off, which is what every channel written before the
+  // field says — so a calm channel is one that never turned them on.
+  const [comments, setComments] = useState(false)
   const [newAvatarFile, setNewAvatarFile] = useState<File | null>(null)
   const [avatarPreviewURL, setAvatarPreviewURL] = useState<string | null>(null)
   const [removeAvatar, setRemoveAvatar] = useState(false)
@@ -64,6 +67,7 @@ export function EditChannel({
         setOriginal(manifest)
         setName(manifest.name)
         setDescription(manifest.description)
+        setComments(manifest.comments === true)
         setLoading(false)
       })
       .catch((e) => {
@@ -135,6 +139,7 @@ export function EditChannel({
       if (trimmedName !== original.name) patch.name = trimmedName
       const trimmedDesc = description.trim()
       if (trimmedDesc !== original.description) patch.description = trimmedDesc
+      if (comments !== (original.comments === true)) patch.comments = comments
       if (newAvatarFile) patch.avatarImage = await toImage(newAvatarFile)
       else if (removeAvatar) patch.removeAvatar = true
       if (newCoverFile) patch.coverImage = await toImage(newCoverFile)
@@ -220,6 +225,25 @@ export function EditChannel({
             rows={3}
             className="w-full px-3 py-2 bg-white border border-neutral-300 rounded-lg text-sm text-neutral-900 placeholder-neutral-400 focus:outline-none focus:border-green-600 disabled:bg-neutral-50 disabled:text-neutral-500"
           />
+        </label>
+
+        <label className="flex items-start gap-2.5">
+          <input
+            type="checkbox"
+            checked={comments}
+            onChange={(e) => setComments(e.target.checked)}
+            disabled={submitting}
+            className="mt-0.5 h-4 w-4 accent-green-600 disabled:opacity-50"
+          />
+          <span className="space-y-0.5">
+            <span className="block text-sm text-neutral-900">
+              Take comments
+            </span>
+            <span className="block text-xs text-neutral-500">
+              Readers can reply to posts here. You publish what you keep, so a
+              comment appears only once you have it.
+            </span>
+          </span>
         </label>
 
         <div className="space-y-2">

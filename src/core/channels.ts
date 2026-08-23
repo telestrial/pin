@@ -95,6 +95,9 @@ export async function createChannel(
     // (no follow primitive existed) and the new shape leans toward
     // discoverable-by-default for the Twitter-shape experience.
     visibility?: ChannelVisibility
+    // Whether the channel takes comments. Absent means the default a new channel
+    // gets, which is on — one created now is created in a product that has them.
+    comments?: boolean
     avatarImage?: { bytes: Uint8Array; mimeType: string }
     coverImage?: { bytes: Uint8Array; mimeType: string }
     // The author's did:dht (derived by the caller from the AppKey — core stays
@@ -120,6 +123,7 @@ export async function createChannel(
         name: args.name,
         description: args.description,
         visibility: args.visibility,
+        comments: args.comments,
         authorPubkey: client.appKeyPublicKey(),
         authorDidDht: args.authorDidDht,
         avatar,
@@ -138,6 +142,8 @@ export async function createChannel(
 export type EditChannelPatch = {
   name?: string
   description?: string
+  // Absent leaves it as it stands, like every other field here.
+  comments?: boolean
   avatarImage?: { bytes: Uint8Array; mimeType: string }
   coverImage?: { bytes: Uint8Array; mimeType: string }
   removeAvatar?: boolean
@@ -168,6 +174,7 @@ export async function editChannel(
       JSON.stringify({
         name: patch.name,
         description: patch.description,
+        comments: patch.comments,
         avatar,
         cover,
         removeAvatar: patch.removeAvatar ?? false,

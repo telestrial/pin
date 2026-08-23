@@ -223,6 +223,18 @@ pub struct ChannelManifest {
     pub cover: Option<ChannelImage>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
+    /// Whether this channel takes comments.
+    ///
+    /// Here rather than in settings because a READER needs it: it decides whether a post
+    /// offers somewhere to reply, and a reader holds the manifest and nothing else of the
+    /// author's. It also means turning comments on is an ordinary channel edit, published
+    /// the way a name change is.
+    ///
+    /// Absent reads as OFF, which is what keeps the design principles honest rather than
+    /// contradicted: a calm channel is one with comments off, and every channel that
+    /// existed before this field is one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub comments: Option<bool>,
     pub items: Vec<ItemRef>,
     /// Posts from elsewhere this channel circulates. A sibling array rather than a
     /// variant of `ItemRef`, because a portal has none of what an item is made of — no
@@ -246,6 +258,9 @@ pub struct ChannelManifest {
 pub struct NewChannel {
     pub name: String,
     pub description: String,
+    /// Whether the channel takes comments. Absent means the default a new channel gets,
+    /// which is ON — a channel created now is created in a product that has them.
+    pub comments: Option<bool>,
     /// Sticky at creation, defaulting to public. A public channel can't later be
     /// obscured: the follow edges pointing at it would become orphan pointers.
     pub visibility: Option<ChannelVisibility>,
@@ -276,6 +291,7 @@ pub fn create_channel(new: NewChannel, now: &str) -> ChannelManifest {
         avatar: new.avatar,
         cover: new.cover,
         language: None,
+        comments: Some(new.comments.unwrap_or(true)),
         items: Vec::new(),
         reposts: None,
     }
@@ -294,6 +310,9 @@ pub struct ChannelPatch {
     pub cover: Option<ChannelImage>,
     pub remove_avatar: bool,
     pub remove_cover: bool,
+    /// Whether the channel takes comments. Absent leaves it as it stands, like every other
+    /// field here — an author editing a name is not deciding anything about comments.
+    pub comments: Option<bool>,
 }
 
 /// An edited channel, plus the images the edit left behind.
@@ -344,6 +363,7 @@ pub fn edit_channel(current: &ChannelManifest, patch: ChannelPatch, now: &str) -
             avatar,
             cover,
             published_at: now.to_string(),
+            comments: patch.comments.or(current.comments),
             ..current.clone()
         },
         reclaim_urls,
@@ -730,6 +750,7 @@ mod tests {
             avatar: None,
             cover: None,
             language: None,
+            comments: None,
             items,
             reposts: None,
         }
@@ -761,6 +782,63 @@ mod tests {
     // whose share URL arrived under a name nothing read.
 
     #[test]
+    fn a_new_channel_takes_comments_and_an_old_one_does_not() {
+        // Absent reads as off, so every channel that existed before the field is a channel
+        // with comments off — which is what keeps the calm shape available rather than
+        // contradicted. A channel created now is created in a product that has them.
+        let fresh = create_channel(
+            NewChannel {
+                name: "New".into(),
+                ..Default::default()
+            },
+            EARLIER,
+        );
+        assert_eq!(fresh.comments, Some(true));
+
+        let legacy = manifest(Vec::new());
+        assert_eq!(legacy.comments, None);
+
+        // And a creator who says no gets no.
+        let quiet = create_channel(
+            NewChannel {
+                name: "Quiet".into(),
+                comments: Some(false),
+                ..Default::default()
+            },
+            EARLIER,
+        );
+        assert_eq!(quiet.comments, Some(false));
+    }
+
+    #[test]
+    fn editing_a_name_decides_nothing_about_comments() {
+        // An absent patch field leaves what stands, like every other field here.
+        let mut current = manifest(Vec::new());
+        current.comments = Some(true);
+        let renamed = edit_channel(
+            &current,
+            ChannelPatch {
+                name: Some("Renamed".into()),
+                ..Default::default()
+            },
+            NOW,
+        );
+        assert_eq!(renamed.manifest.comments, Some(true));
+
+        let switched = edit_channel(
+            &current,
+            ChannelPatch {
+                comments: Some(false),
+                ..Default::default()
+            },
+            NOW,
+        );
+        assert_eq!(switched.manifest.comments, Some(false));
+        // And the switch alone leaves the name alone.
+        assert_eq!(switched.manifest.name, current.name);
+    }
+
+    #[test]
     fn field_names_match_what_the_frontend_reads() {
         let mut m = manifest(vec![item(
             "obj1",
@@ -772,6 +850,7 @@ mod tests {
             content_hash: Some("bafy-avatar".to_string()),
             byte_size: Some(99),
         });
+        m.comments = Some(true);
         let v: Value = serde_json::from_str(&serde_json::to_string(&m).unwrap()).unwrap();
 
         // Sorted so the assertion states the key SET, independent of field order.
@@ -787,6 +866,7 @@ mod tests {
                 "authorDidDht",
                 "authorPubkey",
                 "avatar",
+                "comments",
                 "description",
                 "items",
                 "name",
