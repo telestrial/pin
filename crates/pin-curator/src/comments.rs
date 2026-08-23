@@ -82,6 +82,13 @@ pub struct CommentsOutcome {
     /// entry can carry. Reported rather than swallowed: a cap nobody is told about reads as
     /// complete.
     pub dropped: usize,
+    /// Comments held back by policy rather than by the cap.
+    ///
+    /// Reported HERE and published nowhere, and the difference is the whole point: a
+    /// withheld count in the published tally would be a scoreboard a flooder reads to learn
+    /// whether their flood is landing, which is the tuning oracle the silent knock exists to
+    /// deny. This number is a local diagnostic and must stay one.
+    pub withheld: usize,
     /// Channels whose conversations reached Sia and the DHT — the floor, and the only copy a
     /// reader without a live replica ever sees.
     pub published_floor: usize,
@@ -512,6 +519,51 @@ pub(crate) async fn own(ctx: &EngagementContext) -> Vec<Endorsement> {
         }
     }
     out
+}
+
+/// Which of the comments this identity HOLDS get published on its surface.
+///
+/// The fold is the moderation point, and this is the seam it asks through. Declining to
+/// publish a record is the whole mechanism — there is nothing else to build — so what
+/// matters now is that the question is asked in ONE named place, before there is anything
+/// with an opinion. Retrofitting the question later means reopening the fold.
+///
+/// Note where this ISN'T: intake keeps everything that verifies and names a subject we
+/// publish, because a record we declined to hold is one nobody could ever let through.
+/// Holding and publishing are different decisions and only the second is moderation.
+#[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
+pub enum CommentPolicy {
+    /// Everything held.
+    ///
+    /// The shipped default, and deliberately so while there is nowhere to review a comment
+    /// that was held back: withholding one with no way to let it through would not be
+    /// moderation, it would be swallowing it — and the commenter cannot tell the difference,
+    /// since a knock gets no reply. `Graph` becomes the sensible default the day a surface
+    /// exists for the held ones and not before.
+    #[default]
+    Everything,
+    /// Only actors in this identity's graph, holding strangers back for review.
+    ///
+    /// The shape the design argues for: the graph half keeps a conversation alive with
+    /// nobody watching, and the stranger half is where both the cost and the responsibility
+    /// land. Also the shape 08-21 landed on for DM acceptance, so one policy serves
+    /// comments, DMs, and the private-channel door.
+    Graph,
+}
+
+/// Whether one held comment is published under this policy.
+///
+/// An actor is in the graph if this identity had a reason to read them — the same set the
+/// crawl walks. Ourselves included: a comment on your own post is one you wrote.
+pub(crate) fn publishes(
+    policy: CommentPolicy,
+    record: &Endorsement,
+    graph: &BTreeSet<String>,
+) -> bool {
+    match policy {
+        CommentPolicy::Everything => true,
+        CommentPolicy::Graph => graph.contains(&record.actor),
+    }
 }
 
 /// Every comment this identity holds, as a subject in its own right.
@@ -951,6 +1003,35 @@ mod tests {
             url: "sia://blob".into(),
             epoch: COMMENT_EPOCH + 1,
         })));
+    }
+
+    fn graph_of(actors: &[&str]) -> BTreeSet<String> {
+        actors.iter().map(|a| a.to_string()).collect()
+    }
+
+    #[test]
+    fn everything_held_is_published_by_default() {
+        // The shipped answer, and the reason for it: withholding a comment with nowhere to
+        // review it is not moderation, and the commenter cannot tell the difference because
+        // a knock gets no reply.
+        let c = comment(WHEN, "from a stranger");
+        assert_eq!(CommentPolicy::default(), CommentPolicy::Everything);
+        assert!(publishes(CommentPolicy::default(), &c, &BTreeSet::new()));
+    }
+
+    #[test]
+    fn the_graph_policy_holds_a_stranger_and_publishes_a_neighbour() {
+        // Ready for the day there is somewhere to review the held ones. Not the default
+        // until then.
+        let c = comment(WHEN, "said so");
+        assert!(!publishes(CommentPolicy::Graph, &c, &BTreeSet::new()));
+        assert!(publishes(CommentPolicy::Graph, &c, &graph_of(&[&c.actor])));
+        // Somebody else being in the graph does not let this one through.
+        assert!(!publishes(
+            CommentPolicy::Graph,
+            &c,
+            &graph_of(&["did:dht:somebody-else"])
+        ));
     }
 
     #[test]

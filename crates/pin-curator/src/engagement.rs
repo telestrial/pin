@@ -59,6 +59,9 @@ use crate::{read_record, read_settings, SettingsView};
 
 /// Everything a pass needs.
 pub struct EngagementContext {
+    /// Which held comments this identity publishes. Defaults to everything — see
+    /// `comments::CommentPolicy` for why that is the shipped answer and not the eventual one.
+    pub comment_policy: crate::comments::CommentPolicy,
     pub doc: Doc,
     pub blobs: Store,
     pub author_id: AuthorId,
@@ -686,7 +689,14 @@ pub async fn engagement_once(
         }
     }
 
-    for did in graph_actors(&settings) {
+    let graph = {
+        let mut g = graph_actors(&settings);
+        // Ourselves, because a comment on your own post is one you wrote.
+        g.insert(own_did.to_string());
+        g
+    };
+
+    for did in graph.iter().cloned().collect::<Vec<_>>() {
         if did == own_did {
             continue;
         }
@@ -915,11 +925,18 @@ pub async fn engagement_once(
         // Comments are counted by the same fold: `kind` drives it, so a `comment` tally
         // appears beside the others with its own set and its own root, and a row reads one
         // record for every number it shows.
-        // Capped where they are GATHERED, so the count and the conversation are made of one
-        // set: a tally claiming more than the conversation shows would be a number whose
-        // backing set the holder had in part chosen not to produce.
-        let (commented, dropped) =
-            pin_engagement::newest_comments(crate::comments::held_for(ctx, subject).await);
+        // Asked before the cap, so the same set answers both: what is published is what is
+        // counted, and a tally claiming more than its conversation shows would be a number
+        // whose backing set the holder had in part chosen not to produce.
+        let held = crate::comments::held_for(ctx, subject).await;
+        let before = held.len();
+        let allowed: Vec<Endorsement> = held
+            .into_iter()
+            .filter(|c| crate::comments::publishes(ctx.comment_policy, c, &graph))
+            .collect();
+        outcome.comments.withheld += before - allowed.len();
+
+        let (commented, dropped) = pin_engagement::newest_comments(allowed);
         outcome.comments.dropped += dropped;
 
         let channel_doc = open_channel_doc(ctx, channel_id).await?;

@@ -1163,6 +1163,9 @@ pub async fn curator_start_engagement(
         .clone()
         .ok_or("curator inbox is not up yet")?;
     let ctx = pin_curator::EngagementContext {
+        // Everything held, which is what this means until there is somewhere to review a
+        // comment held back.
+        comment_policy: Default::default(),
         doc: engine.doc.clone(),
         blobs: (*engine.blobs).clone(),
         author_id: engine.author_id,
