@@ -346,6 +346,12 @@ export function manifest_remove_attachment(manifest_json: string, item_id: strin
 export function manifest_remove_repost(manifest_json: string, did_dht: string, channel_id: string, published_at: string, now: string): string;
 
 /**
+ * The longest body a comment may carry, in bytes. Exposed so a composer can say no before
+ * somebody writes past it, rather than failing at the signature.
+ */
+export function max_comment_bytes(): number;
+
+/**
  * Open (create) the in-memory doc engine, with the namespace + author derived from
  * the Sia AppKey. Returns the namespace id. A second call rebuilds from scratch.
  */
@@ -535,6 +541,23 @@ export function sia_validate_recovery_phrase(phrase: string): void;
  * effects twice); the second call sees an already-approved request and returns.
  */
 export function sia_wait_for_approval(): Promise<void>;
+
+/**
+ * Sign one comment, returning the record as the exact JSON to store, and its own id.
+ *
+ * Both, because the caller needs the id to address what it just signed and deriving it a
+ * second time on the far side would be a second implementation of the record's identity.
+ *
+ * `reference_did_dht` chooses the visibility tier exactly as it does for a gesture: the
+ * author's did:dht makes the record navigable and is correct only for a public subject,
+ * and passing nothing publishes the subject hash alone.
+ *
+ * The body is inside the signature, so the words are attributable to the key that signed
+ * them however they travel and whoever publishes them. A body over the limit is refused
+ * here rather than later: the host would refuse it on arrival, so signing one is work
+ * nobody can use.
+ */
+export function sign_comment(app_key_hex: string, channel_id: string, published_at: string, version: string, reference_did_dht: string | null | undefined, attachment: string | null | undefined, body: string, now: string): string;
 
 /**
  * Sign one endorsement, returning the record as the exact JSON to store.
@@ -820,6 +843,7 @@ export interface InitOutput {
     readonly manifest_enumerate_retract: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly manifest_remove_attachment: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number, number, number];
     readonly manifest_remove_repost: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number, number, number];
+    readonly max_comment_bytes: () => number;
     readonly open: (a: number, b: number) => any;
     readonly open_channel_doc: (a: number, b: number) => any;
     readonly pinned_collection: () => [number, number];
@@ -857,6 +881,7 @@ export interface InitOutput {
     readonly sia_upload_items_packed: (a: any, b: number) => any;
     readonly sia_validate_recovery_phrase: (a: number, b: number) => [number, number];
     readonly sia_wait_for_approval: () => any;
+    readonly sign_comment: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number) => [number, number, number, number];
     readonly sign_endorsement: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number) => [number, number, number, number];
     readonly start_channel_doc_loop: (a: number, b: number, c: number, d: any) => any;
     readonly start_channel_sync_loop: (a: number, b: number, c: number, d: number, e: any) => any;

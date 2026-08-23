@@ -1827,6 +1827,63 @@ pub fn sign_endorsement(
     out(&record)
 }
 
+/// Sign one comment, returning the record as the exact JSON to store, and its own id.
+///
+/// Both, because the caller needs the id to address what it just signed and deriving it a
+/// second time on the far side would be a second implementation of the record's identity.
+///
+/// `reference_did_dht` chooses the visibility tier exactly as it does for a gesture: the
+/// author's did:dht makes the record navigable and is correct only for a public subject,
+/// and passing nothing publishes the subject hash alone.
+///
+/// The body is inside the signature, so the words are attributable to the key that signed
+/// them however they travel and whoever publishes them. A body over the limit is refused
+/// here rather than later: the host would refuse it on arrival, so signing one is work
+/// nobody can use.
+#[wasm_bindgen]
+pub fn sign_comment(
+    app_key_hex: &str,
+    channel_id: &str,
+    published_at: &str,
+    version: &str,
+    reference_did_dht: Option<String>,
+    attachment: Option<String>,
+    body: &str,
+    now: &str,
+) -> Result<String, JsValue> {
+    let app_key = decode_app_key(app_key_hex)
+        .ok_or_else(|| JsValue::from_str("app key must be 32 bytes of hex"))?;
+    let reference = reference_did_dht.map(|did_dht| pin_engagement::SubjectRef {
+        did_dht,
+        channel_id: channel_id.to_string(),
+        published_at: published_at.to_string(),
+        attachment: attachment.clone(),
+    });
+    let record = pin_engagement::Endorsement::sign_comment(
+        &pin_derive::did_dht_seed(&app_key),
+        &subject_for(channel_id, published_at, attachment.as_deref()),
+        version,
+        now,
+        reference,
+        body,
+    )
+    .map_err(|e| JsValue::from_str(&e))?;
+    // Checked before it is handed back rather than trusted: `verify` is what applies the
+    // body limit, and a record that would be refused on arrival is one to refuse here.
+    record.verify().map_err(|e| JsValue::from_str(&e))?;
+    out(&serde_json::json!({
+        "record": serde_json::to_value(&record).map_err(je)?,
+        "commentID": record.comment_id(),
+    }))
+}
+
+/// The longest body a comment may carry, in bytes. Exposed so a composer can say no before
+/// somebody writes past it, rather than failing at the signature.
+#[wasm_bindgen]
+pub fn max_comment_bytes() -> usize {
+    pin_engagement::MAX_BODY_BYTES
+}
+
 /// The rkey for the settings snapshot's publish state. Same contract as above: the
 /// frontend writes it when it snapshots, the keep-alive loop reads it to know which
 /// pointer to republish.
