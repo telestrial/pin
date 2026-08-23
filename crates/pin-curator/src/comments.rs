@@ -514,6 +514,47 @@ pub(crate) async fn own(ctx: &EngagementContext) -> Vec<Endorsement> {
     out
 }
 
+/// Every comment this identity holds, as a subject in its own right.
+///
+/// A comment is engageable — it can be liked, kept, or replied to — and the host folds that
+/// engagement for the same reason they fold a post's: the comment sits on their surface and
+/// has no other one. So a record naming a comment has to pass the same "is this ours" gate a
+/// record naming a post does, and this is what puts comments behind it.
+///
+/// Read from the KEYS alone, with no record opened: a held comment's key carries the subject
+/// it is about and the comment's own id, and the subject is what says which channel the
+/// engagement belongs in. A pass over hundreds of comments costs one listing.
+///
+/// The channel comes from the POST, which is what makes threading work without a second
+/// derivation: a reply names a comment, that comment names a post, and the post names the
+/// channel whose doc all of it is published in.
+pub(crate) async fn held_as_subjects(
+    doc: &Doc,
+    author_id: AuthorId,
+    posts: &SubjectTable,
+) -> Vec<(String, String)> {
+    let rkeys = crate::list_rkeys(doc, author_id, pin_derive::COMMENT_LOG_COLLECTION)
+        .await
+        .unwrap_or_default();
+    rkeys
+        .iter()
+        .filter_map(|rkey| subject_of(rkey, posts))
+        .collect()
+}
+
+/// The subject one held comment contributes, and the channel it belongs in.
+///
+/// Where the decisions are, and so where they can be tested: the listing above needs a doc,
+/// what it MEANS does not.
+///
+/// `None` for a comment whose own subject this identity doesn't recognise — somebody else's
+/// conversation, held by mistake or left behind by a post that went. Folding engagement on
+/// one would publish a count into a channel doc for something this identity doesn't publish.
+fn subject_of(rkey: &str, posts: &SubjectTable) -> Option<(String, String)> {
+    let (subject, id, _) = pin_derive::parse_comment_log_rkey(rkey)?;
+    Some((id.to_string(), posts.get(subject)?.clone()))
+}
+
 /// Whether a held key belongs to one subject.
 ///
 /// By PARSING rather than by a prefix match, so a subject that happens to be a prefix of
@@ -745,6 +786,47 @@ mod tests {
 
     fn actors(of: &[&str]) -> BTreeSet<String> {
         of.iter().map(|a| a.to_string()).collect()
+    }
+
+    fn posts_table(pairs: &[(&str, &str)]) -> SubjectTable {
+        pairs
+            .iter()
+            .map(|(s, c)| (s.to_string(), c.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn a_held_comment_becomes_a_subject_in_its_posts_channel() {
+        // What makes a comment engageable: liking one has to pass the same "is this ours"
+        // gate liking a post does, and the channel comes from the POST — which is also what
+        // makes a reply work, since it names a comment that names a post.
+        let c = comment(WHEN, "said so");
+        let posts = posts_table(&[(SUBJECT, "chan-one")]);
+        assert_eq!(
+            subject_of(&log_key(&c), &posts),
+            Some((c.comment_id(), "chan-one".to_string()))
+        );
+    }
+
+    #[test]
+    fn a_comment_on_somebody_elses_post_is_not_our_subject() {
+        // Held by mistake, or left behind by a post that went. Either way engagement on it
+        // is not ours to fold, and folding it would publish a count into a channel doc for
+        // something this identity does not publish.
+        let c = comment(WHEN, "elsewhere");
+        assert_eq!(subject_of(&log_key(&c), &posts_table(&[])), None);
+        assert_eq!(
+            subject_of(&log_key(&c), &posts_table(&[("another", "chan-one")])),
+            None
+        );
+    }
+
+    #[test]
+    fn a_key_that_does_not_parse_is_no_subject() {
+        assert_eq!(
+            subject_of("nonsense", &posts_table(&[(SUBJECT, "chan-one")])),
+            None
+        );
     }
 
     #[test]

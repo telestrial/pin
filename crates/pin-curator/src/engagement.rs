@@ -203,6 +203,16 @@ async fn own_subjects(
             }
         }
     }
+
+    // Then the comments held on those posts, each a subject of its own. A comment is
+    // engageable and the host folds that engagement, so it has to pass the same gate a post
+    // does — and a reply, which names a comment rather than a post, comes in through here
+    // too. Added after the posts because a comment's channel is looked up by the post it is
+    // about.
+    for (id, channel_id) in crate::comments::held_as_subjects(&ctx.doc, ctx.author_id, &table).await
+    {
+        table.insert(id, channel_id);
+    }
     Ok(table)
 }
 
