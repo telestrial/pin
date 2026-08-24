@@ -743,6 +743,7 @@ mod tests {
             }),
             body: None,
             body_url: None,
+            attachments: Vec::new(),
         }
     }
 

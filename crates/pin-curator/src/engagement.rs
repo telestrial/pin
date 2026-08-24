@@ -1630,7 +1630,8 @@ mod tests {
     fn a_conversation_fingerprint_ignores_when_it_was_folded() {
         // Otherwise every cadence mints a fresh Sia object for every channel anyone has ever
         // commented on. The signature covers the body, so it identifies content exactly.
-        let one = Endorsement::sign_comment(&[4u8; 32], "s", "v", "t", None, "said").unwrap();
+        let one =
+            Endorsement::sign_comment(&[4u8; 32], "s", "v", "t", None, "said", Vec::new()).unwrap();
         let mut map = BTreeMap::new();
         map.insert(
             "s".to_string(),
@@ -1645,7 +1646,9 @@ mod tests {
         assert_eq!(conversation_substance(&map).unwrap(), first);
 
         // And it does move when what was said moves.
-        let two = Endorsement::sign_comment(&[5u8; 32], "s", "v", "t", None, "and this").unwrap();
+        let two =
+            Endorsement::sign_comment(&[5u8; 32], "s", "v", "t", None, "and this", Vec::new())
+                .unwrap();
         map.get_mut("s").unwrap().comments.push(two);
         assert_ne!(conversation_substance(&map).unwrap(), first);
     }
@@ -1663,7 +1666,8 @@ mod tests {
     fn a_retention_stamp_needs_both_lanes_confirmed() {
         let liked =
             Endorsement::sign(&[1u8; 32], pin_engagement::KIND_LIKE, "s", "v", "t", None).unwrap();
-        let said = Endorsement::sign_comment(&[2u8; 32], "s", "v", "t", None, "words").unwrap();
+        let said = Endorsement::sign_comment(&[2u8; 32], "s", "v", "t", None, "words", Vec::new())
+            .unwrap();
         let both: BTreeSet<String> = [liked.actor.clone(), said.actor.clone()]
             .into_iter()
             .collect();

@@ -867,7 +867,8 @@ mod tests {
     const WHEN: &str = "2026-08-22T12:00:00.000Z";
 
     fn comment(when: &str, body: &str) -> Endorsement {
-        Endorsement::sign_comment(&SEED, SUBJECT, "bafkreiabc", when, None, body).unwrap()
+        Endorsement::sign_comment(&SEED, SUBJECT, "bafkreiabc", when, None, body, Vec::new())
+            .unwrap()
     }
 
     fn keys(of: &[&Endorsement]) -> BTreeSet<String> {

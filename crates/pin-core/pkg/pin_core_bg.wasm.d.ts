@@ -53,6 +53,7 @@ export const manifest_edit_item: (a: number, b: number, c: number, d: number, e:
 export const manifest_enumerate_retract: (a: number, b: number, c: number, d: number) => [number, number, number, number];
 export const manifest_remove_attachment: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number, number, number];
 export const manifest_remove_repost: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number, number, number];
+export const max_comment_attachments: () => number;
 export const max_comment_bytes: () => number;
 export const open: (a: number, b: number) => any;
 export const open_channel_doc: (a: number, b: number) => any;
@@ -91,7 +92,7 @@ export const sia_upload_item: (a: number, b: number, c: number) => any;
 export const sia_upload_items_packed: (a: any, b: number) => any;
 export const sia_validate_recovery_phrase: (a: number, b: number) => [number, number];
 export const sia_wait_for_approval: () => any;
-export const sign_comment: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number) => [number, number, number, number];
+export const sign_comment: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number) => [number, number, number, number];
 export const sign_comment_endorsement: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => [number, number, number, number];
 export const sign_endorsement: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number) => [number, number, number, number];
 export const start_channel_doc_loop: (a: number, b: number, c: number, d: any) => any;

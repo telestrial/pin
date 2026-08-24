@@ -1897,6 +1897,17 @@ pub fn sign_comment_endorsement(
 /// them however they travel and whoever publishes them. A body over the limit is refused
 /// here rather than later: the host would refuse it on arrival, so signing one is work
 /// nobody can use.
+///
+/// `carried_json` is the files this comment brings, already uploaded — a JSON array of
+/// `{url, mimeType, filename?, byteSize, contentHash}`. As JSON because this boundary takes
+/// primitives, and parsed HERE rather than assembled here so the shape is the record's own
+/// and one side cannot drift from the other. The bytes are uploaded before this is called,
+/// which is the ordering every create in this codebase takes: a record never names bytes
+/// that failed to land.
+///
+/// Not to be confused with `attachment`, which is a hash naming one file OF THE POST being
+/// commented on, and decides which subject this comment is about.
+#[allow(clippy::too_many_arguments)]
 #[wasm_bindgen]
 pub fn sign_comment(
     app_key_hex: &str,
@@ -1906,6 +1917,7 @@ pub fn sign_comment(
     reference_did_dht: Option<String>,
     attachment: Option<String>,
     body: &str,
+    carried_json: Option<String>,
     now: &str,
 ) -> Result<String, JsValue> {
     let app_key = decode_app_key(app_key_hex)
@@ -1916,6 +1928,11 @@ pub fn sign_comment(
         published_at: published_at.to_string(),
         attachment: attachment.clone(),
     });
+    let carried: Vec<pin_engagement::CommentAttachment> = match carried_json.as_deref() {
+        None | Some("") => Vec::new(),
+        Some(json) => serde_json::from_str(json)
+            .map_err(|e| JsValue::from_str(&format!("attachments: {e}")))?,
+    };
     let record = pin_engagement::Endorsement::sign_comment(
         &pin_derive::did_dht_seed(&app_key),
         &subject_for(channel_id, published_at, attachment.as_deref()),
@@ -1923,6 +1940,7 @@ pub fn sign_comment(
         now,
         reference,
         body,
+        carried,
     )
     .map_err(|e| JsValue::from_str(&e))?;
     // Checked before it is handed back rather than trusted: `verify` is what applies the
@@ -1939,6 +1957,13 @@ pub fn sign_comment(
 #[wasm_bindgen]
 pub fn max_comment_bytes() -> usize {
     pin_engagement::MAX_BODY_BYTES
+}
+
+/// How many files a comment may carry. Exposed for the same reason: a composer that let
+/// somebody pick a fifth would fail them at the signature, having already uploaded it.
+#[wasm_bindgen]
+pub fn max_comment_attachments() -> usize {
+    pin_engagement::MAX_COMMENT_ATTACHMENTS
 }
 
 /// The rkey for the settings snapshot's publish state. Same contract as above: the

@@ -69,6 +69,17 @@ pub const KIND_COMMENT: &str = "comment";
 /// in practice.
 pub const MAX_BODY_BYTES: usize = 4096;
 
+/// The ceiling on how many files one comment may carry.
+///
+/// A count rather than a byte budget, because the bytes are not the receiver's to pay for:
+/// an attachment stays in the commenter's own scope and the host holds a pointer at it. What
+/// a count bounds is the RECORD, which the host does publish, and the work a reader does
+/// resolving it — so the limit is about keeping a comment comment-shaped rather than about
+/// storage. Four is a judgement, not a measurement; raising it later keeps every record
+/// already under it valid, and lowering it invalidates records that were legitimate when
+/// they were signed.
+pub const MAX_COMMENT_ATTACHMENTS: usize = 4;
+
 /// The domain tag every signed message starts with.
 ///
 /// Not decoration. The same identity key signs pkarr packets, and an unprefixed message
@@ -90,6 +101,9 @@ const RETRACTION_DOMAIN: &[u8] = b"pin.retraction.v1";
 
 /// The signed-bytes tag for a comment's body.
 const TAG_BODY: &str = "body";
+
+/// The signed-bytes tag for a comment's attachments.
+const TAG_ATTACHMENTS: &str = "attachments";
 
 /// The signed-bytes tag for the record a retraction names.
 const TAG_TARGET: &str = "target";
@@ -197,6 +211,60 @@ pub struct Endorsement {
     /// only when there is something to take custody of.
     #[serde(rename = "bodyURL", default, skip_serializing_if = "Option::is_none")]
     pub body_url: Option<String>,
+    /// The files this comment carries, which its author goes on carrying. Empty on every
+    /// other kind, and omitted from the wire form when there are none — so a record signed
+    /// before the field existed still serializes to exactly what it did.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<CommentAttachment>,
+}
+
+/// A file a comment carries, which the commenter goes on carrying.
+///
+/// The host publishes a comment's WORDS into their own channel and does not take its files:
+/// words are bounded and tiny, where a file is whatever the sender chose, and a knock must
+/// never make a receiver pay for bytes somebody else picked. So this is a pointer at an
+/// object in the commenter's own Sia scope, and it stays alive exactly as long as they keep
+/// paying for it.
+///
+/// What that costs, stated plainly because it is the failure a reader will actually meet: a
+/// comment degrades as WORDS INTACT, MEDIA BROKEN. If the commenter repacks — which rewrites
+/// object URLs while leaving the bytes identical — every URL here goes stale until the host
+/// crawls them again, and the conversation survives its pictures.
+///
+/// The escape hatch is the gesture that already means this: a host who wants a comment's
+/// file kept PINS it, taking custody with the mechanism built for taking custody. Which is
+/// also what pin-on-a-comment means once there are files — the words are already the host's,
+/// so the media is the only part with custody left at stake.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CommentAttachment {
+    /// Where the bytes are: a Sia share URL, whose own fragment carries the key that
+    /// decrypts them.
+    ///
+    /// THE ONE UNSIGNED FIELD, and self-checking instead — a reader fetches, hashes what it
+    /// got, and compares against `content_hash`, so a swapped URL is caught without a
+    /// signature over it. That matters because repack rewrites URLs while preserving
+    /// plaintext: signing one would mean the commenter's own housekeeping invalidated every
+    /// comment they had ever written. The same trade `SubjectRef` makes.
+    pub url: String,
+    /// What the bytes are, so a reader knows how to render them. Signed: mislabelling a file
+    /// is a small attack but a real one, and it costs nothing to close.
+    #[serde(rename = "mimeType")]
+    pub mime_type: String,
+    /// What the commenter called it. Signed like everything else here; absent is fine, empty
+    /// is not — see `check_shape`, which needs the two to stay distinguishable or the signed
+    /// bytes would be ambiguous.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filename: Option<String>,
+    /// How big the bytes are, as a claim a reader can check once it has them.
+    #[serde(rename = "byteSize")]
+    pub byte_size: u64,
+    /// CIDv1 of the plaintext — the file's identity, and what the URL is checked against.
+    ///
+    /// Stable across a repack for the same reason it is on a manifest's attachments: Sia
+    /// content-addresses the CIPHERTEXT, so re-encryption mints a new URL for identical
+    /// bytes, and this is the layer that fingerprints the content itself.
+    #[serde(rename = "contentHash")]
+    pub content_hash: String,
 }
 
 /// Append a length-prefixed field. Length-delimited rather than separated, so no field's
@@ -226,6 +294,33 @@ fn push_tagged(out: &mut Vec<u8>, tag: &str, value: Option<&str>) {
     }
 }
 
+/// What a comment's attachments contribute to its signature, or `None` when there are none.
+///
+/// EVERYTHING BUT THE URL, which is the rule worth stating as a rule rather than as a list:
+/// the URL moves under a repack and nothing else here does, so the URL is checked against
+/// `content_hash` and the rest is signed. That covers each file's identity, what it claims
+/// to be, what it is called and how big it says it is — and, because the whole list goes in
+/// as one value, it covers how many there are and in what order, so a file cannot be added,
+/// dropped or reordered either.
+///
+/// Length-delimited into bytes and then base64'd, rather than joined with a separator: a
+/// mime type can carry parameters and a filename can carry very nearly anything, so any
+/// separator would be a character somebody could smuggle. `None` for an empty list keeps a
+/// record with no attachments signing the bytes it signed before the field existed.
+fn attachments_signing_value(attachments: &[CommentAttachment]) -> Option<String> {
+    if attachments.is_empty() {
+        return None;
+    }
+    let mut out = Vec::with_capacity(attachments.len() * 96);
+    for a in attachments {
+        push_field(&mut out, &a.content_hash);
+        push_field(&mut out, &a.mime_type);
+        push_field(&mut out, a.filename.as_deref().unwrap_or_default());
+        push_field(&mut out, &a.byte_size.to_string());
+    }
+    Some(pin_crypto::b64_encode(&out))
+}
+
 impl Endorsement {
     /// The exact bytes a signature covers.
     ///
@@ -242,9 +337,9 @@ impl Endorsement {
     /// a normalization hazard — prefixed `did:dht:x` against bare `x` — with nothing
     /// gained. `ref` is not covered either, for the reason on `SubjectRef`.
     ///
-    /// `body` IS covered, as a tagged optional trailing field — see `push_tagged` for why
-    /// the tag rather than a bare append. A record without one signs exactly the bytes it
-    /// signed before the field existed.
+    /// `body` and `attachments` ARE covered, as tagged optional trailing fields — see
+    /// `push_tagged` for why the tag rather than a bare append. A record without either
+    /// signs exactly the bytes it signed before those fields existed.
     pub fn signing_bytes(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(SIGNING_DOMAIN.len() + 64);
         out.extend_from_slice(SIGNING_DOMAIN);
@@ -253,6 +348,11 @@ impl Endorsement {
         push_field(&mut out, &self.version);
         push_field(&mut out, &self.created_at);
         push_tagged(&mut out, TAG_BODY, self.body.as_deref());
+        push_tagged(
+            &mut out,
+            TAG_ATTACHMENTS,
+            attachments_signing_value(&self.attachments).as_deref(),
+        );
         out
     }
 
@@ -273,6 +373,7 @@ impl Endorsement {
             created_at,
             reference,
             None,
+            Vec::new(),
         )
     }
 
@@ -282,6 +383,7 @@ impl Endorsement {
     /// REQUIRES a body: taking `&str` here makes that a fact about the type instead of a
     /// check somebody has to remember, and it keeps every gesture call site free of a
     /// `None` that means nothing to it.
+    #[allow(clippy::too_many_arguments)]
     pub fn sign_comment(
         did_dht_seed: &[u8],
         subject: &str,
@@ -289,6 +391,7 @@ impl Endorsement {
         created_at: &str,
         reference: Option<SubjectRef>,
         body: &str,
+        attachments: Vec<CommentAttachment>,
     ) -> Result<Self, String> {
         Self::signed(
             did_dht_seed,
@@ -298,6 +401,7 @@ impl Endorsement {
             created_at,
             reference,
             Some(body),
+            attachments,
         )
     }
 
@@ -310,6 +414,7 @@ impl Endorsement {
         created_at: &str,
         reference: Option<SubjectRef>,
         body: Option<&str>,
+        attachments: Vec<CommentAttachment>,
     ) -> Result<Self, String> {
         let mut record = Endorsement {
             kind: kind.to_string(),
@@ -321,6 +426,7 @@ impl Endorsement {
             reference,
             body: body.map(str::to_string),
             body_url: None,
+            attachments,
         };
         record.sig = pin_pkarr::sign_detached(did_dht_seed, &record.signing_bytes())?;
         Ok(record)
@@ -370,19 +476,60 @@ impl Endorsement {
     /// something.
     fn check_shape(&self) -> Result<(), String> {
         match self.kind.as_str() {
-            KIND_COMMENT => match self.body.as_deref() {
-                None | Some("") => Err("a comment carries no body".into()),
-                Some(body) if body.len() > MAX_BODY_BYTES => Err(format!(
-                    "body is {} bytes, over the {MAX_BODY_BYTES} byte limit",
-                    body.len()
-                )),
-                Some(_) => Ok(()),
-            },
+            KIND_COMMENT => {
+                match self.body.as_deref() {
+                    None | Some("") => return Err("a comment carries no body".into()),
+                    Some(body) if body.len() > MAX_BODY_BYTES => {
+                        return Err(format!(
+                            "body is {} bytes, over the {MAX_BODY_BYTES} byte limit",
+                            body.len()
+                        ))
+                    }
+                    Some(_) => {}
+                }
+                self.check_attachments()
+            }
             KIND_LIKE | KIND_PIN | KIND_REPOST if self.body.is_some() => {
                 Err(format!("a {} carries a body", self.kind))
             }
+            // A gesture is its own existence and nothing else, so a file hanging off one is
+            // either a mistake or an attempt to make a like carry a payload. Refused for the
+            // reason a body on one is.
+            KIND_LIKE | KIND_PIN | KIND_REPOST if !self.attachments.is_empty() => {
+                Err(format!("a {} carries attachments", self.kind))
+            }
             _ => Ok(()),
         }
+    }
+
+    /// Whether a comment's files are within what a record may carry.
+    ///
+    /// An empty `content_hash` is refused because it is the file's identity: without one the
+    /// URL is checked against nothing, so the one field deliberately left unsigned would be
+    /// unverifiable rather than self-checking. An empty `url` is refused because there is
+    /// then nothing to fetch — and unlike `body_url`, which the Curator fills in later, these
+    /// bytes exist before the record does, so absence here is a malformed record and not a
+    /// stage in its life. An empty `filename` is refused so that absent and empty stay
+    /// distinguishable, which the signed bytes rely on.
+    fn check_attachments(&self) -> Result<(), String> {
+        if self.attachments.len() > MAX_COMMENT_ATTACHMENTS {
+            return Err(format!(
+                "comment carries {} attachments, over the {MAX_COMMENT_ATTACHMENTS} limit",
+                self.attachments.len()
+            ));
+        }
+        for a in &self.attachments {
+            if a.content_hash.is_empty() {
+                return Err("an attachment carries no content hash".into());
+            }
+            if a.url.is_empty() {
+                return Err("an attachment carries no url".into());
+            }
+            if a.filename.as_deref() == Some("") {
+                return Err("an attachment carries an empty filename".into());
+            }
+        }
+        Ok(())
     }
 
     /// Whether this record supersedes one already held for the same actor and subject.
@@ -865,6 +1012,7 @@ mod tests {
             reference: None,
             body: None,
             body_url: None,
+            attachments: Vec::new(),
         };
         let hex: String = e
             .signing_bytes()
@@ -898,6 +1046,7 @@ mod tests {
             reference: None,
             body: Some("hi".into()),
             body_url: None,
+            attachments: Vec::new(),
         };
         let hex: String = c
             .signing_bytes()
@@ -930,7 +1079,21 @@ mod tests {
     }
 
     fn commented(body: &str) -> Endorsement {
-        Endorsement::sign_comment(&SEED, SUBJECT, VERSION, WHEN, None, body).unwrap()
+        Endorsement::sign_comment(&SEED, SUBJECT, VERSION, WHEN, None, body, Vec::new()).unwrap()
+    }
+
+    fn carried(hash: &str) -> CommentAttachment {
+        CommentAttachment {
+            url: format!("sia://{hash}#encryption_key=k"),
+            mime_type: "image/png".into(),
+            filename: Some("shot.png".into()),
+            byte_size: 1234,
+            content_hash: hash.into(),
+        }
+    }
+
+    fn commented_with(body: &str, attachments: Vec<CommentAttachment>) -> Endorsement {
+        Endorsement::sign_comment(&SEED, SUBJECT, VERSION, WHEN, None, body, attachments).unwrap()
     }
 
     #[test]
@@ -962,9 +1125,173 @@ mod tests {
         assert!(bodiless.check_shape().is_err());
         assert!(bodiless.verify().is_err());
 
-        let empty = Endorsement::sign_comment(&SEED, SUBJECT, VERSION, WHEN, None, "").unwrap();
+        let empty =
+            Endorsement::sign_comment(&SEED, SUBJECT, VERSION, WHEN, None, "", Vec::new()).unwrap();
         assert!(empty.check_shape().is_err());
         assert!(empty.verify().is_err());
+    }
+
+    #[test]
+    fn a_comment_carries_its_files_and_signs_all_of_them_but_the_url() {
+        let c = commented_with("look", vec![carried("bafkreione")]);
+        assert!(c.verify().is_ok());
+        assert_eq!(c.attachments.len(), 1);
+
+        // THE URL IS THE EXCEPTION, and deliberately: repack rewrites object URLs while
+        // leaving the bytes identical, so signing one would make the commenter's own
+        // housekeeping invalidate every comment they had ever written. It is checked against
+        // the content hash by whoever fetches it instead.
+        let mut moved = c.clone();
+        moved.attachments[0].url = "sia://elsewhere#encryption_key=k".into();
+        assert!(moved.verify().is_ok());
+    }
+
+    #[test]
+    fn altering_anything_else_about_a_file_stops_it_verifying() {
+        // One test over every signed field, because the rule worth holding is "everything
+        // but the url" rather than a list somebody has to keep in step.
+        let c = commented_with("look", vec![carried("bafkreione")]);
+        for tamper in [
+            (|a: &mut CommentAttachment| a.content_hash = "bafkreiother".into()) as fn(&mut _),
+            |a: &mut CommentAttachment| a.mime_type = "text/html".into(),
+            |a: &mut CommentAttachment| a.filename = Some("other.png".into()),
+            |a: &mut CommentAttachment| a.filename = None,
+            |a: &mut CommentAttachment| a.byte_size = 9999,
+        ] {
+            let mut altered = c.clone();
+            tamper(&mut altered.attachments[0]);
+            assert!(altered.verify().is_err(), "an altered field still verified");
+        }
+    }
+
+    #[test]
+    fn the_list_itself_is_signed_so_a_file_cannot_be_added_dropped_or_reordered() {
+        // The whole list goes into the signature as one value, which is what covers the
+        // things no per-file digest would: how many there are, and in what order.
+        let c = commented_with("look", vec![carried("bafkreione"), carried("bafkreitwo")]);
+        assert!(c.verify().is_ok());
+
+        let mut added = c.clone();
+        added.attachments.push(carried("bafkreithree"));
+        assert!(added.verify().is_err());
+
+        let mut dropped = c.clone();
+        dropped.attachments.pop();
+        assert!(dropped.verify().is_err());
+
+        let mut reordered = c.clone();
+        reordered.attachments.reverse();
+        assert!(reordered.verify().is_err());
+    }
+
+    #[test]
+    fn a_comment_carrying_no_files_signs_what_it_did_before_the_field_existed() {
+        // The back-compat claim, and the reason the field is a TAGGED optional: every
+        // comment already published has to go on verifying. An empty list must append
+        // nothing at all, not an empty value.
+        // The property directly: an empty list contributes NOTHING, so there is no tag and
+        // no empty value to append. Asserted here rather than only through the pair below,
+        // which would agree with itself however the empty case were encoded.
+        assert_eq!(attachments_signing_value(&[]), None);
+
+        let bare = commented("said");
+        let same = commented_with("said", Vec::new());
+        assert_eq!(bare.signing_bytes(), same.signing_bytes());
+        assert_ne!(
+            bare.signing_bytes(),
+            commented_with("said", vec![carried("bafkreione")]).signing_bytes()
+        );
+    }
+
+    #[test]
+    fn too_many_files_is_refused() {
+        let ok = commented_with(
+            "look",
+            (0..MAX_COMMENT_ATTACHMENTS)
+                .map(|i| carried(&format!("bafkrei{i}")))
+                .collect(),
+        );
+        assert!(ok.verify().is_ok());
+
+        let over = commented_with(
+            "look",
+            (0..MAX_COMMENT_ATTACHMENTS + 1)
+                .map(|i| carried(&format!("bafkrei{i}")))
+                .collect(),
+        );
+        assert!(over.verify().is_err());
+    }
+
+    #[test]
+    fn a_file_missing_what_makes_it_checkable_is_refused() {
+        // No content hash means the url — the one unsigned field — is checked against
+        // nothing, so what was meant to be self-checking is simply unverifiable. No url
+        // means there is nothing to fetch, and unlike `bodyURL`, which the Curator fills in
+        // later, these bytes exist before the record does. An empty filename is refused so
+        // that absent and empty stay distinguishable, which the signed bytes rely on.
+        let mut hashless = carried("bafkreione");
+        hashless.content_hash = String::new();
+        assert!(commented_with("look", vec![hashless]).verify().is_err());
+
+        let mut urlless = carried("bafkreione");
+        urlless.url = String::new();
+        assert!(commented_with("look", vec![urlless]).verify().is_err());
+
+        let mut nameless = carried("bafkreione");
+        nameless.filename = Some(String::new());
+        assert!(commented_with("look", vec![nameless]).verify().is_err());
+
+        // And no filename at all is fine — a file need not have been called anything.
+        let mut anonymous = carried("bafkreione");
+        anonymous.filename = None;
+        assert!(commented_with("look", vec![anonymous]).verify().is_ok());
+    }
+
+    #[test]
+    fn a_gesture_carrying_files_is_refused() {
+        // A gesture is its own existence and nothing else. Signed WITH them, so the
+        // signature is valid and the shape rule is the only thing that can reject it.
+        let fat_like = Endorsement::signed(
+            &SEED,
+            KIND_LIKE,
+            SUBJECT,
+            VERSION,
+            WHEN,
+            None,
+            None,
+            vec![carried("bafkreione")],
+        )
+        .unwrap();
+        assert!(fat_like.check_shape().is_err());
+        assert!(fat_like.verify().is_err());
+    }
+
+    #[test]
+    fn a_file_is_named_on_the_wire_the_way_a_manifest_names_one() {
+        // Asserted as a key set, because a renamed field is invisible to both compilers and
+        // this codebase has shipped that bug once already.
+        let c = commented_with("look", vec![carried("bafkreione")]);
+        let wire = serde_json::to_value(&c).unwrap();
+        let file = &wire["attachments"][0];
+        let keys: std::collections::BTreeSet<&str> = file
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            keys,
+            ["byteSize", "contentHash", "filename", "mimeType", "url"]
+                .into_iter()
+                .collect()
+        );
+
+        // And a comment with no files omits the field entirely, so nothing already
+        // published serializes differently than it did.
+        assert!(serde_json::to_value(commented("said"))
+            .unwrap()
+            .get("attachments")
+            .is_none());
     }
 
     #[test]
@@ -990,6 +1317,7 @@ mod tests {
             WHEN,
             None,
             Some("smuggled"),
+            Vec::new(),
         )
         .unwrap();
         assert!(fat_like.check_shape().is_err());
@@ -1005,6 +1333,7 @@ mod tests {
             WHEN,
             None,
             Some("allowed"),
+            Vec::new(),
         )
         .unwrap();
         assert!(future.check_shape().is_ok());
@@ -1050,6 +1379,7 @@ mod tests {
             "2026-08-22T13:00:00.000Z",
             None,
             "second",
+            Vec::new(),
         )
         .unwrap();
         assert_ne!(first.comment_id(), second.comment_id());
@@ -1175,6 +1505,7 @@ mod tests {
             reference: None,
             body: None,
             body_url: None,
+            attachments: Vec::new(),
         };
         let mut b = a.clone();
         b.kind = "a".into();
@@ -1514,6 +1845,7 @@ mod tests {
                     &when,
                     None,
                     "words",
+                    Vec::new(),
                 )
                 .unwrap()
             })
@@ -1530,7 +1862,8 @@ mod tests {
             .enumerate()
             .map(|(i, body)| {
                 let when = format!("2026-08-22T12:0{i}:00.000Z");
-                Endorsement::sign_comment(&SEED, SUBJECT, VERSION, &when, None, body).unwrap()
+                Endorsement::sign_comment(&SEED, SUBJECT, VERSION, &when, None, body, Vec::new())
+                    .unwrap()
             })
             .collect();
         let (published, dropped) = newest_comments(three);
@@ -1547,8 +1880,16 @@ mod tests {
         let mut records: Vec<Endorsement> = (0..6)
             .map(|i| {
                 let when = format!("2026-08-22T12:0{i}:00.000Z");
-                Endorsement::sign_comment(&[(i + 1) as u8; 32], SUBJECT, VERSION, &when, None, "w")
-                    .unwrap()
+                Endorsement::sign_comment(
+                    &[(i + 1) as u8; 32],
+                    SUBJECT,
+                    VERSION,
+                    &when,
+                    None,
+                    "w",
+                    Vec::new(),
+                )
+                .unwrap()
             })
             .collect();
         let forwards = newest_comments(records.clone()).0;
@@ -1560,8 +1901,12 @@ mod tests {
     fn two_comments_agreeing_on_everything_signed_still_order() {
         // Same subject, same instant, different actors — so `createdAt` cannot separate them
         // and the signature has to.
-        let a = Endorsement::sign_comment(&[11u8; 32], SUBJECT, VERSION, WHEN, None, "w").unwrap();
-        let b = Endorsement::sign_comment(&[12u8; 32], SUBJECT, VERSION, WHEN, None, "w").unwrap();
+        let a =
+            Endorsement::sign_comment(&[11u8; 32], SUBJECT, VERSION, WHEN, None, "w", Vec::new())
+                .unwrap();
+        let b =
+            Endorsement::sign_comment(&[12u8; 32], SUBJECT, VERSION, WHEN, None, "w", Vec::new())
+                .unwrap();
         assert_eq!(a.created_at, b.created_at);
         let one = newest_comments(vec![a.clone(), b.clone()]).0;
         let other = newest_comments(vec![b, a]).0;
@@ -1575,7 +1920,16 @@ mod tests {
         // number it shows.
         let mut records = set(3, KIND_LIKE);
         records.push(
-            Endorsement::sign_comment(&[7u8; 32], SUBJECT, VERSION, WHEN, None, "said so").unwrap(),
+            Endorsement::sign_comment(
+                &[7u8; 32],
+                SUBJECT,
+                VERSION,
+                WHEN,
+                None,
+                "said so",
+                Vec::new(),
+            )
+            .unwrap(),
         );
         let agg = fold(&records, None, WHEN.into()).unwrap();
 
@@ -1600,7 +1954,8 @@ mod tests {
             .enumerate()
             .map(|(i, body)| {
                 let when = format!("2026-08-22T1{i}:00:00.000Z");
-                Endorsement::sign_comment(&seed, SUBJECT, VERSION, &when, None, body).unwrap()
+                Endorsement::sign_comment(&seed, SUBJECT, VERSION, &when, None, body, Vec::new())
+                    .unwrap()
             })
             .collect();
 
@@ -1620,7 +1975,8 @@ mod tests {
         let mut comments: Vec<Endorsement> = (0..3)
             .map(|i| {
                 let when = format!("2026-08-22T1{i}:00:00.000Z");
-                Endorsement::sign_comment(&seed, SUBJECT, VERSION, &when, None, "words").unwrap()
+                Endorsement::sign_comment(&seed, SUBJECT, VERSION, &when, None, "words", Vec::new())
+                    .unwrap()
             })
             .collect();
         let forwards = fold(&comments, None, WHEN.into()).unwrap();

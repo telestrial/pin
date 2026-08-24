@@ -20,6 +20,7 @@ import { tallySubject } from '../lib/channelTallies'
 import {
   bodyBytes,
   holdsComment,
+  maxCommentAttachments,
   maxCommentBytes,
   pinInputForComment,
   withdrawComment,
@@ -82,7 +83,16 @@ function decode(bytes: Uint8Array) {
     createdAt: string
     sig: string
     ref?: unknown
+    attachments?: { url: string; contentHash: string; mimeType: string }[]
   }
+}
+
+const FILE = {
+  url: 'sia://shot#encryption_key=k',
+  mimeType: 'image/png',
+  filename: 'shot.png',
+  byteSize: 1234,
+  contentHash: 'bafkreishot',
 }
 
 describe('integration: writing a comment', () => {
@@ -116,6 +126,7 @@ describe('integration: writing a comment', () => {
       ITEM,
       null,
       'first',
+      [],
       '2026-08-22T12:00:00.000Z',
     )
     const second = await writeComment(
@@ -123,6 +134,7 @@ describe('integration: writing a comment', () => {
       ITEM,
       null,
       'second',
+      [],
       '2026-08-22T13:00:00.000Z',
     )
     expect(first).not.toBe(second)
@@ -218,6 +230,33 @@ describe('integration: writing a comment', () => {
     expect(await sealMarks()).toHaveLength(0)
   })
 
+  it('carries a file across the boundary with its names intact', async () => {
+    // The one seam neither compiler checks: this list is handed to Rust as JSON and parsed
+    // into `CommentAttachment` there, so a field renamed on either side is a parse failure at
+    // runtime and nothing before it. This codebase has shipped that bug once already.
+    await writeComment(FAKE_APP_KEY_HEX, ITEM, null, 'look at this', [FILE])
+
+    const rkeys = await held()
+    const record = decode((await getStored(rkeys[0])) as Uint8Array)
+    expect(record.attachments).toEqual([FILE])
+    // And the record still holds up, which is what proves Rust read the same fields back.
+    expect(record.sig).not.toBe('')
+  })
+
+  it('refuses more files than a host would take', async () => {
+    // Refused at the signature rather than on arrival — a composer that allowed one more
+    // would have uploaded it before finding out.
+    const max = await maxCommentAttachments()
+    const many = Array.from({ length: max + 1 }, (_, i) => ({
+      ...FILE,
+      contentHash: `bafkrei${i}`,
+    }))
+    await expect(
+      writeComment(FAKE_APP_KEY_HEX, ITEM, null, 'too much', many),
+    ).rejects.toThrow()
+    expect(await held()).toHaveLength(0)
+  })
+
   it('takes a comment back by deleting the record', async () => {
     const id = await writeComment(FAKE_APP_KEY_HEX, ITEM, null, 'regretted')
     expect(await holdsComment(ITEM, id)).toBe(true)
@@ -233,6 +272,7 @@ describe('integration: writing a comment', () => {
       ITEM,
       null,
       'kept',
+      [],
       '2026-08-22T12:00:00.000Z',
     )
     const second = await writeComment(
@@ -240,6 +280,7 @@ describe('integration: writing a comment', () => {
       ITEM,
       null,
       'withdrawn',
+      [],
       '2026-08-22T13:00:00.000Z',
     )
     await withdrawComment(FAKE_APP_KEY_HEX, ITEM, second)

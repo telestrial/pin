@@ -364,6 +364,12 @@ export function manifest_remove_attachment(manifest_json: string, item_id: strin
 export function manifest_remove_repost(manifest_json: string, did_dht: string, channel_id: string, published_at: string, now: string): string;
 
 /**
+ * How many files a comment may carry. Exposed for the same reason: a composer that let
+ * somebody pick a fifth would fail them at the signature, having already uploaded it.
+ */
+export function max_comment_attachments(): number;
+
+/**
  * The longest body a comment may carry, in bytes. Exposed so a composer can say no before
  * somebody writes past it, rather than failing at the signature.
  */
@@ -574,8 +580,18 @@ export function sia_wait_for_approval(): Promise<void>;
  * them however they travel and whoever publishes them. A body over the limit is refused
  * here rather than later: the host would refuse it on arrival, so signing one is work
  * nobody can use.
+ *
+ * `carried_json` is the files this comment brings, already uploaded — a JSON array of
+ * `{url, mimeType, filename?, byteSize, contentHash}`. As JSON because this boundary takes
+ * primitives, and parsed HERE rather than assembled here so the shape is the record's own
+ * and one side cannot drift from the other. The bytes are uploaded before this is called,
+ * which is the ordering every create in this codebase takes: a record never names bytes
+ * that failed to land.
+ *
+ * Not to be confused with `attachment`, which is a hash naming one file OF THE POST being
+ * commented on, and decides which subject this comment is about.
  */
-export function sign_comment(app_key_hex: string, channel_id: string, published_at: string, version: string, reference_did_dht: string | null | undefined, attachment: string | null | undefined, body: string, now: string): string;
+export function sign_comment(app_key_hex: string, channel_id: string, published_at: string, version: string, reference_did_dht: string | null | undefined, attachment: string | null | undefined, body: string, carried_json: string | null | undefined, now: string): string;
 
 /**
  * Sign one endorsement of a COMMENT.
@@ -873,6 +889,7 @@ export interface InitOutput {
     readonly manifest_enumerate_retract: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly manifest_remove_attachment: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number, number, number];
     readonly manifest_remove_repost: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number, number, number];
+    readonly max_comment_attachments: () => number;
     readonly max_comment_bytes: () => number;
     readonly open: (a: number, b: number) => any;
     readonly open_channel_doc: (a: number, b: number) => any;
@@ -911,7 +928,7 @@ export interface InitOutput {
     readonly sia_upload_items_packed: (a: any, b: number) => any;
     readonly sia_validate_recovery_phrase: (a: number, b: number) => [number, number];
     readonly sia_wait_for_approval: () => any;
-    readonly sign_comment: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number) => [number, number, number, number];
+    readonly sign_comment: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number) => [number, number, number, number];
     readonly sign_comment_endorsement: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => [number, number, number, number];
     readonly sign_endorsement: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number) => [number, number, number, number];
     readonly start_channel_doc_loop: (a: number, b: number, c: number, d: any) => any;

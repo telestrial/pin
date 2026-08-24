@@ -14,6 +14,7 @@ import {
   comment_collection,
   comment_rkey,
   comment_seal_collection,
+  max_comment_attachments,
   max_comment_bytes,
   sign_comment,
 } from '../../crates/pin-core/pkg/pin_core.js'
@@ -32,6 +33,34 @@ import { LIBRARY_CHANNEL } from './pinUpload'
 export async function maxCommentBytes(): Promise<number> {
   await ensureWasm()
   return max_comment_bytes()
+}
+
+/** How many files a comment may carry.
+ *
+ *  From Rust for the same reason the byte limit is: the host refuses a record over it, so a
+ *  composer that let somebody pick one more would fail them at the signature, having already
+ *  uploaded the file. */
+export async function maxCommentAttachments(): Promise<number> {
+  await ensureWasm()
+  return max_comment_attachments()
+}
+
+/** A file a comment carries, already uploaded.
+ *
+ *  Mirrors `pin_engagement::CommentAttachment`, and the field names are the contract — this
+ *  is handed to Rust as JSON and parsed into that type, so a rename on either side is a
+ *  parse failure rather than a compile error.
+ *
+ *  The bytes stay in the commenter's own Sia scope: a host publishes a comment's words and
+ *  not its files, because words are bounded and a file is whatever the sender picked. So a
+ *  reader fetches these from wherever the commenter put them, and they live exactly as long
+ *  as the commenter goes on paying for them. */
+export type CommentAttachment = {
+  url: string
+  mimeType: string
+  filename?: string
+  byteSize: number
+  contentHash: string
 }
 
 /** How many bytes a body would take, so a composer can count down honestly. */
@@ -92,6 +121,7 @@ export async function writeComment(
   item: EndorsedItem,
   referenceAuthor: ReferenceAuthor,
   body: string,
+  carried: CommentAttachment[] = [],
   now = new Date().toISOString(),
 ): Promise<string> {
   await ensureWasm()
@@ -106,6 +136,7 @@ export async function writeComment(
       referenceAuthor ?? undefined,
       item.attachment,
       body,
+      carried.length > 0 ? JSON.stringify(carried) : undefined,
       now,
     ),
   ) as { record: unknown; commentID: string }
