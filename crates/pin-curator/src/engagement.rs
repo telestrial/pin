@@ -222,6 +222,20 @@ async fn own_subjects(
 /// The main doc's collection of owned channels' manifests.
 const OWN_CHANNEL_COLLECTION: &str = "channel";
 
+/// The keys of the channels this identity publishes.
+///
+/// What opens a comment somebody left on a channel of ours that isn't public: its record is
+/// sealed under that channel's K in the commenter's own world-readable blob, so reading it
+/// back means holding the key the post was read with. Own channels only — a comment on
+/// anyone else's has no subject of ours to match, so opening it would buy nothing.
+fn own_channel_keys(settings: &SettingsView) -> Vec<[u8; 32]> {
+    settings
+        .my_channels
+        .iter()
+        .filter_map(|c| pin_crypto::channel_key_from_base64(&c.channel_key))
+        .collect()
+}
+
 /// The identities whose endorsements this pass will look for.
 ///
 /// Everyone this identity has a reason to read: the channels it follows, the people it
@@ -841,8 +855,15 @@ pub async fn engagement_once(
 
     // The comment lane's half of the same drain. Its own collection and its own addresses,
     // so nothing above and nothing below touches what it writes.
-    let (comments, commented_on, comments_reached) =
-        crate::comments::take_in(ctx, own_did, &subjects, comment_knocks, &comments_at).await;
+    let (comments, commented_on, comments_reached) = crate::comments::take_in(
+        ctx,
+        own_did,
+        &subjects,
+        comment_knocks,
+        &comments_at,
+        &own_channel_keys(&settings),
+    )
+    .await;
     outcome.comments = comments;
 
     // Reconcile the held log against what this pass saw. `held` was listed before the

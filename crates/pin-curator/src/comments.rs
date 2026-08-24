@@ -178,7 +178,7 @@ struct CommentMark {
 /// An unchanged pointer proves the bytes are identical; it says nothing about whether this
 /// reading of them is still current, so without this a parse fix would never reach anyone
 /// already crawled.
-const COMMENT_EPOCH: u32 = 1;
+const COMMENT_EPOCH: u32 = 2;
 
 /// Where an actor's comments are, as this pass found out.
 ///
@@ -261,6 +261,40 @@ async fn write_mark(ctx: &EngagementContext, did: &str, mark: &CommentMark) {
     .await;
 }
 
+/// The field an opaque entry in a comments blob carries its ciphertext under.
+pub(crate) const SEALED_FIELD: &str = "sealed";
+
+/// One comment out of a comments blob: in the clear, or opened with a key this identity
+/// holds.
+///
+/// A comment on a PUBLIC post is published as it stands, its words being as public as the
+/// post they are on. A comment on a channel that is not public cannot be: this blob hangs
+/// off the directory, which is world-readable by design, so a plaintext record would put a
+/// private conversation's words in front of anybody who resolved its author. The subject is
+/// a hash and carries no reference, so what leaked would be the words without what they are
+/// about — still the content, and content is the thing that tier exists to hold.
+///
+/// The seal is the SUBJECT channel's K, never anything of the commenter's, so readability
+/// tracks the subject's own audience with no key to hand out: whoever can read the post can
+/// read what was said on it. 08-10's rule that a record reveals exactly what its subject
+/// reveals, applied to a payload rather than to a pointer.
+///
+/// `None` for an entry no held key opens, which is the ORDINARY case and not a failure —
+/// most of what an actor's blob carries is about somebody else's channel. Every key is
+/// tried because there is nothing in the entry that says which one to use: naming the
+/// channel would let an observer correlate two people as members of the same private group,
+/// which is the whole of what unlistedness protects. GCM authenticates, so a wrong key is a
+/// clean miss rather than garbage.
+pub(crate) fn open_entry(value: &serde_json::Value, keys: &[[u8; 32]]) -> Option<Endorsement> {
+    match value.get(SEALED_FIELD).and_then(|v| v.as_str()) {
+        Some(blob) => keys.iter().find_map(|k| {
+            let plain = pin_crypto::decrypt(k, blob).ok()?;
+            serde_json::from_slice(&plain).ok()
+        }),
+        None => serde_json::from_value(value.clone()).ok(),
+    }
+}
+
 /// One actor's current comments, downloaded from the blob their directory points at.
 ///
 /// Anything that won't parse is skipped rather than failing the actor: one malformed record
@@ -269,6 +303,7 @@ async fn download(
     ctx: &EngagementContext,
     did: &str,
     url: &str,
+    keys: &[[u8; 32]],
 ) -> Result<Vec<Endorsement>, String> {
     let bytes = ctx.sia.download_item(url).await?;
     let doc: serde_json::Value =
@@ -276,19 +311,21 @@ async fn download(
     let Some(list) = doc.get("comments").and_then(|v| v.as_array()) else {
         return Err(format!("{did}: comments blob has no records"));
     };
-    Ok(list
-        .iter()
-        .filter_map(|v| serde_json::from_value::<Endorsement>(v.clone()).ok())
-        .collect())
+    Ok(list.iter().filter_map(|v| open_entry(v, keys)).collect())
 }
 
 /// Read the comments of every actor whose blob this pass can reach.
 ///
 /// Answers with the records found and the actors they were found for. Only an actor in that
 /// set can lose a comment below: absence in a blob nobody read is not absence.
+///
+/// `keys` are this identity's own channel keys, which is what opens a comment left on a
+/// channel of ours that isn't public — see `open_entry`. Only channels we publish, because
+/// only a comment on one of those has a subject we could match anyway.
 pub(crate) async fn crawl(
     ctx: &EngagementContext,
     at: &BTreeMap<String, CommentsAt>,
+    keys: &[[u8; 32]],
     outcome: &mut CommentsOutcome,
 ) -> (Vec<Endorsement>, BTreeSet<String>) {
     let mut records = Vec::new();
@@ -321,7 +358,7 @@ pub(crate) async fn crawl(
                     outcome.skipped += 1;
                     continue;
                 }
-                match download(ctx, did, url).await {
+                match download(ctx, did, url, keys).await {
                     Ok(found) => {
                         // After the parse, never before: a mark written on a failed read
                         // would skip this actor forever with nothing in hand.
@@ -673,6 +710,7 @@ pub async fn take_in(
     subjects: &SubjectTable,
     knocks: Vec<serde_json::Value>,
     at: &BTreeMap<String, CommentsAt>,
+    keys: &[[u8; 32]],
 ) -> (CommentsOutcome, BTreeSet<String>, BTreeSet<String>) {
     let mut outcome = CommentsOutcome::default();
     let mut touched = BTreeSet::new();
@@ -686,7 +724,7 @@ pub async fn take_in(
 
     // Ourselves first and locally: a comment on your own post is one you wrote, and reading
     // it back over the network would miss the one made a second ago.
-    let (crawled, mut reached) = crawl(ctx, at, &mut outcome).await;
+    let (crawled, mut reached) = crawl(ctx, at, keys, &mut outcome).await;
     reached.insert(own_did.to_string());
 
     for record in own(ctx).await.into_iter().chain(crawled) {
@@ -845,6 +883,57 @@ mod tests {
             .iter()
             .map(|(s, c)| (s.to_string(), c.to_string()))
             .collect()
+    }
+
+    const CHANNEL_KEY: [u8; 32] = [9u8; 32];
+
+    /// A comment as it sits in a blob when its subject's channel is not public.
+    fn sealed(record: &Endorsement, key: &[u8; 32]) -> serde_json::Value {
+        let plain = serde_json::to_vec(record).unwrap();
+        serde_json::json!({ SEALED_FIELD: pin_crypto::encrypt(key, &plain).unwrap() })
+    }
+
+    #[test]
+    fn a_sealed_comment_opens_with_the_channel_key_it_was_left_under() {
+        let c = comment(WHEN, "between us");
+        let opened = open_entry(&sealed(&c, &CHANNEL_KEY), &[CHANNEL_KEY]);
+        assert_eq!(
+            opened.as_ref().and_then(|o| o.body.as_deref()),
+            Some("between us")
+        );
+        // And it is the same record, signature included — sealing carries it verbatim.
+        assert_eq!(opened, Some(c));
+    }
+
+    #[test]
+    fn a_sealed_comment_stays_shut_without_its_key() {
+        // The ORDINARY case rather than a failure: most of what an actor's blob holds is
+        // about somebody else's channel, and none of it opens here. What matters is that it
+        // fails CLOSED — no fallback that reads the entry as if it were in the clear.
+        let c = comment(WHEN, "between us");
+        let entry = sealed(&c, &CHANNEL_KEY);
+        assert_eq!(open_entry(&entry, &[]), None);
+        assert_eq!(open_entry(&entry, &[[1u8; 32], [2u8; 32]]), None);
+        assert!(!entry.to_string().contains("between us"));
+    }
+
+    #[test]
+    fn the_right_key_is_found_among_several_held() {
+        // Nothing in an entry says which channel it belongs to — naming one would let an
+        // observer match two people as members of the same private group — so every key is
+        // tried and the one that authenticates wins.
+        let c = comment(WHEN, "between us");
+        let held = [[1u8; 32], CHANNEL_KEY, [2u8; 32]];
+        assert_eq!(open_entry(&sealed(&c, &CHANNEL_KEY), &held), Some(c));
+    }
+
+    #[test]
+    fn a_comment_in_the_clear_needs_no_key() {
+        // What a comment on a public post is published as, and what every record already out
+        // there is: the words are as public as the post they are on.
+        let c = comment(WHEN, "said openly");
+        let entry = serde_json::to_value(&c).unwrap();
+        assert_eq!(open_entry(&entry, &[]), Some(c));
     }
 
     #[test]
