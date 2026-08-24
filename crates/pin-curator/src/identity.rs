@@ -118,6 +118,14 @@ pub struct IdentityOutcome {
     pub comments_uploaded: bool,
     /// What minting comment bodies into objects of their own did.
     pub bodies: crate::comments::MintOutcome,
+    /// Comments left out of the blob because the channel they are about is not public and no
+    /// key for it is held here any more — an unsubscribe, in practice.
+    ///
+    /// Reported rather than swallowed, and left out rather than published: this blob is
+    /// world-readable, so falling back to the clear would publish the one thing the seal
+    /// exists to withhold. The cost is that the host's next crawl reads the comment as taken
+    /// down, which is recoverable — it comes back the moment the key does.
+    pub comments_unsealable: usize,
 }
 
 /// One advertised public channel: enough for a resolver to read it — the channelID
@@ -253,17 +261,115 @@ struct CommentsDoc {
     comments: Vec<serde_json::Value>,
 }
 
-/// This identity's own comment records, read out of the doc in key order.
+/// One of this identity's comments, ready to go into the blob.
+///
+/// The seal is worked out BEFORE the fingerprint is taken, which is what keeps that
+/// fingerprint over the plaintext: a seal draws a fresh nonce every time, so fingerprinting
+/// the sealed bytes would make every pass look like a change and re-upload the blob forever.
+struct OwnComment {
+    record: serde_json::Value,
+    /// The channel whose key seals this one, when the post it is on is not public. `None`
+    /// publishes the record as it stands.
+    seal: Option<Seal>,
+}
+
+/// Which channel a comment is sealed under, and with what.
+///
+/// The channelID travels beside the key so the fingerprint can name it. Without that, a
+/// channel turning from public into sealed would fingerprint identically and the blob would
+/// go on serving the plaintext generation.
+struct Seal {
+    channel_id: String,
+    key: [u8; 32],
+}
+
+/// The key of one channel this identity holds, whether it owns it or subscribes to it.
+///
+/// A comment can be on either — your own unlisted channel, or one somebody sent you a link
+/// to — and holding K is the same fact in both cases. `None` means no key for it is held any
+/// more, which is what unsubscribing leaves behind.
+fn held_channel_key(settings: &SettingsView, channel_id: &str) -> Option<[u8; 32]> {
+    let owned = settings
+        .my_channels
+        .iter()
+        .find(|c| c.channel_id == channel_id)
+        .map(|c| c.channel_key.as_str());
+    let subscribed = || {
+        settings
+            .subscriptions
+            .iter()
+            .find(|s| s.channel_id == channel_id)
+            .map(|s| s.channel_key.as_str())
+    };
+    owned
+        .or_else(subscribed)
+        .and_then(pin_crypto::channel_key_from_base64)
+}
+
+/// What one comment's seal mark works out to.
+enum SealFor {
+    /// No mark: a comment on a public post, published as it stands.
+    Clear,
+    /// Marked, and the key is held.
+    Under(Seal),
+    /// Marked, and no key for that channel is held here.
+    NoKey,
+}
+
+/// The channel whose key seals one comment, read from its mark.
+///
+/// The mark is written by the composer, which knows the subject channel's visibility; this
+/// side knows how to seal and asks nothing about visibility itself. A mark naming a channel
+/// no key is held for is the one case that has to stay distinguishable from no mark at all —
+/// see `own_comments`.
+async fn seal_for(ctx: &IdentityContext, settings: &SettingsView, rkey: &str) -> SealFor {
+    let Ok(Some(raw)) = read_record(
+        &ctx.doc,
+        &ctx.blobs,
+        ctx.author_id,
+        pin_derive::COMMENT_SEAL_COLLECTION,
+        rkey,
+    )
+    .await
+    else {
+        return SealFor::Clear;
+    };
+    let Some(channel_id) = serde_json::from_slice::<serde_json::Value>(&raw)
+        .ok()
+        .and_then(|v| {
+            v.get("channelID")
+                .and_then(|c| c.as_str())
+                .map(str::to_string)
+        })
+    else {
+        // A mark that named nothing readable still SAYS this comment is not public, so it
+        // still is not published. An unreadable instruction is not an absent one.
+        return SealFor::NoKey;
+    };
+    match held_channel_key(settings, &channel_id) {
+        Some(key) => SealFor::Under(Seal { channel_id, key }),
+        None => SealFor::NoKey,
+    }
+}
+
+/// This identity's own comment records, read out of the doc in key order, each with whatever
+/// seal its mark asks for.
 ///
 /// Sorted so the fingerprint below is stable, exactly as `own_endorsements` is: unordered
 /// iteration would make every pass look like a change and re-upload the blob.
-async fn own_comments(ctx: &IdentityContext) -> Vec<serde_json::Value> {
+///
+/// Answers with the comments to publish and how many were dropped for want of a key. A marked
+/// comment whose channel key is gone is LEFT OUT rather than published in the clear — the
+/// mark is the only thing that knows its post was private, so ignoring it would publish
+/// exactly what it exists to withhold.
+async fn own_comments(ctx: &IdentityContext, settings: &SettingsView) -> (Vec<OwnComment>, usize) {
     let mut rkeys = crate::list_rkeys(&ctx.doc, ctx.author_id, pin_derive::COMMENT_COLLECTION)
         .await
         .unwrap_or_default();
     rkeys.sort();
 
     let mut out = Vec::with_capacity(rkeys.len());
+    let mut unsealable = 0;
     for rkey in rkeys {
         let Ok(Some(raw)) = read_record(
             &ctx.doc,
@@ -276,18 +382,47 @@ async fn own_comments(ctx: &IdentityContext) -> Vec<serde_json::Value> {
         else {
             continue;
         };
-        if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&raw) {
-            out.push(value);
+        let Ok(record) = serde_json::from_slice::<serde_json::Value>(&raw) else {
+            continue;
+        };
+        match seal_for(ctx, settings, &rkey).await {
+            SealFor::Clear => out.push(OwnComment { record, seal: None }),
+            SealFor::Under(seal) => out.push(OwnComment {
+                record,
+                seal: Some(seal),
+            }),
+            SealFor::NoKey => unsealable += 1,
         }
     }
-    out
+    (out, unsealable)
 }
 
-/// A stable fingerprint of a comments blob's content.
-fn comments_fingerprint(doc: &CommentsDoc) -> String {
-    serde_json::to_value(doc)
-        .unwrap_or(serde_json::Value::Null)
-        .to_string()
+/// A stable fingerprint of what a comments blob will hold.
+///
+/// Over the PLAINTEXT records and the channel each is sealed under, never over the sealed
+/// bytes — see `OwnComment`.
+fn comments_fingerprint(entries: &[OwnComment]) -> String {
+    let parts: Vec<serde_json::Value> = entries
+        .iter()
+        .map(|e| serde_json::json!([e.record, e.seal.as_ref().map(|s| s.channel_id.as_str())]))
+        .collect();
+    serde_json::Value::Array(parts).to_string()
+}
+
+/// Each comment as it goes into the blob: in the clear, or inside an opaque envelope.
+fn comment_entries(entries: &[OwnComment]) -> Result<Vec<serde_json::Value>, String> {
+    entries
+        .iter()
+        .map(|e| match &e.seal {
+            None => Ok(e.record.clone()),
+            Some(seal) => {
+                let plain =
+                    serde_json::to_vec(&e.record).map_err(|e| format!("encode comment: {e}"))?;
+                let sealed = pin_crypto::encrypt(&seal.key, &plain)?;
+                Ok(serde_json::json!({ crate::comments::SEALED_FIELD: sealed }))
+            }
+        })
+        .collect()
 }
 
 /// What a pass worked out about the comments blob, to be applied once the packet naming it
@@ -334,9 +469,9 @@ enum CommentsPlan {
 
 fn plan_comments(
     held: Option<PublishedState>,
-    records: Vec<serde_json::Value>,
+    entries: Vec<OwnComment>,
 ) -> Result<CommentsPlan, String> {
-    if records.is_empty() {
+    if entries.is_empty() {
         // A positive answer rather than an absence: the records were read and there are
         // none, which is exactly what deleting a last comment should do.
         return Ok(match held {
@@ -345,11 +480,8 @@ fn plan_comments(
         });
     }
 
-    let doc = CommentsDoc {
-        version: COMMENTS_DOC_VERSION,
-        comments: records,
-    };
-    let fp = comments_fingerprint(&doc);
+    // Before the seals, so an unchanged set of comments is recognised as unchanged.
+    let fp = comments_fingerprint(&entries);
     // A matching fingerprint with no URL beside it cannot be pointed at, so it re-uploads.
     if let Some(h) = &held {
         if h.fp.as_deref() == Some(fp.as_str()) {
@@ -359,6 +491,10 @@ fn plan_comments(
         }
     }
 
+    let doc = CommentsDoc {
+        version: COMMENTS_DOC_VERSION,
+        comments: comment_entries(&entries)?,
+    };
     Ok(CommentsPlan::Upload {
         bytes: serde_json::to_vec(&doc).map_err(|e| format!("encode comments: {e}"))?,
         fp,
@@ -371,10 +507,10 @@ fn plan_comments(
 async fn publish_comments(
     ctx: &IdentityContext,
     published_key: &[u8; 32],
-    records: Vec<serde_json::Value>,
+    entries: Vec<OwnComment>,
 ) -> Result<CommentsPublish, String> {
     let held = read_published(ctx, published_key, COMMENTS_RKEY).await;
-    match plan_comments(held, records)? {
+    match plan_comments(held, entries)? {
         CommentsPlan::Nothing => Ok(CommentsPublish::default()),
         CommentsPlan::Keep(url) => Ok(CommentsPublish {
             url: Some(url),
@@ -450,7 +586,9 @@ pub async fn publish_identity_once(
     // reaches a reader already pinnable rather than becoming so a pass later.
     outcome.bodies =
         crate::comments::mint_bodies(&ctx.doc, &ctx.blobs, ctx.author_id, &ctx.sia).await;
-    let comments = publish_comments(ctx, &published_key, own_comments(ctx).await).await?;
+    let (entries, unsealable) = own_comments(ctx, &settings).await;
+    outcome.comments_unsealable = unsealable;
+    let comments = publish_comments(ctx, &published_key, entries).await?;
     outcome.comments_uploaded = comments.uploaded;
 
     let doc = DirectoryDoc {
@@ -753,8 +891,27 @@ mod tests {
         }
     }
 
-    fn one_comment() -> Vec<serde_json::Value> {
-        vec![serde_json::json!({"kind": "comment", "body": "hi"})]
+    const SEAL_KEY: [u8; 32] = [7u8; 32];
+
+    fn clear(body: &str) -> OwnComment {
+        OwnComment {
+            record: serde_json::json!({"kind": "comment", "body": body}),
+            seal: None,
+        }
+    }
+
+    fn under(body: &str, channel_id: &str) -> OwnComment {
+        OwnComment {
+            record: serde_json::json!({"kind": "comment", "body": body}),
+            seal: Some(Seal {
+                channel_id: channel_id.into(),
+                key: SEAL_KEY,
+            }),
+        }
+    }
+
+    fn one_comment() -> Vec<OwnComment> {
+        vec![clear("hi")]
     }
 
     #[test]
@@ -785,11 +942,7 @@ mod tests {
     fn an_unchanged_blob_is_pointed_at_where_it_is() {
         // The whole reason a fingerprint is stored: a pass that changed nothing costs one
         // signed packet, never a fresh Sia object.
-        let doc = CommentsDoc {
-            version: COMMENTS_DOC_VERSION,
-            comments: one_comment(),
-        };
-        let fp = comments_fingerprint(&doc);
+        let fp = comments_fingerprint(&one_comment());
         assert_eq!(
             plan_comments(
                 Some(state("obj-1", Some("sia://a"), Some(&fp))),
@@ -823,11 +976,7 @@ mod tests {
         // State from a pass that recorded an id and never a URL. Pointing at nothing would
         // publish a directory whose comments pointer is absent while the records exist, so
         // the blob is uploaded again rather than trusted.
-        let doc = CommentsDoc {
-            version: COMMENTS_DOC_VERSION,
-            comments: one_comment(),
-        };
-        let fp = comments_fingerprint(&doc);
+        let fp = comments_fingerprint(&one_comment());
         assert!(matches!(
             plan_comments(Some(state("obj-1", None, Some(&fp))), one_comment()).unwrap(),
             CommentsPlan::Upload { .. }
@@ -851,20 +1000,82 @@ mod tests {
     fn a_comments_blob_fingerprints_on_its_records() {
         // What decides whether a pass re-uploads. Two records in one order and the other
         // must differ, or a comment could be added and the blob left alone.
-        let one = CommentsDoc {
-            version: COMMENTS_DOC_VERSION,
-            comments: vec![serde_json::json!({"a": 1}), serde_json::json!({"b": 2})],
-        };
-        let same = CommentsDoc {
-            version: COMMENTS_DOC_VERSION,
-            comments: vec![serde_json::json!({"a": 1}), serde_json::json!({"b": 2})],
-        };
-        let fewer = CommentsDoc {
-            version: COMMENTS_DOC_VERSION,
-            comments: vec![serde_json::json!({"a": 1})],
-        };
+        let one = vec![clear("a"), clear("b")];
+        let same = vec![clear("a"), clear("b")];
+        let fewer = vec![clear("a")];
         assert_eq!(comments_fingerprint(&one), comments_fingerprint(&same));
         assert_ne!(comments_fingerprint(&one), comments_fingerprint(&fewer));
+    }
+
+    #[test]
+    fn a_seal_is_fingerprinted_by_the_channel_and_not_by_its_bytes() {
+        // Two properties in one, and the blob only stops churning if both hold. A seal draws
+        // a fresh nonce every time, so the same comments have to fingerprint the SAME or
+        // every pass looks like a change and re-uploads forever. And a comment that starts
+        // being sealed has to fingerprint DIFFERENTLY, or the blob would go on serving the
+        // generation that still holds it in the clear.
+        assert_eq!(
+            comments_fingerprint(&[under("a", "chan-one")]),
+            comments_fingerprint(&[under("a", "chan-one")])
+        );
+        assert_ne!(
+            comments_fingerprint(&[clear("a")]),
+            comments_fingerprint(&[under("a", "chan-one")])
+        );
+        assert_ne!(
+            comments_fingerprint(&[under("a", "chan-one")]),
+            comments_fingerprint(&[under("a", "chan-two")])
+        );
+    }
+
+    #[test]
+    fn a_sealed_comment_goes_into_the_blob_opaque() {
+        // The words are what this is for: the blob hangs off a world-readable directory, so
+        // a comment on a post that is not public must not be legible in it.
+        let entries = comment_entries(&[under("between us", "chan-one")]).unwrap();
+        assert_eq!(entries.len(), 1);
+        let text = entries[0].to_string();
+        assert!(
+            !text.contains("between us"),
+            "the words are in the clear: {text}"
+        );
+        assert!(entries[0].get("kind").is_none());
+
+        // And it is the same record to whoever holds the key.
+        let blob = entries[0][crate::comments::SEALED_FIELD].as_str().unwrap();
+        let plain = pin_crypto::decrypt(&SEAL_KEY, blob).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&plain).unwrap(),
+            serde_json::json!({"kind": "comment", "body": "between us"})
+        );
+    }
+
+    #[test]
+    fn an_unsealed_comment_goes_into_the_blob_verbatim() {
+        // What a comment on a public post is published as, and it has to stay legible: a
+        // public count is auditable only by somebody who can read the records behind it
+        // without holding a key.
+        let entries = comment_entries(&one_comment()).unwrap();
+        assert_eq!(
+            entries[0],
+            serde_json::json!({"kind": "comment", "body": "hi"})
+        );
+    }
+
+    #[test]
+    fn a_channel_key_is_found_whether_it_is_owned_or_subscribed() {
+        // A comment can be on your own unlisted channel or on one you were sent a link to,
+        // and holding K is the same fact either way. From JSON rather than constructed, so
+        // this pins the settings field names the frontend writes.
+        let settings: SettingsView = serde_json::from_str(
+            r#"{"myChannels":[{"channelID":"mine","channelKey":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}],
+                "subscriptions":[{"channelID":"theirs","channelKey":"AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE="}]}"#,
+        )
+        .unwrap();
+        assert_eq!(held_channel_key(&settings, "mine"), Some([0u8; 32]));
+        assert_eq!(held_channel_key(&settings, "theirs"), Some([1u8; 32]));
+        // And the case that must not fall back to publishing in the clear.
+        assert_eq!(held_channel_key(&settings, "unsubscribed"), None);
     }
 
     #[test]
@@ -1017,6 +1228,7 @@ mod tests {
             empty,
             comments_uploaded: false,
             bodies: Default::default(),
+            comments_unsealable: 0,
         })
     }
 

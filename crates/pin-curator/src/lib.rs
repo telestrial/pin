@@ -507,9 +507,9 @@ pub(crate) struct SettingsView {
 #[derive(serde::Deserialize)]
 pub(crate) struct SubscriptionView {
     #[serde(rename = "channelID")]
-    channel_id: String,
+    pub(crate) channel_id: String,
     #[serde(rename = "channelKey")]
-    channel_key: String,
+    pub(crate) channel_key: String,
     /// The author's did:dht. Absent on a subscription made from a legacy handle URL, which
     /// simply means the crawl has no identity to read their endorsements from.
     #[serde(default, rename = "didDht")]

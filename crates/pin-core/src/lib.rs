@@ -872,6 +872,11 @@ pub async fn start_identity_loop(
                         "published": o.published,
                         "endpoints": o.endpoints,
                         "empty": o.empty,
+                        // A comment on a channel whose key is no longer held here is left
+                        // out rather than published in the clear. Surfaced because it is the
+                        // one number here that means something the user wrote is not going
+                        // out.
+                        "commentsUnsealable": o.comments_unsealable,
                     })
                     .to_string(),
                     Err(e) => serde_json::json!({ "error": e }).to_string(),

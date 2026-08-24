@@ -1418,10 +1418,18 @@ pub async fn curator_start_identity(
                 let note = match &result {
                     Ok(o) if o.empty => "nothing to advertise yet".to_string(),
                     Ok(o) => format!(
-                        "ok (published{}, {} of {} endpoint(s) dialable)",
+                        "ok (published{}, {} of {} endpoint(s) dialable){}",
                         if o.uploaded { " + uploaded" } else { "" },
                         o.dialable,
-                        o.endpoints
+                        o.endpoints,
+                        // The one number here that means something the user wrote is not
+                        // going out: a comment on a channel whose key is no longer held is
+                        // left out rather than published in the clear.
+                        if o.comments_unsealable > 0 {
+                            format!(" — {} comment(s) unsealable", o.comments_unsealable)
+                        } else {
+                            String::new()
+                        }
                     ),
                     Err(e) => format!("failed: {e}"),
                 };
