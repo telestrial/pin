@@ -22,7 +22,9 @@
 
 import {
   endorse_collection,
+  endorse_comment_rkey,
   endorse_rkey,
+  sign_comment_endorsement,
   sign_endorsement,
 } from '../../crates/pin-core/pkg/pin_core.js'
 import { ensureWasm } from '../core/wasm'
@@ -52,6 +54,13 @@ export type EndorsedItem = {
   channelID: string
   publishedAt: string
   contentHash?: string
+  // Set to endorse a COMMENT on that post rather than the post. A comment's subject is
+  // derived from who wrote it and when, not from the post's coordinates — so this replaces
+  // the derivation instead of narrowing it, which is why it carries the pair it needs.
+  //
+  // channelID stays because it is what the CACHE is keyed by: a comment's counts sit beside
+  // its post's in the same channel's doc.
+  comment?: { actor: string; createdAt: string }
   // Set to endorse one ATTACHMENT of that post rather than the post, named by its content
   // hash. Its count is separate on purpose: keeping a file alive is not keeping the post
   // alive, so a partial custodian must not be counted as a full one.
@@ -101,6 +110,13 @@ export async function endorsementRkey(
   item: EndorsedItem,
 ): Promise<string> {
   await ensureWasm()
+  if (item.comment) {
+    return endorse_comment_rkey(
+      kind,
+      item.comment.actor,
+      item.comment.createdAt,
+    )
+  }
   return endorse_rkey(kind, item.channelID, item.publishedAt, item.attachment)
 }
 
@@ -137,16 +153,29 @@ export async function writeEndorsement(
   const held = decodeHeld(await getRecord(coll, rkey))
   if (held && !differs(held, item, referenceAuthor)) return false
 
-  const record = sign_endorsement(
-    appKeyHex,
-    kind,
-    item.channelID,
-    item.publishedAt,
-    item.contentHash ?? '',
-    referenceAuthor ?? undefined,
-    item.attachment,
-    typeof held?.createdAt === 'string' ? held.createdAt : now,
-  )
+  const madeAt = typeof held?.createdAt === 'string' ? held.createdAt : now
+  const record = item.comment
+    ? // No reference at any tier: a SubjectRef describes a post, and a comment's subject is
+      // derived from neither its author's channel nor its timestamp, so coordinates here
+      // would fail the record's own self-check.
+      sign_comment_endorsement(
+        appKeyHex,
+        kind,
+        item.comment.actor,
+        item.comment.createdAt,
+        item.contentHash ?? '',
+        madeAt,
+      )
+    : sign_endorsement(
+        appKeyHex,
+        kind,
+        item.channelID,
+        item.publishedAt,
+        item.contentHash ?? '',
+        referenceAuthor ?? undefined,
+        item.attachment,
+        madeAt,
+      )
   await putRecord(coll, rkey, new TextEncoder().encode(record))
   return true
 }

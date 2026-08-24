@@ -11,6 +11,7 @@
 // every comment body in it.
 
 import {
+  comment_subject,
   engagement_subject,
   thread_collection,
   thread_rkey,
@@ -37,6 +38,10 @@ export type PublishedComment = {
   createdAt: string
   sig: string
   body?: string
+  // Where the same words sit as a Sia object of the commenter's own. A custody handle and
+  // never the read path: the body above is what renders. Absent on a comment whose author
+  // has not run a Curator, which is why keeping one is offered conditionally.
+  bodyURL?: string
 }
 
 /** One subject's published conversation, newest first. */
@@ -51,7 +56,10 @@ async function threadAddress(item: EndorsedItem): Promise<[string, string]> {
     thread_collection(),
     thread_rkey(
       item.channelID,
-      engagement_subject(item.channelID, item.publishedAt, item.attachment),
+      // A comment's own conversation is its replies, addressed by the comment.
+      item.comment
+        ? comment_subject(item.comment.actor, item.comment.createdAt)
+        : engagement_subject(item.channelID, item.publishedAt, item.attachment),
     ),
   ]
 }

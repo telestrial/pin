@@ -16,14 +16,18 @@ vi.mock('../lib/docs', async () =>
   (await import('./fakeModules')).fakeDocsModule(),
 )
 
+import { tallySubject } from '../lib/channelTallies'
 import {
   bodyBytes,
   holdsComment,
   maxCommentBytes,
+  pinInputForComment,
   withdrawComment,
   writeComment,
 } from '../lib/comments'
 import { listRecords } from '../lib/docs'
+import { endorsementRkey } from '../lib/engagement'
+import { endorsedItemFor } from '../stores/pin'
 import { fakeDocStore as docStore } from './fakeModules'
 import { FAKE_APP_KEY_HEX, resetAllStores } from './setupFakeApp'
 
@@ -175,4 +179,90 @@ async function getStored(rkey: string) {
   )
   const { getRecord } = await import('../lib/docs')
   return getRecord(comment_collection(), rkey)
+}
+
+describe('integration: keeping a comment', () => {
+  beforeEach(() => {
+    resetAllStores()
+    docStore.clear()
+  })
+
+  const POST = { channelID: 'chan-one', publishedAt: ITEM.publishedAt }
+  const SAID = {
+    kind: 'comment',
+    actor: 'did:dht:bob',
+    subject: 'sub',
+    version: 'bafkreiabc',
+    createdAt: '2026-08-22T12:00:00.000Z',
+    sig: 'AAAA',
+    body: 'worth keeping',
+  }
+
+  it('offers nothing to keep until the author has minted the object', async () => {
+    // A comment reads fine without one and offers no custody: there is nothing to take
+    // custody OF until there is an address, and the words alone live in blobs that are
+    // superseded on every write.
+    expect(pinInputForComment(SAID, POST)).toBeNull()
+  })
+
+  it('keeps a comment as a library pin whose origin names it', async () => {
+    const input = pinInputForComment(
+      { ...SAID, bodyURL: 'sia://body#encryption_key=k' },
+      POST,
+    )
+    expect(input?.channel.channelID).toBe('library')
+    expect(input?.item.itemURL).toBe('sia://body#encryption_key=k')
+    // The comment's own time, so a kept comment sorts where it was said.
+    expect(input?.item.publishedAt).toBe(SAID.createdAt)
+    // What makes it more than loose bytes: the post locates the channel doc its counts
+    // live in, and the actor and time say which comment they are about.
+    expect(input?.origin).toEqual({
+      channelID: POST.channelID,
+      publishedAt: POST.publishedAt,
+      commentActor: SAID.actor,
+      commentCreatedAt: SAID.createdAt,
+    })
+  })
+
+  it('reports a kept comment’s subject as the comment’s own', async () => {
+    // Not the post's. A pin on a comment counts toward the comment, and the two subjects
+    // come from different derivations entirely.
+    const input = pinInputForComment(
+      { ...SAID, bodyURL: 'sia://body#encryption_key=k' },
+      POST,
+    )
+    const endorsed = endorsedItemFor({
+      ...(input as NonNullable<typeof input>),
+      objectID: 'obj1',
+      attachmentObjectIDs: [],
+      pinnedAt: SAID.createdAt,
+    })
+    expect(endorsed?.comment).toEqual({
+      actor: SAID.actor,
+      createdAt: SAID.createdAt,
+    })
+    expect(await tallySubject(endorsed as NonNullable<typeof endorsed>)).toBe(
+      await commentSubjectOf(SAID.actor, SAID.createdAt),
+    )
+  })
+
+  it('addresses an endorsement of a comment away from the post’s', async () => {
+    // Same kind, same keyspace, different subject — so keeping a comment and keeping the
+    // post it sits under are two records rather than one overwriting the other.
+    const onComment = await endorsementRkey('pin', {
+      channelID: POST.channelID,
+      publishedAt: POST.publishedAt,
+      comment: { actor: SAID.actor, createdAt: SAID.createdAt },
+    })
+    const onPost = await endorsementRkey('pin', POST)
+    expect(onComment).not.toBe(onPost)
+    expect(onComment.startsWith('pin:')).toBe(true)
+  })
+})
+
+async function commentSubjectOf(actor: string, createdAt: string) {
+  const { comment_subject } = await import(
+    '../../crates/pin-core/pkg/pin_core.js'
+  )
+  return comment_subject(actor, createdAt)
 }

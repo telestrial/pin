@@ -1,6 +1,11 @@
 import { useEffect, useState } from 'react'
 import type { PublishedComment } from '../../lib/channelConversations'
-import { bodyBytes, withdrawComment, writeComment } from '../../lib/comments'
+import {
+  bodyBytes,
+  pinInputForComment,
+  withdrawComment,
+  writeComment,
+} from '../../lib/comments'
 import type { EndorsedItem } from '../../lib/engagement'
 import { referenceAuthorFor } from '../../lib/engagement'
 import { useConversation } from '../../lib/hooks/useConversation'
@@ -8,6 +13,7 @@ import { useIdentityName } from '../../lib/hooks/useIdentityName'
 import { formatRelative } from '../../lib/time'
 import { useAuthStore } from '../../stores/auth'
 import { useFeedStore } from '../../stores/feed'
+import { PinButton } from '../pin/PinButton'
 
 // A post's conversation, and somewhere to add to it.
 //
@@ -21,9 +27,10 @@ import { useFeedStore } from '../../stores/feed'
 // appearing below. So there is no pending state to render and none is invented: an
 // unanswered comment simply isn't in the thread yet.
 //
-// A pinnable comment is the next piece and isn't here: the bytes have an address now (each
-// body is its own Sia object), but the pin store is shaped around an ItemRef and a comment
-// is not one.
+// KEEPING one is offered when its author has minted its body object, and not before: there
+// is nothing to take custody of until there is an address, and a comment whose author has
+// never run a Curator has none. A kept comment is a library pin — bytes in your scope that
+// were never published to a channel of yours — whose origin names the post it sits under.
 
 /** How much a composer will take, in bytes. Read once — it comes from the receiver's own
  *  limit, so a form that allowed more would produce records nobody would keep. */
@@ -31,12 +38,15 @@ const LIMIT_UNKNOWN = 0
 
 function CommentRow({
   comment,
+  post,
   onWithdraw,
 }: {
   comment: PublishedComment
+  post: { channelID: string; publishedAt: string }
   onWithdraw?: () => void
 }) {
   const name = useIdentityName(comment.actor)
+  const keepable = pinInputForComment(comment, post)
   return (
     <li className="space-y-1">
       <p className="text-xs text-neutral-500">
@@ -55,9 +65,12 @@ function CommentRow({
           </>
         )}
       </p>
-      <p className="text-sm text-neutral-900 whitespace-pre-wrap break-words">
-        {comment.body}
-      </p>
+      <div className="flex items-start justify-between gap-2">
+        <p className="text-sm text-neutral-900 whitespace-pre-wrap break-words">
+          {comment.body}
+        </p>
+        {keepable && <PinButton input={keepable} />}
+      </div>
     </li>
   )
 }
@@ -141,6 +154,10 @@ export function CommentThread({ item }: { item: EndorsedItem }) {
             <CommentRow
               key={c.sig}
               comment={c}
+              post={{
+                channelID: item.channelID,
+                publishedAt: item.publishedAt,
+              }}
               onWithdraw={
                 c.actor === myDidDht ? () => void remove(c) : undefined
               }

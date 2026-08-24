@@ -1830,6 +1830,45 @@ pub fn sign_endorsement(
     out(&record)
 }
 
+/// Where one endorsement of a COMMENT lives.
+///
+/// Its own entry point because a comment's subject comes from a different derivation: a
+/// post's is over `(channelID, publishedAt)`, a comment's is over `(actor, createdAt)`. The
+/// kind and the keyspace are identical, so only the subject differs.
+#[wasm_bindgen]
+pub fn endorse_comment_rkey(kind: &str, actor: &str, created_at: &str) -> String {
+    pin_derive::endorse_rkey(kind, &pin_crypto::comment_subject(actor, created_at))
+}
+
+/// Sign one endorsement of a COMMENT.
+///
+/// No reference, at any visibility tier. A `SubjectRef` describes a post — an author, a
+/// channel and a timestamp a reader can navigate to — and a comment's subject is derived
+/// from neither of those, so coordinates here would not reproduce it and the self-check
+/// would reject them. A comment's engagement is a countable token and nothing more.
+#[wasm_bindgen]
+pub fn sign_comment_endorsement(
+    app_key_hex: &str,
+    kind: &str,
+    actor: &str,
+    created_at: &str,
+    version: &str,
+    now: &str,
+) -> Result<String, JsValue> {
+    let app_key = decode_app_key(app_key_hex)
+        .ok_or_else(|| JsValue::from_str("app key must be 32 bytes of hex"))?;
+    let record = pin_engagement::Endorsement::sign(
+        &pin_derive::did_dht_seed(&app_key),
+        kind,
+        &pin_crypto::comment_subject(actor, created_at),
+        version,
+        now,
+        None,
+    )
+    .map_err(|e| JsValue::from_str(&e))?;
+    out(&record)
+}
+
 /// Sign one comment, returning the record as the exact JSON to store, and its own id.
 ///
 /// Both, because the caller needs the id to address what it just signed and deriving it a

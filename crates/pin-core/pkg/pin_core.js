@@ -707,6 +707,36 @@ export function endorse_collection() {
 }
 
 /**
+ * Where one endorsement of a COMMENT lives.
+ *
+ * Its own entry point because a comment's subject comes from a different derivation: a
+ * post's is over `(channelID, publishedAt)`, a comment's is over `(actor, createdAt)`. The
+ * kind and the keyspace are identical, so only the subject differs.
+ * @param {string} kind
+ * @param {string} actor
+ * @param {string} created_at
+ * @returns {string}
+ */
+export function endorse_comment_rkey(kind, actor, created_at) {
+    let deferred4_0;
+    let deferred4_1;
+    try {
+        const ptr0 = passStringToWasm0(kind, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(actor, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ptr2 = passStringToWasm0(created_at, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len2 = WASM_VECTOR_LEN;
+        const ret = wasm.endorse_comment_rkey(ptr0, len0, ptr1, len1, ptr2, len2);
+        deferred4_0 = ret[0];
+        deferred4_1 = ret[1];
+        return getStringFromWasm0(ret[0], ret[1]);
+    } finally {
+        wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
+    }
+}
+
+/**
  * Where one endorsement lives. Needed on its own as well as from `sign_endorsement`,
  * because withdrawing one addresses the record without producing another.
  * @param {string} kind
@@ -1856,6 +1886,52 @@ export function sign_comment(app_key_hex, channel_id, published_at, version, ref
         return getStringFromWasm0(ptr9, len9);
     } finally {
         wasm.__wbindgen_free(deferred10_0, deferred10_1, 1);
+    }
+}
+
+/**
+ * Sign one endorsement of a COMMENT.
+ *
+ * No reference, at any visibility tier. A `SubjectRef` describes a post — an author, a
+ * channel and a timestamp a reader can navigate to — and a comment's subject is derived
+ * from neither of those, so coordinates here would not reproduce it and the self-check
+ * would reject them. A comment's engagement is a countable token and nothing more.
+ * @param {string} app_key_hex
+ * @param {string} kind
+ * @param {string} actor
+ * @param {string} created_at
+ * @param {string} version
+ * @param {string} now
+ * @returns {string}
+ */
+export function sign_comment_endorsement(app_key_hex, kind, actor, created_at, version, now) {
+    let deferred8_0;
+    let deferred8_1;
+    try {
+        const ptr0 = passStringToWasm0(app_key_hex, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(kind, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ptr2 = passStringToWasm0(actor, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len2 = WASM_VECTOR_LEN;
+        const ptr3 = passStringToWasm0(created_at, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len3 = WASM_VECTOR_LEN;
+        const ptr4 = passStringToWasm0(version, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len4 = WASM_VECTOR_LEN;
+        const ptr5 = passStringToWasm0(now, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len5 = WASM_VECTOR_LEN;
+        const ret = wasm.sign_comment_endorsement(ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4, ptr5, len5);
+        var ptr7 = ret[0];
+        var len7 = ret[1];
+        if (ret[3]) {
+            ptr7 = 0; len7 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred8_0 = ptr7;
+        deferred8_1 = len7;
+        return getStringFromWasm0(ptr7, len7);
+    } finally {
+        wasm.__wbindgen_free(deferred8_0, deferred8_1, 1);
     }
 }
 

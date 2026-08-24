@@ -4,6 +4,7 @@ import { type AccountSnapshot, pinItem } from '../core/pin'
 import type { SiaClient } from '../core/siaClient'
 import type { ItemRef } from '../core/types'
 import { APP_KEY } from '../lib/constants'
+import type { EndorsedItem } from '../lib/engagement'
 import { useActionStore } from './actionQueue'
 
 /** The AppKey this identity's pin records are sealed under.
@@ -43,17 +44,25 @@ async function recordPin(ref: PinnedItemRef): Promise<void> {
  *  The attachment's identity is the library item's own `contentHash`, which for a file
  *  IS the file. Without one — a legacy attachment written before the field existed —
  *  there is no subject, and no count is better than a wrong one. */
-export function endorsedItemFor(ref: PinnedItemRef): {
-  channelID: string
-  publishedAt: string
-  contentHash?: string
-  attachment?: string
-} | null {
+export function endorsedItemFor(ref: PinnedItemRef): EndorsedItem | null {
   if (ref.channel.channelID !== 'library') {
     return {
       channelID: ref.channel.channelID,
       publishedAt: ref.item.publishedAt,
       contentHash: ref.item.contentHash,
+    }
+  }
+  if (ref.origin?.commentActor && ref.origin.commentCreatedAt) {
+    // A kept comment. Its subject is the comment's own, so the post's coordinates locate
+    // only which channel doc the counts sit in.
+    return {
+      channelID: ref.origin.channelID,
+      publishedAt: ref.origin.publishedAt,
+      contentHash: ref.item.contentHash,
+      comment: {
+        actor: ref.origin.commentActor,
+        createdAt: ref.origin.commentCreatedAt,
+      },
     }
   }
   if (!ref.origin || !ref.item.contentHash) return null
@@ -156,7 +165,17 @@ export type PinnedItemRef = {
   // `publishedAt` stamped at the moment of pinning, so nothing else in the record can
   // say what it is a copy of. The attachment's own identity is `item.contentHash`,
   // which for a library item IS the file's hash.
-  origin?: { channelID: string; publishedAt: string }
+  //
+  // `commentID` names a COMMENT on that post instead of one of its attachments. A comment's
+  // subject comes from its own author and timestamp, so the pair above locates the post it
+  // sits under and this says which comment.
+  origin?: {
+    channelID: string
+    publishedAt: string
+    commentID?: string
+    commentActor?: string
+    commentCreatedAt?: string
+  }
   pinnedAt: string
 }
 

@@ -218,6 +218,15 @@ export function encrypt_settings(key: Uint8Array, plaintext: string): string;
 export function endorse_collection(): string;
 
 /**
+ * Where one endorsement of a COMMENT lives.
+ *
+ * Its own entry point because a comment's subject comes from a different derivation: a
+ * post's is over `(channelID, publishedAt)`, a comment's is over `(actor, createdAt)`. The
+ * kind and the keyspace are identical, so only the subject differs.
+ */
+export function endorse_comment_rkey(kind: string, actor: string, created_at: string): string;
+
+/**
  * Where one endorsement lives. Needed on its own as well as from `sign_endorsement`,
  * because withdrawing one addresses the record without producing another.
  */
@@ -560,6 +569,16 @@ export function sia_wait_for_approval(): Promise<void>;
 export function sign_comment(app_key_hex: string, channel_id: string, published_at: string, version: string, reference_did_dht: string | null | undefined, attachment: string | null | undefined, body: string, now: string): string;
 
 /**
+ * Sign one endorsement of a COMMENT.
+ *
+ * No reference, at any visibility tier. A `SubjectRef` describes a post — an author, a
+ * channel and a timestamp a reader can navigate to — and a comment's subject is derived
+ * from neither of those, so coordinates here would not reproduce it and the self-check
+ * would reject them. A comment's engagement is a countable token and nothing more.
+ */
+export function sign_comment_endorsement(app_key_hex: string, kind: string, actor: string, created_at: string, version: string, now: string): string;
+
+/**
  * Sign one endorsement, returning the record as the exact JSON to store.
  *
  * Serialized here rather than returned as an object to stringify on the far side, so
@@ -825,6 +844,7 @@ export interface InitOutput {
     readonly encrypt_for_channel: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly encrypt_settings: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly endorse_collection: () => [number, number];
+    readonly endorse_comment_rkey: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];
     readonly endorse_rkey: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number];
     readonly endorsement_verify: (a: number, b: number) => [number, number];
     readonly engagement_subject: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];
@@ -882,6 +902,7 @@ export interface InitOutput {
     readonly sia_validate_recovery_phrase: (a: number, b: number) => [number, number];
     readonly sia_wait_for_approval: () => any;
     readonly sign_comment: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number) => [number, number, number, number];
+    readonly sign_comment_endorsement: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => [number, number, number, number];
     readonly sign_endorsement: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number) => [number, number, number, number];
     readonly start_channel_doc_loop: (a: number, b: number, c: number, d: any) => any;
     readonly start_channel_sync_loop: (a: number, b: number, c: number, d: number, e: any) => any;

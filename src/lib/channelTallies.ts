@@ -14,6 +14,7 @@
 // way: prefer what's cached, resolve fresh when it isn't there.
 
 import {
+  comment_subject,
   engagement_subject,
   tally_collection,
   tally_rkey,
@@ -52,6 +53,9 @@ export type Aggregate = {
  *  so it is unique without qualification and names nothing to anyone without K. */
 export async function tallySubject(item: EndorsedItem): Promise<string> {
   await ensureWasm()
+  if (item.comment) {
+    return comment_subject(item.comment.actor, item.comment.createdAt)
+  }
   return engagement_subject(item.channelID, item.publishedAt, item.attachment)
 }
 

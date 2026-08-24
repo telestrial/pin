@@ -17,8 +17,11 @@ import {
   sign_comment,
 } from '../../crates/pin-core/pkg/pin_core.js'
 import { ensureWasm } from '../core/wasm'
+import type { PinInput } from '../stores/pin'
+import type { PublishedComment } from './channelConversations'
 import { deleteRecord, getRecord, openDocs, putRecord } from './docs'
 import type { EndorsedItem, ReferenceAuthor } from './engagement'
+import { LIBRARY_CHANNEL } from './pinUpload'
 
 /** The longest body a comment may carry, in bytes.
  *
@@ -131,6 +134,50 @@ export async function holdsComment(
     comment_rkey(subject, commentID),
   )
   return held !== null && held !== undefined
+}
+
+/** What keeping one comment pins, or null when there is nothing to keep.
+ *
+ *  Null until the comment's author has minted its body object — a comment written by
+ *  somebody whose Curator has not run yet reads fine and offers no custody, because there
+ *  is no address to take custody of.
+ *
+ *  Stored as a LIBRARY pin, which is what a kept comment is: bytes in your scope that were
+ *  never published to a channel of yours. `origin` is what makes it more than loose bytes —
+ *  it names the post the comment sits under, which locates the channel doc its counts live
+ *  in, and the comment itself, which is what those counts are about.
+ *
+ *  `version` is the comment's signature. The signature covers the body, so it changes when
+ *  the wording does and is stable otherwise, which is exactly what an endorsement's version
+ *  records — and a comment carries no separate content hash to use instead. */
+export function pinInputForComment(
+  comment: PublishedComment,
+  post: { channelID: string; publishedAt: string },
+): PinInput | null {
+  if (!comment.bodyURL || !comment.body) return null
+  return {
+    item: {
+      // Never read for a pin: `pinItem` works off the share URL, and the object id comes
+      // back from Sia. Empty is what every other synthesized ref here uses.
+      id: '',
+      itemURL: comment.bodyURL,
+      type: 'text',
+      title: '',
+      summary: comment.body,
+      // The comment's own time, so a kept comment sorts where it was said.
+      publishedAt: comment.createdAt,
+      mimeType: 'text/plain',
+      byteSize: bodyBytes(comment.body),
+      contentHash: comment.sig,
+    },
+    channel: LIBRARY_CHANNEL,
+    origin: {
+      channelID: post.channelID,
+      publishedAt: post.publishedAt,
+      commentActor: comment.actor,
+      commentCreatedAt: comment.createdAt,
+    },
+  }
 }
 
 /** The subject a signed record names, read back off the record itself.
