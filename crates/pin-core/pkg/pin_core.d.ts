@@ -108,6 +108,15 @@ export function comment_collection(): string;
 export function comment_rkey(subject: string, comment_id: string): string;
 
 /**
+ * The collection saying which of this identity's comments get published sealed.
+ *
+ * Written here and read by the publish loop, which is why the name comes from Rust: the
+ * composer knows the subject channel's visibility and the loop knows how to seal, and a
+ * collection spelled twice would have one side marking where the other never looks.
+ */
+export function comment_seal_collection(): string;
+
+/**
  * A comment's own identity: a hash over who wrote it and when.
  *
  * Derived from the record rather than from where a host publishes it, so nobody can
@@ -824,6 +833,7 @@ export interface InitOutput {
     readonly channel_resolve_tallies_url: (a: number, b: number) => any;
     readonly comment_collection: () => [number, number];
     readonly comment_rkey: (a: number, b: number, c: number, d: number) => [number, number];
+    readonly comment_seal_collection: () => [number, number];
     readonly comment_subject: (a: number, b: number, c: number, d: number) => [number, number];
     readonly content_hash: (a: number, b: number) => [number, number];
     readonly decrypt_for_channel: (a: number, b: number, c: number, d: number) => [number, number, number, number];

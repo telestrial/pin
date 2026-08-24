@@ -13,6 +13,7 @@ export const channel_resolve_conversations_url: (a: number, b: number) => any;
 export const channel_resolve_tallies_url: (a: number, b: number) => any;
 export const comment_collection: () => [number, number];
 export const comment_rkey: (a: number, b: number, c: number, d: number) => [number, number];
+export const comment_seal_collection: () => [number, number];
 export const comment_subject: (a: number, b: number, c: number, d: number) => [number, number];
 export const content_hash: (a: number, b: number) => [number, number];
 export const decrypt_for_channel: (a: number, b: number, c: number, d: number) => [number, number, number, number];

@@ -25,7 +25,7 @@ import {
   withdrawComment,
   writeComment,
 } from '../lib/comments'
-import { listRecords } from '../lib/docs'
+import { getRecord, listRecords } from '../lib/docs'
 import { endorsementRkey } from '../lib/engagement'
 import { endorsedItemFor } from '../stores/pin'
 import { fakeDocStore as docStore } from './fakeModules'
@@ -42,6 +42,35 @@ async function held() {
     '../../crates/pin-core/pkg/pin_core.js'
   )
   return listRecords(comment_collection())
+}
+
+async function sealMarks() {
+  const { comment_seal_collection } = await import(
+    '../../crates/pin-core/pkg/pin_core.js'
+  )
+  return listRecords(comment_seal_collection())
+}
+
+async function sealMark(rkey: string) {
+  const { comment_seal_collection } = await import(
+    '../../crates/pin-core/pkg/pin_core.js'
+  )
+  const raw = await getRecord(comment_seal_collection(), rkey)
+  return raw
+    ? (JSON.parse(new TextDecoder().decode(raw)) as { channelID: string })
+    : null
+}
+
+/** Put a manifest in the store, which is where the visibility a seal turns on is read from. */
+async function knownChannel(visibility: 'public' | 'obscure' | undefined) {
+  const { useFeedStore } = await import('../stores/feed')
+  useFeedStore.getState().setManifest(ITEM.channelID, {
+    channelID: ITEM.channelID,
+    name: 'a channel',
+    items: [],
+    publishedAt: ITEM.publishedAt,
+    visibility,
+  } as never)
 }
 
 function decode(bytes: Uint8Array) {
@@ -140,6 +169,53 @@ describe('integration: writing a comment', () => {
     expect(bodyBytes('abc')).toBe(3)
     expect(bodyBytes('é')).toBe(2)
     expect(bodyBytes('😀')).toBe(4)
+  })
+
+  it('marks a comment on a channel that is not public to be sealed', async () => {
+    // The blob the Curator publishes these into hangs off the directory and is
+    // world-readable, so an unlisted post's conversation has to go in sealed. The mark is
+    // how the composer, which knows the channel's visibility, tells the publish loop, which
+    // knows how to seal.
+    await knownChannel('obscure')
+    await writeComment(FAKE_APP_KEY_HEX, ITEM, null, 'between us')
+
+    // The same address the record itself is at, so the loop reading one finds the other.
+    const rkeys = await held()
+    expect(await sealMarks()).toEqual(rkeys)
+    expect(await sealMark(rkeys[0])).toEqual({ channelID: ITEM.channelID })
+  })
+
+  it('leaves a comment on a public channel in the clear', async () => {
+    // Not an oversight and not the safe-by-default direction: a public post's count is only
+    // auditable by somebody holding no key if the records behind it are readable by them.
+    await knownChannel('public')
+    await writeComment(FAKE_APP_KEY_HEX, ITEM, null, 'said openly')
+    expect(await sealMarks()).toHaveLength(0)
+  })
+
+  it('seals when the channel says nothing about being public', async () => {
+    // Two ways to know nothing, and both take the safe direction: a manifest with no
+    // visibility field, which every reader here treats as obscure, and one that never
+    // loaded. Being sealed costs a keyless reader nothing they were promised; being in the
+    // clear cannot be taken back.
+    await knownChannel(undefined)
+    await writeComment(FAKE_APP_KEY_HEX, ITEM, null, 'unsure')
+    expect(await sealMarks()).toHaveLength(1)
+
+    docStore.clear()
+    resetAllStores()
+    await writeComment(FAKE_APP_KEY_HEX, ITEM, null, 'unknown channel')
+    expect(await sealMarks()).toHaveLength(1)
+  })
+
+  it('takes the mark back with the comment', async () => {
+    // Or the next pass would look for a comment to seal that nobody holds any more.
+    await knownChannel('obscure')
+    const id = await writeComment(FAKE_APP_KEY_HEX, ITEM, null, 'regretted')
+    expect(await sealMarks()).toHaveLength(1)
+
+    await withdrawComment(FAKE_APP_KEY_HEX, ITEM, id)
+    expect(await sealMarks()).toHaveLength(0)
   })
 
   it('takes a comment back by deleting the record', async () => {

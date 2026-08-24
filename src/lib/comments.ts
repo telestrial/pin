@@ -13,6 +13,7 @@
 import {
   comment_collection,
   comment_rkey,
+  comment_seal_collection,
   max_comment_bytes,
   sign_comment,
 } from '../../crates/pin-core/pkg/pin_core.js'
@@ -50,6 +51,36 @@ async function collection(): Promise<string> {
   return comment_collection()
 }
 
+async function sealCollection(): Promise<string> {
+  await ensureWasm()
+  return comment_seal_collection()
+}
+
+/** Which channel's key must seal a comment on this channel, or null to publish it as it
+ *  stands.
+ *
+ *  The Curator publishes every comment this identity wrote into a blob the directory points
+ *  at, and that blob is world-readable by design. For a comment on a PUBLIC post that is
+ *  right — the words are as public as the post, and a stranger holding no key is exactly who
+ *  has to be able to read them for the count to be auditable. For a post on a channel that
+ *  is not public it would put a private conversation's words in front of anyone who resolved
+ *  this identity. So the record goes into that blob sealed, under the key of the channel the
+ *  post is on: whoever can read the post can read what was said on it, and nobody else, with
+ *  no key to hand out.
+ *
+ *  Same input and same safe direction as `referenceAuthorFor`: only a manifest that SAYS
+ *  public is treated as public. A manifest with no visibility field reads as obscure, which
+ *  is the convention every reader here follows, and one that hasn't loaded reads as unknown —
+ *  and unknown seals, because being sealed costs a reader who holds no key nothing they were
+ *  promised, where being in the clear cannot be taken back. */
+export async function sealChannelFor(
+  channelID: string,
+): Promise<string | null> {
+  const { useFeedStore } = await import('../stores/feed')
+  const manifest = useFeedStore.getState().manifests[channelID]
+  return manifest?.visibility === 'public' ? null : channelID
+}
+
 /** Sign and store one comment, answering with its id.
  *
  *  A fresh record every time, unlike a gesture: a gesture is a singleton at its address, so
@@ -80,9 +111,22 @@ export async function writeComment(
   ) as { record: unknown; commentID: string }
 
   const subject = subjectOf(record)
+  const rkey = comment_rkey(subject, commentID)
+
+  // The mark BEFORE the record it classifies. A failure here leaves a mark with no comment,
+  // which is inert; the other order would leave a comment nothing says to seal, and a
+  // comment published in the clear cannot be un-published.
+  const sealChannel = await sealChannelFor(item.channelID)
+  if (sealChannel) {
+    await putRecord(
+      await sealCollection(),
+      rkey,
+      new TextEncoder().encode(JSON.stringify({ channelID: sealChannel })),
+    )
+  }
   await putRecord(
     await collection(),
-    comment_rkey(subject, commentID),
+    rkey,
     new TextEncoder().encode(JSON.stringify(record)),
   )
   return commentID
@@ -109,7 +153,11 @@ export async function withdrawComment(
     item.publishedAt,
     item.attachment,
   )
-  await deleteRecord(await collection(), comment_rkey(subject, commentID))
+  const rkey = comment_rkey(subject, commentID)
+  // The record first, that being the withdrawal itself, and the mark after. A mark left
+  // behind classifies nothing and is picked up by no pass.
+  await deleteRecord(await collection(), rkey)
+  await deleteRecord(await sealCollection(), rkey)
 }
 
 /** Whether this identity still holds the comment it wrote at one address.

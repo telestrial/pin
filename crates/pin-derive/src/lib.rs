@@ -530,6 +530,23 @@ pub const DELIVER_COLLECTION: &str = "deliver";
 /// object, since nothing left would name what to reclaim.
 pub const COMMENT_OBJECT_COLLECTION: &str = "comment-object";
 
+/// The collection saying which of this identity's comments must be published SEALED, keyed
+/// by that comment's own rkey and naming the channel whose key seals it.
+///
+/// A mark rather than a field on the record, because the record is SIGNED and gets published
+/// verbatim: an extra field saying "this one is private" would be a field announcing itself
+/// to everybody the blob is world-readable to, which is the opposite of the point. It is
+/// also written by a different party than reads it — the composer knows the subject
+/// channel's visibility, the publish loop knows how to seal — and a sidecar is how the two
+/// agree without either learning the other's job.
+///
+/// Presence is the whole instruction: a marked comment is sealed under that channel's key, an
+/// unmarked one is published as it stands. Which way round is deliberate — a comment on a
+/// public post SHOULD be readable by anyone, because that is what makes a public count
+/// auditable by somebody who holds no key. The composer writes the mark before the record it
+/// belongs to, so there is no ordering in which a comment exists unclassified.
+pub const COMMENT_SEAL_COLLECTION: &str = "comment-seal";
+
 /// The collection recording, per actor, the comments blob this identity last read of theirs.
 ///
 /// Apart from `CRAWL_COLLECTION` deliberately, even though one directory read serves both.

@@ -1720,6 +1720,16 @@ pub fn comment_rkey(subject: &str, comment_id: &str) -> String {
     pin_derive::comment_rkey(subject, comment_id)
 }
 
+/// The collection saying which of this identity's comments get published sealed.
+///
+/// Written here and read by the publish loop, which is why the name comes from Rust: the
+/// composer knows the subject channel's visibility and the loop knows how to seal, and a
+/// collection spelled twice would have one side marking where the other never looks.
+#[wasm_bindgen]
+pub fn comment_seal_collection() -> String {
+    pin_derive::COMMENT_SEAL_COLLECTION.to_string()
+}
+
 /// A comment's own identity: a hash over who wrote it and when.
 ///
 /// Derived from the record rather than from where a host publishes it, so nobody can
