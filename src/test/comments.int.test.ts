@@ -23,6 +23,7 @@ import {
   maxCommentAttachments,
   maxCommentBytes,
   pinInputForComment,
+  pinInputForCommentFile,
   uploadCommentFiles,
   withdrawComment,
   writeComment,
@@ -430,6 +431,7 @@ describe('integration: keeping a comment', () => {
   })
 
   const POST = { channelID: 'chan-one', publishedAt: ITEM.publishedAt }
+  const NOW = '2026-08-24T12:00:00.000Z'
   const SAID = {
     kind: 'comment',
     actor: 'did:dht:bob',
@@ -439,6 +441,55 @@ describe('integration: keeping a comment', () => {
     sig: 'AAAA',
     body: 'worth keeping',
   }
+
+  it('keeps one file of a comment as its own library pin', async () => {
+    // The escape hatch for media that belongs to somebody else: a comment's files sit in
+    // its author's scope and last as long as they pay for them, so taking custody is what
+    // makes one outlive that.
+    const input = pinInputForCommentFile(FILE, SAID, POST)
+    expect(input.channel.channelID).toBe('library')
+    expect(input.item.itemURL).toBe(FILE.url)
+    expect(input.item.mimeType).toBe('image/png')
+    expect(input.item.type).toBe('image')
+    expect(input.item.contentHash).toBe(FILE.contentHash)
+    // The bytes are already on Sia, so the id keys off the share URL — the object id in the
+    // record names an object in the COMMENTER's scope and is no use here.
+    expect(input.item.id).toBe(FILE.url)
+    // And it says what it is a copy of: the post, the comment, and which file.
+    expect(input.origin).toEqual({
+      channelID: POST.channelID,
+      publishedAt: POST.publishedAt,
+      commentActor: SAID.actor,
+      commentCreatedAt: SAID.createdAt,
+      commentFileHash: FILE.contentHash,
+    })
+  })
+
+  it('does not let keeping a file claim custody of the comment', async () => {
+    // The collision this exists to avoid: both pins name the same comment, so without the
+    // file hash the endorsement published for one would be the other's. Keeping somebody's
+    // picture alive is not standing behind their words.
+    const file = pinInputForCommentFile(FILE, SAID, POST)
+    expect(
+      endorsedItemFor({ ...file, objectID: 'obj', pinnedAt: NOW }),
+    ).toBeNull()
+
+    // Where keeping the COMMENT still endorses the comment, as it did before.
+    const words = pinInputForComment(
+      { ...SAID, bodyURL: 'sia://body#encryption_key=k' },
+      POST,
+    )
+    expect(words).not.toBeNull()
+    const endorsed = endorsedItemFor({
+      ...(words as NonNullable<typeof words>),
+      objectID: 'obj',
+      pinnedAt: NOW,
+    })
+    expect(endorsed?.comment).toEqual({
+      actor: SAID.actor,
+      createdAt: SAID.createdAt,
+    })
+  })
 
   it('offers nothing to keep until the author has minted the object', async () => {
     // A comment reads fine without one and offers no custody: there is nothing to take

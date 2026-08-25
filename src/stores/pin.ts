@@ -52,6 +52,15 @@ export function endorsedItemFor(ref: PinnedItemRef): EndorsedItem | null {
       contentHash: ref.item.contentHash,
     }
   }
+  if (ref.origin?.commentFileHash) {
+    // A kept FILE of a comment. There is no subject for one: a comment's subject names the
+    // comment, and the post-attachment subject names a file of the POST — so every address
+    // available here would claim something other than what was kept, and the wrongest of
+    // them is the comment's own, which would read as standing behind words nobody endorsed.
+    // Custody without a count, which the rule below already allows: no count is better than
+    // a wrong one. A subject of its own is a design question, not an oversight.
+    return null
+  }
   if (ref.origin?.commentActor && ref.origin.commentCreatedAt) {
     // A kept comment. Its subject is the comment's own, so the post's coordinates locate
     // only which channel doc the counts sit in.
@@ -169,12 +178,19 @@ export type PinnedItemRef = {
   // `commentID` names a COMMENT on that post instead of one of its attachments. A comment's
   // subject comes from its own author and timestamp, so the pair above locates the post it
   // sits under and this says which comment.
+  //
+  // `commentFileHash` narrows that further, to one FILE the comment carries. It has to be
+  // distinguishable from keeping the comment itself, because the two are different claims
+  // and the pin records would otherwise be identical in shape — keeping somebody's picture
+  // alive is not standing behind their words. See `endorsedItemFor`, which declines to
+  // publish a count for one rather than publishing the comment's.
   origin?: {
     channelID: string
     publishedAt: string
     commentID?: string
     commentActor?: string
     commentCreatedAt?: string
+    commentFileHash?: string
   }
   pinnedAt: string
 }

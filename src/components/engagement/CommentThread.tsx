@@ -6,6 +6,7 @@ import {
   type CommentAttachment,
   type CommentFileSource,
   pinInputForComment,
+  pinInputForCommentFile,
   uploadCommentFiles,
   withdrawComment,
   writeComment,
@@ -62,8 +63,21 @@ type PickedFile = CommentFileSource & { id: string }
  *
  *  Shown small and never as a grid: a comment is a remark with something attached, where a
  *  post is the attachment with a remark on it, and giving them the same weight would make
- *  every thread read like a feed. */
-function CommentFile({ file }: { file: CommentAttachment }) {
+ *  every thread read like a feed.
+ *
+ *  Offered with a pin, which is the whole answer to these bytes being somebody else's: they
+ *  last as long as their author goes on paying for them, and taking custody is what makes
+ *  one outlive that. Keeping a file is NOT keeping the comment — different bytes, different
+ *  claim — so the two pins sit side by side and neither implies the other. */
+function CommentFile({
+  file,
+  comment,
+  post,
+}: {
+  file: CommentAttachment
+  comment: PublishedComment
+  post: { channelID: string; publishedAt: string }
+}) {
   const kind = kindForMime(file.mimeType)
   const { url, error } = useItemBlobURL(
     file.url,
@@ -90,6 +104,12 @@ function CommentFile({ file }: { file: CommentAttachment }) {
         filename={name}
         byteSize={file.byteSize}
       />
+      <div className="flex items-center justify-between gap-2 px-2 py-1 border-t border-neutral-200">
+        <span className="text-xs text-neutral-400">
+          {formatBytes(file.byteSize)}
+        </span>
+        <PinButton input={pinInputForCommentFile(file, comment, post)} />
+      </div>
     </li>
   )
 }
@@ -132,7 +152,12 @@ function CommentRow({
       {comment.attachments && comment.attachments.length > 0 && (
         <ul className="flex flex-wrap gap-2">
           {comment.attachments.map((f) => (
-            <CommentFile key={f.contentHash} file={f} />
+            <CommentFile
+              key={f.contentHash}
+              file={f}
+              comment={comment}
+              post={post}
+            />
           ))}
         </ul>
       )}

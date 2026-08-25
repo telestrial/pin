@@ -20,6 +20,7 @@ import {
   sign_comment,
 } from '../../crates/pin-core/pkg/pin_core.js'
 import type { SiaClient } from '../core/siaClient'
+import type { ItemType } from '../core/types'
 import { ensureWasm } from '../core/wasm'
 import type { PinInput } from '../stores/pin'
 import type { PublishedComment } from './channelConversations'
@@ -340,6 +341,66 @@ export function pinInputForComment(
       commentCreatedAt: comment.createdAt,
     },
   }
+}
+
+/** What keeping one FILE of a comment pins.
+ *
+ *  The escape hatch the attachment design names: a comment's files stay in its author's own
+ *  Sia scope and last exactly as long as they go on paying for them, so anyone who wants one
+ *  to outlive that takes custody of it with the gesture that already means custody. It is
+ *  also what pin-on-a-comment means for a host, whose channel already publishes the words —
+ *  the media is the only part with custody left at stake.
+ *
+ *  Mirrors the existing object rather than uploading: the bytes are already on Sia, so this
+ *  is a second custodian for them and not a second copy.
+ *
+ *  `origin` names the comment AND the file, and the second half is load-bearing: without it
+ *  this would be indistinguishable from keeping the comment, and the endorsement published
+ *  for one would claim the other. See `endorsedItemFor`. */
+export function pinInputForCommentFile(
+  file: CommentAttachment,
+  comment: Pick<PublishedComment, 'actor' | 'createdAt'>,
+  post: { channelID: string; publishedAt: string },
+): PinInput {
+  return {
+    item: {
+      // A comment's file carries no object id — that id names an object in the COMMENTER's
+      // scope, which is no use to anyone else — so the share URL is what keys the bytes, the
+      // same fallback a legacy post attachment takes.
+      id: file.url,
+      itemURL: file.url,
+      type: itemTypeForMime(file.mimeType),
+      title: file.filename ?? '',
+      // Stamped now: this is a copy made at this moment, and nothing else in the record says
+      // what it is a copy of.
+      publishedAt: new Date().toISOString(),
+      mimeType: file.mimeType,
+      byteSize: file.byteSize,
+      // For a file the identity and the version are one hash: change the bytes and it is a
+      // different file, so there is no drift to record separately.
+      contentHash: file.contentHash,
+      filename: file.filename,
+    },
+    channel: LIBRARY_CHANNEL,
+    origin: {
+      channelID: post.channelID,
+      publishedAt: post.publishedAt,
+      commentActor: comment.actor,
+      commentCreatedAt: comment.createdAt,
+      commentFileHash: file.contentHash,
+    },
+  }
+}
+
+/** What kind of library item a file reads as. Same mapping the post-attachment path uses;
+ *  duplicated rather than shared because `filePin` speaks `AttachmentRef` and this speaks
+ *  the comment's own shape, and three lines beat a type both sides have to satisfy. */
+function itemTypeForMime(mimeType: string): ItemType {
+  if (mimeType.startsWith('image/')) return 'image'
+  if (mimeType.startsWith('audio/')) return 'audio'
+  if (mimeType.startsWith('video/')) return 'video'
+  if (mimeType === 'text/html') return 'app'
+  return 'file'
 }
 
 /** The subject a signed record names, read back off the record itself.
