@@ -29,7 +29,12 @@ import {
   resolveChannelViaLocator,
 } from '../lib/channelLocator'
 import { readTally, warmChannelTallies } from '../lib/channelTallies'
-import { type HeldChannels, makePortalResolver, targetOf } from '../lib/repost'
+import {
+  type HeldChannels,
+  isPermanent,
+  makePortalResolver,
+  targetOf,
+} from '../lib/repost'
 import {
   fakeDocStore as docStore,
   publishFakeDirectory,
@@ -85,6 +90,36 @@ function portal(channelID: string, item: ItemRef) {
   })
 }
 
+const COMMENTER = 'did:dht:bob'
+const SAID_AT = '2026-08-24T09:00:00.000Z'
+
+/** The same portal, narrowed to one comment on that post. */
+function commentPortal(channelID: string, item: ItemRef) {
+  return targetOf({
+    didDht: SOURCE_DID,
+    channelID,
+    publishedAt: item.publishedAt,
+    repostedAt: new Date().toISOString(),
+    comment: { actor: COMMENTER, createdAt: SAID_AT },
+  })
+}
+
+/** What the HOST publishes on that post — the only place a comment portal reads from. */
+function hostPublishes(
+  bodies: { actor: string; createdAt: string; body: string }[],
+) {
+  return async () =>
+    bodies.map((b) => ({
+      kind: 'comment',
+      actor: b.actor,
+      subject: 'sub',
+      version: 'bafkreiabc',
+      createdAt: b.createdAt,
+      sig: `sig-${b.createdAt}`,
+      body: b.body,
+    }))
+}
+
 describe('integration: resolving a portal', () => {
   let app: ReturnType<typeof createFakeApp>
   let author: FakeAccount
@@ -112,6 +147,92 @@ describe('integration: resolving a portal', () => {
     expect(outcome.source.name).toBe('Their channel')
     expect(outcome.source.channelKey).toBe(channel.channelKey)
     expect(outcome.source.authorDidDht).toBe(SOURCE_DID)
+  })
+
+  it('reads a comment through the host that publishes it', async () => {
+    // Through the HOST, never the commenter's own records: resolving from the commenter
+    // would circulate a comment the host had declined, rendered as though it sat on their
+    // post.
+    const { channel, item } = await aChannelWorthReposting(author)
+
+    const outcome = await makePortalResolver(
+      reader.client,
+      () => null,
+      () => {},
+      hostPublishes([
+        { actor: COMMENTER, createdAt: SAID_AT, body: 'worth repeating' },
+      ]),
+    ).resolve(commentPortal(channel.channelID, item))
+
+    expect(outcome.state).toBe('resolved')
+    if (outcome.state !== 'resolved') return
+    // The post comes too: a comment lifted out of its thread needs the post for context,
+    // and the portal resolves both in one pass.
+    expect(outcome.item.summary).toBe('worth circulating')
+    expect(outcome.comment?.body).toBe('worth repeating')
+    expect(outcome.comment?.actor).toBe(COMMENTER)
+  })
+
+  it('reports a comment the host no longer publishes as unpublished, not deleted', async () => {
+    // Retryable, and that is the difference from a retracted post: a comment's address is
+    // derived from who wrote it and when, so nobody can reassign it and one put back comes
+    // back where it was. Neutral about WHY — the commenter withdrawing it and the host
+    // declining it are indistinguishable from out here.
+    const { channel, item } = await aChannelWorthReposting(author)
+
+    const outcome = await makePortalResolver(
+      reader.client,
+      () => null,
+      () => {},
+      hostPublishes([
+        {
+          actor: 'did:dht:someone-else',
+          createdAt: SAID_AT,
+          body: 'a different remark',
+        },
+      ]),
+    ).resolve(commentPortal(channel.channelID, item))
+
+    expect(outcome.state).toBe('unpublished')
+    expect(isPermanent(outcome)).toBe(false)
+  })
+
+  it('reports an uncached conversation as unreachable rather than as an absence', async () => {
+    // The ordinary first pass over a cold portal: the post resolves, the warm that fetches
+    // the host's conversations is still in flight, and nothing has been read. Converting
+    // that into "the host is not publishing it" is the mistake this codebase has made three
+    // times.
+    const { channel, item } = await aChannelWorthReposting(author)
+
+    const outcome = await makePortalResolver(
+      reader.client,
+      () => null,
+      () => {},
+      async () => null,
+    ).resolve(commentPortal(channel.channelID, item))
+
+    expect(outcome.state).toBe('unreachable')
+  })
+
+  it('leaves a portal to the post itself alone', async () => {
+    // Every portal published before comments existed names no comment, so the conversation
+    // must never be consulted for one — and a host publishing nothing must not make an
+    // ordinary repost unreadable.
+    const { channel, item } = await aChannelWorthReposting(author)
+    let asked = false
+
+    const outcome = await makePortalResolver(
+      reader.client,
+      () => null,
+      () => {},
+      async () => {
+        asked = true
+        return null
+      },
+    ).resolve(portal(channel.channelID, item))
+
+    expect(outcome.state).toBe('resolved')
+    expect(asked).toBe(false)
   })
 
   it('reports a retracted post as deleted', async () => {

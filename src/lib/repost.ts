@@ -54,18 +54,23 @@ import type { SiaClient } from '../core/siaClient'
 import type {
   ChannelImage,
   ChannelManifest,
+  CommentPortal,
   ItemRef,
   RepostRef,
 } from '../core/types'
+import type { PublishedComment } from './channelConversations'
 import { resolveChannelViaLocator } from './channelLocator'
 import { resolveIdentityDoc } from './identityDoc'
 
-/** The post a portal names. Just the address — the parts of a `RepostRef` that identify
- *  the source, without the parts that are about this copy of it. */
+/** What a portal names. Just the address — the parts of a `RepostRef` that identify the
+ *  source, without the parts that are about this copy of it.
+ *
+ *  `comment` narrows it from the post to one remark made under the post. */
 export type PortalTarget = {
   didDht: string
   channelID: string
   publishedAt: string
+  comment?: CommentPortal
 }
 
 /** What the source channel turned out to be, for a portal that resolved. Enough to render
@@ -79,8 +84,22 @@ export type PortalSource = {
 }
 
 export type PortalOutcome =
-  /** The post is there. */
-  | { state: 'resolved'; item: ItemRef; source: PortalSource }
+  /** The post is there — and, for a portal naming one, the comment too. */
+  | {
+      state: 'resolved'
+      item: ItemRef
+      source: PortalSource
+      comment?: PublishedComment
+    }
+  /** The post is there and the host is not publishing this comment on it.
+   *
+   *  RETRYABLE, and this is the row the post case does not have. A comment's address is
+   *  derived from who wrote it and when, so nobody can reassign it — which means a comment
+   *  taken down and put back comes back at the SAME address, where a re-published post takes
+   *  a new `publishedAt` and is gone forever. Neutral about why on purpose: the commenter
+   *  withdrawing it and the host declining to publish it are indistinguishable from out
+   *  here, and that indistinguishability is the moderation property, not a gap in this. */
+  | { state: 'unpublished' }
   /** Their channel was read and this post is not in it: the author retracted it.
    *  PERMANENT — a re-publish takes a new publishedAt, so nothing will ever appear at
    *  this address again. A reader shows nothing; the owner is offered a dismiss. */
@@ -105,6 +124,7 @@ export function targetOf(repost: RepostRef): PortalTarget {
     didDht: repost.didDht,
     channelID: repost.channelID,
     publishedAt: repost.publishedAt,
+    comment: repost.comment,
   }
 }
 
@@ -132,6 +152,21 @@ export type HeldChannels = (target: PortalTarget) => HeldChannel | null
  *  path, so warming there would spend DHT resolves and Sia reads on work already done. */
 export type WarmChannel = (channelID: string, channelKey: string) => void
 
+/** One post's conversation as this identity currently holds it, or null when it holds none.
+ *
+ *  Read through THE HOST, never the commenter's own published records, and that is the whole
+ *  of what makes moderation mean anything: resolving from the commenter would circulate a
+ *  comment the host had declined, rendered as though it sat on their post. It also makes
+ *  un-including one take every portal to it dark, which is the same revocability an
+ *  un-advertised channel already has.
+ *
+ *  Injected like `held` and `warm`, so this module stays off the store graph. Null means not
+ *  read rather than empty — a conversation nobody has cached yet says nothing about whether
+ *  a comment is published, and treating it as absence is how a read becomes a verdict. */
+export type ReadConversation = (
+  target: PortalTarget,
+) => Promise<PublishedComment[] | null>
+
 export type PortalResolver = {
   resolve: (target: PortalTarget) => Promise<PortalOutcome>
 }
@@ -149,6 +184,7 @@ export function makePortalResolver(
   client: SiaClient,
   held: HeldChannels = () => null,
   warm: WarmChannel = () => {},
+  conversation: ReadConversation = async () => null,
 ): PortalResolver {
   const directories = new Map<
     string,
@@ -186,7 +222,11 @@ export function makePortalResolver(
       if (mine) {
         const source = mine.manifest ?? (await manifest(mine.channelKey))
         if (!source) return { state: 'unreachable' }
-        return found(target, source, mine.channelKey)
+        return narrow(
+          found(target, source, mine.channelKey),
+          target,
+          conversation,
+        )
       }
 
       // Rung 2: no relationship with this channel, so ask its author.
@@ -208,13 +248,47 @@ export function makePortalResolver(
       const outcome = found(target, source, advertised.key, advertised.name)
       // Only for a portal that resolved: the other outcomes have no row to put numbers
       // beside, and a channel that could not be read is not one to go asking about.
+      //
+      // BEFORE narrowing to a comment, deliberately. This is what fetches the host's
+      // conversations, so a portal to a comment on a channel we have no relationship with
+      // resolves its post now and its comment on a later pass, once the warm has landed.
+      // Waiting on it here would make every portal in the feed wait on a Sia read.
       if (outcome.state === 'resolved' && !warmed.has(target.channelID)) {
         warmed.add(target.channelID)
         warm(target.channelID, advertised.key)
       }
-      return outcome
+      return narrow(outcome, target, conversation)
     },
   }
+}
+
+/** Narrow a resolved post to the one comment a portal names, when it names one.
+ *
+ *  Left alone for a portal to the post itself, which is every portal published before this
+ *  existed. */
+async function narrow(
+  outcome: PortalOutcome,
+  target: PortalTarget,
+  conversation: ReadConversation,
+): Promise<PortalOutcome> {
+  if (outcome.state !== 'resolved' || !target.comment) return outcome
+
+  const held = await conversation(target)
+  // Not read is not absent. A conversation nobody has cached yet says nothing about whether
+  // the host publishes this comment, and the warm above is what fills it in — so this is the
+  // ordinary state on a first pass over a cold portal, not a failure.
+  if (!held) return { state: 'unreachable' }
+
+  const said = held.find(
+    (c) =>
+      c.actor === target.comment?.actor &&
+      c.createdAt === target.comment?.createdAt,
+  )
+  // Read, and the host is not publishing it. Retryable: the address is the commenter's own,
+  // so it can come back.
+  if (!said) return { state: 'unpublished' }
+
+  return { ...outcome, comment: said }
 }
 
 /** The item a portal names inside a manifest now in hand, or the news that it is gone.

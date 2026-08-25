@@ -19,7 +19,10 @@ import { useEffect, useRef } from 'react'
 import { portalsIn } from '../../core/feed'
 import { useAuthStore } from '../../stores/auth'
 import { useFeedStore } from '../../stores/feed'
-import { warmChannelConversations } from '../channelConversations'
+import {
+  readConversation,
+  warmChannelConversations,
+} from '../channelConversations'
 import { warmChannelTallies } from '../channelTallies'
 import { type HeldChannels, makePortalResolver } from '../repost'
 
@@ -87,6 +90,18 @@ export function usePortalResolution() {
               // the ordinary shape of this.
               void warmChannelTallies(appKeyHex, channelID, channelKey)
               void warmChannelConversations(appKeyHex, channelID, channelKey)
+            },
+            // A portal to a comment reads the comment out of what the HOST publishes, which
+            // is the cache the warm above fills and the pull loop keeps current for anything
+            // subscribed. Null when nothing is cached, which reads as unreachable rather
+            // than as the comment being gone.
+            async (target) => {
+              if (!appKeyHex) return null
+              const held = await readConversation(appKeyHex, {
+                channelID: target.channelID,
+                publishedAt: target.publishedAt,
+              })
+              return held?.comments ?? null
             },
           )
           const subs = useAuthStore.getState().subscriptions

@@ -22,10 +22,17 @@ import { useToastStore } from '../../stores/toast'
 
 /** What the owner is told, and whether asking again could change it.
  *
- *  The two absences differ and the difference is worth showing. A retract is final: the
- *  address carries the post's publish time and a re-publish takes a new one, so nothing
- *  will ever appear there again. An un-advertised channel is access withdrawn rather than
- *  content gone, and advertising is reversible — so that one might simply come back. */
+ *  The absences differ and the difference is worth showing. A retract is final: the address
+ *  carries the post's publish time and a re-publish takes a new one, so nothing will ever
+ *  appear there again. An un-advertised channel is access withdrawn rather than content
+ *  gone, and advertising is reversible — so that one might simply come back. A comment the
+ *  host no longer publishes is reversible too, and for a sharper reason: a comment's address
+ *  is derived from who wrote it and when, so nobody can reassign it, and one put back comes
+ *  back where it was.
+ *
+ *  What that last case does NOT say is why. The commenter withdrawing it and the host
+ *  declining to publish it are indistinguishable from out here, and guessing between them in
+ *  the copy would be inventing a fact. */
 function describe(state: PortalOutcome['state']): {
   text: string
   final: boolean
@@ -36,6 +43,11 @@ function describe(state: PortalOutcome['state']): {
     case 'unavailable':
       return {
         text: 'The author is no longer sharing this channel.',
+        final: false,
+      }
+    case 'unpublished':
+      return {
+        text: 'This comment is no longer shown on that post.',
         final: false,
       }
     default:

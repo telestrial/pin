@@ -113,8 +113,11 @@ export function ChannelView({
           d,
         ): d is {
           repost: (typeof d)['repost']
-          state: 'deleted' | 'unavailable'
-        } => d.state === 'deleted' || d.state === 'unavailable',
+          state: 'deleted' | 'unavailable' | 'unpublished'
+        } =>
+          d.state === 'deleted' ||
+          d.state === 'unavailable' ||
+          d.state === 'unpublished',
       )
       .sort((a, b) => {
         const cmp = a.repost.repostedAt.localeCompare(b.repost.repostedAt)
