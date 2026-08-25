@@ -89,4 +89,97 @@ describe('integration: subscriber feed display', () => {
     expect(screen.getByText("Alice's voice")).toBeInTheDocument()
     expect(screen.getByText('@alice.test')).toBeInTheDocument()
   })
+
+  it('shows a circulated comment under the post it was made on', async () => {
+    // The row is the POST, which is the context the remark needs and the only identity a
+    // feed row has chrome for — a commenter has no channel. What was actually circulated
+    // sits beneath it, attributed, with its own gesture.
+    const app = createFakeApp()
+    const alice = app.createAccount({
+      did: 'did:plc:alice',
+      handle: 'alice.test',
+    })
+    const carol = app.createAccount({
+      did: 'did:plc:carol',
+      handle: 'carol.test',
+    })
+
+    const channel = await authorCreateChannel(alice, {
+      name: "Alice's voice",
+      description: '',
+    })
+    await publishTextPost(
+      alice,
+      { channelID: channel.channelID, channelKey: channel.channelKey },
+      'the original post',
+    )
+
+    const sub: SubscriptionRef = {
+      authorHandle: alice.handle,
+      authorDID: alice.did,
+      channelID: channel.channelID,
+      channelKey: channel.channelKey,
+      addedAt: new Date().toISOString(),
+    }
+    mountAs(carol, { subscriptions: [sub] })
+
+    render(
+      <HomeFeed
+        onItemClick={() => {}}
+        onChannelClick={() => {}}
+        onHandleClick={() => {}}
+      />,
+    )
+    await waitFor(() => {
+      expect(screen.getByText('the original post')).toBeInTheDocument()
+    })
+
+    // Put a resolved comment portal in front of the collation, the way a resolution pass
+    // would, and rebuild the entries from it.
+    const { useFeedStore } = await import('../stores/feed')
+    const { entriesForManifest } = await import('../core/feed')
+    const manifest = useFeedStore.getState().manifests[channel.channelID]
+    const entries = entriesForManifest(sub, manifest, {})
+    useFeedStore.setState({
+      entries: entries.map((e) => ({
+        ...e,
+        repost: { channel: e.channel, at: new Date().toISOString() },
+        comment: {
+          actor: 'did:dht:bob',
+          createdAt: '2026-08-24T09:00:00.000Z',
+          body: 'worth repeating',
+          sig: 'sig-bob',
+          bodyURL: 'sia://body#encryption_key=k',
+          attachments: [
+            {
+              url: 'sia://shot#encryption_key=k',
+              mimeType: 'image/png',
+              filename: 'shot.png',
+              byteSize: 1234,
+              contentHash: 'bafkreishot',
+            },
+          ],
+        },
+      })),
+    })
+
+    // Both are on screen: the post as the row, the remark under it.
+    await waitFor(() => {
+      expect(screen.getByText('worth repeating')).toBeInTheDocument()
+    })
+    expect(screen.getByText('the original post')).toBeInTheDocument()
+
+    // And the remark is WHOLE, not a text-only rendering of one: whose it is, the files it
+    // carries, and both gestures. A comment met in the feed and the same comment met in its
+    // thread must not be two different things.
+    // The unresolved-identity fallback, which is what a DID with no published name reads
+    // as anywhere in the app.
+    expect(await screen.findByText(/^@did:dht:/)).toBeInTheDocument()
+    expect(
+      await screen.findByText('shot.png — unavailable'),
+    ).toBeInTheDocument()
+    // Two pins on screen: the post's and the remark's. Keeping a post and keeping something
+    // said under it are different claims, so the remark must not borrow the post's.
+    expect(screen.getAllByTitle(/Pin to your storage/).length).toBe(2)
+  })
 })

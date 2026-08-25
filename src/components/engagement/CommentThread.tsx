@@ -3,10 +3,8 @@ import { useEffect, useRef, useState } from 'react'
 import type { PublishedComment } from '../../lib/channelConversations'
 import {
   bodyBytes,
-  type CommentAttachment,
   type CommentFileSource,
   pinInputForComment,
-  pinInputForCommentFile,
   uploadCommentFiles,
   withdrawComment,
   writeComment,
@@ -17,13 +15,12 @@ import { formatBytes } from '../../lib/format'
 import { useConversation } from '../../lib/hooks/useConversation'
 import { useEngagement } from '../../lib/hooks/useEngagement'
 import { useIdentityName } from '../../lib/hooks/useIdentityName'
-import { useItemBlobURL } from '../../lib/hooks/useItemBytes'
 import { commentRepostTargetFor } from '../../lib/repost'
 import { formatRelative } from '../../lib/time'
 import { useAuthStore } from '../../stores/auth'
 import { useFeedStore } from '../../stores/feed'
-import { kindForMime, MediaPreview } from '../AttachmentMedia'
 import { PinButton } from '../pin/PinButton'
+import { CommentFiles } from './CommentFiles'
 import { RepostButton } from './RepostButton'
 
 // A post's conversation, and somewhere to add to it.
@@ -61,61 +58,6 @@ const FILE_CAP_UNKNOWN = 0
 /** A file chosen but not yet uploaded. Held as bytes because that is what the upload takes,
  *  and because a comment that is never submitted must leave nothing behind on Sia. */
 type PickedFile = CommentFileSource & { id: string }
-
-/** One file a comment carries, read from the commenter's own scope.
- *
- *  Shown small and never as a grid: a comment is a remark with something attached, where a
- *  post is the attachment with a remark on it, and giving them the same weight would make
- *  every thread read like a feed.
- *
- *  Offered with a pin, which is the whole answer to these bytes being somebody else's: they
- *  last as long as their author goes on paying for them, and taking custody is what makes
- *  one outlive that. Keeping a file is NOT keeping the comment — different bytes, different
- *  claim — so the two pins sit side by side and neither implies the other. */
-function CommentFile({
-  file,
-  comment,
-  post,
-}: {
-  file: CommentAttachment
-  comment: PublishedComment
-  post: { channelID: string; publishedAt: string }
-}) {
-  const kind = kindForMime(file.mimeType)
-  const { url, error } = useItemBlobURL(
-    file.url,
-    file.mimeType,
-    file.contentHash,
-  )
-  const name = file.filename ?? 'file'
-
-  // The failure this design accepts, said plainly rather than left as a blank tile: these
-  // bytes are the commenter's, so a URL that has moved is unreadable here until the host
-  // crawls them again.
-  if (error) {
-    return (
-      <li className="text-xs text-neutral-400 truncate" title={name}>
-        {name} — unavailable
-      </li>
-    )
-  }
-  return (
-    <li className="max-w-56 overflow-hidden rounded-lg border border-neutral-200">
-      <MediaPreview
-        previewURL={url}
-        kind={kind}
-        filename={name}
-        byteSize={file.byteSize}
-      />
-      <div className="flex items-center justify-between gap-2 px-2 py-1 border-t border-neutral-200">
-        <span className="text-xs text-neutral-400">
-          {formatBytes(file.byteSize)}
-        </span>
-        <PinButton input={pinInputForCommentFile(file, comment, post)} />
-      </div>
-    </li>
-  )
-}
 
 function CommentRow({
   comment,
@@ -173,18 +115,7 @@ function CommentRow({
           {keepable && <PinButton input={keepable} />}
         </div>
       </div>
-      {comment.attachments && comment.attachments.length > 0 && (
-        <ul className="flex flex-wrap gap-2">
-          {comment.attachments.map((f) => (
-            <CommentFile
-              key={f.contentHash}
-              file={f}
-              comment={comment}
-              post={post}
-            />
-          ))}
-        </ul>
-      )}
+      <CommentFiles files={comment.attachments} comment={comment} post={post} />
     </li>
   )
 }

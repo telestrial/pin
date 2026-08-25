@@ -314,7 +314,10 @@ export async function holdsComment(
  *  the wording does and is stable otherwise, which is exactly what an endorsement's version
  *  records — and a comment carries no separate content hash to use instead. */
 export function pinInputForComment(
-  comment: PublishedComment,
+  comment: Pick<
+    PublishedComment,
+    'actor' | 'createdAt' | 'body' | 'bodyURL' | 'sig'
+  >,
   post: { channelID: string; publishedAt: string },
 ): PinInput | null {
   if (!comment.bodyURL || !comment.body) return null

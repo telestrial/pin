@@ -605,6 +605,150 @@ describe('integration: what may be circulated', () => {
     ).toBeNull()
   })
 
+  it('carries the circulated comment onto the feed entry, beside its post', async () => {
+    // The post is the row and the comment is what was circulated, so both have to reach the
+    // collation. Dropping the comment here would show the POST under a "reposted by" line —
+    // a row claiming somebody circulated something they did not.
+    const { useFeedStore, renderable } = await import('../stores/feed')
+    const key = portalKey({
+      didDht: 'did:dht:host',
+      channelID: POST.channelID,
+      publishedAt: POST.publishedAt,
+      comment: SAID,
+    })
+    useFeedStore.setState({
+      portals: {
+        [key]: {
+          state: 'resolved',
+          item: { publishedAt: POST.publishedAt } as never,
+          source: {
+            channelID: POST.channelID,
+            channelKey: 'k',
+            name: 'Their channel',
+            authorDidDht: 'did:dht:host',
+          },
+          comment: {
+            kind: 'comment',
+            actor: COMMENTER,
+            subject: 'sub',
+            version: 'v',
+            createdAt: SAID_AT,
+            sig: 'sig',
+            body: 'worth repeating',
+            bodyURL: 'sia://body#encryption_key=k',
+            attachments: [
+              {
+                url: 'sia://shot#encryption_key=k',
+                mimeType: 'image/png',
+                filename: 'shot.png',
+                byteSize: 1234,
+                contentHash: 'bafkreishot',
+              },
+            ],
+          },
+        },
+      },
+    })
+    const shown = renderable(useFeedStore.getState().portals)
+    // Everything the thread would show, not just the words: `bodyURL` is what makes the
+    // remark keepable and `attachments` are the files its author goes on carrying, so a
+    // comment met in the feed and the same comment met in its thread stay one thing.
+    expect(shown[key]?.comment).toEqual({
+      actor: COMMENTER,
+      createdAt: SAID_AT,
+      body: 'worth repeating',
+      sig: 'sig',
+      bodyURL: 'sia://body#encryption_key=k',
+      attachments: [
+        {
+          url: 'sia://shot#encryption_key=k',
+          mimeType: 'image/png',
+          filename: 'shot.png',
+          byteSize: 1234,
+          contentHash: 'bafkreishot',
+        },
+      ],
+    })
+    // And an ordinary repost carries none, so nothing about it changed.
+    const plain = portalKey({
+      didDht: 'did:dht:host',
+      channelID: POST.channelID,
+      publishedAt: POST.publishedAt,
+    })
+    useFeedStore.setState({
+      portals: {
+        [plain]: {
+          state: 'resolved',
+          item: { publishedAt: POST.publishedAt } as never,
+          source: {
+            channelID: POST.channelID,
+            channelKey: 'k',
+            name: 'Their channel',
+            authorDidDht: 'did:dht:host',
+          },
+        },
+      },
+    })
+    expect(
+      renderable(useFeedStore.getState().portals)[plain]?.comment,
+    ).toBeUndefined()
+  })
+
+  it('puts the circulated comment on the entry the collation builds', async () => {
+    // The hand-off between the resolved portal and the row. Without it the entry is an
+    // ordinary repost of the post, and the remark that was actually circulated is gone by
+    // the time anything renders.
+    const { entriesForManifest } = await import('../core/feed')
+    const repost = {
+      didDht: 'did:dht:host',
+      channelID: POST.channelID,
+      publishedAt: POST.publishedAt,
+      repostedAt: '2026-08-24T12:00:00.000Z',
+      comment: SAID,
+    }
+    const sub = {
+      authorHandle: 'carol.test',
+      authorDID: 'did:plc:carol',
+      didDht: 'did:dht:carol',
+      channelID: 'carol-chan',
+      channelKey: 'k',
+      addedAt: '2026-08-24T00:00:00.000Z',
+    }
+    const manifest = {
+      version: 1,
+      name: 'Carol’s voice',
+      description: '',
+      authorPubkey: 'ed25519:cc',
+      publishedAt: '2026-08-24T12:00:00.000Z',
+      items: [],
+      reposts: [repost],
+    } as unknown as ChannelManifest
+
+    const circulated = {
+      item: { publishedAt: POST.publishedAt } as never,
+      channel: {
+        authorHandle: '',
+        authorDidDht: 'did:dht:host',
+        channelID: POST.channelID,
+        name: 'Their channel',
+      },
+      comment: {
+        actor: COMMENTER,
+        createdAt: SAID_AT,
+        body: 'worth repeating',
+        sig: 'sig',
+      },
+    }
+
+    const entries = entriesForManifest(sub as never, manifest, {
+      [portalKey(repost)]: circulated,
+    })
+    expect(entries).toHaveLength(1)
+    expect(entries[0].comment).toEqual(circulated.comment)
+    // And it is still a repost of the post, which is what supplies the row.
+    expect(entries[0].repost?.channel.channelID).toBe('carol-chan')
+  })
+
   it('keys a post and a comment on it apart', async () => {
     // Same collision the manifest address had, one layer up: these key the resolved-portal
     // cache and the menu's idea of which of your channels already carry it, so sharing a key

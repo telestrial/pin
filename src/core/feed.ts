@@ -36,6 +36,43 @@ export type FeedEntry = {
   item: ItemRef
   channel: FeedChannel
   repost?: FeedRepost
+  /** The comment this entry circulates, when what was circulated is a remark made under
+   *  the post rather than the post.
+   *
+   *  The post is still the row — it is the context the remark needs, and rendering a
+   *  commenter as a channel would mean inventing chrome they have no channel to fill. The
+   *  comment sits beneath it with its own gestures, so the two subjects on screen each stay
+   *  attached to what they are about.
+   *
+   *  Structural rather than the `PublishedComment` from lib, for the reason
+   *  `ResolvedPortalEntry` is: core stays clear of the network layer. */
+  comment?: CirculatedComment
+}
+
+/** A comment as a feed row shows it: everything the thread shows, so a remark reads the
+ *  same wherever it is met.
+ *
+ *  `bodyURL` and `attachments` are the two that make it more than text — the first is what
+ *  makes the words keepable, the second is the files their author goes on carrying. Both
+ *  are optional for the same reason they are optional on the record: a comment whose author
+ *  has never run a Curator has no body object, and most comments carry no files. */
+export type CirculatedComment = {
+  actor: string
+  createdAt: string
+  body?: string
+  sig: string
+  bodyURL?: string
+  attachments?: CirculatedFile[]
+}
+
+/** One file a circulated comment carries. Structural, like everything else here — core
+ *  stays clear of the network layer. */
+export type CirculatedFile = {
+  url: string
+  mimeType: string
+  filename?: string
+  byteSize: number
+  contentHash: string
 }
 
 /** When an entry belongs in the feed. A portal arrives when it was circulated;
@@ -80,6 +117,7 @@ export function portalKey(target: {
 export type ResolvedPortalEntry = {
   item: ItemRef
   channel: FeedChannel
+  comment?: CirculatedComment
 }
 
 /** Every entry one channel contributes: its own items, plus the portals it
@@ -117,6 +155,8 @@ export function entriesForManifest(
       // The original's identity, which is whose post this is.
       channel: resolved.channel,
       repost: { channel, at: repost.repostedAt },
+      // Present only for a portal that named one, so an ordinary repost is untouched.
+      comment: resolved.comment,
     })
   }
 

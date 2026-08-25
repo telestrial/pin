@@ -37,16 +37,26 @@ type PortalCache = Record<string, PortalOutcome>
 
 /** What the collation can actually render: the resolved ones, under the original's
  *  identity. Rebuilt per collation, which is a handful of entries at friend scale. */
-function renderable(
+export function renderable(
   portals: PortalCache,
 ): Record<string, ResolvedPortalEntry | undefined> {
   const out: Record<string, ResolvedPortalEntry> = {}
   for (const [key, outcome] of Object.entries(portals)) {
-    if (outcome.state === 'resolved') {
-      out[key] = {
-        item: outcome.item,
-        channel: channelOfSource(outcome.source),
-      }
+    if (outcome.state !== 'resolved') continue
+    out[key] = {
+      item: outcome.item,
+      channel: channelOfSource(outcome.source),
+      // Carried through so the row can show WHAT was circulated. Without it a comment
+      // portal would render as its post, claiming somebody circulated something they did
+      // not.
+      comment: outcome.comment && {
+        actor: outcome.comment.actor,
+        createdAt: outcome.comment.createdAt,
+        body: outcome.comment.body,
+        sig: outcome.comment.sig,
+        bodyURL: outcome.comment.bodyURL,
+        attachments: outcome.comment.attachments,
+      },
     }
   }
   return out

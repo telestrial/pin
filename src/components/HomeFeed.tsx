@@ -2,14 +2,20 @@ import { Recycle } from 'lucide-react'
 import { useEffect, useMemo } from 'react'
 import { type FeedEntry, feedTimeOf } from '../core/feed'
 import type { ItemRef } from '../core/types'
+import { pinInputForComment } from '../lib/comments'
+import { useEngagement } from '../lib/hooks/useEngagement'
 import { useIdentityName } from '../lib/hooks/useIdentityName'
 import { renderPostBody } from '../lib/markdown'
+import { commentRepostTargetFor } from '../lib/repost'
 import { formatAbsolute, formatRelativeShort } from '../lib/time'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
 import { AttachmentGrid } from './AttachmentMedia'
 import { ChannelAvatar } from './channel/ChannelAvatar'
+import { CommentFiles } from './engagement/CommentFiles'
 import { EngagementRow } from './engagement/EngagementRow'
+import { RepostButton } from './engagement/RepostButton'
+import { PinButton } from './pin/PinButton'
 
 export function HomeFeed({
   onItemClick,
@@ -232,6 +238,77 @@ function PostBody({
 // author — the name, the avatar, the body, the counts. This one line is the only part of
 // a portal row that is about the person circulating it, and on their own channel page it
 // is the only thing distinguishing a repost from something they wrote.
+/** The remark a portal circulated, shown under the post it was made on.
+ *
+ *  The POST is the row, and that is the decision worth stating: a comment lifted out of its
+ *  thread is the decontextualised-quote problem, and a commenter has no channel for a feed
+ *  row's chrome to render — no avatar, no channel name, nothing but a did:dht and a name
+ *  they gave themselves. So the post supplies the context and this supplies what was
+ *  actually circulated.
+ *
+ *  It carries its own gestures because it is its own subject: liking the post and liking
+ *  what somebody said under it are different claims, and the two blocks keep them apart. */
+function CirculatedRemark({
+  comment,
+  post,
+  onHandleClick,
+}: {
+  comment: NonNullable<FeedEntry['comment']>
+  post: { channelID: string; publishedAt: string }
+  onHandleClick: (handle: string) => void
+}) {
+  const name = useIdentityName(comment.actor)
+  const manifests = useFeedStore((s) => s.manifests)
+  const circulable = commentRepostTargetFor(comment, post, manifests)
+  // Null until its author has minted the body object, exactly as in the thread: there is
+  // nothing to take custody OF until there is an address.
+  const keepable = pinInputForComment(comment, post)
+  // Its own subject, read the way the thread reads it: liking the post and liking what
+  // somebody said under it are different claims, and this is the second one.
+  const { reposts } = useEngagement({
+    channelID: post.channelID,
+    publishedAt: post.publishedAt,
+    // The signature covers the words, so it moves when they do and is stable otherwise —
+    // which is what a version records.
+    contentHash: comment.sig,
+    comment: { actor: comment.actor, createdAt: comment.createdAt },
+  })
+  return (
+    // No click handler of its own: the row IS the post, so clicking the remark opening the
+    // post is right. The controls inside stop their own propagation, the way every other
+    // gesture in a row does.
+    <div className="mt-2 pl-3 border-l-2 border-neutral-200 space-y-1">
+      <p className="text-xs text-neutral-500">
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation()
+            onHandleClick(comment.actor)
+          }}
+          className="font-medium text-neutral-700 hover:underline cursor-pointer"
+        >
+          @{name}
+        </button>
+        {' · '}
+        {formatRelativeShort(comment.createdAt)}
+      </p>
+      <p className="text-sm text-neutral-900 whitespace-pre-wrap break-words">
+        {comment.body}
+      </p>
+      <CommentFiles files={comment.attachments} comment={comment} post={post} />
+      <div className="flex items-center gap-1">
+        <RepostButton
+          target={circulable}
+          sourceName={manifests[post.channelID]?.name}
+          contentHash={comment.sig}
+          count={reposts}
+        />
+        {keepable && <PinButton input={keepable} />}
+      </div>
+    </div>
+  )
+}
+
 function RepostedBy({
   repost,
   onHandleClick,
@@ -376,6 +453,16 @@ export function FeedRow({
                 },
               }}
             />
+            {entry.comment && (
+              <CirculatedRemark
+                comment={entry.comment}
+                post={{
+                  channelID: channel.channelID,
+                  publishedAt: item.publishedAt,
+                }}
+                onHandleClick={onHandleClick}
+              />
+            )}
           </div>
         </div>
       </div>
