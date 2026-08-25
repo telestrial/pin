@@ -106,10 +106,14 @@ export function RepostButton({
   const carriedAfter = (c: (typeof channels)[number]) =>
     carrying + (c.carries ? -1 : 1)
 
+  // For a comment portal the endorsement is about the COMMENT, not about the post it sits
+  // under — so it folds into the host's tally for that comment, which is where a count of
+  // it belongs and the only surface it has.
   const item: EndorsedItem = {
     channelID: target.channelID,
     publishedAt: target.publishedAt,
     contentHash,
+    comment: target.comment,
   }
 
   // Assert or withdraw this identity's repost of the post. Which side of zero the channel

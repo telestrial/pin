@@ -22,14 +22,16 @@ vi.mock('../lib/docs', async () =>
 
 import { deletePublishedItem } from '../core/channels'
 import { channelKeyFromBase64 } from '../core/crypto'
+import { portalKey } from '../core/feed'
 import { DIRECTORY_DOC_VERSION } from '../core/identityDoc'
-import type { ItemRef } from '../core/types'
+import type { ChannelManifest, ItemRef } from '../core/types'
 import {
   commitChannelManifest,
   resolveChannelViaLocator,
 } from '../lib/channelLocator'
 import { readTally, warmChannelTallies } from '../lib/channelTallies'
 import {
+  commentRepostTargetFor,
   type HeldChannels,
   isPermanent,
   makePortalResolver,
@@ -541,5 +543,81 @@ describe('integration: a portal brings the source’s counts with it', () => {
 
     expect(outcome.state).toBe('deleted')
     expect(reads).toHaveLength(0)
+  })
+})
+
+describe('integration: what may be circulated', () => {
+  const POST = {
+    channelID: 'host-chan',
+    publishedAt: '2026-08-24T08:00:00.000Z',
+  }
+  const SAID = { actor: COMMENTER, createdAt: SAID_AT }
+
+  // No default on `authorDidDht`: a default replaces an explicitly-passed `undefined`, so
+  // the "no author to resolve through" case would silently become the ordinary one.
+  function host(
+    visibility: 'public' | 'obscure' | undefined,
+    authorDidDht: string | undefined,
+  ) {
+    return {
+      [POST.channelID]: {
+        version: 1,
+        name: 'Their channel',
+        description: '',
+        authorPubkey: 'ed25519:aa',
+        authorDidDht,
+        publishedAt: POST.publishedAt,
+        visibility,
+        items: [],
+      } as unknown as ChannelManifest,
+    }
+  }
+
+  it('circulates a comment out of a public channel', async () => {
+    expect(
+      commentRepostTargetFor(SAID, POST, host('public', 'did:dht:host')),
+    ).toEqual({
+      didDht: 'did:dht:host',
+      channelID: POST.channelID,
+      publishedAt: POST.publishedAt,
+      comment: SAID,
+    })
+  })
+
+  it('refuses to circulate one out of a channel that is not public', async () => {
+    // Twitter's and Mastodon's behaviour, and here it is self-enforcing rather than policy:
+    // an unlisted channel is not in its author's directory, so a portal to one has nothing
+    // to resolve through. Hiding the gesture is honesty about a refusal the mechanism
+    // already makes.
+    expect(
+      commentRepostTargetFor(SAID, POST, host('obscure', 'did:dht:host')),
+    ).toBeNull()
+    // Absent visibility reads as not-public, the safe direction every reader here takes.
+    expect(
+      commentRepostTargetFor(SAID, POST, host(undefined, 'did:dht:host')),
+    ).toBeNull()
+  })
+
+  it('refuses when the host channel is unknown or has no author to resolve through', async () => {
+    expect(commentRepostTargetFor(SAID, POST, {})).toBeNull()
+    expect(
+      commentRepostTargetFor(SAID, POST, host('public', undefined)),
+    ).toBeNull()
+  })
+
+  it('keys a post and a comment on it apart', async () => {
+    // Same collision the manifest address had, one layer up: these key the resolved-portal
+    // cache and the menu's idea of which of your channels already carry it, so sharing a key
+    // would hold one where two belong.
+    const post = {
+      didDht: 'did:dht:host',
+      channelID: POST.channelID,
+      publishedAt: POST.publishedAt,
+    }
+    expect(portalKey(post)).not.toBe(portalKey({ ...post, comment: SAID }))
+    // And a post's key is exactly what it always was, so nothing already keyed moves.
+    expect(portalKey(post)).toBe(
+      `did:dht:host/${POST.channelID}/${POST.publishedAt}`,
+    )
   })
 })

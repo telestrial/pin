@@ -15,13 +15,16 @@ import type { EndorsedItem } from '../../lib/engagement'
 import { referenceAuthorFor } from '../../lib/engagement'
 import { formatBytes } from '../../lib/format'
 import { useConversation } from '../../lib/hooks/useConversation'
+import { useEngagement } from '../../lib/hooks/useEngagement'
 import { useIdentityName } from '../../lib/hooks/useIdentityName'
 import { useItemBlobURL } from '../../lib/hooks/useItemBytes'
+import { commentRepostTargetFor } from '../../lib/repost'
 import { formatRelative } from '../../lib/time'
 import { useAuthStore } from '../../stores/auth'
 import { useFeedStore } from '../../stores/feed'
 import { kindForMime, MediaPreview } from '../AttachmentMedia'
 import { PinButton } from '../pin/PinButton'
+import { RepostButton } from './RepostButton'
 
 // A post's conversation, and somewhere to add to it.
 //
@@ -125,6 +128,16 @@ function CommentRow({
 }) {
   const name = useIdentityName(comment.actor)
   const keepable = pinInputForComment(comment, post)
+  const manifests = useFeedStore((s) => s.manifests)
+  const circulable = commentRepostTargetFor(comment, post, manifests)
+  // The comment's own count, from the host's published tally — the same number every other
+  // gesture on it reads, and not how many of your own channels carry it.
+  const { reposts } = useEngagement({
+    channelID: post.channelID,
+    publishedAt: post.publishedAt,
+    contentHash: comment.sig,
+    comment: { actor: comment.actor, createdAt: comment.createdAt },
+  })
   return (
     <li className="space-y-1">
       <p className="text-xs text-neutral-500">
@@ -147,7 +160,18 @@ function CommentRow({
         <p className="text-sm text-neutral-900 whitespace-pre-wrap break-words">
           {comment.body}
         </p>
-        {keepable && <PinButton input={keepable} />}
+        <div className="flex items-center gap-1 shrink-0">
+          <RepostButton
+            target={circulable}
+            sourceName={manifests[post.channelID]?.name}
+            // The signature covers the words, so it moves when they do and is stable
+            // otherwise — which is what a version records. A comment carries no separate
+            // content hash to use instead.
+            contentHash={comment.sig}
+            count={reposts}
+          />
+          {keepable && <PinButton input={keepable} />}
+        </div>
       </div>
       {comment.attachments && comment.attachments.length > 0 && (
         <ul className="flex flex-wrap gap-2">

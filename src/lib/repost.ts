@@ -373,3 +373,30 @@ export function repostTargetFor(
     publishedAt: entry.item.publishedAt,
   }
 }
+
+/** The portal circulating one COMMENT, or null when that comment cannot be circulated.
+ *
+ *  Same rule as a post's, applied to the host: never out of a channel that isn't public.
+ *  It is self-enforcing rather than merely policy — an unlisted channel is not in its
+ *  author's directory, so a portal to one has nothing to resolve through — and hiding the
+ *  gesture is honesty about a refusal the mechanism already makes.
+ *
+ *  It is the HOST's channel that has to be public, not the commenter's anything. The comment
+ *  is published on the host's post and read through it, so what a portal needs is a door
+ *  into the host's channel; the commenter has no channel in this at all. */
+export function commentRepostTargetFor(
+  comment: Pick<PublishedComment, 'actor' | 'createdAt'>,
+  post: { channelID: string; publishedAt: string },
+  manifests: Readonly<Record<string, ChannelManifest | undefined>>,
+): PortalTarget | null {
+  const host = manifests[post.channelID]
+  if (!host?.authorDidDht) return null
+  if (host.visibility !== 'public') return null
+
+  return {
+    didDht: host.authorDidDht,
+    channelID: post.channelID,
+    publishedAt: post.publishedAt,
+    comment: { actor: comment.actor, createdAt: comment.createdAt },
+  }
+}

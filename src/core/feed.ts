@@ -61,8 +61,17 @@ export function portalKey(target: {
   didDht: string
   channelID: string
   publishedAt: string
+  comment?: { actor: string; createdAt: string }
 }): string {
-  return `${target.didDht}/${target.channelID}/${target.publishedAt}`
+  const post = `${target.didDht}/${target.channelID}/${target.publishedAt}`
+  // A post's key is exactly what it always was — the comment part is appended only when
+  // there is one — so nothing already keyed by this moves. Without the suffix a post and a
+  // comment made under it would share a key, and every map keyed by this would hold one
+  // where two belong: the resolved-portal cache, and the menu's idea of which of your
+  // channels already carry it.
+  return target.comment
+    ? `${post}/${target.comment.actor}/${target.comment.createdAt}`
+    : post
 }
 
 /** A resolved portal, as the collation needs it: the post, and whose it is.
