@@ -1427,20 +1427,22 @@ pub fn manifest_add_repost(
     ))
 }
 
-/// Stop circulating a post here. Nothing to reclaim: a portal never held bytes.
+/// Stop circulating something here. Nothing to reclaim: a portal never held bytes.
+///
+/// Takes the whole address as JSON rather than its parts as arguments, because the address
+/// now has an optional part — which comment, if it is a comment — and a signature that grows
+/// an argument per tier is one every call site has to be revisited for.
 #[wasm_bindgen]
 pub fn manifest_remove_repost(
     manifest_json: &str,
-    did_dht: &str,
-    channel_id: &str,
-    published_at: &str,
+    address_json: &str,
     now: &str,
 ) -> Result<String, JsValue> {
+    let address: pin_manifest::PortalAddress = serde_json::from_str(address_json)
+        .map_err(|e| JsValue::from_str(&format!("portal address is not readable: {e}")))?;
     out(&pin_manifest::remove_repost(
         &manifest_in(manifest_json)?,
-        did_dht,
-        channel_id,
-        published_at,
+        &address,
         now,
     ))
 }

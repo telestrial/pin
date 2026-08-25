@@ -53,7 +53,7 @@ export const manifest_edit_channel: (a: number, b: number, c: number, d: number,
 export const manifest_edit_item: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number, number, number];
 export const manifest_enumerate_retract: (a: number, b: number, c: number, d: number) => [number, number, number, number];
 export const manifest_remove_attachment: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number, number, number];
-export const manifest_remove_repost: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number, number, number];
+export const manifest_remove_repost: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
 export const max_comment_attachments: () => number;
 export const max_comment_bytes: () => number;
 export const open: (a: number, b: number) => any;

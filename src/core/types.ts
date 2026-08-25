@@ -119,6 +119,30 @@ export type RepostRef = {
   // The source channel's name as it read when this was made. A display cache so a
   // row renders before the portal resolves; never preferred over a live resolve.
   cachedName?: string
+  // Which COMMENT on that post this circulates, when it circulates a comment
+  // rather than the post. A struct rather than two optional fields, so "names a
+  // comment" is one fact the type holds instead of two that could disagree.
+  comment?: CommentPortal
+}
+
+// Which comment a portal circulates, by the pair that IS its identity — who wrote
+// it and when. Never a coordinate the host assigns, which is what makes
+// re-including a removed comment restore it at the same address, and a portal to
+// one retryable where a portal to a retracted post is permanent.
+export type CommentPortal = {
+  actor: string
+  createdAt: string
+}
+
+// What a portal points at, with nothing about this copy of it. What makes two
+// portals the same, and what removing one names — one type so the two cannot
+// disagree, which is where a comment portal would first have bitten: removing a
+// comment's would otherwise have taken its post's with it.
+export type PortalAddress = {
+  didDht: string
+  channelID: string
+  publishedAt: string
+  comment?: CommentPortal
 }
 
 export type ChannelImage = {

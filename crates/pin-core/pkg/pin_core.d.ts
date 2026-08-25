@@ -368,9 +368,13 @@ export function manifest_enumerate_retract(manifest_json: string, protected_obje
 export function manifest_remove_attachment(manifest_json: string, item_id: string, attachment_url: string, protected_object_ids: string[], now: string): string;
 
 /**
- * Stop circulating a post here. Nothing to reclaim: a portal never held bytes.
+ * Stop circulating something here. Nothing to reclaim: a portal never held bytes.
+ *
+ * Takes the whole address as JSON rather than its parts as arguments, because the address
+ * now has an optional part — which comment, if it is a comment — and a signature that grows
+ * an argument per tier is one every call site has to be revisited for.
  */
-export function manifest_remove_repost(manifest_json: string, did_dht: string, channel_id: string, published_at: string, now: string): string;
+export function manifest_remove_repost(manifest_json: string, address_json: string, now: string): string;
 
 /**
  * How many files a comment may carry. Exposed for the same reason: a composer that let
@@ -898,7 +902,7 @@ export interface InitOutput {
     readonly manifest_edit_item: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number, number, number];
     readonly manifest_enumerate_retract: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly manifest_remove_attachment: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number, number, number];
-    readonly manifest_remove_repost: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number, number, number];
+    readonly manifest_remove_repost: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
     readonly max_comment_attachments: () => number;
     readonly max_comment_bytes: () => number;
     readonly open: (a: number, b: number) => any;

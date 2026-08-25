@@ -182,6 +182,62 @@ pub struct RepostRef {
     /// renders before the portal resolves, never preferred over what a resolve returns.
     #[serde(rename = "cachedName", skip_serializing_if = "Option::is_none")]
     pub cached_name: Option<String>,
+    /// Which COMMENT on that post this circulates, when it circulates a comment rather than
+    /// the post itself.
+    ///
+    /// A struct rather than two loose optional fields, so "names a comment" stays one fact
+    /// the type can hold rather than two that could disagree — the same reason a repost is
+    /// its own array instead of a `type` on `ItemRef`.
+    ///
+    /// Absent on every portal already published, and omitted when absent, so nothing in
+    /// anyone's manifest serializes differently than it did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comment: Option<CommentPortal>,
+}
+
+/// Which comment a portal circulates, by the pair that IS its identity.
+///
+/// Not by any coordinate the host assigns. A comment's subject is derived from who wrote it
+/// and when, precisely so nobody can reassign it — re-including a removed comment therefore
+/// restores it at the same address, which is what makes a portal to one retryable where a
+/// portal to a retracted POST is permanent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CommentPortal {
+    /// The commenter's did:dht.
+    pub actor: String,
+    /// When they say they wrote it — signed, and half of the comment's identity.
+    #[serde(rename = "createdAt")]
+    pub created_at: String,
+}
+
+/// Everything that says WHICH thing a portal points at, with nothing about this copy of it.
+///
+/// Its own type because two places have to agree on it exactly: what makes two portals the
+/// same, and what removing one names. They disagreed for a while by construction — removal
+/// took the post triple as loose arguments — and a comment portal is where that would first
+/// have bitten, since removing a comment's portal would have taken the post's with it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PortalAddress {
+    #[serde(rename = "didDht")]
+    pub did_dht: String,
+    #[serde(rename = "channelID")]
+    pub channel_id: String,
+    #[serde(rename = "publishedAt")]
+    pub published_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comment: Option<CommentPortal>,
+}
+
+impl RepostRef {
+    /// What this portal points at, dropping what is about this copy of it.
+    pub fn address(&self) -> PortalAddress {
+        PortalAddress {
+            did_dht: self.did_dht.clone(),
+            channel_id: self.channel_id.clone(),
+            published_at: self.published_at.clone(),
+            comment: self.comment.clone(),
+        }
+    }
 }
 
 /// A channel's avatar or cover banner. `mime_type` is stored because Sia's
@@ -458,20 +514,20 @@ pub fn add_repost(current: &ChannelManifest, repost: RepostRef, now: &str) -> Ch
     manifest
 }
 
-/// Stop circulating a post here. Nothing to reclaim: a portal never held bytes.
+/// Stop circulating something here. Nothing to reclaim: a portal never held bytes.
+///
+/// Takes the whole address, comment included, so removing a comment's portal leaves the
+/// post's alone and the other way round. The two can legitimately sit side by side — you can
+/// circulate a post and something somebody said under it.
 pub fn remove_repost(
     current: &ChannelManifest,
-    did_dht: &str,
-    channel_id: &str,
-    published_at: &str,
+    address: &PortalAddress,
     now: &str,
 ) -> ChannelManifest {
     let mut manifest = current.clone();
     manifest.published_at = now.to_string();
     if let Some(reposts) = manifest.reposts.as_mut() {
-        reposts.retain(|r| {
-            !(r.did_dht == did_dht && r.channel_id == channel_id && r.published_at == published_at)
-        });
+        reposts.retain(|r| &r.address() != address);
         // Absent rather than empty, so a channel that never reposted and one that stopped
         // serialize the same. A manifest is compared for change by stringify-equality.
         if reposts.is_empty() {
@@ -481,10 +537,10 @@ pub fn remove_repost(
     manifest
 }
 
-/// Whether two portals name the same post. The address is the triple; `reposted_at` and
-/// the cached name are about this copy of it.
+/// Whether two portals name the same thing. The address is what identifies it; `reposted_at`
+/// and the cached name are about this copy of it.
 fn same_repost(a: &RepostRef, b: &RepostRef) -> bool {
-    a.did_dht == b.did_dht && a.channel_id == b.channel_id && a.published_at == b.published_at
+    a.address() == b.address()
 }
 
 /// Retract one published item. Its body and any attachments nothing else references
@@ -763,6 +819,27 @@ mod tests {
             published_at: published_at.to_string(),
             reposted_at: reposted_at.to_string(),
             cached_name: Some("Their channel".to_string()),
+            comment: None,
+        }
+    }
+
+    /// The same portal, pointed at one comment on that post rather than the post.
+    fn repost_of_comment(published_at: &str, actor: &str, created_at: &str) -> RepostRef {
+        RepostRef {
+            comment: Some(CommentPortal {
+                actor: actor.to_string(),
+                created_at: created_at.to_string(),
+            }),
+            ..repost_at(published_at, published_at)
+        }
+    }
+
+    fn address_of(published_at: &str) -> PortalAddress {
+        PortalAddress {
+            did_dht: "did:dht:source".to_string(),
+            channel_id: "srcchan".to_string(),
+            published_at: published_at.to_string(),
+            comment: None,
         }
     }
 
@@ -1381,7 +1458,7 @@ mod tests {
     fn removing_a_portal_leaves_the_others() {
         let a = add_repost(&manifest(vec![]), repost_at(EARLIER, EARLIER), EARLIER);
         let b = add_repost(&a, repost_at(NOW, NOW), NOW);
-        let after = remove_repost(&b, "did:dht:source", "srcchan", EARLIER, NOW);
+        let after = remove_repost(&b, &address_of(EARLIER), NOW);
 
         let reposts = after.reposts.as_ref().unwrap();
         assert_eq!(reposts.len(), 1);
@@ -1391,7 +1468,7 @@ mod tests {
     #[test]
     fn removing_the_last_portal_leaves_the_field_absent() {
         let before = add_repost(&manifest(vec![]), repost_at(EARLIER, EARLIER), EARLIER);
-        let after = remove_repost(&before, "did:dht:source", "srcchan", EARLIER, NOW);
+        let after = remove_repost(&before, &address_of(EARLIER), NOW);
         assert!(after.reposts.is_none());
         assert!(!serde_json::to_string(&after).unwrap().contains("reposts"));
     }
@@ -1399,9 +1476,108 @@ mod tests {
     #[test]
     fn removing_a_portal_that_is_not_there_changes_nothing_but_the_stamp() {
         let before = add_repost(&manifest(vec![]), repost_at(EARLIER, EARLIER), EARLIER);
-        let after = remove_repost(&before, "did:dht:someone-else", "srcchan", EARLIER, NOW);
+        let after = remove_repost(
+            &before,
+            &PortalAddress {
+                did_dht: "did:dht:someone-else".into(),
+                ..address_of(EARLIER)
+            },
+            NOW,
+        );
         assert_eq!(after.reposts, before.reposts);
         assert_eq!(after.published_at, NOW);
+    }
+
+    #[test]
+    fn a_post_and_a_comment_on_it_are_two_portals() {
+        // The whole reason the address grew a field. Under the old triple these were the
+        // same portal, so circulating something said under a post you had already reposted
+        // would have been silently dropped as a duplicate.
+        let with_post = add_repost(&manifest(vec![]), repost_at(NOW, NOW), NOW);
+        let with_both = add_repost(
+            &with_post,
+            repost_of_comment(NOW, "did:dht:bob", "2026-08-24T09:00:00.000Z"),
+            NOW,
+        );
+        assert_eq!(with_both.reposts.as_ref().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn two_comments_on_one_post_are_two_portals() {
+        let one = add_repost(
+            &manifest(vec![]),
+            repost_of_comment(NOW, "did:dht:bob", "2026-08-24T09:00:00.000Z"),
+            NOW,
+        );
+        let two = add_repost(
+            &one,
+            repost_of_comment(NOW, "did:dht:bob", "2026-08-24T10:00:00.000Z"),
+            NOW,
+        );
+        assert_eq!(two.reposts.as_ref().unwrap().len(), 2);
+
+        // And re-circulating one already carried still changes nothing, comment or not.
+        let again = add_repost(
+            &two,
+            repost_of_comment(NOW, "did:dht:bob", "2026-08-24T09:00:00.000Z"),
+            NOW,
+        );
+        assert_eq!(again.reposts.as_ref().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn removing_a_comments_portal_leaves_its_posts_alone() {
+        // The failure the shared address type exists to prevent, in the direction that
+        // loses something: stopping circulating a remark must not stop circulating the post
+        // it was made under.
+        let with_post = add_repost(&manifest(vec![]), repost_at(NOW, NOW), NOW);
+        let both = add_repost(
+            &with_post,
+            repost_of_comment(NOW, "did:dht:bob", "2026-08-24T09:00:00.000Z"),
+            NOW,
+        );
+
+        let after = remove_repost(
+            &both,
+            &PortalAddress {
+                comment: Some(CommentPortal {
+                    actor: "did:dht:bob".into(),
+                    created_at: "2026-08-24T09:00:00.000Z".into(),
+                }),
+                ..address_of(NOW)
+            },
+            NOW,
+        );
+        let left = after.reposts.as_ref().unwrap();
+        assert_eq!(left.len(), 1);
+        assert!(left[0].comment.is_none());
+
+        // And the other way: removing the post's portal leaves the comment's.
+        let after = remove_repost(&both, &address_of(NOW), NOW);
+        let left = after.reposts.as_ref().unwrap();
+        assert_eq!(left.len(), 1);
+        assert!(left[0].comment.is_some());
+    }
+
+    #[test]
+    fn a_portal_naming_no_comment_serializes_as_it_always_did() {
+        // Every portal already published carries no comment, and the field is omitted when
+        // absent — so nothing in anybody's manifest reads differently than it did. A
+        // manifest is compared for change by stringify-equality, so a field appearing as
+        // null would read as an edit forever.
+        let wire = serde_json::to_string(&repost_at(NOW, NOW)).unwrap();
+        assert!(!wire.contains("comment"), "{wire}");
+
+        let with = serde_json::to_string(&repost_of_comment(
+            NOW,
+            "did:dht:bob",
+            "2026-08-24T09:00:00.000Z",
+        ))
+        .unwrap();
+        assert!(
+            with.contains(r#""comment":{"actor":"did:dht:bob","createdAt":"#),
+            "{with}"
+        );
     }
 
     #[test]

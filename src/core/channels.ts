@@ -25,6 +25,7 @@ import type {
   Facet,
   ItemRef,
   ItemType,
+  PortalAddress,
   RepostRef,
 } from './types'
 import { ensureWasm } from './wasm'
@@ -361,15 +362,13 @@ export async function repostToChannel(
 // is why this returns a manifest rather than the orphan list every other removal does.
 export async function removeRepostFromChannel(
   current: ChannelManifest,
-  target: { didDht: string; channelID: string; publishedAt: string },
+  target: PortalAddress,
 ): Promise<ChannelManifest> {
   await ensureWasm()
   return JSON.parse(
     manifest_remove_repost(
       JSON.stringify(current),
-      target.didDht,
-      target.channelID,
-      target.publishedAt,
+      JSON.stringify(target),
       stamp(),
     ),
   )
