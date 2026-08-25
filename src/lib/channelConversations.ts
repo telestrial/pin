@@ -22,6 +22,7 @@ import {
   fetchConversations,
   resolveConversationsUrl,
 } from './channelLocatorNative'
+import type { CommentAttachment } from './comments'
 import { getRecord, openDocs, putRecord } from './docs'
 import type { EndorsedItem } from './engagement'
 
@@ -42,6 +43,10 @@ export type PublishedComment = {
   // never the read path: the body above is what renders. Absent on a comment whose author
   // has not run a Curator, which is why keeping one is offered conditionally.
   bodyURL?: string
+  // Files the commenter carries, in their own scope rather than the host's. So these can go
+  // stale where the words cannot — a repack on the commenter's side rewrites every URL here
+  // until the host crawls them again, and a comment degrades as words intact, media broken.
+  attachments?: CommentAttachment[]
 }
 
 /** One subject's published conversation, newest first. */

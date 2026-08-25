@@ -54,8 +54,19 @@ function manifestSays(comments: boolean | undefined) {
   })
 }
 
+/** A file on a published comment, as the commenter's record carries it. */
+type PublishedFile = {
+  url: string
+  mimeType: string
+  filename: string
+  byteSize: number
+  contentHash: string
+}
+
 /** Put a conversation in the cache the way the Curator's loops would. */
-function published(bodies: { actor: string; body: string }[]) {
+function published(
+  bodies: { actor: string; body: string; attachments?: PublishedFile[] }[],
+) {
   const subject = engagement_subject(CHANNEL_ID, PUBLISHED_AT, undefined)
   docStore.set(
     `thread/${thread_rkey(CHANNEL_ID, subject)}`,
@@ -69,6 +80,7 @@ function published(bodies: { actor: string; body: string }[]) {
           createdAt: `2026-08-22T1${i}:00:00.000Z`,
           sig: `sig-${i}`,
           body: b.body,
+          attachments: b.attachments,
         })),
         updatedAt: PUBLISHED_AT,
       }),
@@ -140,6 +152,130 @@ describe('integration: a post’s conversation', () => {
     expect(record.body).toBe('worth saying')
     // Throws on anything that doesn't hold up, so surviving the call IS the assertion.
     expect(() => endorsement_verify(JSON.stringify(record))).not.toThrow()
+  })
+
+  it('carries a picked file into the record and onto Sia', async () => {
+    // The whole path in one: bytes go up first, then the record names them — so what lands
+    // in the doc points at something that is actually there.
+    manifestSays(true)
+    render(<CommentThread item={ITEM} />)
+
+    const box = await screen.findByPlaceholderText('Say something')
+    await userEvent.type(box, 'look at this')
+    const picker = document.querySelector(
+      'input[type="file"]',
+    ) as HTMLInputElement
+    await userEvent.upload(
+      picker,
+      new File(['png bytes'], 'shot.png', { type: 'image/png' }),
+    )
+    expect(await screen.findByText('shot.png')).toBeTruthy()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Comment' }))
+
+    await waitFor(async () => {
+      expect(await listRecords(comment_collection())).toHaveLength(1)
+    })
+    const rkeys = await listRecords(comment_collection())
+    const raw = docStore.get(`${comment_collection()}/${rkeys[0]}`)
+    const record = JSON.parse(new TextDecoder().decode(raw as Uint8Array))
+    expect(record.attachments).toHaveLength(1)
+    expect(record.attachments[0].mimeType).toBe('image/png')
+    expect(record.attachments[0].filename).toBe('shot.png')
+    expect(record.attachments[0].url).not.toBe('')
+    // Still a record the author would take, files and all.
+    expect(() => endorsement_verify(JSON.stringify(record))).not.toThrow()
+    // And the picker is empty again, so the next comment does not re-send it.
+    expect(screen.queryByText('shot.png')).toBeNull()
+  })
+
+  it('lets a picked file be taken back before anything is uploaded', async () => {
+    manifestSays(true)
+    render(<CommentThread item={ITEM} />)
+
+    const picker = document.querySelector(
+      'input[type="file"]',
+    ) as HTMLInputElement
+    await userEvent.upload(
+      picker,
+      new File(['x'], 'mistake.png', { type: 'image/png' }),
+    )
+    expect(await screen.findByText('mistake.png')).toBeTruthy()
+
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Remove mistake.png' }),
+    )
+    await waitFor(() => {
+      expect(screen.queryByText('mistake.png')).toBeNull()
+    })
+
+    // Nothing was written and nothing was uploaded — a comment that is never submitted must
+    // leave nothing behind.
+    await userEvent.type(
+      await screen.findByPlaceholderText('Say something'),
+      'just words',
+    )
+    await userEvent.click(screen.getByRole('button', { name: 'Comment' }))
+    await waitFor(async () => {
+      expect(await listRecords(comment_collection())).toHaveLength(1)
+    })
+    const rkeys = await listRecords(comment_collection())
+    const raw = docStore.get(`${comment_collection()}/${rkeys[0]}`)
+    const record = JSON.parse(new TextDecoder().decode(raw as Uint8Array))
+    expect(record.attachments).toBeUndefined()
+  })
+
+  it('takes only as many files as a record can hold, and says so', async () => {
+    // Said rather than silently dropped: a picker that quietly took four of five would
+    // publish a comment missing a file the person believed they had attached.
+    manifestSays(true)
+    const { max_comment_attachments } = await import(
+      '../../crates/pin-core/pkg/pin_core.js'
+    )
+    const cap = max_comment_attachments()
+    render(<CommentThread item={ITEM} />)
+
+    const picker = document.querySelector(
+      'input[type="file"]',
+    ) as HTMLInputElement
+    await userEvent.upload(
+      picker,
+      Array.from(
+        { length: cap + 1 },
+        (_, i) => new File(['x'], `f${i}.png`, { type: 'image/png' }),
+      ),
+    )
+
+    expect(
+      await screen.findByText(`A comment can carry at most ${cap} files`),
+    ).toBeTruthy()
+    expect(screen.queryByText(`f${cap}.png`)).toBeNull()
+    expect(screen.getByText(`f${cap - 1}.png`)).toBeTruthy()
+  })
+
+  it('shows the files a published comment carries', async () => {
+    manifestSays(true)
+    published([
+      {
+        actor: 'did:dht:bob',
+        body: 'with a picture',
+        attachments: [
+          {
+            url: 'sia://missing#encryption_key=k',
+            mimeType: 'image/png',
+            filename: 'theirs.png',
+            byteSize: 12,
+            contentHash: 'bafkreitheirs',
+          },
+        ],
+      },
+    ])
+    render(<CommentThread item={ITEM} />)
+
+    expect(await screen.findByText('with a picture')).toBeTruthy()
+    // These bytes are the COMMENTER's, so a URL nobody here can resolve is ordinary rather
+    // than an error state — and it says so rather than leaving a blank tile.
+    expect(await screen.findByText('theirs.png — unavailable')).toBeTruthy()
   })
 
   it('does not write an empty comment', async () => {
