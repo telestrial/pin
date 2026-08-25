@@ -12,12 +12,14 @@
 
 import {
   comment_collection,
+  comment_files_collection,
   comment_rkey,
   comment_seal_collection,
   max_comment_attachments,
   max_comment_bytes,
   sign_comment,
 } from '../../crates/pin-core/pkg/pin_core.js'
+import type { SiaClient } from '../core/siaClient'
 import { ensureWasm } from '../core/wasm'
 import type { PinInput } from '../stores/pin'
 import type { PublishedComment } from './channelConversations'
@@ -85,6 +87,68 @@ async function sealCollection(): Promise<string> {
   return comment_seal_collection()
 }
 
+async function filesCollection(): Promise<string> {
+  await ensureWasm()
+  return comment_files_collection()
+}
+
+/** A file picked for a comment, before it has anywhere to live. */
+export type CommentFileSource = {
+  bytes: Uint8Array
+  mimeType: string
+  filename?: string
+}
+
+/** One uploaded file: what the record carries, and what reclaims it.
+ *
+ *  The object id is deliberately NOT in the record. A reader has no use for it — it names
+ *  the object inside the commenter's own Sia scope, and what a reader needs is the share URL
+ *  — while the commenter needs it to give the bytes back later. So it travels beside the
+ *  attachment rather than inside it. */
+export type UploadedCommentFile = {
+  attachment: CommentAttachment
+  objectID: string
+}
+
+/** Put a comment's files on Sia, ready for a record to name them.
+ *
+ *  Bytes first and the record afterwards, which is the ordering every create in this
+ *  codebase takes: a record must never name bytes that failed to land, and an outage should
+ *  surface before anything commits.
+ *
+ *  Bin-packed through one upload rather than one apiece, the same as a post's attachments —
+ *  Sia allocates in ~40 MiB slabs, so three small files uploaded separately would pay for
+ *  three of them.
+ *
+ *  Refuses more files than a host would take, here rather than at the signature: finding out
+ *  afterwards would mean having uploaded them first. */
+export async function uploadCommentFiles(
+  client: SiaClient,
+  sources: CommentFileSource[],
+  onProgress?: () => void,
+): Promise<UploadedCommentFile[]> {
+  if (sources.length === 0) return []
+  const max = await maxCommentAttachments()
+  if (sources.length > max) {
+    throw new Error(`A comment can carry at most ${max} files`)
+  }
+
+  const uploaded = await client.uploadItemsPacked(
+    sources.map((s) => s.bytes),
+    onProgress,
+  )
+  return sources.map((source, i) => ({
+    attachment: {
+      url: uploaded[i].itemURL,
+      mimeType: source.mimeType,
+      filename: source.filename,
+      byteSize: source.bytes.length,
+      contentHash: uploaded[i].contentHash,
+    },
+    objectID: uploaded[i].id,
+  }))
+}
+
 /** Which channel's key must seal a comment on this channel, or null to publish it as it
  *  stands.
  *
@@ -121,12 +185,13 @@ export async function writeComment(
   item: EndorsedItem,
   referenceAuthor: ReferenceAuthor,
   body: string,
-  carried: CommentAttachment[] = [],
+  carried: UploadedCommentFile[] = [],
   now = new Date().toISOString(),
 ): Promise<string> {
   await ensureWasm()
   await openDocs(appKeyHex)
 
+  const attachments = carried.map((c) => c.attachment)
   const { record, commentID } = JSON.parse(
     sign_comment(
       appKeyHex,
@@ -136,7 +201,7 @@ export async function writeComment(
       referenceAuthor ?? undefined,
       item.attachment,
       body,
-      carried.length > 0 ? JSON.stringify(carried) : undefined,
+      attachments.length > 0 ? JSON.stringify(attachments) : undefined,
       now,
     ),
   ) as { record: unknown; commentID: string }
@@ -153,6 +218,20 @@ export async function writeComment(
       await sealCollection(),
       rkey,
       new TextEncoder().encode(JSON.stringify({ channelID: sealChannel })),
+    )
+  }
+  // What to give back, also before the record, and for a second reason beyond ordering: a
+  // record that then fails to write leaves bytes on Sia named by a mark whose comment does
+  // not exist, which is exactly what the Curator's reclaim sweep collects. Written after
+  // the upload because that is when the object ids exist, so a crash in between is the one
+  // window that orphans anything — the same window a post's upload has.
+  if (carried.length > 0) {
+    await putRecord(
+      await filesCollection(),
+      rkey,
+      new TextEncoder().encode(
+        JSON.stringify({ ids: carried.map((c) => c.objectID) }),
+      ),
     )
   }
   await putRecord(
@@ -185,8 +264,12 @@ export async function withdrawComment(
     item.attachment,
   )
   const rkey = comment_rkey(subject, commentID)
-  // The record first, that being the withdrawal itself, and the mark after. A mark left
-  // behind classifies nothing and is picked up by no pass.
+  // The record first, that being the withdrawal itself, and the seal mark after. A seal mark
+  // left behind classifies nothing and is picked up by no pass.
+  //
+  // The FILES mark is deliberately left alone: it has to outlive the record, because once
+  // the record is gone it is the only thing that still knows which objects to give back.
+  // The Curator's sweep deletes it after the bytes.
   await deleteRecord(await collection(), rkey)
   await deleteRecord(await sealCollection(), rkey)
 }

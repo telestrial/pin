@@ -102,6 +102,15 @@ export function channel_resolve_tallies_url(channel_key: Uint8Array): Promise<st
 export function comment_collection(): string;
 
 /**
+ * The collection naming the Sia objects a comment's files were uploaded as.
+ *
+ * Written here, swept by the Curator: the composer is where the bytes go up and so is the
+ * only place that learns the object ids, and reclaiming them is credential-bound work that
+ * belongs with the rest of the Curator's housekeeping.
+ */
+export function comment_files_collection(): string;
+
+/**
  * Where one of this identity's own comments lives, by the subject it is about and its own
  * id.
  */
@@ -848,6 +857,7 @@ export interface InitOutput {
     readonly channel_resolve_conversations_url: (a: number, b: number) => any;
     readonly channel_resolve_tallies_url: (a: number, b: number) => any;
     readonly comment_collection: () => [number, number];
+    readonly comment_files_collection: () => [number, number];
     readonly comment_rkey: (a: number, b: number, c: number, d: number) => [number, number];
     readonly comment_seal_collection: () => [number, number];
     readonly comment_subject: (a: number, b: number, c: number, d: number) => [number, number];

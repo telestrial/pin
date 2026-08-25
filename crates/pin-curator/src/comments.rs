@@ -395,6 +395,16 @@ struct BodyObject {
     id: String,
 }
 
+/// The objects one comment's files were uploaded as, written by the composer before the
+/// record and swept from here once the record is gone.
+///
+/// A list rather than one id, and the list is what a partial failure shrinks: an object that
+/// will not delete stays named, so the next pass tries it again rather than forgetting it.
+#[derive(serde::Serialize, serde::Deserialize, PartialEq, Eq, Debug, Default)]
+struct CommentFiles {
+    ids: Vec<String>,
+}
+
 /// Whether a comment still needs an object minting for its body.
 ///
 /// Only a comment with words and no object yet. A record that already carries one is left
@@ -494,17 +504,12 @@ async fn reclaim_withdrawn(
     sia: &pin_sia::Session,
     live: &[String],
 ) -> usize {
-    let marks = crate::list_rkeys(doc, author_id, pin_derive::COMMENT_OBJECT_COLLECTION)
-        .await
-        .unwrap_or_default();
     let live: BTreeSet<&str> = live.iter().map(String::as_str).collect();
     let mut reclaimed = 0;
 
-    for rkey in marks {
-        if live.contains(rkey.as_str()) {
-            continue;
-        }
-        let Ok(Some(raw)) = read_record(
+    // The body object, one per comment, minted by this loop.
+    for rkey in dead_marks(doc, author_id, pin_derive::COMMENT_OBJECT_COLLECTION, &live).await {
+        let Some(mark) = read_mark_as::<BodyObject>(
             doc,
             blobs,
             author_id,
@@ -513,9 +518,6 @@ async fn reclaim_withdrawn(
         )
         .await
         else {
-            continue;
-        };
-        let Ok(mark) = serde_json::from_slice::<BodyObject>(&raw) else {
             continue;
         };
         // The mark goes only once the object has, or a failed delete would be forgotten and
@@ -527,7 +529,91 @@ async fn reclaim_withdrawn(
             reclaimed += 1;
         }
     }
+
+    // The files the comment carried, uploaded by the composer. Reclaimed here rather than
+    // where the comment is withdrawn, so the one pass that holds the credentials does all of
+    // this identity's byte deletes — and so a comment withdrawn on a device that cannot
+    // reach Sia still gives its bytes back.
+    for rkey in dead_marks(doc, author_id, pin_derive::COMMENT_FILES_COLLECTION, &live).await {
+        let Some(mark) = read_mark_as::<CommentFiles>(
+            doc,
+            blobs,
+            author_id,
+            pin_derive::COMMENT_FILES_COLLECTION,
+            &rkey,
+        )
+        .await
+        else {
+            continue;
+        };
+        let mut left = Vec::new();
+        for id in &mark.ids {
+            if sia.delete_object(id).await.is_ok() {
+                reclaimed += 1;
+            } else {
+                left.push(id.clone());
+            }
+        }
+        // What could not be deleted stays NAMED. Dropping the whole mark on a partial
+        // failure would leave objects nothing knows about, which is the one outcome this
+        // record exists to prevent.
+        if left.is_empty() {
+            let _ =
+                crate::delete_record(doc, author_id, pin_derive::COMMENT_FILES_COLLECTION, &rkey)
+                    .await;
+        } else if let Ok(bytes) = serde_json::to_vec(&CommentFiles { ids: left }) {
+            let _ = crate::write_record(
+                doc,
+                author_id,
+                pin_derive::COMMENT_FILES_COLLECTION,
+                &rkey,
+                bytes,
+            )
+            .await;
+        }
+    }
     reclaimed
+}
+
+/// The rkeys in one collection whose comment is no longer held.
+async fn dead_marks(
+    doc: &Doc,
+    author_id: AuthorId,
+    collection: &str,
+    live: &BTreeSet<&str>,
+) -> Vec<String> {
+    let marks = crate::list_rkeys(doc, author_id, collection)
+        .await
+        .unwrap_or_default();
+    unclaimed(marks, live)
+}
+
+/// Which marks name a comment nothing holds any more.
+///
+/// Positive identification, never deny-by-absence: a mark is acted on because the comment it
+/// names was LOOKED FOR in this identity's own doc and found missing — a local read, which
+/// cannot fail into looking empty the way a network one can. The listing is the caller's
+/// because it needs a doc; deciding what it MEANS does not, which is what makes the rule
+/// testable rather than merely stated.
+fn unclaimed(marks: Vec<String>, live: &BTreeSet<&str>) -> Vec<String> {
+    marks
+        .into_iter()
+        .filter(|rkey| !live.contains(rkey.as_str()))
+        .collect()
+}
+
+/// One mark, decoded, or `None` if it is missing or unreadable.
+async fn read_mark_as<T: serde::de::DeserializeOwned>(
+    doc: &Doc,
+    blobs: &Store,
+    author_id: AuthorId,
+    collection: &str,
+    rkey: &str,
+) -> Option<T> {
+    let raw = read_record(doc, blobs, author_id, collection, rkey)
+        .await
+        .ok()??;
+    serde_json::from_slice(&raw).ok()
 }
 
 /// This identity's own comments, read straight out of the doc.
@@ -935,6 +1021,43 @@ mod tests {
         let c = comment(WHEN, "said openly");
         let entry = serde_json::to_value(&c).unwrap();
         assert_eq!(open_entry(&entry, &[]), Some(c));
+    }
+
+    #[test]
+    fn a_mark_is_swept_only_once_its_comment_is_gone() {
+        // What decides whether bytes get deleted, so the direction matters more here than
+        // almost anywhere: acting on a mark whose comment is still held would delete the
+        // files of a live comment.
+        let live: BTreeSet<&str> = ["sub:one", "sub:two"].into_iter().collect();
+        let marks = vec!["sub:one".to_string(), "sub:gone".to_string()];
+        assert_eq!(unclaimed(marks, &live), vec!["sub:gone".to_string()]);
+    }
+
+    #[test]
+    fn no_comments_at_all_sweeps_every_mark() {
+        // The ordinary end state rather than an edge: withdraw your only comment and its
+        // mark is the one thing left naming the objects to give back.
+        let live: BTreeSet<&str> = BTreeSet::new();
+        assert_eq!(
+            unclaimed(vec!["sub:gone".to_string()], &live),
+            vec!["sub:gone".to_string()]
+        );
+    }
+
+    #[test]
+    fn a_files_mark_carries_a_list_and_survives_a_partial_reclaim() {
+        // The wire shape the composer writes and this reads, and the thing a partial failure
+        // depends on: an object that would not delete stays named, so the next pass tries it
+        // again rather than losing track of it.
+        let mark: CommentFiles = serde_json::from_str(r#"{"ids":["obj-a","obj-b"]}"#).unwrap();
+        assert_eq!(mark.ids, vec!["obj-a", "obj-b"]);
+        let left = CommentFiles {
+            ids: vec!["obj-b".to_string()],
+        };
+        assert_eq!(
+            serde_json::to_string(&left).unwrap(),
+            r#"{"ids":["obj-b"]}"#
+        );
     }
 
     #[test]

@@ -547,6 +547,22 @@ pub const COMMENT_OBJECT_COLLECTION: &str = "comment-object";
 /// belongs to, so there is no ordering in which a comment exists unclassified.
 pub const COMMENT_SEAL_COLLECTION: &str = "comment-seal";
 
+/// The collection naming the Sia objects one of this identity's comments uploaded for its
+/// files, keyed by that comment's own rkey.
+///
+/// A mark that OUTLIVES the record, exactly as `COMMENT_OBJECT_COLLECTION` does and for the
+/// same reason: a withdrawn comment takes its attachment list with it, so without this
+/// nothing would be left naming the objects to reclaim and they would be paid for forever.
+///
+/// Its own collection rather than a field on the body mark, because the two have different
+/// writers — the composer writes this before the record, the Curator writes the body mark
+/// after minting — and one key with two writers is how records get clobbered.
+///
+/// It is also what makes a half-finished write self-cleaning: the mark goes down before the
+/// comment, so bytes uploaded for a comment that never got written are named by a mark whose
+/// comment is missing, which is precisely what the reclaim sweep collects.
+pub const COMMENT_FILES_COLLECTION: &str = "comment-files";
+
 /// The collection recording, per actor, the comments blob this identity last read of theirs.
 ///
 /// Apart from `CRAWL_COLLECTION` deliberately, even though one directory read serves both.

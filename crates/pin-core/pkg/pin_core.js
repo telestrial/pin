@@ -304,6 +304,27 @@ export function comment_collection() {
 }
 
 /**
+ * The collection naming the Sia objects a comment's files were uploaded as.
+ *
+ * Written here, swept by the Curator: the composer is where the bytes go up and so is the
+ * only place that learns the object ids, and reclaiming them is credential-bound work that
+ * belongs with the rest of the Curator's housekeeping.
+ * @returns {string}
+ */
+export function comment_files_collection() {
+    let deferred1_0;
+    let deferred1_1;
+    try {
+        const ret = wasm.comment_files_collection();
+        deferred1_0 = ret[0];
+        deferred1_1 = ret[1];
+        return getStringFromWasm0(ret[0], ret[1]);
+    } finally {
+        wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+    }
+}
+
+/**
  * Where one of this identity's own comments lives, by the subject it is about and its own
  * id.
  * @param {string} subject

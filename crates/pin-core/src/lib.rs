@@ -1725,6 +1725,16 @@ pub fn comment_rkey(subject: &str, comment_id: &str) -> String {
     pin_derive::comment_rkey(subject, comment_id)
 }
 
+/// The collection naming the Sia objects a comment's files were uploaded as.
+///
+/// Written here, swept by the Curator: the composer is where the bytes go up and so is the
+/// only place that learns the object ids, and reclaiming them is credential-bound work that
+/// belongs with the rest of the Curator's housekeeping.
+#[wasm_bindgen]
+pub fn comment_files_collection() -> String {
+    pin_derive::COMMENT_FILES_COLLECTION.to_string()
+}
+
 /// The collection saying which of this identity's comments get published sealed.
 ///
 /// Written here and read by the publish loop, which is why the name comes from Rust: the

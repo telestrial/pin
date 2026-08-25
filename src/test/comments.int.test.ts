@@ -23,6 +23,7 @@ import {
   maxCommentAttachments,
   maxCommentBytes,
   pinInputForComment,
+  uploadCommentFiles,
   withdrawComment,
   writeComment,
 } from '../lib/comments'
@@ -30,7 +31,7 @@ import { getRecord, listRecords } from '../lib/docs'
 import { endorsementRkey } from '../lib/engagement'
 import { endorsedItemFor } from '../stores/pin'
 import { fakeDocStore as docStore } from './fakeModules'
-import { FAKE_APP_KEY_HEX, resetAllStores } from './setupFakeApp'
+import { createFakeApp, FAKE_APP_KEY_HEX, resetAllStores } from './setupFakeApp'
 
 const ITEM = {
   channelID: 'chan-one',
@@ -93,6 +94,25 @@ const FILE = {
   filename: 'shot.png',
   byteSize: 1234,
   contentHash: 'bafkreishot',
+}
+
+const CARRIED = { attachment: FILE, objectID: 'obj-shot' }
+
+async function fileMarks() {
+  const { comment_files_collection } = await import(
+    '../../crates/pin-core/pkg/pin_core.js'
+  )
+  return listRecords(comment_files_collection())
+}
+
+async function fileMark(rkey: string) {
+  const { comment_files_collection } = await import(
+    '../../crates/pin-core/pkg/pin_core.js'
+  )
+  const raw = await getRecord(comment_files_collection(), rkey)
+  return raw
+    ? (JSON.parse(new TextDecoder().decode(raw)) as { ids: string[] })
+    : null
 }
 
 describe('integration: writing a comment', () => {
@@ -234,7 +254,7 @@ describe('integration: writing a comment', () => {
     // The one seam neither compiler checks: this list is handed to Rust as JSON and parsed
     // into `CommentAttachment` there, so a field renamed on either side is a parse failure at
     // runtime and nothing before it. This codebase has shipped that bug once already.
-    await writeComment(FAKE_APP_KEY_HEX, ITEM, null, 'look at this', [FILE])
+    await writeComment(FAKE_APP_KEY_HEX, ITEM, null, 'look at this', [CARRIED])
 
     const rkeys = await held()
     const record = decode((await getStored(rkeys[0])) as Uint8Array)
@@ -243,13 +263,37 @@ describe('integration: writing a comment', () => {
     expect(record.sig).not.toBe('')
   })
 
+  it('names the objects to give back, and keeps naming them after the comment goes', async () => {
+    // The object id is not in the record — a reader has no use for it — so this mark is the
+    // only thing that knows what to reclaim. It has to OUTLIVE the withdrawal, or the bytes
+    // are paid for forever with nothing left pointing at them.
+    const id = await writeComment(FAKE_APP_KEY_HEX, ITEM, null, 'look', [
+      CARRIED,
+    ])
+    const rkeys = await held()
+    expect(await fileMark(rkeys[0])).toEqual({ ids: ['obj-shot'] })
+    // And the id stays out of what gets published.
+    expect(
+      JSON.stringify(decode((await getStored(rkeys[0])) as Uint8Array)),
+    ).not.toContain('obj-shot')
+
+    await withdrawComment(FAKE_APP_KEY_HEX, ITEM, id)
+    expect(await held()).toHaveLength(0)
+    expect(await fileMarks()).toHaveLength(1)
+  })
+
+  it('leaves no mark behind for a comment carrying nothing', async () => {
+    await writeComment(FAKE_APP_KEY_HEX, ITEM, null, 'just words')
+    expect(await fileMarks()).toHaveLength(0)
+  })
+
   it('refuses more files than a host would take', async () => {
     // Refused at the signature rather than on arrival — a composer that allowed one more
     // would have uploaded it before finding out.
     const max = await maxCommentAttachments()
     const many = Array.from({ length: max + 1 }, (_, i) => ({
-      ...FILE,
-      contentHash: `bafkrei${i}`,
+      attachment: { ...FILE, contentHash: `bafkrei${i}` },
+      objectID: `obj-${i}`,
     }))
     await expect(
       writeComment(FAKE_APP_KEY_HEX, ITEM, null, 'too much', many),
@@ -297,6 +341,87 @@ async function getStored(rkey: string) {
   const { getRecord } = await import('../lib/docs')
   return getRecord(comment_collection(), rkey)
 }
+
+describe('integration: uploading a comment’s files', () => {
+  beforeEach(() => {
+    resetAllStores()
+    docStore.clear()
+  })
+
+  async function account() {
+    const app = createFakeApp()
+    return app.createAccount({ did: 'did:plc:alice', handle: 'alice.test' })
+  }
+
+  it('puts the bytes on Sia and hands back what the record names', async () => {
+    const alice = await account()
+    const carried = await uploadCommentFiles(alice.client, [
+      {
+        bytes: new Uint8Array([1, 2, 3]),
+        mimeType: 'image/png',
+        filename: 'a.png',
+      },
+    ])
+
+    expect(carried).toHaveLength(1)
+    expect(carried[0].attachment.mimeType).toBe('image/png')
+    expect(carried[0].attachment.filename).toBe('a.png')
+    // The size is what was actually uploaded rather than anything the caller claimed.
+    expect(carried[0].attachment.byteSize).toBe(3)
+    expect(carried[0].attachment.contentHash).not.toBe('')
+    // The bytes are really there, under the URL the record will carry.
+    expect(await alice.client.downloadItem(carried[0].attachment.url)).toEqual(
+      new Uint8Array([1, 2, 3]),
+    )
+    // And the id that reclaims it comes back beside the attachment, never inside it.
+    expect(carried[0].objectID).not.toBe('')
+    expect(carried[0].attachment).not.toHaveProperty('objectID')
+  })
+
+  it('packs several files into one upload', async () => {
+    // Sia allocates in ~40 MiB slabs, so three small files uploaded one apiece would pay
+    // for three of them. Same reason a post packs its attachments with its body.
+    const alice = await account()
+    let uploads = 0
+    const carried = await uploadCommentFiles(
+      alice.client,
+      [1, 2, 3].map((n) => ({
+        bytes: new Uint8Array([n]),
+        mimeType: 'text/plain',
+      })),
+      () => {
+        uploads += 1
+      },
+    )
+    expect(carried).toHaveLength(3)
+    // Each file its own object, all through one packed upload.
+    expect(new Set(carried.map((c) => c.objectID)).size).toBe(3)
+    expect(uploads).toBe(3)
+  })
+
+  it('refuses more files than a record may carry before uploading any', async () => {
+    // Before, not after: finding out at the signature would mean having paid to store them.
+    const alice = await account()
+    const max = await maxCommentAttachments()
+    const before = (await alice.client.listPinnedObjects()).length
+    await expect(
+      uploadCommentFiles(
+        alice.client,
+        Array.from({ length: max + 1 }, () => ({
+          bytes: new Uint8Array([1]),
+          mimeType: 'text/plain',
+        })),
+      ),
+    ).rejects.toThrow()
+    expect((await alice.client.listPinnedObjects()).length).toBe(before)
+  })
+
+  it('uploads nothing when there is nothing to upload', async () => {
+    const alice = await account()
+    expect(await uploadCommentFiles(alice.client, [])).toEqual([])
+    expect(await alice.client.listPinnedObjects()).toEqual([])
+  })
+})
 
 describe('integration: keeping a comment', () => {
   beforeEach(() => {
