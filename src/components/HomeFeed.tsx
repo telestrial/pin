@@ -2,20 +2,15 @@ import { Recycle } from 'lucide-react'
 import { useEffect, useMemo } from 'react'
 import { type FeedEntry, feedTimeOf } from '../core/feed'
 import type { ItemRef } from '../core/types'
-import { pinInputForComment } from '../lib/comments'
-import { useEngagement } from '../lib/hooks/useEngagement'
 import { useIdentityName } from '../lib/hooks/useIdentityName'
 import { renderPostBody } from '../lib/markdown'
-import { commentRepostTargetFor } from '../lib/repost'
 import { formatAbsolute, formatRelativeShort } from '../lib/time'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
 import { AttachmentGrid } from './AttachmentMedia'
 import { ChannelAvatar } from './channel/ChannelAvatar'
 import { CommentFiles } from './engagement/CommentFiles'
-import { EngagementRow } from './engagement/EngagementRow'
-import { RepostButton } from './engagement/RepostButton'
-import { PinButton } from './pin/PinButton'
+import { CommentEngagementRow, EngagementRow } from './engagement/EngagementRow'
 
 export function HomeFeed({
   onItemClick,
@@ -258,21 +253,6 @@ function CirculatedRemark({
   onHandleClick: (handle: string) => void
 }) {
   const name = useIdentityName(comment.actor)
-  const manifests = useFeedStore((s) => s.manifests)
-  const circulable = commentRepostTargetFor(comment, post, manifests)
-  // Null until its author has minted the body object, exactly as in the thread: there is
-  // nothing to take custody OF until there is an address.
-  const keepable = pinInputForComment(comment, post)
-  // Its own subject, read the way the thread reads it: liking the post and liking what
-  // somebody said under it are different claims, and this is the second one.
-  const { reposts } = useEngagement({
-    channelID: post.channelID,
-    publishedAt: post.publishedAt,
-    // The signature covers the words, so it moves when they do and is stable otherwise —
-    // which is what a version records.
-    contentHash: comment.sig,
-    comment: { actor: comment.actor, createdAt: comment.createdAt },
-  })
   return (
     // No click handler of its own: the row IS the post, so clicking the remark opening the
     // post is right. The controls inside stop their own propagation, the way every other
@@ -296,15 +276,7 @@ function CirculatedRemark({
         {comment.body}
       </p>
       <CommentFiles files={comment.attachments} comment={comment} post={post} />
-      <div className="flex items-center gap-1">
-        <RepostButton
-          target={circulable}
-          sourceName={manifests[post.channelID]?.name}
-          contentHash={comment.sig}
-          count={reposts}
-        />
-        {keepable && <PinButton input={keepable} />}
-      </div>
+      <CommentEngagementRow comment={comment} post={post} />
     </div>
   )
 }

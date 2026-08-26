@@ -1,7 +1,13 @@
 import { Heart, MessageCircle } from 'lucide-react'
 import type { FeedEntry } from '../../core/feed'
+import { pinInputForComment } from '../../lib/comments'
+import type { EndorsedItem } from '../../lib/engagement'
 import { useEngagement } from '../../lib/hooks/useEngagement'
-import { repostTargetFor } from '../../lib/repost'
+import {
+  commentRepostTargetFor,
+  type PortalTarget,
+  repostTargetFor,
+} from '../../lib/repost'
 import { useFeedStore } from '../../stores/feed'
 import type { PinInput } from '../../stores/pin'
 import { PinButton } from '../pin/PinButton'
@@ -23,6 +29,14 @@ import { RepostButton } from './RepostButton'
 // A count of zero shows nothing. Absent and zero mean the same thing to a reader, and one
 // of them is far the more common: most items are unendorsed, and an item whose channel no
 // pass has read counts for yet reads identically.
+//
+// ONE ROW, TWO ADAPTERS. A post and a comment carry the same four gestures and must look
+// identical doing it, but they answer three questions differently: what the counts are
+// ABOUT (a post's subject comes from its channel and publish time, a comment's from who
+// wrote it and when), what the pin takes custody OF (a post's bytes, a comment's body
+// object — which may not exist yet), and what a repost would circulate. So the layout is
+// one component and each shape gets a small adapter that answers those three. Two
+// components drawing the same row is how they drift; two adapters over one cannot.
 
 /** A count beside its gesture, or nothing when there is none to show. */
 function Count({ n }: { n: number }) {
@@ -30,23 +44,25 @@ function Count({ n }: { n: number }) {
   return <span className="text-xs tabular-nums text-neutral-500">{n}</span>
 }
 
-export function EngagementRow({
-  input,
-  entry,
+/** The gestures themselves, over whatever subject the adapter below named. */
+function Row({
+  item,
+  pin,
+  repostTarget,
+  sourceName,
 }: {
-  input: PinInput
-  // Present wherever the post came out of the feed, which is everywhere a repost makes
-  // sense. Absent on a library item, which has no channel to be circulated out of.
-  entry?: FeedEntry
+  /** What every count here is about. */
+  item: EndorsedItem
+  /** What the pin takes custody of, or null when there is nothing to keep yet — a comment
+   *  whose author has not minted its body object has no address to take custody of. */
+  pin: PinInput | null
+  /** What a repost would circulate, or null when it cannot be. */
+  repostTarget: PortalTarget | null
+  /** The source channel's name, for the repost menu's cached label. */
+  sourceName?: string
 }) {
-  const manifests = useFeedStore((s) => s.manifests)
-  const repostTarget = entry ? repostTargetFor(entry, manifests) : null
   const { likes, pins, reposts, comments, liked, toggleLike, busy } =
-    useEngagement({
-      channelID: input.channel.channelID,
-      publishedAt: input.item.publishedAt,
-      contentHash: input.item.contentHash,
-    })
+    useEngagement(item)
 
   // The row that contains this is itself a click target for opening the item, so a
   // gesture has to stop there rather than also navigating — the same thing PinButton
@@ -81,15 +97,17 @@ export function EngagementRow({
         </button>
       </div>
 
-      <div className="flex items-center gap-1">
-        <Count n={pins} />
-        <PinButton input={input} />
-      </div>
+      {pin && (
+        <div className="flex items-center gap-1">
+          <Count n={pins} />
+          <PinButton input={pin} />
+        </div>
+      )}
 
       <RepostButton
         target={repostTarget}
-        sourceName={entry?.channel.name}
-        contentHash={input.item.contentHash}
+        sourceName={sourceName}
+        contentHash={item.contentHash}
         count={reposts}
       />
 
@@ -110,5 +128,76 @@ export function EngagementRow({
         />
       </div>
     </div>
+  )
+}
+
+/** The gestures on a POST.
+ *
+ *  Its subject comes from the channel it was published in and when — this codebase's
+ *  logical-post identity, preserved across edits — and its pin always has something to take
+ *  custody of, because the bytes exist by the time anyone can see it.
+ */
+export function EngagementRow({
+  input,
+  entry,
+}: {
+  input: PinInput
+  // Present wherever the post came out of the feed, which is everywhere a repost makes
+  // sense. Absent on a library item, which has no channel to be circulated out of.
+  entry?: FeedEntry
+}) {
+  const manifests = useFeedStore((s) => s.manifests)
+  return (
+    <Row
+      item={{
+        channelID: input.channel.channelID,
+        publishedAt: input.item.publishedAt,
+        contentHash: input.item.contentHash,
+      }}
+      pin={input}
+      repostTarget={entry ? repostTargetFor(entry, manifests) : null}
+      sourceName={entry?.channel.name}
+    />
+  )
+}
+
+/** The gestures on a COMMENT, which are the same gestures.
+ *
+ *  Three things differ and all three are about identity rather than about the row. Its
+ *  subject is derived from who wrote it and when, so nobody can reassign it. Its version is
+ *  the signature, which moves when the words do and is stable otherwise — a comment carries
+ *  no separate content hash. And its pin is null until its author has minted its body
+ *  object, because there is nothing to take custody of until there is an address.
+ *
+ *  Its comment count is its REPLIES, which falls out of the fold rather than needing
+ *  anything: a subject can name a comment, so a reply is counted against the comment the
+ *  same way a comment is counted against the post.
+ */
+export function CommentEngagementRow({
+  comment,
+  post,
+}: {
+  comment: {
+    actor: string
+    createdAt: string
+    body?: string
+    bodyURL?: string
+    sig: string
+  }
+  post: { channelID: string; publishedAt: string }
+}) {
+  const manifests = useFeedStore((s) => s.manifests)
+  return (
+    <Row
+      item={{
+        channelID: post.channelID,
+        publishedAt: post.publishedAt,
+        contentHash: comment.sig,
+        comment: { actor: comment.actor, createdAt: comment.createdAt },
+      }}
+      pin={pinInputForComment(comment, post)}
+      repostTarget={commentRepostTargetFor(comment, post, manifests)}
+      sourceName={manifests[post.channelID]?.name}
+    />
   )
 }

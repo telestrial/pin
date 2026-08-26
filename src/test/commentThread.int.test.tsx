@@ -15,8 +15,10 @@ vi.mock('../lib/docs', async () =>
 
 import {
   comment_collection,
+  comment_subject,
   endorsement_verify,
   engagement_subject,
+  tally_rkey,
   thread_rkey,
 } from '../../crates/pin-core/pkg/pin_core.js'
 import { CommentThread } from '../components/engagement/CommentThread'
@@ -276,6 +278,59 @@ describe('integration: a post’s conversation', () => {
     // These bytes are the COMMENTER's, so a URL nobody here can resolve is ordinary rather
     // than an error state — and it says so rather than leaving a blank tile.
     expect(await screen.findByText('theirs.png — unavailable')).toBeTruthy()
+  })
+
+  it('gives a comment the same gestures a post has', async () => {
+    // The point of one row with two adapters: a comment is likeable, keepable and
+    // circulable exactly as a post is, and its comment count is its replies. The
+    // hand-rolled row this replaced offered only two of the four.
+    manifestSays(true)
+    published([{ actor: 'did:dht:bob', body: 'worth saying' }])
+    render(<CommentThread item={ITEM} />)
+
+    expect(await screen.findByText('worth saying')).toBeTruthy()
+    // A like, which a comment could not carry before.
+    expect(screen.getByTitle('Like')).toBeTruthy()
+    // And a repost, offered because this channel is public.
+    expect(screen.getByLabelText('Repost')).toBeTruthy()
+  })
+
+  it('counts the comment’s own engagement, never the post’s', async () => {
+    // The adapter derives a comment's subject from who wrote it and when. Get that wrong
+    // and the row silently shows the POST's numbers — a plausible-looking row that is
+    // wrong about whose engagement it is reporting.
+    manifestSays(true)
+    published([{ actor: 'did:dht:bob', body: 'worth saying' }])
+
+    const cache = (subject: string, likes: number) =>
+      docStore.set(
+        `tally/${tally_rkey(CHANNEL_ID, subject)}`,
+        new TextEncoder().encode(
+          JSON.stringify({
+            kinds: { like: { count: likes, setRoot: 'r', sampleActors: [] } },
+            updatedAt: PUBLISHED_AT,
+          }),
+        ),
+      )
+    cache(engagement_subject(CHANNEL_ID, PUBLISHED_AT, undefined), 9)
+    cache(comment_subject('did:dht:bob', '2026-08-22T10:00:00.000Z'), 2)
+
+    render(<CommentThread item={ITEM} />)
+
+    // The comment's own figure, not the post's.
+    await waitFor(() => expect(screen.getByText('2')).toBeInTheDocument())
+    expect(screen.queryByText('9')).toBeNull()
+  })
+
+  it('offers no pin on a comment whose author has minted no body object', async () => {
+    // Null pin rather than a dead button: there is nothing to take custody OF until there
+    // is an address, and a comment whose author never ran a Curator has none.
+    manifestSays(true)
+    published([{ actor: 'did:dht:bob', body: 'no object yet' }])
+    render(<CommentThread item={ITEM} />)
+
+    expect(await screen.findByText('no object yet')).toBeTruthy()
+    expect(screen.queryByTitle(/Pin to your storage/)).toBeNull()
   })
 
   it('does not write an empty comment', async () => {

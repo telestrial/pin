@@ -162,7 +162,16 @@ export function useEngagement(item: EndorsedItem): Engagement {
 
   // Destructured so the effect depends on the item's identity rather than on the object,
   // which callers rebuild every render.
+  //
+  // A COMMENT'S PAIR IS PART OF THAT IDENTITY and was missing here, which silently made
+  // every comment read its POST's counts: the target rebuilt below dropped the field, so
+  // `tallySubject` never saw a comment to derive a subject from and fell through to the
+  // post's. It has to be spread as primitives, because the deps array compares by
+  // reference and a caller rebuilds the object each render.
+
   const { channelID, publishedAt, contentHash, attachment } = item
+  const commentActor = item.comment?.actor
+  const commentCreatedAt = item.comment?.createdAt
 
   useEffect(() => {
     if (!storedKeyHex) return
@@ -172,6 +181,10 @@ export function useEngagement(item: EndorsedItem): Engagement {
       publishedAt,
       contentHash,
       attachment,
+      comment:
+        commentActor && commentCreatedAt
+          ? { actor: commentActor, createdAt: commentCreatedAt }
+          : undefined,
     }
 
     const refresh = async () => {
@@ -232,11 +245,24 @@ export function useEngagement(item: EndorsedItem): Engagement {
       cancelled = true
       unsub()
     }
-  }, [storedKeyHex, myDid, channelID, publishedAt, contentHash, attachment])
+  }, [
+    storedKeyHex,
+    myDid,
+    channelID,
+    publishedAt,
+    contentHash,
+    attachment,
+    commentActor,
+    commentCreatedAt,
+  ])
 
   const toggleLike = useCallback(() => {
     if (!storedKeyHex || busy) return
     const target: EndorsedItem = {
+      comment:
+        commentActor && commentCreatedAt
+          ? { actor: commentActor, createdAt: commentCreatedAt }
+          : undefined,
       channelID,
       publishedAt,
       contentHash,
@@ -282,6 +308,8 @@ export function useEngagement(item: EndorsedItem): Engagement {
     publishedAt,
     contentHash,
     attachment,
+    commentActor,
+    commentCreatedAt,
   ])
 
   return {
