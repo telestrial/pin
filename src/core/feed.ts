@@ -1,6 +1,7 @@
 import type {
   ChannelImage,
   ChannelManifest,
+  Facet,
   ItemRef,
   RepostRef,
   SubscriptionRef,
@@ -63,6 +64,7 @@ export type CirculatedComment = {
   sig: string
   bodyURL?: string
   attachments?: CirculatedFile[]
+  facets?: Facet[]
 }
 
 /** One file a circulated comment carries. Structural, like everything else here — core

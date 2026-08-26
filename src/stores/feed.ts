@@ -56,6 +56,7 @@ export function renderable(
         sig: outcome.comment.sig,
         bodyURL: outcome.comment.bodyURL,
         attachments: outcome.comment.attachments,
+        facets: outcome.comment.facets,
       },
     }
   }

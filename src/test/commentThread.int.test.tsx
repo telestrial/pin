@@ -391,6 +391,53 @@ describe('integration: a post’s conversation', () => {
     expect(await screen.findByText('answering that')).toBeTruthy()
   })
 
+  it('renders a mention in a comment as a link to whoever it names', async () => {
+    // A comment carries facets exactly as a post does, and goes through the same renderer —
+    // so what a reader clicks resolves to the DID the commenter picked rather than to an
+    // @name that matches nobody.
+    manifestSays(true)
+    const subject = engagement_subject(CHANNEL_ID, PUBLISHED_AT, undefined)
+    docStore.set(
+      `thread/${thread_rkey(CHANNEL_ID, subject)}`,
+      new TextEncoder().encode(
+        JSON.stringify({
+          comments: [
+            {
+              kind: 'comment',
+              actor: 'did:dht:bob',
+              subject,
+              version: 'bafkreiabc',
+              createdAt: '2026-08-26T10:00:00.000Z',
+              sig: 'sig-bob',
+              body: 'ask @alice',
+              facets: [
+                {
+                  index: { byteStart: 4, byteEnd: 10 },
+                  features: [
+                    {
+                      $type: 'pin.mention',
+                      did: 'did:dht:alice',
+                      handle: 'alice',
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+          updatedAt: PUBLISHED_AT,
+        }),
+      ),
+    )
+
+    const opened: string[] = []
+    render(<CommentThread item={ITEM} onHandleClick={(h) => opened.push(h)} />)
+
+    const link = await screen.findByText('@alice')
+    expect(link.getAttribute('data-mention-handle')).toBe('alice')
+    await userEvent.click(link)
+    expect(opened).toEqual(['alice'])
+  })
+
   it('gives a comment the same gestures a post has', async () => {
     // The point of one row with two adapters: a comment is likeable, keepable and
     // circulable exactly as a post is, and its comment count is its replies. The

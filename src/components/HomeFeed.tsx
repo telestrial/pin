@@ -3,13 +3,13 @@ import { useEffect, useMemo } from 'react'
 import { type FeedChannel, type FeedEntry, feedTimeOf } from '../core/feed'
 import type { ItemRef } from '../core/types'
 import { useIdentityName } from '../lib/hooks/useIdentityName'
-import { renderPostBody } from '../lib/markdown'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
 import { AttachmentGrid } from './AttachmentMedia'
 import { CommentFiles } from './engagement/CommentFiles'
 import { CommentEngagementRow, EngagementRow } from './engagement/EngagementRow'
 import { PostRow } from './PostRow'
+import { RichBody } from './RichBody'
 
 export function HomeFeed({
   onItemClick,
@@ -183,37 +183,15 @@ function PostBody({
   channelID: string
   onHandleClick: (handle: string) => void
 }) {
-  const html = useMemo(
-    () => renderPostBody(item.summary ?? '', item.facets),
-    [item.summary, item.facets],
-  )
-  const hasBody = !!item.summary && item.summary.length > 0
   const hasAttachments = !!item.attachments && item.attachments.length > 0
-
-  // Delegated: a click on an injected mention anchor navigates to that handle's
-  // directory and is kept from bubbling to the row's open-post click. The
-  // anchors are native <a>, so keyboard activation works through them.
-  const handleClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    const a = (e.target as HTMLElement).closest('a[data-mention-handle]')
-    if (!a) return
-    e.preventDefault()
-    e.stopPropagation()
-    const handle = a.getAttribute('data-mention-handle') ?? ''
-    if (handle) onHandleClick(handle)
-  }
 
   return (
     <>
-      {hasBody && (
-        // biome-ignore lint/a11y/noStaticElementInteractions: click delegates to nested <a> mentions, which are natively interactive
-        // biome-ignore lint/a11y/useKeyWithClickEvents: delegates to nested <a> mentions, which are natively keyboard-accessible
-        <div
-          className="markdown wrap-break-word text-sm text-neutral-900"
-          onClick={handleClick}
-          // biome-ignore lint/security/noDangerouslySetInnerHtml: HTML is sanitized via DOMPurify
-          dangerouslySetInnerHTML={{ __html: html }}
-        />
-      )}
+      <RichBody
+        body={item.summary ?? ''}
+        facets={item.facets}
+        onHandleClick={onHandleClick}
+      />
       {hasAttachments && item.attachments && (
         <AttachmentGrid
           attachments={item.attachments}
@@ -311,9 +289,11 @@ export function FeedRow({
           onOpenPerson={onHandleClick}
         >
           <ReplyingTo channel={channel} />
-          <p className="text-sm text-neutral-900 whitespace-pre-wrap break-words">
-            {entry.comment.body}
-          </p>
+          <RichBody
+            body={entry.comment.body ?? ''}
+            facets={entry.comment.facets}
+            onHandleClick={onHandleClick}
+          />
           <CommentFiles
             files={entry.comment.attachments}
             comment={entry.comment}

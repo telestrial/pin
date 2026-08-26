@@ -17,6 +17,7 @@ import {
   thread_rkey,
 } from '../../crates/pin-core/pkg/pin_core.js'
 import { channelKeyFromBase64 } from '../core/crypto'
+import type { Facet } from '../core/types'
 import { ensureWasm } from '../core/wasm'
 import {
   fetchConversations,
@@ -47,6 +48,9 @@ export type PublishedComment = {
   // stale where the words cannot — a repack on the commenter's side rewrites every URL here
   // until the host crawls them again, and a comment degrades as words intact, media broken.
   attachments?: CommentAttachment[]
+  // Annotations over the body: today, who it mentions. Signed, so what a reader resolves is
+  // what the commenter picked — a mention is only a mention by virtue of the DID.
+  facets?: Facet[]
 }
 
 /** One subject's published conversation, newest first. */

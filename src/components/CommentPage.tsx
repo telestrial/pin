@@ -5,6 +5,7 @@ import { CommentFiles } from './engagement/CommentFiles'
 import { CommentThread } from './engagement/CommentThread'
 import { CommentEngagementRow } from './engagement/EngagementRow'
 import { PostRow } from './PostRow'
+import { RichBody } from './RichBody'
 
 // One comment, and what was said back to it.
 //
@@ -78,9 +79,11 @@ export function CommentPage({
               <p className="text-xs text-neutral-500 truncate">
                 Replying to {channel.name}
               </p>
-              <p className="text-sm text-neutral-900 whitespace-pre-wrap break-words">
-                {comment.body}
-              </p>
+              <RichBody
+                body={comment.body ?? ''}
+                facets={comment.facets}
+                onHandleClick={onHandleClick}
+              />
               <CommentFiles
                 files={comment.attachments}
                 comment={comment}

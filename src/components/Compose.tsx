@@ -1,7 +1,6 @@
 import { Check, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import type { AttachmentSource } from '../core/channels'
-import type { ReachablePerson } from '../core/network'
 import {
   type ItemRef,
   isValidAttachment,
@@ -14,10 +13,7 @@ import {
   type DraftMention,
 } from '../lib/facets'
 import { useItemBlobURL } from '../lib/hooks/useItemBytes'
-import {
-  filterMentionCandidates,
-  useMentionCandidates,
-} from '../lib/hooks/useMentionCandidates'
+import { useMentionBox } from '../lib/hooks/useMentionBox'
 import { useActionStore } from '../stores/actionQueue'
 import { useAuthStore } from '../stores/auth'
 import { useComposeStore } from '../stores/compose'
@@ -29,6 +25,7 @@ import {
   MediaPreview,
 } from './AttachmentMedia'
 import { ChannelAvatar } from './channel/ChannelAvatar'
+import { MentionPicker } from './MentionPicker'
 
 export type ComposeEditMode = {
   item: ItemRef
@@ -75,11 +72,6 @@ export function Compose({
   const armedItem = useComposeStore((s) => s.armedItem)
   const disarm = useComposeStore((s) => s.disarm)
   const manifests = useFeedStore((s) => s.manifests)
-  const {
-    candidates,
-    loading: candidatesLoading,
-    ensureLoaded: ensureMentionCandidates,
-  } = useMentionCandidates()
 
   const [selectedID, setSelectedID] = useState(
     editing?.channelID ?? channels[0]?.channelID ?? '',
@@ -89,36 +81,37 @@ export function Compose({
   const [expanded, setExpanded] = useState(!!editing)
   const [voiceOpen, setVoiceOpen] = useState(false)
 
-  // Mentions captured during composition, in insertion order. Resolved to
-  // byte-range facets against the final body at submit (buildMentionFacets),
-  // so editing text around a mention doesn't need per-keystroke re-anchoring.
-  // On edit, preload from the post's existing facets (surface = the body text
-  // under each range) so untouched mentions survive a re-save.
-  const [mentions, setMentions] = useState<DraftMention[]>(() => {
-    const facets = editing?.item.facets
-    const summary = editing?.item.summary ?? ''
-    if (!facets) return []
-    const out: DraftMention[] = []
-    for (const f of facets) {
-      const mf = f.features.find((x) => x.$type === 'pin.mention')
-      if (!mf) continue
-      const cs = byteToChar(summary, f.index.byteStart)
-      const ce = byteToChar(summary, f.index.byteEnd)
-      out.push({
-        did: mf.did,
-        handle: mf.handle ?? '',
-        surface: summary.slice(cs, ce),
-      })
-    }
-    return out
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null)
+
+  // What an `@` does lives in `useMentionBox`, shared with the comment composer — a mention
+  // is only a mention by virtue of the DID underneath it, and two implementations of the
+  // anchoring is two chances for one of them to resolve to nobody.
+  //
+  // On edit, preloaded from the post's existing facets (surface = the body text under each
+  // range) so untouched mentions survive a re-save.
+  const mentionBox = useMentionBox({
+    value: body,
+    setValue: setBody,
+    textarea: textareaRef,
+    initial: () => {
+      const facets = editing?.item.facets
+      const summary = editing?.item.summary ?? ''
+      if (!facets) return []
+      const out: DraftMention[] = []
+      for (const f of facets) {
+        const mf = f.features.find((x) => x.$type === 'pin.mention')
+        if (!mf) continue
+        const cs = byteToChar(summary, f.index.byteStart)
+        const ce = byteToChar(summary, f.index.byteEnd)
+        out.push({
+          did: mf.did,
+          handle: mf.handle ?? '',
+          surface: summary.slice(cs, ce),
+        })
+      }
+      return out
+    },
   })
-  // The active `@…` token at the caret (char indices), or null. Drives the picker.
-  const [mentionQuery, setMentionQuery] = useState<{
-    text: string
-    start: number
-    end: number
-  } | null>(null)
-  const [pickerIndex, setPickerIndex] = useState(0)
   const [attachments, setAttachments] = useState<AttachmentDraft[]>(() => {
     if (!editing?.item.attachments) return []
     return editing.item.attachments.filter(isValidAttachment).map((a) => ({
@@ -151,7 +144,6 @@ export function Compose({
     )
   })
   const [isDragging, setIsDragging] = useState(false)
-  const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const voiceWrapperRef = useRef<HTMLDivElement | null>(null)
 
   const channel =
@@ -249,71 +241,6 @@ export function Compose({
     })
   }
 
-  // Recompute the active mention token from the live textarea value + caret.
-  // A token is an `@` at start-of-string or after whitespace, followed by
-  // non-whitespace up to the caret. Opening one lazily loads the candidate pool.
-  function updateMentionQuery(value: string, caret: number) {
-    const m = value.slice(0, caret).match(/(^|\s)@(\S*)$/)
-    if (!m) {
-      setMentionQuery(null)
-      return
-    }
-    setMentionQuery({
-      text: m[2],
-      start: (m.index ?? 0) + m[1].length,
-      end: caret,
-    })
-    setPickerIndex(0)
-    ensureMentionCandidates()
-  }
-
-  function selectMention(person: ReachablePerson) {
-    if (!mentionQuery) return
-    const surface = `@${person.username || person.handle}`
-    const inserted = `${surface} `
-    const next =
-      body.slice(0, mentionQuery.start) +
-      inserted +
-      body.slice(mentionQuery.end)
-    const caret = mentionQuery.start + inserted.length
-    setBody(next)
-    setMentions((prev) => [
-      ...prev,
-      { did: person.did, handle: person.handle, surface },
-    ])
-    setMentionQuery(null)
-    // Restore focus + caret after React re-renders with the new value.
-    requestAnimationFrame(() => {
-      const ta = textareaRef.current
-      if (ta) {
-        ta.focus()
-        ta.setSelectionRange(caret, caret)
-      }
-    })
-  }
-
-  function handleTextareaKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
-    if (!mentionQuery) return
-    if (e.key === 'Escape') {
-      e.preventDefault()
-      setMentionQuery(null)
-      return
-    }
-    const filtered = filterMentionCandidates(candidates, mentionQuery.text)
-    if (filtered.length === 0) return
-    if (e.key === 'ArrowDown') {
-      e.preventDefault()
-      setPickerIndex((i) => (i + 1) % filtered.length)
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault()
-      setPickerIndex((i) => (i - 1 + filtered.length) % filtered.length)
-    } else if (e.key === 'Enter' || e.key === 'Tab') {
-      e.preventDefault()
-      const pick = filtered[Math.min(pickerIndex, filtered.length - 1)]
-      if (pick) selectMention(pick)
-    }
-  }
-
   function isAttachZoneInteractive(target: EventTarget | null): boolean {
     if (!(target instanceof Element)) return true
     return !!target.closest(
@@ -401,7 +328,7 @@ export function Compose({
       : new Uint8Array([0x20])
     // Resolve mentions to byte-range facets against the final (trimmed) body,
     // which is exactly what gets stored as summary + uploaded — so offsets align.
-    const facets = buildMentionFacets(trimmed, mentions)
+    const facets = buildMentionFacets(trimmed, mentionBox.mentions)
     enqueue({
       payload: {
         type: 'text',
@@ -428,8 +355,7 @@ export function Compose({
     } else {
       setBody('')
       setAttachments([])
-      setMentions([])
-      setMentionQuery(null)
+      mentionBox.clear()
       setExpanded(false)
     }
   }
@@ -461,7 +387,6 @@ export function Compose({
           <p className="text-sm font-medium text-green-700">Drop to attach</p>
         </div>
       )}
-
       <div className="flex items-start gap-3">
         <div ref={voiceWrapperRef} className="relative shrink-0">
           {multiVoice ? (
@@ -538,18 +463,18 @@ export function Compose({
             value={body}
             onChange={(e) => {
               setBody(e.target.value)
-              updateMentionQuery(
+              mentionBox.onTextChanged(
                 e.target.value,
                 e.target.selectionStart ?? e.target.value.length,
               )
             }}
             onSelect={(e) =>
-              updateMentionQuery(
+              mentionBox.onTextChanged(
                 e.currentTarget.value,
                 e.currentTarget.selectionStart ?? 0,
               )
             }
-            onKeyDown={handleTextareaKeyDown}
+            onKeyDown={mentionBox.onKeyDown}
             onPaste={handleTextareaPaste}
             onFocus={() => setExpanded(true)}
             rows={1}
@@ -560,7 +485,6 @@ export function Compose({
           />
         </div>
       </div>
-
       {attachments.length > 0 && (
         <div
           className={`mt-3 grid gap-2 ${
@@ -576,16 +500,14 @@ export function Compose({
           ))}
         </div>
       )}
-
-      {mentionQuery && (
+      {mentionBox.picker && (
         <MentionPicker
-          candidates={filterMentionCandidates(candidates, mentionQuery.text)}
-          loading={candidatesLoading}
-          activeIndex={pickerIndex}
-          onPick={selectMention}
+          candidates={mentionBox.picker.candidates}
+          loading={mentionBox.picker.loading}
+          activeIndex={mentionBox.picker.activeIndex}
+          onPick={mentionBox.picker.pick}
         />
       )}
-
       <div
         aria-hidden={!expanded}
         className={`grid transition-[grid-template-rows,opacity,margin-top] duration-300 ease-out ${
@@ -632,67 +554,6 @@ export function Compose({
         </div>
       </div>
     </form>
-  )
-}
-
-function MentionPicker({
-  candidates,
-  loading,
-  activeIndex,
-  onPick,
-}: {
-  candidates: ReachablePerson[]
-  loading: boolean
-  activeIndex: number
-  onPick: (person: ReachablePerson) => void
-}) {
-  if (candidates.length === 0) {
-    return (
-      <div className="mt-2 border border-neutral-200 rounded-lg bg-white p-3 text-xs text-neutral-500">
-        {loading
-          ? 'Searching your network…'
-          : 'No one in your network matches.'}
-      </div>
-    )
-  }
-  return (
-    <div
-      role="listbox"
-      className="mt-2 border border-neutral-200 rounded-lg bg-white py-1 max-h-64 overflow-y-auto shadow-sm"
-    >
-      {candidates.map((p, i) => {
-        const name = p.username || p.handle
-        const active = i === activeIndex
-        return (
-          <button
-            key={p.did}
-            type="button"
-            role="option"
-            aria-selected={active}
-            // mousedown (not click) so selection fires before the textarea
-            // blur, keeping focus/caret handling clean; preventDefault stops
-            // the blur entirely.
-            onMouseDown={(e) => {
-              e.preventDefault()
-              onPick(p)
-            }}
-            className={`w-full flex items-center gap-2 px-3 py-1.5 text-left cursor-pointer ${
-              active ? 'bg-neutral-100' : 'hover:bg-neutral-50'
-            }`}
-          >
-            <span className="min-w-0 flex-1 truncate text-sm text-neutral-900">
-              @{name}
-              {p.username && (
-                <span className="text-neutral-400"> · {p.handle}</span>
-              )}
-            </span>
-            <span className="shrink-0 text-[10px] uppercase tracking-wide text-neutral-400">
-              {p.distance === 0 ? 'following' : 'network'}
-            </span>
-          </button>
-        )
-      })}
-    </div>
   )
 }
 

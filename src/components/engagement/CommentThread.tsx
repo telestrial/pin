@@ -10,11 +10,15 @@ import {
 } from '../../lib/comments'
 import type { EndorsedItem } from '../../lib/engagement'
 import { referenceAuthorFor } from '../../lib/engagement'
+import { buildMentionFacets } from '../../lib/facets'
 import { formatBytes } from '../../lib/format'
 import { useConversation } from '../../lib/hooks/useConversation'
+import { useMentionBox } from '../../lib/hooks/useMentionBox'
 import { useAuthStore } from '../../stores/auth'
 import { useFeedStore } from '../../stores/feed'
+import { MentionPicker } from '../MentionPicker'
 import { PostRow } from '../PostRow'
+import { RichBody } from '../RichBody'
 import { CommentFiles } from './CommentFiles'
 import { CommentEngagementRow } from './EngagementRow'
 
@@ -76,9 +80,11 @@ function CommentRow({
         onOpen={onOpen}
         onOpenPerson={onOpenPerson}
       >
-        <p className="text-sm text-neutral-900 whitespace-pre-wrap break-words">
-          {comment.body}
-        </p>
+        <RichBody
+          body={comment.body ?? ''}
+          facets={comment.facets}
+          onHandleClick={onOpenPerson}
+        />
         <CommentFiles
           files={comment.attachments}
           comment={comment}
@@ -130,6 +136,15 @@ export function CommentThread({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const filePicker = useRef<HTMLInputElement>(null)
+  const textarea = useRef<HTMLTextAreaElement>(null)
+  // The same `@` behaviour a post's composer has, from the same place. A comment carries
+  // facets exactly as a post does, so a mention here anchors to a DID rather than being an
+  // @name that resolves to nobody.
+  const mentionBox = useMentionBox({
+    value: draft,
+    setValue: setDraft,
+    textarea,
+  })
 
   useEffect(() => {
     let cancelled = false
@@ -180,9 +195,14 @@ export function CommentThread({
         await referenceAuthorFor(item.channelID),
         body,
         carried,
+        // Resolved against the FINAL body, which is what gets signed — so the offsets a
+        // reader slices by are the ones the words actually have. A mention whose surface
+        // the author edited away is dropped rather than left pointing at nothing.
+        buildMentionFacets(body, mentionBox.mentions),
       )
       setDraft('')
       setPicked([])
+      mentionBox.clear()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not add that comment')
     } finally {
@@ -263,13 +283,36 @@ export function CommentThread({
 
       <form onSubmit={submit} className="space-y-2">
         <textarea
+          ref={textarea}
           value={draft}
-          onChange={(e) => setDraft(e.target.value)}
+          onChange={(e) => {
+            setDraft(e.target.value)
+            mentionBox.onTextChanged(
+              e.target.value,
+              e.target.selectionStart ?? e.target.value.length,
+            )
+          }}
+          onSelect={(e) =>
+            mentionBox.onTextChanged(
+              e.currentTarget.value,
+              e.currentTarget.selectionStart ?? 0,
+            )
+          }
+          onKeyDown={mentionBox.onKeyDown}
           disabled={busy}
           rows={2}
           placeholder="Say something"
           className="w-full px-3 py-2 bg-white border border-neutral-300 rounded-lg text-sm text-neutral-900 placeholder-neutral-400 focus:outline-none focus:border-green-600 disabled:bg-neutral-50 disabled:text-neutral-500"
         />
+
+        {mentionBox.picker && (
+          <MentionPicker
+            candidates={mentionBox.picker.candidates}
+            loading={mentionBox.picker.loading}
+            activeIndex={mentionBox.picker.activeIndex}
+            onPick={mentionBox.picker.pick}
+          />
+        )}
 
         {picked.length > 0 && (
           <ul className="flex flex-wrap gap-2">
