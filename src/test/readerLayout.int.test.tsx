@@ -114,7 +114,11 @@ describe('integration: where a post’s conversation sits', () => {
     })
 
     const article = container.querySelector('article')
-    const thread = screen.getByText('Comments').closest('section')
+    // Anchored on the composer rather than a heading — the conversation carries no label,
+    // the same as the feed's composer.
+    const thread = screen
+      .getByPlaceholderText('Say something')
+      .closest('section')
     expect(article).toBeTruthy()
     expect(thread).toBeTruthy()
 

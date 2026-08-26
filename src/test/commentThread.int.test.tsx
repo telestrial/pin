@@ -23,6 +23,7 @@ import {
 } from '../../crates/pin-core/pkg/pin_core.js'
 import { CommentThread } from '../components/engagement/CommentThread'
 import type { ChannelManifest } from '../core/types'
+import { maxCommentBytes } from '../lib/comments'
 import { listRecords } from '../lib/docs'
 import { useFeedStore } from '../stores/feed'
 import { fakeDocStore as docStore } from './fakeModules'
@@ -128,10 +129,14 @@ describe('integration: a post’s conversation', () => {
     expect(await screen.findByText('second thing')).toBeTruthy()
   })
 
-  it('says so when nobody has commented', async () => {
+  it('offers the composer and nothing else when nobody has commented', async () => {
+    // Unlabelled, the way the feed's composer is: a box you can type in says what it is,
+    // and a heading over it is the app explaining its own furniture.
     manifestSays(true)
     render(<CommentThread item={ITEM} />)
-    expect(await screen.findByText('Nothing here yet.')).toBeTruthy()
+    expect(await screen.findByPlaceholderText('Say something')).toBeTruthy()
+    expect(screen.queryByText('Comments')).toBeNull()
+    expect(screen.queryByRole('listitem')).toBeNull()
   })
 
   it('writes a comment into the doc as a signed record', async () => {
@@ -142,7 +147,7 @@ describe('integration: a post’s conversation', () => {
 
     const box = await screen.findByPlaceholderText('Say something')
     await userEvent.type(box, 'worth saying')
-    await userEvent.click(screen.getByRole('button', { name: 'Comment' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Reply' }))
 
     await waitFor(async () => {
       expect(await listRecords(comment_collection())).toHaveLength(1)
@@ -173,7 +178,7 @@ describe('integration: a post’s conversation', () => {
     )
     expect(await screen.findByText('shot.png')).toBeTruthy()
 
-    await userEvent.click(screen.getByRole('button', { name: 'Comment' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Reply' }))
 
     await waitFor(async () => {
       expect(await listRecords(comment_collection())).toHaveLength(1)
@@ -217,7 +222,7 @@ describe('integration: a post’s conversation', () => {
       await screen.findByPlaceholderText('Say something'),
       'just words',
     )
-    await userEvent.click(screen.getByRole('button', { name: 'Comment' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Reply' }))
     await waitFor(async () => {
       expect(await listRecords(comment_collection())).toHaveLength(1)
     })
@@ -500,7 +505,7 @@ describe('integration: a post’s conversation', () => {
     const box = await screen.findByPlaceholderText('Say something')
     await userEvent.type(box, '   ')
     expect(
-      (screen.getByRole('button', { name: 'Comment' }) as HTMLButtonElement)
+      (screen.getByRole('button', { name: 'Reply' }) as HTMLButtonElement)
         .disabled,
     ).toBe(true)
     expect(await listRecords(comment_collection())).toHaveLength(0)
@@ -515,16 +520,25 @@ describe('integration: a post’s conversation', () => {
     })
   })
 
-  it('counts what it will take in bytes', async () => {
+  it('counts in bytes, and only once the count is worth showing', async () => {
     // The receiver's limit is in bytes, so a form counting characters would let through
     // four times what a host accepts and move the refusal to the signature.
+    //
+    // And it stays quiet until you are near it: a running total on an empty box is chrome,
+    // where the same number as you approach a limit you can actually hit is information.
     manifestSays(true)
     render(<CommentThread item={ITEM} />)
 
     const box = await screen.findByPlaceholderText('Say something')
     await userEvent.type(box, '😀')
+    expect(screen.queryByText(/bytes/)).toBeNull()
+
+    const max = await maxCommentBytes()
+    // One emoji is four bytes, so this lands just inside the limit and well past the
+    // threshold — the remaining count is what shows, not the running one.
+    fireEvent.change(box, { target: { value: `${'x'.repeat(max - 4)}😀` } })
     await waitFor(() => {
-      expect(screen.getByText(/^4 \/ \d+ bytes$/)).toBeTruthy()
+      expect(screen.getByText('0 bytes left')).toBeTruthy()
     })
   })
 })

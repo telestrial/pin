@@ -13,9 +13,14 @@ import { referenceAuthorFor } from '../../lib/engagement'
 import { buildMentionFacets } from '../../lib/facets'
 import { formatBytes } from '../../lib/format'
 import { useConversation } from '../../lib/hooks/useConversation'
+import {
+  useIdentityName,
+  useIdentityProfile,
+} from '../../lib/hooks/useIdentityName'
 import { useMentionBox } from '../../lib/hooks/useMentionBox'
 import { useAuthStore } from '../../stores/auth'
 import { useFeedStore } from '../../stores/feed'
+import { IdentityAvatar } from '../IdentityAvatar'
 import { MentionPicker } from '../MentionPicker'
 import { PostRow } from '../PostRow'
 import { RichBody } from '../RichBody'
@@ -123,6 +128,8 @@ export function CommentThread({
 }) {
   const storedKeyHex = useAuthStore((s) => s.storedKeyHex)
   const myDidDht = useAuthStore((s) => s.myDidDht)
+  const myProfile = useIdentityProfile(myDidDht ?? '')
+  const myName = useIdentityName(myDidDht ?? '')
   const takesComments =
     useFeedStore((s) => s.manifests[item.channelID])?.comments === true
   const conversation = useConversation(item)
@@ -170,6 +177,8 @@ export function CommentThread({
 
   const used = bodyBytes(draft)
   const overLimit = limit !== LIMIT_UNKNOWN && used > limit
+  // Near enough that the number is worth showing — a tenth of the way from the end.
+  const nearLimit = limit !== LIMIT_UNKNOWN && used > limit * 0.9
   const full = fileCap !== FILE_CAP_UNKNOWN && picked.length >= fileCap
 
   async function submit(e: React.FormEvent) {
@@ -254,56 +263,48 @@ export function CommentThread({
     // the card with it rather than being wrapped by its callers, because it renders NOTHING
     // on a channel that takes no comments — and a caller wrapping it would leave an empty
     // card sitting under those posts.
-    <section className="bg-white border border-neutral-200 rounded-lg p-5 space-y-4">
-      <h2 className="text-xs font-medium text-neutral-700 uppercase tracking-wider">
-        Comments
-      </h2>
-
-      {comments.length > 0 ? (
-        <ul className="space-y-3">
-          {comments.map((c) => (
-            <CommentRow
-              key={c.sig}
-              comment={c}
-              post={{
-                channelID: item.channelID,
-                publishedAt: item.publishedAt,
+    <section className="space-y-4">
+      {/* The composer FIRST and unlabelled, the way the feed's is. A box you can type in
+          says what it is; a heading over it is the app explaining its own furniture. It
+          sits above the replies for the same reason every microblog puts it there — the
+          thing you came to do is nearer than the thing you came to read. */}
+      <form
+        onSubmit={submit}
+        className="bg-white border border-neutral-200 rounded-lg p-3"
+      >
+        <div className="flex items-start gap-3">
+          {/* Yourself, not a channel: a comment is written as you. The feed's composer
+              shows the voice you are publishing AS, and a comment has none. */}
+          <IdentityAvatar
+            didDht={myDidDht ?? ''}
+            name={myName}
+            avatarURL={myProfile?.avatarURL ?? undefined}
+          />
+          <div className="flex-1 min-w-0">
+            <textarea
+              ref={textarea}
+              value={draft}
+              onChange={(e) => {
+                setDraft(e.target.value)
+                mentionBox.onTextChanged(
+                  e.target.value,
+                  e.target.selectionStart ?? e.target.value.length,
+                )
               }}
-              onWithdraw={
-                c.actor === myDidDht ? () => void remove(c) : undefined
+              onSelect={(e) =>
+                mentionBox.onTextChanged(
+                  e.currentTarget.value,
+                  e.currentTarget.selectionStart ?? 0,
+                )
               }
-              onOpenPerson={onHandleClick}
-              onOpen={onOpenComment && (() => onOpenComment(c))}
+              onKeyDown={mentionBox.onKeyDown}
+              disabled={busy}
+              rows={1}
+              placeholder="Say something"
+              className="block w-full mt-1.5 bg-transparent text-sm text-black placeholder-neutral-400 focus:outline-none resize-none border-0 p-0 field-sizing-content max-h-60 overflow-y-auto"
             />
-          ))}
-        </ul>
-      ) : (
-        <p className="text-sm text-neutral-500">Nothing here yet.</p>
-      )}
-
-      <form onSubmit={submit} className="space-y-2">
-        <textarea
-          ref={textarea}
-          value={draft}
-          onChange={(e) => {
-            setDraft(e.target.value)
-            mentionBox.onTextChanged(
-              e.target.value,
-              e.target.selectionStart ?? e.target.value.length,
-            )
-          }}
-          onSelect={(e) =>
-            mentionBox.onTextChanged(
-              e.currentTarget.value,
-              e.currentTarget.selectionStart ?? 0,
-            )
-          }
-          onKeyDown={mentionBox.onKeyDown}
-          disabled={busy}
-          rows={2}
-          placeholder="Say something"
-          className="w-full px-3 py-2 bg-white border border-neutral-300 rounded-lg text-sm text-neutral-900 placeholder-neutral-400 focus:outline-none focus:border-green-600 disabled:bg-neutral-50 disabled:text-neutral-500"
-        />
+          </div>
+        </div>
 
         {mentionBox.picker && (
           <MentionPicker
@@ -315,7 +316,7 @@ export function CommentThread({
         )}
 
         {picked.length > 0 && (
-          <ul className="flex flex-wrap gap-2">
+          <ul className="mt-3 flex flex-wrap gap-2">
             {picked.map((f) => (
               <li
                 key={f.id}
@@ -341,46 +342,70 @@ export function CommentThread({
           </ul>
         )}
 
-        <div className="flex items-center justify-between gap-2">
-          <p className="text-xs text-neutral-500">
-            {error ??
-              (overLimit
-                ? `${used - limit} bytes too long`
-                : // Bytes, because bytes are what the receiver counts.
-                  `${used}${limit === LIMIT_UNKNOWN ? '' : ` / ${limit}`} bytes`)}
-          </p>
-          <div className="flex items-center gap-2">
-            <input
-              ref={filePicker}
-              type="file"
-              multiple
-              hidden
-              onChange={(e) => {
-                void pick(e.target.files)
-                // Cleared so picking the same file twice in a row still fires a change.
-                e.target.value = ''
-              }}
-            />
-            <button
-              type="button"
-              onClick={() => filePicker.current?.click()}
-              disabled={busy || fileCap === FILE_CAP_UNKNOWN || full}
-              aria-label="Attach a file"
-              title={full ? `At most ${fileCap} files` : 'Attach a file'}
-              className="p-1.5 text-neutral-500 hover:text-neutral-900 cursor-pointer disabled:text-neutral-300 disabled:cursor-default"
+        <div className="mt-2 flex items-center justify-end gap-2">
+          {/* Only when it matters. A running byte count on an empty box is chrome; the
+              same number as you approach a limit you can actually hit is information. */}
+          {(error || nearLimit) && (
+            <p
+              className={`mr-auto text-xs ${overLimit ? 'text-red-600' : 'text-neutral-500'}`}
             >
-              <Paperclip size={16} />
-            </button>
-            <button
-              type="submit"
-              disabled={busy || overLimit || draft.trim() === ''}
-              className="px-3 py-1.5 text-sm font-medium text-white bg-green-700 hover:bg-green-600 rounded-lg transition-colors cursor-pointer disabled:bg-neutral-300 disabled:cursor-default"
-            >
-              {busy ? 'Adding…' : 'Comment'}
-            </button>
-          </div>
+              {error ??
+                (overLimit
+                  ? `${used - limit} bytes too long`
+                  : // Bytes, because bytes are what the receiver counts.
+                    `${limit - used} bytes left`)}
+            </p>
+          )}
+          <input
+            ref={filePicker}
+            type="file"
+            multiple
+            hidden
+            onChange={(e) => {
+              void pick(e.target.files)
+              // Cleared so picking the same file twice in a row still fires a change.
+              e.target.value = ''
+            }}
+          />
+          <button
+            type="button"
+            onClick={() => filePicker.current?.click()}
+            disabled={busy || fileCap === FILE_CAP_UNKNOWN || full}
+            aria-label="Attach a file"
+            title={full ? `At most ${fileCap} files` : 'Attach a file'}
+            className="p-1.5 text-neutral-500 hover:text-neutral-900 cursor-pointer disabled:text-neutral-300 disabled:cursor-default"
+          >
+            <Paperclip size={16} />
+          </button>
+          <button
+            type="submit"
+            disabled={busy || overLimit || draft.trim() === ''}
+            className="px-4 py-1.5 bg-green-600 hover:bg-green-700 disabled:bg-neutral-200 disabled:text-neutral-400 text-white text-sm font-medium rounded-md transition-colors"
+          >
+            {busy ? 'Adding…' : 'Reply'}
+          </button>
         </div>
       </form>
+
+      {comments.length > 0 && (
+        <ul className="bg-white border border-neutral-200 rounded-lg p-5 space-y-3">
+          {comments.map((c) => (
+            <CommentRow
+              key={c.sig}
+              comment={c}
+              post={{
+                channelID: item.channelID,
+                publishedAt: item.publishedAt,
+              }}
+              onWithdraw={
+                c.actor === myDidDht ? () => void remove(c) : undefined
+              }
+              onOpenPerson={onHandleClick}
+              onOpen={onOpenComment && (() => onOpenComment(c))}
+            />
+          ))}
+        </ul>
+      )}
     </section>
   )
 }
