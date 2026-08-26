@@ -96,6 +96,7 @@ export const sia_wait_for_approval: () => any;
 export const sign_comment: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number) => [number, number, number, number];
 export const sign_comment_endorsement: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => [number, number, number, number];
 export const sign_endorsement: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number) => [number, number, number, number];
+export const sign_reply: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number) => [number, number, number, number];
 export const start_channel_doc_loop: (a: number, b: number, c: number, d: any) => any;
 export const start_channel_sync_loop: (a: number, b: number, c: number, d: number, e: any) => any;
 export const start_deliver_loop: (a: number, b: number, c: number, d: number, e: number, f: any) => any;

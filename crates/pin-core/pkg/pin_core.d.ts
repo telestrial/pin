@@ -638,6 +638,24 @@ export function sign_comment_endorsement(app_key_hex: string, kind: string, acto
  */
 export function sign_endorsement(app_key_hex: string, kind: string, channel_id: string, published_at: string, version: string, reference_did_dht: string | null | undefined, attachment: string | null | undefined, now: string): string;
 
+/**
+ * Sign one REPLY: a comment whose subject is another comment.
+ *
+ * The same record as any other comment, addressed at a different kind of subject — which is
+ * the whole of what makes threading work here, and why it needs no new field. `subject`
+ * names anything, a held comment is already registered as a subject by its host, so a reply
+ * is folded and counted against its parent exactly as a comment is against a post.
+ *
+ * `version` is the PARENT's signature, which is what a comment has instead of a content
+ * hash: it moves when the words do and is stable otherwise.
+ *
+ * No reference, at any visibility tier, for the reason `sign_comment_endorsement` gives: a
+ * `SubjectRef` describes a post, and a comment's subject is derived from neither an author
+ * nor a channel, so coordinates here would not reproduce it and the self-check would reject
+ * them.
+ */
+export function sign_reply(app_key_hex: string, parent_actor: string, parent_created_at: string, version: string, body: string, carried_json: string | null | undefined, now: string): string;
+
 export function start(): void;
 
 /**
@@ -945,6 +963,7 @@ export interface InitOutput {
     readonly sign_comment: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number) => [number, number, number, number];
     readonly sign_comment_endorsement: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => [number, number, number, number];
     readonly sign_endorsement: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number) => [number, number, number, number];
+    readonly sign_reply: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number) => [number, number, number, number];
     readonly start_channel_doc_loop: (a: number, b: number, c: number, d: any) => any;
     readonly start_channel_sync_loop: (a: number, b: number, c: number, d: number, e: any) => any;
     readonly start_deliver_loop: (a: number, b: number, c: number, d: number, e: number, f: any) => any;

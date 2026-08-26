@@ -18,6 +18,7 @@ import {
   max_comment_attachments,
   max_comment_bytes,
   sign_comment,
+  sign_reply,
 } from '../../crates/pin-core/pkg/pin_core.js'
 import type { SiaClient } from '../core/siaClient'
 import type { ItemType } from '../core/types'
@@ -193,18 +194,40 @@ export async function writeComment(
   await openDocs(appKeyHex)
 
   const attachments = carried.map((c) => c.attachment)
+  const files = attachments.length > 0 ? JSON.stringify(attachments) : undefined
+
+  // A REPLY when the thing being commented on is itself a comment. The same record either
+  // way — only the subject differs, which is exactly what makes threading need no new
+  // field: `subject` names anything, and a host registers every comment it holds as a
+  // subject, so a reply is folded and counted against its parent the way a comment is
+  // against a post.
+  //
+  // No reference on a reply, at any tier: a `SubjectRef` describes a post, and a comment's
+  // subject is derived from neither an author nor a channel, so coordinates would not
+  // reproduce it and the record's own self-check would reject them.
   const { record, commentID } = JSON.parse(
-    sign_comment(
-      appKeyHex,
-      item.channelID,
-      item.publishedAt,
-      item.contentHash ?? '',
-      referenceAuthor ?? undefined,
-      item.attachment,
-      body,
-      attachments.length > 0 ? JSON.stringify(attachments) : undefined,
-      now,
-    ),
+    item.comment
+      ? sign_reply(
+          appKeyHex,
+          item.comment.actor,
+          item.comment.createdAt,
+          // A comment has no content hash; its signature is what a version records.
+          item.contentHash ?? '',
+          body,
+          files,
+          now,
+        )
+      : sign_comment(
+          appKeyHex,
+          item.channelID,
+          item.publishedAt,
+          item.contentHash ?? '',
+          referenceAuthor ?? undefined,
+          item.attachment,
+          body,
+          files,
+          now,
+        ),
   ) as { record: unknown; commentID: string }
 
   const subject = subjectOf(record)
@@ -256,15 +279,7 @@ export async function withdrawComment(
 ): Promise<void> {
   await ensureWasm()
   await openDocs(appKeyHex)
-  const { engagement_subject } = await import(
-    '../../crates/pin-core/pkg/pin_core.js'
-  )
-  const subject = engagement_subject(
-    item.channelID,
-    item.publishedAt,
-    item.attachment,
-  )
-  const rkey = comment_rkey(subject, commentID)
+  const rkey = comment_rkey(await subjectFor(item), commentID)
   // The record first, that being the withdrawal itself, and the seal mark after. A seal mark
   // left behind classifies nothing and is picked up by no pass.
   //
@@ -284,17 +299,9 @@ export async function holdsComment(
   commentID: string,
 ): Promise<boolean> {
   await ensureWasm()
-  const { engagement_subject } = await import(
-    '../../crates/pin-core/pkg/pin_core.js'
-  )
-  const subject = engagement_subject(
-    item.channelID,
-    item.publishedAt,
-    item.attachment,
-  )
   const held = await getRecord(
     await collection(),
-    comment_rkey(subject, commentID),
+    comment_rkey(await subjectFor(item), commentID),
   )
   return held !== null && held !== undefined
 }
@@ -404,6 +411,21 @@ function itemTypeForMime(mimeType: string): ItemType {
   if (mimeType.startsWith('video/')) return 'video'
   if (mimeType === 'text/html') return 'app'
   return 'file'
+}
+
+/** The subject a comment on this thing is addressed at.
+ *
+ *  One derivation for every caller that has to find a comment again — taking it back,
+ *  asking whether we still hold it — so a reply cannot be written at one address and looked
+ *  for at another. That class of bug is why the write path reads its subject off the signed
+ *  record rather than recomputing it. */
+async function subjectFor(item: EndorsedItem): Promise<string> {
+  const { comment_subject, engagement_subject } = await import(
+    '../../crates/pin-core/pkg/pin_core.js'
+  )
+  return item.comment
+    ? comment_subject(item.comment.actor, item.comment.createdAt)
+    : engagement_subject(item.channelID, item.publishedAt, item.attachment)
 }
 
 /** The subject a signed record names, read back off the record itself.

@@ -1964,6 +1964,54 @@ pub fn sign_comment(
     }))
 }
 
+/// Sign one REPLY: a comment whose subject is another comment.
+///
+/// The same record as any other comment, addressed at a different kind of subject — which is
+/// the whole of what makes threading work here, and why it needs no new field. `subject`
+/// names anything, a held comment is already registered as a subject by its host, so a reply
+/// is folded and counted against its parent exactly as a comment is against a post.
+///
+/// `version` is the PARENT's signature, which is what a comment has instead of a content
+/// hash: it moves when the words do and is stable otherwise.
+///
+/// No reference, at any visibility tier, for the reason `sign_comment_endorsement` gives: a
+/// `SubjectRef` describes a post, and a comment's subject is derived from neither an author
+/// nor a channel, so coordinates here would not reproduce it and the self-check would reject
+/// them.
+#[wasm_bindgen]
+pub fn sign_reply(
+    app_key_hex: &str,
+    parent_actor: &str,
+    parent_created_at: &str,
+    version: &str,
+    body: &str,
+    carried_json: Option<String>,
+    now: &str,
+) -> Result<String, JsValue> {
+    let app_key = decode_app_key(app_key_hex)
+        .ok_or_else(|| JsValue::from_str("app key must be 32 bytes of hex"))?;
+    let carried: Vec<pin_engagement::CommentAttachment> = match carried_json.as_deref() {
+        None | Some("") => Vec::new(),
+        Some(json) => serde_json::from_str(json)
+            .map_err(|e| JsValue::from_str(&format!("attachments: {e}")))?,
+    };
+    let record = pin_engagement::Endorsement::sign_comment(
+        &pin_derive::did_dht_seed(&app_key),
+        &pin_crypto::comment_subject(parent_actor, parent_created_at),
+        version,
+        now,
+        None,
+        body,
+        carried,
+    )
+    .map_err(|e| JsValue::from_str(&e))?;
+    record.verify().map_err(|e| JsValue::from_str(&e))?;
+    out(&serde_json::json!({
+        "record": serde_json::to_value(&record).map_err(je)?,
+        "commentID": record.comment_id(),
+    }))
+}
+
 /// The longest body a comment may carry, in bytes. Exposed so a composer can say no before
 /// somebody writes past it, rather than failing at the signature.
 #[wasm_bindgen]

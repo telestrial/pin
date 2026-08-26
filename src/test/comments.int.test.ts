@@ -302,6 +302,52 @@ describe('integration: writing a comment', () => {
     expect(await held()).toHaveLength(0)
   })
 
+  it('addresses a reply at the comment it answers', async () => {
+    // Threading needs no new field: a reply is a comment whose SUBJECT is another comment,
+    // and a host already registers every comment it holds as a subject — so the fold counts
+    // a reply against its parent exactly as it counts a comment against a post.
+    const { comment_subject } = await import(
+      '../../crates/pin-core/pkg/pin_core.js'
+    )
+    const parent = {
+      actor: 'did:dht:bob',
+      createdAt: '2026-08-25T09:00:00.000Z',
+    }
+    const id = await writeComment(
+      FAKE_APP_KEY_HEX,
+      { ...ITEM, contentHash: 'sig-of-parent', comment: parent },
+      null,
+      'answering that',
+    )
+
+    const rkeys = await held()
+    expect(rkeys).toEqual([
+      `${comment_subject(parent.actor, parent.createdAt)}:${id}`,
+    ])
+    const record = decode((await getStored(rkeys[0])) as Uint8Array)
+    expect(record.subject).toBe(comment_subject(parent.actor, parent.createdAt))
+    expect(record.body).toBe('answering that')
+    // No reference, at any tier: a SubjectRef describes a post, and a comment's subject is
+    // derived from neither an author nor a channel, so coordinates could not reproduce it.
+    expect(record.ref).toBeUndefined()
+  })
+
+  it('finds a reply again at the address it was written to', async () => {
+    // Written at one address and looked for at another is the bug class that made a like
+    // and a pin share a key. Taking one back has to derive the subject the same way.
+    const parent = {
+      actor: 'did:dht:bob',
+      createdAt: '2026-08-25T09:00:00.000Z',
+    }
+    const target = { ...ITEM, contentHash: 'sig-of-parent', comment: parent }
+    const id = await writeComment(FAKE_APP_KEY_HEX, target, null, 'regretted')
+
+    expect(await holdsComment(target, id)).toBe(true)
+    await withdrawComment(FAKE_APP_KEY_HEX, target, id)
+    expect(await holdsComment(target, id)).toBe(false)
+    expect(await held()).toHaveLength(0)
+  })
+
   it('takes a comment back by deleting the record', async () => {
     const id = await writeComment(FAKE_APP_KEY_HEX, ITEM, null, 'regretted')
     expect(await holdsComment(ITEM, id)).toBe(true)
