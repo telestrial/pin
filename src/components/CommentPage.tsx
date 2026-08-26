@@ -56,8 +56,11 @@ export function CommentPage({
     <div className="flex-1 p-6 lg:min-h-0">
       <div className="flex flex-col gap-6 lg:h-full lg:min-h-0 lg:flex-row lg:items-start">
         {sidebar}
-        <div className="flex-1 space-y-5 min-w-0 lg:max-h-full lg:overflow-y-auto">
-          <div className="border border-neutral-200 rounded-lg bg-white p-6 space-y-6">
+        <div className="flex-1 space-y-6 min-w-0 lg:max-h-full lg:overflow-y-auto">
+          {/* The comment in its own card and the replies in theirs, which is the shape a
+              post's page has — the head of the thread is the thing, and what was said back
+              to it sits beneath. Back lives in the FIRST card, as it does everywhere. */}
+          <div className="border border-neutral-200 rounded-lg bg-white p-5 space-y-5">
             <button
               type="button"
               onClick={onBack}
@@ -85,13 +88,13 @@ export function CommentPage({
               />
               <CommentEngagementRow comment={comment} post={post} />
             </PostRow>
-
-            <CommentThread
-              item={replyTarget}
-              onHandleClick={onHandleClick}
-              onOpenComment={onOpenComment}
-            />
           </div>
+
+          <CommentThread
+            item={replyTarget}
+            onHandleClick={onHandleClick}
+            onOpenComment={onOpenComment}
+          />
         </div>
         {rightSidebar}
       </div>

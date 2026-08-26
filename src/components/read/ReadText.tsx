@@ -98,128 +98,132 @@ export function ReadText({
     <div className="flex-1 p-6 lg:min-h-0">
       <div className="flex flex-col gap-6 lg:h-full lg:min-h-0 lg:flex-row lg:items-start">
         {sidebar}
-        <article className="flex-1 min-w-0 bg-white border border-neutral-200 rounded-lg p-5 space-y-5 lg:max-h-full lg:overflow-y-auto">
-          <div className="flex items-center justify-between gap-2">
-            <button
-              type="button"
-              onClick={onBack}
-              className="inline-flex items-center px-2.5 py-1 text-xs font-medium text-neutral-600 hover:text-neutral-900 bg-neutral-100 hover:bg-neutral-200 rounded-full transition-colors cursor-pointer"
-            >
-              {backLabel}
-            </button>
-            <div className="flex items-center gap-1.5">
-              {onEdit && (
-                <button
-                  type="button"
-                  onClick={onEdit}
-                  className="px-2.5 py-1 text-xs font-medium text-neutral-600 hover:text-neutral-900 bg-neutral-100 hover:bg-neutral-200 rounded-full transition-colors cursor-pointer"
-                >
-                  Edit
-                </button>
-              )}
-              <EngagementRow input={pinInput} entry={entry} />
+        <div className="flex-1 min-w-0 space-y-6 lg:max-h-full lg:overflow-y-auto">
+          <article className="bg-white border border-neutral-200 rounded-lg p-5 space-y-5">
+            <div className="flex items-center justify-between gap-2">
+              <button
+                type="button"
+                onClick={onBack}
+                className="inline-flex items-center px-2.5 py-1 text-xs font-medium text-neutral-600 hover:text-neutral-900 bg-neutral-100 hover:bg-neutral-200 rounded-full transition-colors cursor-pointer"
+              >
+                {backLabel}
+              </button>
+              <div className="flex items-center gap-1.5">
+                {onEdit && (
+                  <button
+                    type="button"
+                    onClick={onEdit}
+                    className="px-2.5 py-1 text-xs font-medium text-neutral-600 hover:text-neutral-900 bg-neutral-100 hover:bg-neutral-200 rounded-full transition-colors cursor-pointer"
+                  >
+                    Edit
+                  </button>
+                )}
+                <EngagementRow input={pinInput} entry={entry} />
+              </div>
             </div>
-          </div>
 
-          <header className="space-y-2">
-            <p className="text-sm text-neutral-500">
-              <span className="font-medium text-neutral-900">
-                {channelName}
-              </span>{' '}
-              · {formatRelative(displayItem.publishedAt)}
-              {displayItem.editedAt && (
-                <span title={`Edited ${formatAbsolute(displayItem.editedAt)}`}>
-                  {' · edited '}
-                  {formatRelative(displayItem.editedAt)}
-                </span>
-              )}
-            </p>
-            {displayItem.title && (
-              <p className="text-base font-semibold text-neutral-900 wrap-break-word">
-                {displayItem.title}
+            <header className="space-y-2">
+              <p className="text-sm text-neutral-500">
+                <span className="font-medium text-neutral-900">
+                  {channelName}
+                </span>{' '}
+                · {formatRelative(displayItem.publishedAt)}
+                {displayItem.editedAt && (
+                  <span
+                    title={`Edited ${formatAbsolute(displayItem.editedAt)}`}
+                  >
+                    {' · edited '}
+                    {formatRelative(displayItem.editedAt)}
+                  </span>
+                )}
               </p>
-            )}
-            {isRetracted ? (
-              <p className="text-sm italic text-neutral-500">
-                This post was retracted by the author. You're viewing your
-                pinned copy.
-              </p>
-            ) : (
-              driftedPin && (
-                <p className="text-sm text-neutral-500 flex items-center gap-2 flex-wrap">
-                  {showYours ? (
-                    <>
-                      <span>Showing your pinned version.</span>
-                      <button
-                        type="button"
-                        onClick={() => setViewYours(false)}
-                        className="px-2 py-0.5 text-xs font-medium text-neutral-700 hover:text-neutral-900 bg-neutral-100 hover:bg-neutral-200 rounded-full transition-colors cursor-pointer"
-                      >
-                        View current
-                      </button>
-                    </>
-                  ) : (
-                    <>
-                      <span>You pinned an earlier version.</span>
-                      <button
-                        type="button"
-                        onClick={() => setViewYours(true)}
-                        className="px-2 py-0.5 text-xs font-medium text-neutral-700 hover:text-neutral-900 bg-neutral-100 hover:bg-neutral-200 rounded-full transition-colors cursor-pointer"
-                      >
-                        View yours
-                      </button>
-                    </>
-                  )}
+              {displayItem.title && (
+                <p className="text-base font-semibold text-neutral-900 wrap-break-word">
+                  {displayItem.title}
                 </p>
-              )
+              )}
+              {isRetracted ? (
+                <p className="text-sm italic text-neutral-500">
+                  This post was retracted by the author. You're viewing your
+                  pinned copy.
+                </p>
+              ) : (
+                driftedPin && (
+                  <p className="text-sm text-neutral-500 flex items-center gap-2 flex-wrap">
+                    {showYours ? (
+                      <>
+                        <span>Showing your pinned version.</span>
+                        <button
+                          type="button"
+                          onClick={() => setViewYours(false)}
+                          className="px-2 py-0.5 text-xs font-medium text-neutral-700 hover:text-neutral-900 bg-neutral-100 hover:bg-neutral-200 rounded-full transition-colors cursor-pointer"
+                        >
+                          View current
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <span>You pinned an earlier version.</span>
+                        <button
+                          type="button"
+                          onClick={() => setViewYours(true)}
+                          className="px-2 py-0.5 text-xs font-medium text-neutral-700 hover:text-neutral-900 bg-neutral-100 hover:bg-neutral-200 rounded-full transition-colors cursor-pointer"
+                        >
+                          View yours
+                        </button>
+                      </>
+                    )}
+                  </p>
+                )
+              )}
+            </header>
+
+            {error ? (
+              <p className="text-red-600 text-sm wrap-break-word">{error}</p>
+            ) : html === null ? (
+              <p className="text-neutral-500 text-sm">Loading…</p>
+            ) : (
+              // biome-ignore lint/a11y/noStaticElementInteractions: click delegates to nested <a> mentions, which are natively interactive
+              // biome-ignore lint/a11y/useKeyWithClickEvents: delegates to nested <a> mentions, which are natively keyboard-accessible
+              <div
+                className="markdown wrap-break-word text-base sm:text-lg"
+                onClick={handleBodyClick}
+                // biome-ignore lint/security/noDangerouslySetInnerHtml: HTML is sanitized via DOMPurify
+                dangerouslySetInnerHTML={{ __html: html }}
+              />
             )}
-          </header>
 
-          {error ? (
-            <p className="text-red-600 text-sm wrap-break-word">{error}</p>
-          ) : html === null ? (
-            <p className="text-neutral-500 text-sm">Loading…</p>
-          ) : (
-            // biome-ignore lint/a11y/noStaticElementInteractions: click delegates to nested <a> mentions, which are natively interactive
-            // biome-ignore lint/a11y/useKeyWithClickEvents: delegates to nested <a> mentions, which are natively keyboard-accessible
-            <div
-              className="markdown wrap-break-word text-base sm:text-lg"
-              onClick={handleBodyClick}
-              // biome-ignore lint/security/noDangerouslySetInnerHtml: HTML is sanitized via DOMPurify
-              dangerouslySetInnerHTML={{ __html: html }}
-            />
-          )}
-
-          {displayItem.attachments && displayItem.attachments.length > 0 && (
-            <AttachmentGrid
-              attachments={displayItem.attachments}
-              channelID={channelID}
-              itemID={item.id}
-              publishedAt={item.publishedAt}
-            />
-          )}
-
-          <footer className="pt-2 text-xs text-neutral-500">
-            {formatAbsolute(displayItem.publishedAt)}
-            {displayItem.editedAt && (
-              <>
-                {' · edited '}
-                {formatAbsolute(displayItem.editedAt)}
-              </>
+            {displayItem.attachments && displayItem.attachments.length > 0 && (
+              <AttachmentGrid
+                attachments={displayItem.attachments}
+                channelID={channelID}
+                itemID={item.id}
+                publishedAt={item.publishedAt}
+              />
             )}
-          </footer>
-        </article>
-        {/* Under the post, and only on a channel that takes comments — the component
+
+            <footer className="pt-2 text-xs text-neutral-500">
+              {formatAbsolute(displayItem.publishedAt)}
+              {displayItem.editedAt && (
+                <>
+                  {' · edited '}
+                  {formatAbsolute(displayItem.editedAt)}
+                </>
+              )}
+            </footer>
+          </article>
+          {/* Under the post, and only on a channel that takes comments — the component
             decides that for itself, so every reader page asks the same way. */}
-        <CommentThread
-          onHandleClick={onHandleClick}
-          onOpenComment={onOpenComment}
-          item={{
-            channelID: pinInput.channel.channelID,
-            publishedAt: item.publishedAt,
-            contentHash: item.contentHash,
-          }}
-        />
+          <CommentThread
+            onHandleClick={onHandleClick}
+            onOpenComment={onOpenComment}
+            item={{
+              channelID: pinInput.channel.channelID,
+              publishedAt: item.publishedAt,
+              contentHash: item.contentHash,
+            }}
+          />
+        </div>
         {rightSidebar}
       </div>
     </div>

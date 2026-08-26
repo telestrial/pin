@@ -230,7 +230,11 @@ export function CommentThread({
   const comments = conversation?.comments ?? []
 
   return (
-    <section className="space-y-4">
+    // Its own card on the app's canvas, the way every other block of content is. It brings
+    // the card with it rather than being wrapped by its callers, because it renders NOTHING
+    // on a channel that takes no comments — and a caller wrapping it would leave an empty
+    // card sitting under those posts.
+    <section className="bg-white border border-neutral-200 rounded-lg p-5 space-y-4">
       <h2 className="text-xs font-medium text-neutral-700 uppercase tracking-wider">
         Comments
       </h2>
