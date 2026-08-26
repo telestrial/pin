@@ -105,6 +105,9 @@ const TAG_BODY: &str = "body";
 /// The signed-bytes tag for a comment's attachments.
 const TAG_ATTACHMENTS: &str = "attachments";
 
+/// The signed-bytes tag for a comment's facets.
+const TAG_FACETS: &str = "facets";
+
 /// The signed-bytes tag for the record a retraction names.
 const TAG_TARGET: &str = "target";
 
@@ -216,6 +219,13 @@ pub struct Endorsement {
     /// before the field existed still serializes to exactly what it did.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<CommentAttachment>,
+    /// Annotations over the body: today, who it mentions.
+    ///
+    /// A comment is post-shaped to a reader, and a post carries these on its `ItemRef` — so
+    /// a comment carries them too, or mentioning somebody in one would be typing an @name
+    /// that resolves to nobody.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub facets: Vec<Facet>,
 }
 
 /// A file a comment carries, which the commenter goes on carrying.
@@ -265,6 +275,46 @@ pub struct CommentAttachment {
     /// bytes, and this is the layer that fingerprints the content itself.
     #[serde(rename = "contentHash")]
     pub content_hash: String,
+}
+
+/// Where in a comment's body a facet applies. UTF-8 BYTE offsets, the Bluesky convention,
+/// so a multibyte body stays correct.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FacetIndex {
+    #[serde(rename = "byteStart")]
+    pub byte_start: u32,
+    #[serde(rename = "byteEnd")]
+    pub byte_end: u32,
+}
+
+/// A mention of a person inside a comment, anchored by DID.
+///
+/// The DID is the whole point and is why this has to be SIGNED. A name is non-unique and
+/// self-asserted, so what makes a mention resolve to anybody is the key underneath it — and
+/// an unsigned one could be altered in flight to leave the visible @name alone while
+/// pointing it at somebody else. The host publishes a comment's words, so that is a party
+/// who would be able to do it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MentionFeature {
+    #[serde(rename = "$type")]
+    pub type_: String,
+    pub did: String,
+    /// What they were called when the mention was made. A snapshot for rendering, never
+    /// re-resolved, and never what identifies them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handle: Option<String>,
+}
+
+/// A typed annotation over a byte range of a comment's body.
+///
+/// Byte-identical in shape to a post's, deliberately: a comment is post-shaped to a reader,
+/// so the thing that renders a mention should not have to ask which it is looking at. One
+/// feature type today, and a reader ignores what it does not understand, so this grows
+/// without a schema bump.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Facet {
+    pub index: FacetIndex,
+    pub features: Vec<MentionFeature>,
 }
 
 /// Append a length-prefixed field. Length-delimited rather than separated, so no field's
@@ -321,6 +371,35 @@ fn attachments_signing_value(attachments: &[CommentAttachment]) -> Option<String
     Some(pin_crypto::b64_encode(&out))
 }
 
+/// What a comment's facets contribute to its signature, or `None` when there are none.
+///
+/// EVERYTHING, unlike an attachment where the url is left out: there is no repack here to
+/// move anything, and every part of a facet decides what a reader resolves. The range says
+/// which text is the mention, the DID says who, and the type says how to read the feature —
+/// alter any one and the mention points somewhere its author did not put it.
+///
+/// The handle is signed too, even though it is only a rendering snapshot. It is what a
+/// reader SEES, so leaving it out would let it be swapped to name one person over another
+/// person's key.
+fn facets_signing_value(facets: &[Facet]) -> Option<String> {
+    if facets.is_empty() {
+        return None;
+    }
+    let mut out = Vec::with_capacity(facets.len() * 96);
+    for f in facets {
+        push_field(&mut out, &f.index.byte_start.to_string());
+        push_field(&mut out, &f.index.byte_end.to_string());
+        // The count, so features cannot be added or dropped inside one facet.
+        push_field(&mut out, &f.features.len().to_string());
+        for feature in &f.features {
+            push_field(&mut out, &feature.type_);
+            push_field(&mut out, &feature.did);
+            push_field(&mut out, feature.handle.as_deref().unwrap_or_default());
+        }
+    }
+    Some(pin_crypto::b64_encode(&out))
+}
+
 impl Endorsement {
     /// The exact bytes a signature covers.
     ///
@@ -353,6 +432,11 @@ impl Endorsement {
             TAG_ATTACHMENTS,
             attachments_signing_value(&self.attachments).as_deref(),
         );
+        push_tagged(
+            &mut out,
+            TAG_FACETS,
+            facets_signing_value(&self.facets).as_deref(),
+        );
         out
     }
 
@@ -374,6 +458,7 @@ impl Endorsement {
             reference,
             None,
             Vec::new(),
+            Vec::new(),
         )
     }
 
@@ -392,6 +477,7 @@ impl Endorsement {
         reference: Option<SubjectRef>,
         body: &str,
         attachments: Vec<CommentAttachment>,
+        facets: Vec<Facet>,
     ) -> Result<Self, String> {
         Self::signed(
             did_dht_seed,
@@ -402,6 +488,7 @@ impl Endorsement {
             reference,
             Some(body),
             attachments,
+            facets,
         )
     }
 
@@ -415,6 +502,7 @@ impl Endorsement {
         reference: Option<SubjectRef>,
         body: Option<&str>,
         attachments: Vec<CommentAttachment>,
+        facets: Vec<Facet>,
     ) -> Result<Self, String> {
         let mut record = Endorsement {
             kind: kind.to_string(),
@@ -427,6 +515,7 @@ impl Endorsement {
             body: body.map(str::to_string),
             body_url: None,
             attachments,
+            facets,
         };
         record.sig = pin_pkarr::sign_detached(did_dht_seed, &record.signing_bytes())?;
         Ok(record)
@@ -487,7 +576,8 @@ impl Endorsement {
                     }
                     Some(_) => {}
                 }
-                self.check_attachments()
+                self.check_attachments()?;
+                self.check_facets()
             }
             KIND_LIKE | KIND_PIN | KIND_REPOST if self.body.is_some() => {
                 Err(format!("a {} carries a body", self.kind))
@@ -497,6 +587,10 @@ impl Endorsement {
             // reason a body on one is.
             KIND_LIKE | KIND_PIN | KIND_REPOST if !self.attachments.is_empty() => {
                 Err(format!("a {} carries attachments", self.kind))
+            }
+            // A gesture has no body, so it has nothing for a facet to annotate.
+            KIND_LIKE | KIND_PIN | KIND_REPOST if !self.facets.is_empty() => {
+                Err(format!("a {} carries facets", self.kind))
             }
             _ => Ok(()),
         }
@@ -511,6 +605,39 @@ impl Endorsement {
     /// bytes exist before the record does, so absence here is a malformed record and not a
     /// stage in its life. An empty `filename` is refused so that absent and empty stay
     /// distinguishable, which the signed bytes rely on.
+    /// Whether a comment's facets point at its own words.
+    ///
+    /// A range past the end of the body, or backwards, would have a reader slicing text that
+    /// is not there — so it is refused here rather than left for whoever renders it to
+    /// survive. Byte offsets, matching how the body is measured everywhere else.
+    ///
+    /// A facet with no features is refused because it annotates nothing, and a mention with
+    /// no DID because the DID is the only part that identifies anybody: a name is
+    /// self-asserted and non-unique, so a mention without a key resolves to nobody.
+    fn check_facets(&self) -> Result<(), String> {
+        let len = self.body.as_deref().unwrap_or_default().len() as u32;
+        for f in &self.facets {
+            if f.index.byte_end < f.index.byte_start {
+                return Err("a facet ends before it starts".into());
+            }
+            if f.index.byte_end as usize > len as usize {
+                return Err(format!(
+                    "a facet runs to {} in a body of {len} bytes",
+                    f.index.byte_end
+                ));
+            }
+            if f.features.is_empty() {
+                return Err("a facet annotates nothing".into());
+            }
+            for feature in &f.features {
+                if feature.did.is_empty() {
+                    return Err("a mention names no identity".into());
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn check_attachments(&self) -> Result<(), String> {
         if self.attachments.len() > MAX_COMMENT_ATTACHMENTS {
             return Err(format!(
@@ -1013,6 +1140,7 @@ mod tests {
             body: None,
             body_url: None,
             attachments: Vec::new(),
+            facets: Vec::new(),
         };
         let hex: String = e
             .signing_bytes()
@@ -1047,6 +1175,7 @@ mod tests {
             body: Some("hi".into()),
             body_url: None,
             attachments: Vec::new(),
+            facets: Vec::new(),
         };
         let hex: String = c
             .signing_bytes()
@@ -1079,7 +1208,17 @@ mod tests {
     }
 
     fn commented(body: &str) -> Endorsement {
-        Endorsement::sign_comment(&SEED, SUBJECT, VERSION, WHEN, None, body, Vec::new()).unwrap()
+        Endorsement::sign_comment(
+            &SEED,
+            SUBJECT,
+            VERSION,
+            WHEN,
+            None,
+            body,
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap()
     }
 
     fn carried(hash: &str) -> CommentAttachment {
@@ -1093,7 +1232,45 @@ mod tests {
     }
 
     fn commented_with(body: &str, attachments: Vec<CommentAttachment>) -> Endorsement {
-        Endorsement::sign_comment(&SEED, SUBJECT, VERSION, WHEN, None, body, attachments).unwrap()
+        Endorsement::sign_comment(
+            &SEED,
+            SUBJECT,
+            VERSION,
+            WHEN,
+            None,
+            body,
+            attachments,
+            Vec::new(),
+        )
+        .unwrap()
+    }
+
+    fn mention(start: u32, end: u32, did: &str) -> Facet {
+        Facet {
+            index: FacetIndex {
+                byte_start: start,
+                byte_end: end,
+            },
+            features: vec![MentionFeature {
+                type_: "pin.mention".into(),
+                did: did.into(),
+                handle: Some("alice".into()),
+            }],
+        }
+    }
+
+    fn commented_mentioning(body: &str, facets: Vec<Facet>) -> Endorsement {
+        Endorsement::sign_comment(
+            &SEED,
+            SUBJECT,
+            VERSION,
+            WHEN,
+            None,
+            body,
+            Vec::new(),
+            facets,
+        )
+        .unwrap()
     }
 
     #[test]
@@ -1125,8 +1302,17 @@ mod tests {
         assert!(bodiless.check_shape().is_err());
         assert!(bodiless.verify().is_err());
 
-        let empty =
-            Endorsement::sign_comment(&SEED, SUBJECT, VERSION, WHEN, None, "", Vec::new()).unwrap();
+        let empty = Endorsement::sign_comment(
+            &SEED,
+            SUBJECT,
+            VERSION,
+            WHEN,
+            None,
+            "",
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap();
         assert!(empty.check_shape().is_err());
         assert!(empty.verify().is_err());
     }
@@ -1260,6 +1446,7 @@ mod tests {
             None,
             None,
             vec![carried("bafkreione")],
+            Vec::new(),
         )
         .unwrap();
         assert!(fat_like.check_shape().is_err());
@@ -1295,6 +1482,143 @@ mod tests {
     }
 
     #[test]
+    fn a_comment_can_mention_somebody_and_the_mention_is_signed() {
+        // The DID is the whole point of a mention: a name is self-asserted and non-unique,
+        // so the key underneath is what makes it resolve to anybody.
+        let c = commented_mentioning("hi @alice", vec![mention(3, 9, "did:dht:alice")]);
+        assert!(c.verify().is_ok());
+        assert_eq!(c.facets[0].features[0].did, "did:dht:alice");
+
+        // Repointing it at somebody else — leaving the visible name alone — stops it
+        // verifying. The host publishes these words, so that is a party who could try.
+        let mut redirected = c.clone();
+        redirected.facets[0].features[0].did = "did:dht:mallory".into();
+        assert!(redirected.verify().is_err());
+    }
+
+    #[test]
+    fn every_part_of_a_facet_is_signed() {
+        // Unlike an attachment, where the url is deliberately left out because repack moves
+        // it. Nothing here moves, and every part decides what a reader resolves.
+        let c = commented_mentioning("hi @alice", vec![mention(3, 9, "did:dht:alice")]);
+        for tamper in [
+            (|f: &mut Facet| f.index.byte_start = 0) as fn(&mut _),
+            |f: &mut Facet| f.index.byte_end = 8,
+            |f: &mut Facet| f.features[0].type_ = "pin.other".into(),
+            // The handle is only a rendering snapshot, and is signed anyway: it is what a
+            // reader SEES, so an unsigned one could name one person over another's key.
+            |f: &mut Facet| f.features[0].handle = Some("mallory".into()),
+            |f: &mut Facet| f.features[0].handle = None,
+        ] {
+            let mut altered = c.clone();
+            tamper(&mut altered.facets[0]);
+            assert!(altered.verify().is_err(), "an altered facet still verified");
+        }
+
+        // And the list itself: a mention cannot be added, dropped or reordered.
+        let two = commented_mentioning(
+            "hi @alice and @bob",
+            vec![
+                mention(3, 9, "did:dht:alice"),
+                mention(14, 18, "did:dht:bob"),
+            ],
+        );
+        assert!(two.verify().is_ok());
+        let mut dropped = two.clone();
+        dropped.facets.pop();
+        assert!(dropped.verify().is_err());
+        let mut reordered = two.clone();
+        reordered.facets.reverse();
+        assert!(reordered.verify().is_err());
+    }
+
+    #[test]
+    fn a_comment_mentioning_nobody_signs_what_it_did_before_the_field_existed() {
+        assert_eq!(facets_signing_value(&[]), None);
+        assert_eq!(
+            commented("said").signing_bytes(),
+            commented_mentioning("said", Vec::new()).signing_bytes()
+        );
+    }
+
+    #[test]
+    fn a_facet_has_to_point_at_the_body_it_annotates() {
+        // A range past the end would have a reader slicing text that is not there, and one
+        // that ends before it starts is not a range at all.
+        assert!(
+            commented_mentioning("hi", vec![mention(0, 99, "did:dht:alice")])
+                .verify()
+                .is_err()
+        );
+        assert!(
+            commented_mentioning("hi @alice", vec![mention(9, 3, "did:dht:alice")])
+                .verify()
+                .is_err()
+        );
+        // Exactly to the end is fine.
+        assert!(
+            commented_mentioning("hi @alice", vec![mention(0, 9, "did:dht:alice")])
+                .verify()
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn a_facet_naming_nobody_is_refused() {
+        let mut anonymous = mention(3, 9, "did:dht:alice");
+        anonymous.features[0].did = String::new();
+        assert!(commented_mentioning("hi @alice", vec![anonymous])
+            .verify()
+            .is_err());
+
+        let mut empty = mention(3, 9, "did:dht:alice");
+        empty.features.clear();
+        assert!(commented_mentioning("hi @alice", vec![empty])
+            .verify()
+            .is_err());
+    }
+
+    #[test]
+    fn a_gesture_carrying_facets_is_refused() {
+        let fat_like = Endorsement::signed(
+            &SEED,
+            KIND_LIKE,
+            SUBJECT,
+            VERSION,
+            WHEN,
+            None,
+            None,
+            Vec::new(),
+            vec![mention(0, 0, "did:dht:alice")],
+        )
+        .unwrap();
+        assert!(fat_like.check_shape().is_err());
+        assert!(fat_like.verify().is_err());
+    }
+
+    #[test]
+    fn a_facet_is_named_on_the_wire_the_way_a_post_names_one() {
+        // Byte-identical in shape to a manifest's, so whatever renders a mention does not
+        // have to ask which it is looking at.
+        let c = commented_mentioning("hi @alice", vec![mention(3, 9, "did:dht:alice")]);
+        let wire = serde_json::to_value(&c).unwrap();
+        assert_eq!(
+            wire["facets"][0],
+            serde_json::json!({
+                "index": { "byteStart": 3, "byteEnd": 9 },
+                "features": [
+                    { "$type": "pin.mention", "did": "did:dht:alice", "handle": "alice" }
+                ]
+            })
+        );
+        // And a comment mentioning nobody omits the field entirely.
+        assert!(serde_json::to_value(commented("said"))
+            .unwrap()
+            .get("facets")
+            .is_none());
+    }
+
+    #[test]
     fn a_body_over_the_limit_is_refused() {
         // An allocation bound: the host publishes these words into their own channel, so
         // the size of one is the sender choosing what the receiver pays for.
@@ -1318,6 +1642,7 @@ mod tests {
             None,
             Some("smuggled"),
             Vec::new(),
+            Vec::new(),
         )
         .unwrap();
         assert!(fat_like.check_shape().is_err());
@@ -1333,6 +1658,7 @@ mod tests {
             WHEN,
             None,
             Some("allowed"),
+            Vec::new(),
             Vec::new(),
         )
         .unwrap();
@@ -1379,6 +1705,7 @@ mod tests {
             "2026-08-22T13:00:00.000Z",
             None,
             "second",
+            Vec::new(),
             Vec::new(),
         )
         .unwrap();
@@ -1506,6 +1833,7 @@ mod tests {
             body: None,
             body_url: None,
             attachments: Vec::new(),
+            facets: Vec::new(),
         };
         let mut b = a.clone();
         b.kind = "a".into();
@@ -1846,6 +2174,7 @@ mod tests {
                     None,
                     "words",
                     Vec::new(),
+                    Vec::new(),
                 )
                 .unwrap()
             })
@@ -1862,8 +2191,17 @@ mod tests {
             .enumerate()
             .map(|(i, body)| {
                 let when = format!("2026-08-22T12:0{i}:00.000Z");
-                Endorsement::sign_comment(&SEED, SUBJECT, VERSION, &when, None, body, Vec::new())
-                    .unwrap()
+                Endorsement::sign_comment(
+                    &SEED,
+                    SUBJECT,
+                    VERSION,
+                    &when,
+                    None,
+                    body,
+                    Vec::new(),
+                    Vec::new(),
+                )
+                .unwrap()
             })
             .collect();
         let (published, dropped) = newest_comments(three);
@@ -1888,6 +2226,7 @@ mod tests {
                     None,
                     "w",
                     Vec::new(),
+                    Vec::new(),
                 )
                 .unwrap()
             })
@@ -1901,12 +2240,28 @@ mod tests {
     fn two_comments_agreeing_on_everything_signed_still_order() {
         // Same subject, same instant, different actors — so `createdAt` cannot separate them
         // and the signature has to.
-        let a =
-            Endorsement::sign_comment(&[11u8; 32], SUBJECT, VERSION, WHEN, None, "w", Vec::new())
-                .unwrap();
-        let b =
-            Endorsement::sign_comment(&[12u8; 32], SUBJECT, VERSION, WHEN, None, "w", Vec::new())
-                .unwrap();
+        let a = Endorsement::sign_comment(
+            &[11u8; 32],
+            SUBJECT,
+            VERSION,
+            WHEN,
+            None,
+            "w",
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap();
+        let b = Endorsement::sign_comment(
+            &[12u8; 32],
+            SUBJECT,
+            VERSION,
+            WHEN,
+            None,
+            "w",
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap();
         assert_eq!(a.created_at, b.created_at);
         let one = newest_comments(vec![a.clone(), b.clone()]).0;
         let other = newest_comments(vec![b, a]).0;
@@ -1927,6 +2282,7 @@ mod tests {
                 WHEN,
                 None,
                 "said so",
+                Vec::new(),
                 Vec::new(),
             )
             .unwrap(),
@@ -1954,8 +2310,17 @@ mod tests {
             .enumerate()
             .map(|(i, body)| {
                 let when = format!("2026-08-22T1{i}:00:00.000Z");
-                Endorsement::sign_comment(&seed, SUBJECT, VERSION, &when, None, body, Vec::new())
-                    .unwrap()
+                Endorsement::sign_comment(
+                    &seed,
+                    SUBJECT,
+                    VERSION,
+                    &when,
+                    None,
+                    body,
+                    Vec::new(),
+                    Vec::new(),
+                )
+                .unwrap()
             })
             .collect();
 
@@ -1975,8 +2340,17 @@ mod tests {
         let mut comments: Vec<Endorsement> = (0..3)
             .map(|i| {
                 let when = format!("2026-08-22T1{i}:00:00.000Z");
-                Endorsement::sign_comment(&seed, SUBJECT, VERSION, &when, None, "words", Vec::new())
-                    .unwrap()
+                Endorsement::sign_comment(
+                    &seed,
+                    SUBJECT,
+                    VERSION,
+                    &when,
+                    None,
+                    "words",
+                    Vec::new(),
+                    Vec::new(),
+                )
+                .unwrap()
             })
             .collect();
         let forwards = fold(&comments, None, WHEN.into()).unwrap();

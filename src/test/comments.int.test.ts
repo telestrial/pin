@@ -86,6 +86,7 @@ function decode(bytes: Uint8Array) {
     sig: string
     ref?: unknown
     attachments?: { url: string; contentHash: string; mimeType: string }[]
+    facets?: unknown
   }
 }
 
@@ -148,6 +149,7 @@ describe('integration: writing a comment', () => {
       null,
       'first',
       [],
+      [],
       '2026-08-22T12:00:00.000Z',
     )
     const second = await writeComment(
@@ -155,6 +157,7 @@ describe('integration: writing a comment', () => {
       ITEM,
       null,
       'second',
+      [],
       [],
       '2026-08-22T13:00:00.000Z',
     )
@@ -249,6 +252,46 @@ describe('integration: writing a comment', () => {
 
     await withdrawComment(FAKE_APP_KEY_HEX, ITEM, id)
     expect(await sealMarks()).toHaveLength(0)
+  })
+
+  it('carries a mention across the boundary with its names intact', async () => {
+    // The other seam neither compiler checks. A mention is only a mention because of the
+    // DID underneath it — a name is self-asserted and non-unique — so a field renamed on
+    // either side would leave an @name resolving to nobody, at runtime and nowhere else.
+    const facet = {
+      index: { byteStart: 3, byteEnd: 9 },
+      features: [
+        { $type: 'pin.mention', did: 'did:dht:alice', handle: 'alice' },
+      ],
+    }
+    await writeComment(FAKE_APP_KEY_HEX, ITEM, null, 'hi @alice', [], [facet])
+
+    const rkeys = await held()
+    const record = decode((await getStored(rkeys[0])) as Uint8Array)
+    expect(record.facets).toEqual([facet])
+    // And it holds up, which is what proves Rust read the same fields back — the facet is
+    // inside the signature, so a mis-parse would not survive verification.
+    expect(record.sig).not.toBe('')
+  })
+
+  it('refuses a mention that does not point at the words', async () => {
+    // Refused at the signature rather than left for whoever renders it to survive.
+    await expect(
+      writeComment(
+        FAKE_APP_KEY_HEX,
+        ITEM,
+        null,
+        'hi',
+        [],
+        [
+          {
+            index: { byteStart: 0, byteEnd: 99 },
+            features: [{ $type: 'pin.mention', did: 'did:dht:alice' }],
+          },
+        ],
+      ),
+    ).rejects.toThrow()
+    expect(await held()).toHaveLength(0)
   })
 
   it('carries a file across the boundary with its names intact', async () => {
@@ -364,6 +407,7 @@ describe('integration: writing a comment', () => {
       null,
       'kept',
       [],
+      [],
       '2026-08-22T12:00:00.000Z',
     )
     const second = await writeComment(
@@ -371,6 +415,7 @@ describe('integration: writing a comment', () => {
       ITEM,
       null,
       'withdrawn',
+      [],
       [],
       '2026-08-22T13:00:00.000Z',
     )

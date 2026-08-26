@@ -604,7 +604,7 @@ export function sia_wait_for_approval(): Promise<void>;
  * Not to be confused with `attachment`, which is a hash naming one file OF THE POST being
  * commented on, and decides which subject this comment is about.
  */
-export function sign_comment(app_key_hex: string, channel_id: string, published_at: string, version: string, reference_did_dht: string | null | undefined, attachment: string | null | undefined, body: string, carried_json: string | null | undefined, now: string): string;
+export function sign_comment(app_key_hex: string, channel_id: string, published_at: string, version: string, reference_did_dht: string | null | undefined, attachment: string | null | undefined, body: string, carried_json: string | null | undefined, facets_json: string | null | undefined, now: string): string;
 
 /**
  * Sign one endorsement of a COMMENT.
@@ -654,7 +654,7 @@ export function sign_endorsement(app_key_hex: string, kind: string, channel_id: 
  * nor a channel, so coordinates here would not reproduce it and the self-check would reject
  * them.
  */
-export function sign_reply(app_key_hex: string, parent_actor: string, parent_created_at: string, version: string, body: string, carried_json: string | null | undefined, now: string): string;
+export function sign_reply(app_key_hex: string, parent_actor: string, parent_created_at: string, version: string, body: string, carried_json: string | null | undefined, facets_json: string | null | undefined, now: string): string;
 
 export function start(): void;
 
@@ -960,10 +960,10 @@ export interface InitOutput {
     readonly sia_upload_items_packed: (a: any, b: number) => any;
     readonly sia_validate_recovery_phrase: (a: number, b: number) => [number, number];
     readonly sia_wait_for_approval: () => any;
-    readonly sign_comment: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number) => [number, number, number, number];
+    readonly sign_comment: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number, s: number, t: number) => [number, number, number, number];
     readonly sign_comment_endorsement: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => [number, number, number, number];
     readonly sign_endorsement: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number) => [number, number, number, number];
-    readonly sign_reply: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number) => [number, number, number, number];
+    readonly sign_reply: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number) => [number, number, number, number];
     readonly start_channel_doc_loop: (a: number, b: number, c: number, d: any) => any;
     readonly start_channel_sync_loop: (a: number, b: number, c: number, d: number, e: any) => any;
     readonly start_deliver_loop: (a: number, b: number, c: number, d: number, e: number, f: any) => any;

@@ -1930,6 +1930,7 @@ pub fn sign_comment(
     attachment: Option<String>,
     body: &str,
     carried_json: Option<String>,
+    facets_json: Option<String>,
     now: &str,
 ) -> Result<String, JsValue> {
     let app_key = decode_app_key(app_key_hex)
@@ -1953,6 +1954,7 @@ pub fn sign_comment(
         reference,
         body,
         carried,
+        facets_in(facets_json)?,
     )
     .map_err(|e| JsValue::from_str(&e))?;
     // Checked before it is handed back rather than trusted: `verify` is what applies the
@@ -1962,6 +1964,15 @@ pub fn sign_comment(
         "record": serde_json::to_value(&record).map_err(je)?,
         "commentID": record.comment_id(),
     }))
+}
+
+/// A comment's facets, as JSON from the composer. Parsed into the record's own type so the
+/// shape is the record's rather than a second one that could drift.
+fn facets_in(json: Option<String>) -> Result<Vec<pin_engagement::Facet>, JsValue> {
+    match json.as_deref() {
+        None | Some("") => Ok(Vec::new()),
+        Some(j) => serde_json::from_str(j).map_err(|e| JsValue::from_str(&format!("facets: {e}"))),
+    }
 }
 
 /// Sign one REPLY: a comment whose subject is another comment.
@@ -1986,6 +1997,7 @@ pub fn sign_reply(
     version: &str,
     body: &str,
     carried_json: Option<String>,
+    facets_json: Option<String>,
     now: &str,
 ) -> Result<String, JsValue> {
     let app_key = decode_app_key(app_key_hex)
@@ -2003,6 +2015,7 @@ pub fn sign_reply(
         None,
         body,
         carried,
+        facets_in(facets_json)?,
     )
     .map_err(|e| JsValue::from_str(&e))?;
     record.verify().map_err(|e| JsValue::from_str(&e))?;

@@ -49,6 +49,23 @@ export async function maxCommentAttachments(): Promise<number> {
   return max_comment_attachments()
 }
 
+/** Where in a comment's body a facet applies. UTF-8 BYTE offsets, matching how the body is
+ *  measured everywhere else — a post's facets use the same convention. */
+export type FacetIndex = { byteStart: number; byteEnd: number }
+
+/** A mention inside a comment, anchored by DID.
+ *
+ *  Mirrors `pin_engagement::Facet`, and the field names are the contract: this is handed to
+ *  Rust as JSON and parsed into that type, so a rename on either side is a runtime parse
+ *  failure and nothing before it.
+ *
+ *  Byte-identical in shape to a post's facet, deliberately — a comment is post-shaped to a
+ *  reader, so whatever renders a mention should not have to ask which it is looking at. */
+export type CommentFacet = {
+  index: FacetIndex
+  features: { $type: string; did: string; handle?: string }[]
+}
+
 /** A file a comment carries, already uploaded.
  *
  *  Mirrors `pin_engagement::CommentAttachment`, and the field names are the contract — this
@@ -188,6 +205,7 @@ export async function writeComment(
   referenceAuthor: ReferenceAuthor,
   body: string,
   carried: UploadedCommentFile[] = [],
+  facets: CommentFacet[] = [],
   now = new Date().toISOString(),
 ): Promise<string> {
   await ensureWasm()
@@ -195,6 +213,7 @@ export async function writeComment(
 
   const attachments = carried.map((c) => c.attachment)
   const files = attachments.length > 0 ? JSON.stringify(attachments) : undefined
+  const marks = facets.length > 0 ? JSON.stringify(facets) : undefined
 
   // A REPLY when the thing being commented on is itself a comment. The same record either
   // way — only the subject differs, which is exactly what makes threading need no new
@@ -215,6 +234,7 @@ export async function writeComment(
           item.contentHash ?? '',
           body,
           files,
+          marks,
           now,
         )
       : sign_comment(
@@ -226,6 +246,7 @@ export async function writeComment(
           item.attachment,
           body,
           files,
+          marks,
           now,
         ),
   ) as { record: unknown; commentID: string }
