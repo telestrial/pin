@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import type { FeedEntry } from '../../core/feed'
 import type { ItemRef } from '../../core/types'
+import type { PublishedComment } from '../../lib/channelConversations'
 import { useItemBytes } from '../../lib/hooks/useItemBytes'
 import { usePinState } from '../../lib/hooks/usePinState'
 import { renderPostBody } from '../../lib/markdown'
@@ -23,6 +24,7 @@ export function ReadText({
   entry,
   onEdit,
   onHandleClick,
+  onOpenComment,
 }: {
   item: ItemRef
   channelName: string
@@ -36,6 +38,8 @@ export function ReadText({
   entry?: FeedEntry
   onEdit?: () => void
   onHandleClick: (handle: string) => void
+  /** Opening one comment's own page, where its replies are. */
+  onOpenComment?: (comment: PublishedComment) => void
 }) {
   const channelID = pinInput.channel.channelID
   const pinState = usePinState(item, channelID)
@@ -209,6 +213,7 @@ export function ReadText({
             decides that for itself, so every reader page asks the same way. */}
         <CommentThread
           onHandleClick={onHandleClick}
+          onOpenComment={onOpenComment}
           item={{
             channelID: pinInput.channel.channelID,
             publishedAt: item.publishedAt,

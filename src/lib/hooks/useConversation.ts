@@ -25,7 +25,14 @@ export function useConversation(item: EndorsedItem): Conversation | null {
 
   // Destructured so the effect depends on the item's identity rather than on the object,
   // which callers rebuild every render.
+  //
+  // A COMMENT'S PAIR IS PART OF THAT IDENTITY. Rebuilding the target without it made a
+  // comment's thread read its POST's conversation — replies to one remark showing as
+  // replies to the post. Spread as primitives, because the deps array compares by reference
+  // and a caller rebuilds the object every render.
   const { channelID, publishedAt, attachment } = item
+  const commentActor = item.comment?.actor
+  const commentCreatedAt = item.comment?.createdAt
 
   useEffect(() => {
     if (!storedKeyHex) return
@@ -36,6 +43,10 @@ export function useConversation(item: EndorsedItem): Conversation | null {
         channelID,
         publishedAt,
         attachment,
+        comment:
+          commentActor && commentCreatedAt
+            ? { actor: commentActor, createdAt: commentCreatedAt }
+            : undefined,
       })
       if (!cancelled) setConversation(held)
     }
@@ -61,7 +72,14 @@ export function useConversation(item: EndorsedItem): Conversation | null {
       cancelled = true
       unsub()
     }
-  }, [storedKeyHex, channelID, publishedAt, attachment])
+  }, [
+    storedKeyHex,
+    channelID,
+    publishedAt,
+    attachment,
+    commentActor,
+    commentCreatedAt,
+  ])
 
   return conversation
 }

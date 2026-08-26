@@ -1,5 +1,6 @@
 import type { FeedEntry } from '../../core/feed'
 import type { ItemRef } from '../../core/types'
+import type { PublishedComment } from '../../lib/channelConversations'
 import { useItemBlobURL } from '../../lib/hooks/useItemBytes'
 import type { PinInput } from '../../stores/pin'
 import { CommentThread } from '../engagement/CommentThread'
@@ -16,6 +17,7 @@ export function ReadImage({
   entry,
   onEdit,
   onHandleClick,
+  onOpenComment,
 }: {
   item: ItemRef
   channelName: string
@@ -30,6 +32,8 @@ export function ReadImage({
   onEdit?: () => void
   /** Opening whoever wrote a comment: a commenter is a person, not a channel. */
   onHandleClick?: (handle: string) => void
+  /** Opening one comment's own page, where its replies are. */
+  onOpenComment?: (comment: PublishedComment) => void
 }) {
   const { url: imgURL, error } = useItemBlobURL(
     item.itemURL,
@@ -95,6 +99,7 @@ export function ReadImage({
             decides that for itself, so every reader page asks the same way. */}
         <CommentThread
           onHandleClick={onHandleClick}
+          onOpenComment={onOpenComment}
           item={{
             channelID: pinInput.channel.channelID,
             publishedAt: item.publishedAt,

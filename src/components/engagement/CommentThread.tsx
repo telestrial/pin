@@ -59,17 +59,21 @@ function CommentRow({
   post,
   onWithdraw,
   onOpenPerson,
+  onOpen,
 }: {
   comment: PublishedComment
   post: { channelID: string; publishedAt: string }
   onWithdraw?: () => void
   onOpenPerson?: (id: string) => void
+  /** Opening this comment's own page, where its replies are. */
+  onOpen?: () => void
 }) {
   return (
     <li>
       <PostRow
         identity={{ kind: 'person', didDht: comment.actor }}
         at={comment.createdAt}
+        onOpen={onOpen}
         onOpenPerson={onOpenPerson}
       >
         <p className="text-sm text-neutral-900 whitespace-pre-wrap break-words">
@@ -101,11 +105,15 @@ function CommentRow({
 export function CommentThread({
   item,
   onHandleClick,
+  onOpenComment,
 }: {
   item: EndorsedItem
   /** Opening whoever wrote a comment. A commenter is a person rather than a channel, so
    *  this is the same handler a post row uses for its author. */
   onHandleClick?: (handle: string) => void
+  /** Opening one comment's own page, where its replies are. Absent where there is nowhere
+   *  to go — a comment row still renders, it just does not open. */
+  onOpenComment?: (comment: PublishedComment) => void
 }) {
   const storedKeyHex = useAuthStore((s) => s.storedKeyHex)
   const myDidDht = useAuthStore((s) => s.myDidDht)
@@ -241,6 +249,7 @@ export function CommentThread({
                 c.actor === myDidDht ? () => void remove(c) : undefined
               }
               onOpenPerson={onHandleClick}
+              onOpen={onOpenComment && (() => onOpenComment(c))}
             />
           ))}
         </ul>

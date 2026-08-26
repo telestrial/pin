@@ -1,6 +1,7 @@
 import { useState } from 'react'
-import type { FeedEntry } from '../core/feed'
+import type { FeedChannel, FeedEntry } from '../core/feed'
 import type { ItemRef } from '../core/types'
+import type { PublishedComment } from '../lib/channelConversations'
 import { retractChannel } from '../lib/channelWrites'
 import { flushSettingsBestEffort } from '../lib/hooks/useSettingsSync'
 import { objectIDsInManifests } from '../lib/scopeRefs'
@@ -9,6 +10,7 @@ import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
 import { objectIDsReferencedBy, usePinStore } from '../stores/pin'
 import { useToastStore } from '../stores/toast'
+import { CommentPage } from './CommentPage'
 import { Compose } from './Compose'
 import { CurateView } from './CurateView'
 import { ChannelsView } from './channel/ChannelsView'
@@ -30,6 +32,36 @@ import { SettingsView } from './SettingsView'
 import { Sidebar } from './Sidebar'
 import { SubscribeToChannel } from './SubscribeToChannel'
 import { FormCard } from './ui/FormCard'
+
+/** Where opening a feed row goes.
+ *
+ *  A circulated COMMENT opens the comment, not the post it was made under — what the row
+ *  showed is the remark, and opening a row has to land on the thing the row was. */
+function opened(entry: FeedEntry, returnTo: View): View {
+  if (!entry.comment) return { kind: 'reading', entry, returnTo }
+  return {
+    kind: 'reading-comment',
+    // A feed entry carries only what a row needs; a comment page shows the whole record, so
+    // the parts a row never used are filled in as absent rather than guessed at.
+    comment: {
+      kind: 'comment',
+      actor: entry.comment.actor,
+      subject: '',
+      version: '',
+      createdAt: entry.comment.createdAt,
+      sig: entry.comment.sig,
+      body: entry.comment.body,
+      bodyURL: entry.comment.bodyURL,
+      attachments: entry.comment.attachments,
+    },
+    post: {
+      channelID: entry.channel.channelID,
+      publishedAt: entry.item.publishedAt,
+    },
+    channel: entry.channel,
+    returnTo,
+  }
+}
 
 type View =
   | { kind: 'idle' }
@@ -57,6 +89,16 @@ type View =
   | { kind: 'settings' }
   | { kind: 'curate' }
   | { kind: 'reading'; entry: FeedEntry; returnTo: View }
+  // One comment and its replies. Its own view rather than a mode of `reading`, because
+  // what it opens is not an item: a comment has no ItemRef, no channel of its own, and a
+  // subject derived from who wrote it rather than from where it sits.
+  | {
+      kind: 'reading-comment'
+      comment: PublishedComment
+      post: { channelID: string; publishedAt: string }
+      channel: FeedChannel
+      returnTo: View
+    }
   | { kind: 'storage'; returnTo: View }
   // returnTo is OPTIONAL — sidebar's My Profile sets it undefined (primary
   // nav, no Back), @handle clicks set it to the calling view (contextual
@@ -160,6 +202,39 @@ export function Home() {
         }
         onHandleClick={(handle) =>
           setView({ kind: 'handle-directory', handle, returnTo: storageView })
+        }
+      />
+    )
+  }
+
+  if (view.kind === 'reading-comment') {
+    const commentView = view
+    return (
+      <CommentPage
+        comment={view.comment}
+        post={view.post}
+        channel={view.channel}
+        onBack={() => setView(commentView.returnTo)}
+        backLabel="Back"
+        sidebar={renderSidebar()}
+        rightSidebar={renderPinSidebar()}
+        onHandleClick={(handle) =>
+          setView({
+            kind: 'handle-directory',
+            handle,
+            returnTo: commentView,
+          })
+        }
+        // A reply's own page, one level further down. Flat all the way: each level shows
+        // the replies to the thing at its head, and its counts and its list agree.
+        onOpenComment={(comment) =>
+          setView({
+            kind: 'reading-comment',
+            comment,
+            post: commentView.post,
+            channel: commentView.channel,
+            returnTo: commentView,
+          })
         }
       />
     )
@@ -382,9 +457,7 @@ export function Home() {
       <ChannelView
         authorHandle={view.authorHandle}
         channelID={view.channelID}
-        onItemClick={(entry) =>
-          setView({ kind: 'reading', entry, returnTo: channelView })
-        }
+        onItemClick={(entry) => setView(opened(entry, channelView))}
         onChannelClick={(authorHandle, channelID) =>
           setView({
             kind: 'viewing-channel',
@@ -563,6 +636,15 @@ export function Home() {
       // mentions.
       onHandleClick: (handle: string) =>
         setView({ kind: 'handle-directory', handle, returnTo: readingView }),
+      // Opening a comment from the post's own thread. Same page a circulated one opens.
+      onOpenComment: (comment: PublishedComment) =>
+        setView({
+          kind: 'reading-comment',
+          comment,
+          post: { channelID: channel.channelID, publishedAt: item.publishedAt },
+          channel,
+          returnTo: readingView,
+        }),
     }
     if (item.type === 'image') return <ReadImage {...readerProps} />
     if (item.type === 'audio') return <ReadAudio {...readerProps} />
@@ -663,9 +745,7 @@ export function Home() {
         <div className="flex-1 space-y-6 min-w-0 lg:max-h-full lg:overflow-y-auto">
           {composerSlot}
           <HomeFeed
-            onItemClick={(entry) =>
-              setView({ kind: 'reading', entry, returnTo: idleView })
-            }
+            onItemClick={(entry) => setView(opened(entry, idleView))}
             onChannelClick={(authorHandle, channelID) =>
               setView({
                 kind: 'viewing-channel',

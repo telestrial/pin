@@ -334,6 +334,63 @@ describe('integration: a post’s conversation', () => {
     expect(colourOf(other)).not.toBe(colourOf(first))
   })
 
+  it('opens one comment’s own page from the thread', async () => {
+    manifestSays(true)
+    published([{ actor: 'did:dht:bob', body: 'worth saying' }])
+    const opened: string[] = []
+    render(
+      <CommentThread
+        item={ITEM}
+        onOpenComment={(c) => opened.push(c.body ?? '')}
+      />,
+    )
+
+    await userEvent.click(await screen.findByText('worth saying'))
+    expect(opened).toEqual(['worth saying'])
+  })
+
+  it('a comment’s thread is its replies, addressed at the comment', async () => {
+    // One level at a time, the way every microblog does it: this shows what was said back
+    // to THIS comment, and each of those carries its own count and its own page. The count
+    // and the list agree at every level because the fold counts against the subject a
+    // record names.
+    manifestSays(true)
+    const parent = {
+      actor: 'did:dht:bob',
+      createdAt: '2026-08-25T09:00:00.000Z',
+    }
+    const replySubject = comment_subject(parent.actor, parent.createdAt)
+    docStore.set(
+      `thread/${thread_rkey(CHANNEL_ID, replySubject)}`,
+      new TextEncoder().encode(
+        JSON.stringify({
+          comments: [
+            {
+              kind: 'comment',
+              actor: 'did:dht:carol',
+              subject: replySubject,
+              version: 'sig-of-parent',
+              createdAt: '2026-08-25T10:00:00.000Z',
+              sig: 'sig-carol',
+              body: 'answering that',
+            },
+          ],
+          updatedAt: PUBLISHED_AT,
+        }),
+      ),
+    )
+
+    render(
+      <CommentThread
+        item={{ ...ITEM, contentHash: 'sig-of-parent', comment: parent }}
+      />,
+    )
+
+    // The reply is what shows, read from the parent COMMENT's address rather than the
+    // post's.
+    expect(await screen.findByText('answering that')).toBeTruthy()
+  })
+
   it('gives a comment the same gestures a post has', async () => {
     // The point of one row with two adapters: a comment is likeable, keepable and
     // circulable exactly as a post is, and its comment count is its replies. The
