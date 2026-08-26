@@ -15,6 +15,7 @@ export function ReadImage({
   pinInput,
   entry,
   onEdit,
+  onHandleClick,
 }: {
   item: ItemRef
   channelName: string
@@ -27,6 +28,8 @@ export function ReadImage({
   // the pin input does not: whether the post can be circulated, and by whom.
   entry?: FeedEntry
   onEdit?: () => void
+  /** Opening whoever wrote a comment: a commenter is a person, not a channel. */
+  onHandleClick?: (handle: string) => void
 }) {
   const { url: imgURL, error } = useItemBlobURL(
     item.itemURL,
@@ -91,6 +94,7 @@ export function ReadImage({
         {/* Under the post, and only on a channel that takes comments — the component
             decides that for itself, so every reader page asks the same way. */}
         <CommentThread
+          onHandleClick={onHandleClick}
           item={{
             channelID: pinInput.channel.channelID,
             publishedAt: item.publishedAt,

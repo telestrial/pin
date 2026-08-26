@@ -14,6 +14,7 @@ export function ReadAudio({
   rightSidebar,
   pinInput,
   entry,
+  onHandleClick,
 }: {
   item: ItemRef
   channelName: string
@@ -25,6 +26,8 @@ export function ReadAudio({
   // The feed entry this page was opened from, when there was one. Carries what
   // the pin input does not: whether the post can be circulated, and by whom.
   entry?: FeedEntry
+  /** Opening whoever wrote a comment: a commenter is a person, not a channel. */
+  onHandleClick?: (handle: string) => void
 }) {
   const { url: audioURL, error } = useItemBlobURL(
     item.itemURL,
@@ -75,6 +78,7 @@ export function ReadAudio({
         {/* Under the post, and only on a channel that takes comments — the component
             decides that for itself, so every reader page asks the same way. */}
         <CommentThread
+          onHandleClick={onHandleClick}
           item={{
             channelID: pinInput.channel.channelID,
             publishedAt: item.publishedAt,

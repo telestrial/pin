@@ -12,10 +12,9 @@ import type { EndorsedItem } from '../../lib/engagement'
 import { referenceAuthorFor } from '../../lib/engagement'
 import { formatBytes } from '../../lib/format'
 import { useConversation } from '../../lib/hooks/useConversation'
-import { useIdentityName } from '../../lib/hooks/useIdentityName'
-import { formatRelative } from '../../lib/time'
 import { useAuthStore } from '../../stores/auth'
 import { useFeedStore } from '../../stores/feed'
+import { PostRow } from '../PostRow'
 import { CommentFiles } from './CommentFiles'
 import { CommentEngagementRow } from './EngagementRow'
 
@@ -59,42 +58,55 @@ function CommentRow({
   comment,
   post,
   onWithdraw,
+  onOpenPerson,
 }: {
   comment: PublishedComment
   post: { channelID: string; publishedAt: string }
   onWithdraw?: () => void
+  onOpenPerson?: (id: string) => void
 }) {
-  const name = useIdentityName(comment.actor)
   return (
-    <li className="space-y-1">
-      <p className="text-xs text-neutral-500">
-        <span className="font-medium text-neutral-700">@{name}</span> ·{' '}
-        {formatRelative(comment.createdAt)}
-        {onWithdraw && (
-          <>
-            {' · '}
-            <button
-              type="button"
-              onClick={onWithdraw}
-              className="text-neutral-500 hover:text-neutral-900 cursor-pointer"
-            >
-              remove
-            </button>
-          </>
-        )}
-      </p>
-      <div className="flex items-start justify-between gap-2">
+    <li>
+      <PostRow
+        identity={{ kind: 'person', didDht: comment.actor }}
+        at={comment.createdAt}
+        onOpenPerson={onOpenPerson}
+      >
         <p className="text-sm text-neutral-900 whitespace-pre-wrap break-words">
           {comment.body}
         </p>
-      </div>
-      <CommentFiles files={comment.attachments} comment={comment} post={post} />
-      <CommentEngagementRow comment={comment} post={post} />
+        <CommentFiles
+          files={comment.attachments}
+          comment={comment}
+          post={post}
+        />
+        <CommentEngagementRow comment={comment} post={post} />
+        {/* Taking your own back. Below the gestures rather than in the header, because it
+            is not one of them: the others are things anybody does to a comment, and this is
+            the only thing only its author can do. */}
+        {onWithdraw && (
+          <button
+            type="button"
+            onClick={onWithdraw}
+            className="text-xs text-neutral-500 hover:text-neutral-900 cursor-pointer"
+          >
+            remove
+          </button>
+        )}
+      </PostRow>
     </li>
   )
 }
 
-export function CommentThread({ item }: { item: EndorsedItem }) {
+export function CommentThread({
+  item,
+  onHandleClick,
+}: {
+  item: EndorsedItem
+  /** Opening whoever wrote a comment. A commenter is a person rather than a channel, so
+   *  this is the same handler a post row uses for its author. */
+  onHandleClick?: (handle: string) => void
+}) {
   const storedKeyHex = useAuthStore((s) => s.storedKeyHex)
   const myDidDht = useAuthStore((s) => s.myDidDht)
   const takesComments =
@@ -228,6 +240,7 @@ export function CommentThread({ item }: { item: EndorsedItem }) {
               onWithdraw={
                 c.actor === myDidDht ? () => void remove(c) : undefined
               }
+              onOpenPerson={onHandleClick}
             />
           ))}
         </ul>

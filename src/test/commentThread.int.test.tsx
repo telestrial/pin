@@ -280,6 +280,60 @@ describe('integration: a post’s conversation', () => {
     expect(await screen.findByText('theirs.png — unavailable')).toBeTruthy()
   })
 
+  it('renders a comment as a post row, under its author’s own identity', async () => {
+    // A comment is written by a PERSON, who has no channel — so the row's heading is their
+    // identity rather than a channel's, and it goes through the same component a post's
+    // does. Two lookalike rows would drift; one cannot.
+    manifestSays(true)
+    published([{ actor: 'did:dht:bob', body: 'worth saying' }])
+    render(<CommentThread item={ITEM} onHandleClick={() => {}} />)
+
+    expect(await screen.findByText('worth saying')).toBeTruthy()
+    // The heading is the commenter and it is reachable, exactly as a post's author is.
+    const heading = screen.getByRole('button', { name: /View did:dht:/ })
+    expect(heading).toBeTruthy()
+    // And an avatar sits beside it — the hash-derived mark, since this DID publishes no
+    // profile in the fake world.
+    expect(heading.querySelector('div[aria-hidden="true"]')).toBeTruthy()
+  })
+
+  it('sends you to whoever wrote a comment', async () => {
+    manifestSays(true)
+    published([{ actor: 'did:dht:bob', body: 'worth saying' }])
+    const opened: string[] = []
+    render(<CommentThread item={ITEM} onHandleClick={(h) => opened.push(h)} />)
+
+    await screen.findByText('worth saying')
+    await userEvent.click(screen.getByRole('button', { name: /View did:dht:/ }))
+    // The DID, never the display name: a name is self-asserted and non-unique, and the
+    // identity is the key.
+    expect(opened).toEqual(['did:dht:bob'])
+  })
+
+  it('colours a commenter’s mark by their DID, not by what they call themselves', async () => {
+    // A name is self-asserted and mutable; the DID is the identity. Keying the mark on the
+    // name would make somebody renaming themselves change colour, which reads as a
+    // different person.
+    const { IdentityAvatar } = await import('../components/IdentityAvatar')
+    const { container: first } = render(
+      <IdentityAvatar didDht="did:dht:bob" name="Bob" />,
+    )
+    const { container: renamed } = render(
+      <IdentityAvatar didDht="did:dht:bob" name="Roberta" />,
+    )
+    const colourOf = (c: HTMLElement) =>
+      (c.querySelector('div[aria-hidden="true"]') as HTMLElement).style
+        .backgroundColor
+    expect(colourOf(first)).toBe(colourOf(renamed))
+    expect(colourOf(first)).not.toBe('')
+
+    // A different person is a different colour.
+    const { container: other } = render(
+      <IdentityAvatar didDht="did:dht:carol" name="Bob" />,
+    )
+    expect(colourOf(other)).not.toBe(colourOf(first))
+  })
+
   it('gives a comment the same gestures a post has', async () => {
     // The point of one row with two adapters: a comment is likeable, keepable and
     // circulable exactly as a post is, and its comment count is its replies. The

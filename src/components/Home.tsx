@@ -557,20 +557,19 @@ export function Home() {
       // So the page's gestures match the row's — a post that can be circulated from the
       // feed can be circulated from its own page.
       entry: view.entry,
+      // Every reader shows the post's conversation, and a comment is written by a PERSON
+      // rather than a channel — so every reader needs somewhere to send you when you tap
+      // whoever wrote one. It was on the text reader alone while only its body carried
+      // mentions.
+      onHandleClick: (handle: string) =>
+        setView({ kind: 'handle-directory', handle, returnTo: readingView }),
     }
     if (item.type === 'image') return <ReadImage {...readerProps} />
     if (item.type === 'audio') return <ReadAudio {...readerProps} />
     if (item.type === 'video') return <ReadVideo {...readerProps} />
     if (item.type === 'file') return <ReadFile {...readerProps} />
     if (item.type === 'app') return <ReadApp {...readerProps} />
-    return (
-      <ReadText
-        {...readerProps}
-        onHandleClick={(handle) =>
-          setView({ kind: 'handle-directory', handle, returnTo: readingView })
-        }
-      />
-    )
+    return <ReadText {...readerProps} />
   }
 
   const composerSlot = (() => {

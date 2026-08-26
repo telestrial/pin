@@ -4,13 +4,13 @@ import { type FeedEntry, feedTimeOf } from '../core/feed'
 import type { ItemRef } from '../core/types'
 import { useIdentityName } from '../lib/hooks/useIdentityName'
 import { renderPostBody } from '../lib/markdown'
-import { formatAbsolute, formatRelativeShort } from '../lib/time'
+import { formatRelativeShort } from '../lib/time'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
 import { AttachmentGrid } from './AttachmentMedia'
-import { ChannelAvatar } from './channel/ChannelAvatar'
 import { CommentFiles } from './engagement/CommentFiles'
 import { CommentEngagementRow, EngagementRow } from './engagement/EngagementRow'
+import { PostRow } from './PostRow'
 
 export function HomeFeed({
   onItemClick,
@@ -324,120 +324,48 @@ export function FeedRow({
   onHandleClick: (handle: string) => void
 }) {
   const { item, channel } = entry
-  // did:dht subs display + navigate by identity-doc; legacy handle subs show the
-  // raw handle (no atproto profile lookup).
-  const identityName = useIdentityName(channel.authorDidDht ?? '')
-  const authorName = channel.authorDidDht ? identityName : channel.authorHandle
-  const authorId = channel.authorDidDht || channel.authorHandle
-
-  const handleChannelClick = (e: React.MouseEvent | React.KeyboardEvent) => {
-    e.stopPropagation()
-    onChannelClick(channel.authorHandle, channel.channelID)
-  }
-
-  const handleAuthorClick = (e: React.MouseEvent) => {
-    e.stopPropagation()
-    onHandleClick(authorId)
-  }
-
   return (
     <li>
-      {/* biome-ignore lint/a11y/useSemanticElements: row contains nested interactives (channel buttons, pin button, audio/video controls) so a button element would nest interactives */}
-      <div
-        role="button"
-        tabIndex={0}
-        onClick={() => onItemClick(entry)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' || e.key === ' ') {
-            e.preventDefault()
-            onItemClick(entry)
-          }
-        }}
-        className="py-4 px-2 -mx-2 rounded hover:bg-neutral-50 cursor-pointer transition-colors"
+      <PostRow
+        identity={{ kind: 'channel', channel }}
+        at={item.publishedAt}
+        editedAt={item.editedAt}
+        above={
+          entry.repost && (
+            <RepostedBy repost={entry.repost} onHandleClick={onHandleClick} />
+          )
+        }
+        onOpen={() => onItemClick(entry)}
+        onOpenChannel={(c) => onChannelClick(c.authorHandle, c.channelID)}
+        onOpenPerson={onHandleClick}
       >
-        {entry.repost && (
-          <RepostedBy repost={entry.repost} onHandleClick={onHandleClick} />
+        <PostBody
+          item={item}
+          channelID={channel.channelID}
+          onHandleClick={onHandleClick}
+        />
+        <EngagementRow
+          entry={entry}
+          input={{
+            item,
+            channel: {
+              authorHandle: channel.authorHandle,
+              channelID: channel.channelID,
+              name: channel.name,
+            },
+          }}
+        />
+        {entry.comment && (
+          <CirculatedRemark
+            comment={entry.comment}
+            post={{
+              channelID: channel.channelID,
+              publishedAt: item.publishedAt,
+            }}
+            onHandleClick={onHandleClick}
+          />
         )}
-        <div className="flex gap-3">
-          <button
-            type="button"
-            onClick={handleChannelClick}
-            className="self-start shrink-0 rounded-full focus:outline-none focus:ring-2 focus:ring-green-600 cursor-pointer"
-            aria-label={`View channel ${channel.name}`}
-          >
-            <ChannelAvatar
-              channelID={channel.channelID}
-              channelName={channel.name}
-              authorHandle={channel.authorHandle}
-              avatar={channel.avatar}
-            />
-          </button>
-          <div className="min-w-0 flex-1 space-y-2">
-            <div className="flex items-start justify-between gap-2">
-              <div className="min-w-0 space-y-0.5">
-                <button
-                  type="button"
-                  onClick={handleChannelClick}
-                  className="block max-w-full text-sm font-semibold text-neutral-900 truncate hover:underline cursor-pointer text-left"
-                >
-                  {channel.name}
-                </button>
-                {/* did:dht subs display the identity-doc username; legacy subs the
-                    atproto handle. Hidden only if neither identifier exists. */}
-                {authorId && (
-                  <button
-                    type="button"
-                    onClick={handleAuthorClick}
-                    className="block max-w-full text-xs text-neutral-500 truncate hover:underline cursor-pointer text-left"
-                  >
-                    @{authorName}
-                  </button>
-                )}
-              </div>
-              <div className="flex items-center gap-1.5 shrink-0">
-                <p
-                  className="text-xs text-neutral-500 whitespace-nowrap"
-                  title={formatAbsolute(item.publishedAt)}
-                >
-                  {formatRelativeShort(item.publishedAt)}
-                  {item.editedAt && (
-                    <span title={`Edited ${formatAbsolute(item.editedAt)}`}>
-                      {' · edited '}
-                      {formatRelativeShort(item.editedAt)}
-                    </span>
-                  )}
-                </p>
-              </div>
-            </div>
-            <PostBody
-              item={item}
-              channelID={channel.channelID}
-              onHandleClick={onHandleClick}
-            />
-            <EngagementRow
-              entry={entry}
-              input={{
-                item,
-                channel: {
-                  authorHandle: channel.authorHandle,
-                  channelID: channel.channelID,
-                  name: channel.name,
-                },
-              }}
-            />
-            {entry.comment && (
-              <CirculatedRemark
-                comment={entry.comment}
-                post={{
-                  channelID: channel.channelID,
-                  publishedAt: item.publishedAt,
-                }}
-                onHandleClick={onHandleClick}
-              />
-            )}
-          </div>
-        </div>
-      </div>
+      </PostRow>
     </li>
   )
 }

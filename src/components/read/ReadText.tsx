@@ -208,6 +208,7 @@ export function ReadText({
         {/* Under the post, and only on a channel that takes comments — the component
             decides that for itself, so every reader page asks the same way. */}
         <CommentThread
+          onHandleClick={onHandleClick}
           item={{
             channelID: pinInput.channel.channelID,
             publishedAt: item.publishedAt,
