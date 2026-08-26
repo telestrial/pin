@@ -1,4 +1,4 @@
-import { Heart } from 'lucide-react'
+import { Heart, MessageCircle } from 'lucide-react'
 import type { FeedEntry } from '../../core/feed'
 import { useEngagement } from '../../lib/hooks/useEngagement'
 import { repostTargetFor } from '../../lib/repost'
@@ -41,11 +41,12 @@ export function EngagementRow({
 }) {
   const manifests = useFeedStore((s) => s.manifests)
   const repostTarget = entry ? repostTargetFor(entry, manifests) : null
-  const { likes, pins, reposts, liked, toggleLike, busy } = useEngagement({
-    channelID: input.channel.channelID,
-    publishedAt: input.item.publishedAt,
-    contentHash: input.item.contentHash,
-  })
+  const { likes, pins, reposts, comments, liked, toggleLike, busy } =
+    useEngagement({
+      channelID: input.channel.channelID,
+      publishedAt: input.item.publishedAt,
+      contentHash: input.item.contentHash,
+    })
 
   // The row that contains this is itself a click target for opening the item, so a
   // gesture has to stop there rather than also navigating — the same thing PinButton
@@ -91,6 +92,23 @@ export function EngagementRow({
         contentHash={input.item.contentHash}
         count={reposts}
       />
+
+      {/* An indicator rather than a button, and deliberately: liking is something you do
+          FROM a row, where commenting is something you do in the thread. It does not stop
+          the click, so in a feed it opens the post — which is where the conversation it
+          counts already lives — and on a page that already shows that conversation it
+          does nothing, which is correct. */}
+      <div
+        className="flex items-center gap-1 text-neutral-400"
+        title={comments === 1 ? '1 comment' : `${comments} comments`}
+      >
+        <Count n={comments} />
+        <MessageCircle
+          className="size-5"
+          strokeWidth={1.5}
+          aria-hidden="true"
+        />
+      </div>
     </div>
   )
 }

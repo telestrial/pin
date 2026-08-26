@@ -48,6 +48,19 @@ export type Engagement = {
    *  an endorsement is per actor, so reposting one post into three of your own channels
    *  is one reposter. */
   reposts: number
+  /** How many comments the author PUBLISHES on it.
+   *
+   *  Folded from the same records the conversation is, by the same pass — so the number
+   *  and the thread beneath it are one set seen two ways, and a count claiming more than
+   *  the conversation shows would be a set its holder had partly chosen not to produce.
+   *
+   *  Unlike the gestures above this carries NO adjustment for your own. A gesture is a
+   *  boolean, so "the author's fold predates my record" resolves to a clean +1; a comment
+   *  is not — you can leave three — and there is no equivalent of taking one back for the
+   *  count to subtract. So this shows what the author publishes, which is exactly what the
+   *  thread already does: an unanswered comment is not in it yet, and no pending state is
+   *  invented for either. */
+  comments: number
   /** Whether THIS identity has liked it: the heart's fill. */
   liked: boolean
   toggleLike: () => void
@@ -275,6 +288,8 @@ export function useEngagement(item: EndorsedItem): Engagement {
     likes: shown(countOf(tally, 'like'), mine.like, withdrawn.like),
     pins: shown(countOf(tally, 'pin'), mine.pin, withdrawn.pin),
     reposts: shown(countOf(tally, 'repost'), mine.repost, withdrawn.repost),
+    // Straight off the tally, with no own-gesture adjustment — see the field's doc.
+    comments: countOf(tally, 'comment'),
     liked,
     toggleLike,
     busy,

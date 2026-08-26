@@ -87,6 +87,41 @@ describe('integration: the engagement row', () => {
     docStore.clear()
   })
 
+  it('shows the comment count the author published, and only that', async () => {
+    // Straight off the same tally the gestures come from — `kind` drives the fold, so a
+    // comment count arrives beside them with no separate read.
+    //
+    // A comment of this identity's own is written first, deliberately: the gestures bump
+    // optimistically because each is a boolean and a fold stamped before your record
+    // provably excludes it, but a comment is not a boolean — you can leave three — so this
+    // number must stay the author's. Holding a record it does not count is what proves it.
+    mountAs(
+      createFakeApp().createAccount({
+        did: 'did:plc:reader',
+        handle: 'reader.test',
+      }),
+    )
+    useAuthStore.setState({ myDidDht: ME })
+
+    const { writeComment } = await import('../lib/comments')
+    await writeComment(
+      FAKE_APP_KEY_HEX,
+      { channelID: CHANNEL_ID, publishedAt: PUBLISHED_AT },
+      null,
+      'just said this',
+    )
+    cacheCounts({ like: 1, comment: 3 })
+
+    render(<EngagementRow input={INPUT} />)
+
+    await waitFor(() =>
+      expect(screen.getByTitle('3 comments')).toBeInTheDocument(),
+    )
+    expect(screen.getByText('3')).toBeInTheDocument()
+    // Not four: the one just written is not in the author's fold and is not added to it.
+    expect(screen.queryByText('4')).toBeNull()
+  })
+
   it('shows the counts its channel published, beside the gesture each belongs to', async () => {
     mountAs(
       createFakeApp().createAccount({
