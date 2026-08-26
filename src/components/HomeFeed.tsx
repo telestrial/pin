@@ -1,10 +1,9 @@
 import { Recycle } from 'lucide-react'
 import { useEffect, useMemo } from 'react'
-import { type FeedEntry, feedTimeOf } from '../core/feed'
+import { type FeedChannel, type FeedEntry, feedTimeOf } from '../core/feed'
 import type { ItemRef } from '../core/types'
 import { useIdentityName } from '../lib/hooks/useIdentityName'
 import { renderPostBody } from '../lib/markdown'
-import { formatRelativeShort } from '../lib/time'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
 import { AttachmentGrid } from './AttachmentMedia'
@@ -233,51 +232,18 @@ function PostBody({
 // author — the name, the avatar, the body, the counts. This one line is the only part of
 // a portal row that is about the person circulating it, and on their own channel page it
 // is the only thing distinguishing a repost from something they wrote.
-/** The remark a portal circulated, shown under the post it was made on.
+/** What a circulated comment was said under.
  *
- *  The POST is the row, and that is the decision worth stating: a comment lifted out of its
- *  thread is the decontextualised-quote problem, and a commenter has no channel for a feed
- *  row's chrome to render — no avatar, no channel name, nothing but a did:dht and a name
- *  they gave themselves. So the post supplies the context and this supplies what was
- *  actually circulated.
- *
- *  It carries its own gestures because it is its own subject: liking the post and liking
- *  what somebody said under it are different claims, and the two blocks keep them apart. */
-function CirculatedRemark({
-  comment,
-  post,
-  onHandleClick,
-}: {
-  comment: NonNullable<FeedEntry['comment']>
-  post: { channelID: string; publishedAt: string }
-  onHandleClick: (handle: string) => void
-}) {
-  const name = useIdentityName(comment.actor)
+ *  A comment lifted out of its thread is the decontextualised-quote problem — every
+ *  microblog puts this line on a boosted reply for the same reason. Plain text rather than a
+ *  link, because the row itself already opens the post it names and a second affordance to
+ *  the same place is one to get wrong.
+ */
+function ReplyingTo({ channel }: { channel: FeedChannel }) {
   return (
-    // No click handler of its own: the row IS the post, so clicking the remark opening the
-    // post is right. The controls inside stop their own propagation, the way every other
-    // gesture in a row does.
-    <div className="mt-2 pl-3 border-l-2 border-neutral-200 space-y-1">
-      <p className="text-xs text-neutral-500">
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation()
-            onHandleClick(comment.actor)
-          }}
-          className="font-medium text-neutral-700 hover:underline cursor-pointer"
-        >
-          @{name}
-        </button>
-        {' · '}
-        {formatRelativeShort(comment.createdAt)}
-      </p>
-      <p className="text-sm text-neutral-900 whitespace-pre-wrap break-words">
-        {comment.body}
-      </p>
-      <CommentFiles files={comment.attachments} comment={comment} post={post} />
-      <CommentEngagementRow comment={comment} post={post} />
-    </div>
+    <p className="text-xs text-neutral-500 truncate">
+      Replying to {channel.name}
+    </p>
   )
 }
 
@@ -324,6 +290,41 @@ export function FeedRow({
   onHandleClick: (handle: string) => void
 }) {
   const { item, channel } = entry
+
+  // A circulated COMMENT is a comment row, not a post row with something under it: what was
+  // circulated is the remark, so the remark is the row and the post it was made on becomes
+  // the context line beneath the header. Twitter's shape, and the one that follows from a
+  // comment being post-shaped everywhere else.
+  if (entry.comment) {
+    const post = { channelID: channel.channelID, publishedAt: item.publishedAt }
+    return (
+      <li>
+        <PostRow
+          identity={{ kind: 'person', didDht: entry.comment.actor }}
+          at={entry.comment.createdAt}
+          above={
+            entry.repost && (
+              <RepostedBy repost={entry.repost} onHandleClick={onHandleClick} />
+            )
+          }
+          onOpen={() => onItemClick(entry)}
+          onOpenPerson={onHandleClick}
+        >
+          <ReplyingTo channel={channel} />
+          <p className="text-sm text-neutral-900 whitespace-pre-wrap break-words">
+            {entry.comment.body}
+          </p>
+          <CommentFiles
+            files={entry.comment.attachments}
+            comment={entry.comment}
+            post={post}
+          />
+          <CommentEngagementRow comment={entry.comment} post={post} />
+        </PostRow>
+      </li>
+    )
+  }
+
   return (
     <li>
       <PostRow
@@ -355,16 +356,6 @@ export function FeedRow({
             },
           }}
         />
-        {entry.comment && (
-          <CirculatedRemark
-            comment={entry.comment}
-            post={{
-              channelID: channel.channelID,
-              publishedAt: item.publishedAt,
-            }}
-            onHandleClick={onHandleClick}
-          />
-        )}
       </PostRow>
     </li>
   )
