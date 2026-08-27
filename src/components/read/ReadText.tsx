@@ -4,7 +4,6 @@ import type { ItemRef } from '../../core/types'
 import type { PublishedComment } from '../../lib/channelConversations'
 import { useItemBytes } from '../../lib/hooks/useItemBytes'
 import { usePinState } from '../../lib/hooks/usePinState'
-import { renderPostBody } from '../../lib/markdown'
 import { formatAbsolute, formatRelative } from '../../lib/time'
 import { useAuthStore } from '../../stores/auth'
 import { useFeedStore } from '../../stores/feed'
@@ -13,6 +12,7 @@ import { AttachmentGrid } from '../AttachmentMedia'
 import { CommentThread } from '../engagement/CommentThread'
 import { EngagementRow } from '../engagement/EngagementRow'
 import { FilePinButton } from '../pin/FilePinButton'
+import { RichBody } from '../RichBody'
 
 export function ReadText({
   item,
@@ -79,21 +79,10 @@ export function ReadText({
     displayItem.itemURL,
     displayItem.contentHash,
   )
-  const html = useMemo(
-    () =>
-      bytes
-        ? renderPostBody(new TextDecoder().decode(bytes), displayItem.facets)
-        : null,
-    [bytes, displayItem.facets],
+  const bodyText = useMemo(
+    () => (bytes ? new TextDecoder().decode(bytes) : null),
+    [bytes],
   )
-
-  const handleBodyClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    const a = (e.target as HTMLElement).closest('a[data-mention-handle]')
-    if (!a) return
-    e.preventDefault()
-    const handle = a.getAttribute('data-mention-handle') ?? ''
-    if (handle) onHandleClick(handle)
-  }
 
   return (
     <div className="flex-1 p-6 lg:min-h-0">
@@ -181,16 +170,17 @@ export function ReadText({
 
             {error ? (
               <p className="text-red-600 text-sm wrap-break-word">{error}</p>
-            ) : html === null ? (
+            ) : bodyText === null ? (
               <p className="text-neutral-500 text-sm">Loading…</p>
             ) : (
-              // biome-ignore lint/a11y/noStaticElementInteractions: click delegates to nested <a> mentions, which are natively interactive
-              // biome-ignore lint/a11y/useKeyWithClickEvents: delegates to nested <a> mentions, which are natively keyboard-accessible
-              <div
-                className="markdown wrap-break-word text-base sm:text-lg"
-                onClick={handleBodyClick}
-                // biome-ignore lint/security/noDangerouslySetInnerHtml: HTML is sanitized via DOMPurify
-                dangerouslySetInnerHTML={{ __html: html }}
+              // The same renderer a row uses, larger. This page hand-rolled it — the memo,
+              // the sanitized HTML, the mention click delegation — which was a second copy
+              // of RichBody that could drift from the one every other surface reads through.
+              <RichBody
+                body={bodyText}
+                facets={displayItem.facets}
+                onHandleClick={onHandleClick}
+                textClass="text-base sm:text-lg"
               />
             )}
 

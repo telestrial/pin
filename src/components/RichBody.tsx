@@ -13,11 +13,15 @@ export function RichBody({
   body,
   facets,
   onHandleClick,
+  textClass = 'text-sm',
 }: {
   body: string
   facets?: Facet[]
   /** Absent where there is nowhere to send anyone — the mention still renders as text. */
   onHandleClick?: (handle: string) => void
+  /** Type size, which is the one thing that legitimately differs by where this is read: a
+   *  row in a list is small, and a post opened on its own page is not. */
+  textClass?: string
 }) {
   const html = useMemo(() => renderPostBody(body, facets), [body, facets])
   if (!body) return null
@@ -38,7 +42,7 @@ export function RichBody({
     // biome-ignore lint/a11y/noStaticElementInteractions: click delegates to nested <a> mentions, which are natively interactive
     // biome-ignore lint/a11y/useKeyWithClickEvents: delegates to nested <a> mentions, which are natively keyboard-accessible
     <div
-      className="markdown wrap-break-word text-sm text-neutral-900"
+      className={`markdown wrap-break-word text-neutral-900 ${textClass}`}
       onClick={handleClick}
       // biome-ignore lint/security/noDangerouslySetInnerHtml: HTML is sanitized via DOMPurify
       dangerouslySetInnerHTML={{ __html: html }}
