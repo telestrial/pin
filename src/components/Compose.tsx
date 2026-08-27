@@ -1,4 +1,4 @@
-import { Check, X } from 'lucide-react'
+import { Check } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import type { AttachmentSource } from '../core/channels'
 import {
@@ -7,56 +7,29 @@ import {
   type OwnedChannel,
 } from '../core/types'
 import { NOTE_CHAR_LIMIT } from '../lib/constants'
-import {
-  buildMentionFacets,
-  byteToChar,
-  type DraftMention,
-} from '../lib/facets'
-import { useItemBlobURL } from '../lib/hooks/useItemBytes'
-import { useMentionBox } from '../lib/hooks/useMentionBox'
+import { byteToChar, type DraftMention } from '../lib/facets'
 import { useActionStore } from '../stores/actionQueue'
 import { useAuthStore } from '../stores/auth'
-import { useComposeStore } from '../stores/compose'
 import { useFeedStore } from '../stores/feed'
 import { useToastStore } from '../stores/toast'
+import { kindForMime } from './AttachmentMedia'
 import {
-  type AttachmentKind,
-  kindForMime,
-  MediaPreview,
-} from './AttachmentMedia'
+  type AttachmentDraft,
+  Composer,
+  type ComposerSubmission,
+  newTempID,
+} from './Composer'
 import { ChannelAvatar } from './channel/ChannelAvatar'
-import { MentionPicker } from './MentionPicker'
+
+// Writing a post. Everything about the form itself — the box, the mentions, attaching and
+// previewing files, dragging onto it, the limit, the buttons — is `Composer`, shared with
+// the comment composer. What is here is only what is true of a POST: which voice you are
+// publishing as, editing one that already exists, and handing the bytes to a channel.
 
 export type ComposeEditMode = {
   item: ItemRef
   channelID: string
   onCancel: () => void
-}
-
-type AttachmentDraft =
-  | {
-      tempID: string
-      source: 'bytes'
-      filename: string
-      mimeType: string
-      kind: AttachmentKind
-      bytes: Uint8Array
-      blobURL: string
-    }
-  | {
-      tempID: string
-      source: 'url'
-      filename: string
-      mimeType: string
-      kind: AttachmentKind
-      url: string
-      byteSize: number
-      contentHash?: string
-      objectID?: string
-    }
-
-function newTempID(): string {
-  return `att-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
 }
 
 export function Compose({
@@ -69,81 +42,12 @@ export function Compose({
   const client = useAuthStore((s) => s.client)
   const enqueue = useActionStore((s) => s.enqueuePublish)
   const addToast = useToastStore((s) => s.addToast)
-  const armedItem = useComposeStore((s) => s.armedItem)
-  const disarm = useComposeStore((s) => s.disarm)
   const manifests = useFeedStore((s) => s.manifests)
 
   const [selectedID, setSelectedID] = useState(
     editing?.channelID ?? channels[0]?.channelID ?? '',
   )
-  const [body, setBody] = useState(editing?.item.summary ?? '')
-  const [error, setError] = useState<string | null>(null)
-  const [expanded, setExpanded] = useState(!!editing)
   const [voiceOpen, setVoiceOpen] = useState(false)
-
-  const textareaRef = useRef<HTMLTextAreaElement | null>(null)
-
-  // What an `@` does lives in `useMentionBox`, shared with the comment composer — a mention
-  // is only a mention by virtue of the DID underneath it, and two implementations of the
-  // anchoring is two chances for one of them to resolve to nobody.
-  //
-  // On edit, preloaded from the post's existing facets (surface = the body text under each
-  // range) so untouched mentions survive a re-save.
-  const mentionBox = useMentionBox({
-    value: body,
-    setValue: setBody,
-    textarea: textareaRef,
-    initial: () => {
-      const facets = editing?.item.facets
-      const summary = editing?.item.summary ?? ''
-      if (!facets) return []
-      const out: DraftMention[] = []
-      for (const f of facets) {
-        const mf = f.features.find((x) => x.$type === 'pin.mention')
-        if (!mf) continue
-        const cs = byteToChar(summary, f.index.byteStart)
-        const ce = byteToChar(summary, f.index.byteEnd)
-        out.push({
-          did: mf.did,
-          handle: mf.handle ?? '',
-          surface: summary.slice(cs, ce),
-        })
-      }
-      return out
-    },
-  })
-  const [attachments, setAttachments] = useState<AttachmentDraft[]>(() => {
-    if (!editing?.item.attachments) return []
-    return editing.item.attachments.filter(isValidAttachment).map((a) => ({
-      tempID: newTempID(),
-      source: 'url' as const,
-      filename: a.filename ?? 'attachment',
-      mimeType: a.mimeType,
-      kind: kindForMime(a.mimeType),
-      url: a.url,
-      byteSize: a.byteSize,
-      contentHash: a.contentHash,
-      objectID: a.objectID,
-    }))
-  })
-  const [removedOriginalObjectIDs, setRemovedOriginalObjectIDs] = useState<
-    string[]
-  >([])
-  // Set of objectIDs from the original attachments at edit-mount time.
-  // Captures who was already there so we can distinguish "removed an
-  // original" (needs cleanup) from "removed a chip I just added" (no
-  // cleanup; we never published it). Legacy attachments lacking
-  // objectID can't be tracked here — orphan sweep is the safety net.
-  const [originalAttachmentObjectIDs] = useState<Set<string>>(() => {
-    if (!editing?.item.attachments) return new Set()
-    return new Set(
-      editing.item.attachments
-        .filter(isValidAttachment)
-        .map((a) => a.objectID)
-        .filter((id): id is string => !!id),
-    )
-  })
-  const [isDragging, setIsDragging] = useState(false)
   const voiceWrapperRef = useRef<HTMLDivElement | null>(null)
 
   const channel =
@@ -171,224 +75,65 @@ export function Compose({
 
   if (!channel) return null
 
-  const trimmed = body.trim()
-  const remaining = NOTE_CHAR_LIMIT - body.length
-  const overLimit = remaining < 0
-  const canSubmit = !overLimit && (!!trimmed || attachments.length > 0)
-  // The composer avatar is the selected channel's; authorHandle is just a
-  // mark-seed fallback, empty now that there's no atproto handle.
+  // The composer avatar is the selected channel's; authorHandle is just a mark-seed
+  // fallback, empty now that there's no atproto handle.
   const handleForAvatar = ''
 
-  function attachArmedItem() {
-    if (!armedItem) return
-    setAttachments((prev) => [
-      ...prev,
-      {
-        tempID: newTempID(),
-        source: 'url',
-        filename: armedItem.item.filename ?? armedItem.item.title ?? 'item',
-        mimeType: armedItem.item.mimeType,
-        kind: kindForMime(armedItem.item.mimeType),
-        url: armedItem.item.itemURL,
-        byteSize: armedItem.item.byteSize,
-        contentHash: armedItem.item.contentHash,
-        // armedItem.objectID is the user's pin (PinnedItemRef.objectID),
-        // which is the right scope-local object ID for the attachment.
-        // armedItem.item.id may be the original publisher's id for items
-        // pinned from other channels, so prefer the PinnedItemRef field.
-        objectID: armedItem.objectID,
-      },
-    ])
-    disarm()
-    if (!expanded) setExpanded(true)
-  }
-
-  async function attachFile(file: File) {
-    const filename = file.name || 'file'
-    const mimeType = file.type || 'application/octet-stream'
-    const kind = kindForMime(mimeType)
-    const buffer = await file.arrayBuffer()
-    const bytes = new Uint8Array(buffer)
-    const blobURL = URL.createObjectURL(file)
-    setAttachments((prev) => [
-      ...prev,
-      {
-        tempID: newTempID(),
-        source: 'bytes',
-        filename,
-        mimeType,
-        kind,
-        bytes,
-        blobURL,
-      },
-    ])
-    if (!expanded) setExpanded(true)
-  }
-
-  function removeAttachment(tempID: string) {
-    setAttachments((prev) => {
-      const target = prev.find((a) => a.tempID === tempID)
-      if (target?.source === 'bytes') URL.revokeObjectURL(target.blobURL)
-      if (
-        target?.source === 'url' &&
-        target.objectID &&
-        originalAttachmentObjectIDs.has(target.objectID)
-      ) {
-        const oid = target.objectID
-        setRemovedOriginalObjectIDs((r) => (r.includes(oid) ? r : [...r, oid]))
-      }
-      return prev.filter((a) => a.tempID !== tempID)
-    })
-  }
-
-  function isAttachZoneInteractive(target: EventTarget | null): boolean {
-    if (!(target instanceof Element)) return true
-    return !!target.closest(
-      'button, a, select, [role="menuitem"], input, [data-attach-chip]',
+  function handleSubmit(submission: ComposerSubmission) {
+    // Thrown rather than returned, so the composer keeps the draft. Returning quietly would
+    // clear a post that was never queued.
+    if (!client) throw new Error('Not connected to Sia yet')
+    if (!channel) throw new Error('No channel to publish to')
+    const attachmentSources: AttachmentSource[] = submission.attachments.map(
+      (a) =>
+        a.source === 'url'
+          ? {
+              kind: 'url',
+              url: a.url,
+              mimeType: a.mimeType,
+              filename: a.filename,
+              byteSize: a.byteSize,
+              contentHash: a.contentHash,
+              objectID: a.objectID,
+            }
+          : {
+              kind: 'bytes',
+              bytes: a.bytes,
+              mimeType: a.mimeType,
+              filename: a.filename,
+            },
     )
-  }
-
-  function handleAttachZoneClick(e: React.MouseEvent<HTMLDivElement>) {
-    if (!armedItem) {
-      if (!expanded) setExpanded(true)
-      return
-    }
-    if (isAttachZoneInteractive(e.target)) return
-    attachArmedItem()
-  }
-
-  function handleTextareaPaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
-    if (!armedItem) return
-    e.preventDefault()
-    attachArmedItem()
-  }
-
-  function handleFormBlur(e: React.FocusEvent<HTMLFormElement>) {
-    if (e.currentTarget.contains(e.relatedTarget)) return
-    if (!body.trim() && attachments.length === 0 && !armedItem) {
-      setExpanded(false)
-    }
-  }
-
-  function isAcceptedDrag(e: React.DragEvent): boolean {
-    return e.dataTransfer.types.includes('Files')
-  }
-
-  function handleDragEnter(e: React.DragEvent) {
-    if (!isAcceptedDrag(e)) return
-    e.preventDefault()
-    setIsDragging(true)
-  }
-
-  function handleDragOver(e: React.DragEvent) {
-    if (!isAcceptedDrag(e)) return
-    e.preventDefault()
-    e.dataTransfer.dropEffect = 'copy'
-  }
-
-  function handleDragLeave(e: React.DragEvent) {
-    if (e.currentTarget === e.target) setIsDragging(false)
-  }
-
-  function handleDrop(e: React.DragEvent) {
-    e.preventDefault()
-    setIsDragging(false)
-    const files = Array.from(e.dataTransfer.files)
-    if (files.length === 0) return
-    for (const file of files) attachFile(file)
-  }
-
-  function handleSubmit(e: React.FormEvent) {
-    e.preventDefault()
-    if (!client || !canSubmit) return
-    setError(null)
-    const attachmentSources: AttachmentSource[] = attachments.map((a) =>
-      a.source === 'url'
-        ? {
-            kind: 'url',
-            url: a.url,
-            mimeType: a.mimeType,
-            filename: a.filename,
-            byteSize: a.byteSize,
-            contentHash: a.contentHash,
-            objectID: a.objectID,
-          }
-        : {
-            kind: 'bytes',
-            bytes: a.bytes,
-            mimeType: a.mimeType,
-            filename: a.filename,
-          },
-    )
-    // sdk.upload rejects 0-byte uploads (verified day-0). For attachment-only
-    // posts, encode a single space so the body object is valid; the renderer
-    // reads summary (which stays as the empty trimmed string).
-    const bodyBytes = trimmed
-      ? new TextEncoder().encode(trimmed)
+    // sdk.upload rejects 0-byte uploads (verified day-0). For attachment-only posts, encode
+    // a single space so the body object is valid; the renderer reads summary (which stays
+    // as the empty trimmed string).
+    const bodyBytes = submission.body
+      ? new TextEncoder().encode(submission.body)
       : new Uint8Array([0x20])
-    // Resolve mentions to byte-range facets against the final (trimmed) body,
-    // which is exactly what gets stored as summary + uploaded — so offsets align.
-    const facets = buildMentionFacets(trimmed, mentionBox.mentions)
     enqueue({
       payload: {
         type: 'text',
         title: '',
-        summary: trimmed,
+        summary: submission.body,
         mimeType: 'text/markdown',
         bytes: bodyBytes,
         attachmentSources:
           attachmentSources.length > 0 ? attachmentSources : undefined,
-        facets: facets.length > 0 ? facets : undefined,
+        facets: submission.facets.length > 0 ? submission.facets : undefined,
       },
       channelIDs: [channel.channelID],
       editingItemID: editing?.item.id,
       removedAttachmentObjectIDs: editing
-        ? removedOriginalObjectIDs
+        ? submission.removedOriginalObjectIDs
         : undefined,
     })
     addToast(editing ? 'Queued for save' : 'Queued for publish')
-    for (const a of attachments) {
-      if (a.source === 'bytes') URL.revokeObjectURL(a.blobURL)
-    }
-    if (editing) {
-      editing.onCancel()
-    } else {
-      setBody('')
-      setAttachments([])
-      mentionBox.clear()
-      setExpanded(false)
-    }
-  }
-
-  function handleCancel() {
-    for (const a of attachments) {
-      if (a.source === 'bytes') URL.revokeObjectURL(a.blobURL)
-    }
     editing?.onCancel()
   }
 
   return (
-    <form
-      onSubmit={handleSubmit}
-      onBlur={handleFormBlur}
-      onDragEnter={handleDragEnter}
-      onDragOver={handleDragOver}
-      onDragLeave={handleDragLeave}
-      onDrop={handleDrop}
-      data-compose-area="true"
-      className={`relative bg-white border rounded-lg p-3 transition-colors ${
-        isDragging
-          ? 'border-green-600 ring-2 ring-green-600/30'
-          : 'border-neutral-200'
-      }`}
-    >
-      {isDragging && (
-        <div className="absolute inset-0 z-10 rounded-lg bg-green-50/90 flex items-center justify-center pointer-events-none">
-          <p className="text-sm font-medium text-green-700">Drop to attach</p>
-        </div>
-      )}
-      <div className="flex items-start gap-3">
-        <div ref={voiceWrapperRef} className="relative shrink-0">
+    <Composer
+      avatar={
+        <div ref={voiceWrapperRef} className="contents">
           {multiVoice ? (
             <button
               type="button"
@@ -454,170 +199,55 @@ export function Compose({
             </div>
           )}
         </div>
-
-        {/* biome-ignore lint/a11y/noStaticElementInteractions: textarea inside handles keyboard */}
-        {/* biome-ignore lint/a11y/useKeyWithClickEvents: textarea inside handles keyboard */}
-        <div className="flex-1 min-w-0" onClick={handleAttachZoneClick}>
-          <textarea
-            ref={textareaRef}
-            value={body}
-            onChange={(e) => {
-              setBody(e.target.value)
-              mentionBox.onTextChanged(
-                e.target.value,
-                e.target.selectionStart ?? e.target.value.length,
-              )
-            }}
-            onSelect={(e) =>
-              mentionBox.onTextChanged(
-                e.currentTarget.value,
-                e.currentTarget.selectionStart ?? 0,
-              )
+      }
+      placeholder="What are you thinking about?"
+      submitLabel={editing ? 'Save' : 'Publish'}
+      limit={{ unit: 'chars', max: NOTE_CHAR_LIMIT }}
+      onSubmit={handleSubmit}
+      onCancel={editing?.onCancel}
+      startExpanded={!!editing}
+      initialBody={editing?.item.summary ?? ''}
+      initialAttachments={() => {
+        if (!editing?.item.attachments) return []
+        return editing.item.attachments
+          .filter(isValidAttachment)
+          .map((a): AttachmentDraft => {
+            return {
+              tempID: newTempID(),
+              source: 'url',
+              filename: a.filename ?? 'attachment',
+              mimeType: a.mimeType,
+              kind: kindForMime(a.mimeType),
+              url: a.url,
+              byteSize: a.byteSize,
+              contentHash: a.contentHash,
+              objectID: a.objectID,
+              // Already published, so removing it is a removal that needs cleanup —
+              // unlike an armed library item, whose bytes the library still references.
+              // Legacy attachments lacking objectID can't be tracked; the orphan sweep
+              // is the safety net.
+              original: true,
             }
-            onKeyDown={mentionBox.onKeyDown}
-            onPaste={handleTextareaPaste}
-            onFocus={() => setExpanded(true)}
-            rows={1}
-            placeholder="What are you thinking about?"
-            className={`block w-full mt-1.5 bg-transparent text-lg text-black placeholder-neutral-400 focus:outline-none resize-none border-0 p-0 field-sizing-content transition-[max-height] duration-300 ease-out ${
-              expanded ? 'max-h-80 overflow-y-auto' : 'max-h-7 overflow-hidden'
-            }`}
-          />
-        </div>
-      </div>
-      {attachments.length > 0 && (
-        <div
-          className={`mt-3 grid gap-2 ${
-            attachments.length === 1 ? 'grid-cols-1' : 'grid-cols-2'
-          }`}
-        >
-          {attachments.map((a) => (
-            <AttachmentChip
-              key={a.tempID}
-              attachment={a}
-              onRemove={() => removeAttachment(a.tempID)}
-            />
-          ))}
-        </div>
-      )}
-      {mentionBox.picker && (
-        <MentionPicker
-          candidates={mentionBox.picker.candidates}
-          loading={mentionBox.picker.loading}
-          activeIndex={mentionBox.picker.activeIndex}
-          onPick={mentionBox.picker.pick}
-        />
-      )}
-      <div
-        aria-hidden={!expanded}
-        className={`grid transition-[grid-template-rows,opacity,margin-top] duration-300 ease-out ${
-          expanded
-            ? 'grid-rows-[1fr] opacity-100 mt-2'
-            : 'grid-rows-[0fr] opacity-0 mt-0'
-        }`}
-      >
-        <div className="overflow-hidden">
-          {error && (
-            <p className="text-red-600 text-sm wrap-break-word mb-2">{error}</p>
-          )}
-
-          <div className="flex items-center justify-end gap-2">
-            <span
-              className={`text-xs tabular-nums ${
-                overLimit
-                  ? 'text-red-600 font-medium'
-                  : remaining <= 20
-                    ? 'text-amber-600'
-                    : 'text-neutral-500'
-              }`}
-            >
-              {remaining}
-            </span>
-            {editing && (
-              <button
-                type="button"
-                onClick={handleCancel}
-                className="px-4 py-1.5 bg-neutral-100 hover:bg-neutral-200 text-neutral-700 text-sm font-medium rounded-md transition-colors cursor-pointer"
-              >
-                Cancel
-              </button>
-            )}
-            <button
-              type="submit"
-              disabled={!canSubmit}
-              tabIndex={expanded ? 0 : -1}
-              className="px-4 py-1.5 bg-green-600 hover:bg-green-700 disabled:bg-neutral-200 disabled:text-neutral-400 text-white text-sm font-medium rounded-md transition-colors"
-            >
-              {editing ? 'Save' : 'Publish'}
-            </button>
-          </div>
-        </div>
-      </div>
-    </form>
-  )
-}
-
-function AttachmentChip({
-  attachment,
-  onRemove,
-}: {
-  attachment: AttachmentDraft
-  onRemove: () => void
-}) {
-  return (
-    <div
-      data-attach-chip="true"
-      className="relative group bg-neutral-50 border border-neutral-200 rounded-lg overflow-hidden"
-    >
-      <button
-        type="button"
-        onClick={onRemove}
-        aria-label={`Remove ${attachment.filename}`}
-        className="absolute top-1 right-1 z-10 size-6 flex items-center justify-center rounded-full bg-black/60 text-white hover:bg-black/80 cursor-pointer"
-      >
-        <X className="size-3.5" aria-hidden />
-      </button>
-
-      {attachment.source === 'bytes' ? (
-        <BytesChipBody attachment={attachment} />
-      ) : (
-        <UrlChipBody attachment={attachment} />
-      )}
-    </div>
-  )
-}
-
-function BytesChipBody({
-  attachment,
-}: {
-  attachment: Extract<AttachmentDraft, { source: 'bytes' }>
-}) {
-  return (
-    <MediaPreview
-      previewURL={attachment.blobURL}
-      kind={attachment.kind}
-      filename={attachment.filename}
-      byteSize={attachment.bytes.length}
-    />
-  )
-}
-
-function UrlChipBody({
-  attachment,
-}: {
-  attachment: Extract<AttachmentDraft, { source: 'url' }>
-}) {
-  const { url } = useItemBlobURL(
-    attachment.url,
-    attachment.mimeType,
-    attachment.contentHash,
-  )
-  return (
-    <MediaPreview
-      previewURL={url}
-      kind={attachment.kind}
-      filename={attachment.filename}
-      byteSize={attachment.byteSize}
+          })
+      }}
+      initialMentions={() => {
+        const facets = editing?.item.facets
+        const summary = editing?.item.summary ?? ''
+        if (!facets) return []
+        const out: DraftMention[] = []
+        for (const f of facets) {
+          const mf = f.features.find((x) => x.$type === 'pin.mention')
+          if (!mf) continue
+          const cs = byteToChar(summary, f.index.byteStart)
+          const ce = byteToChar(summary, f.index.byteEnd)
+          out.push({
+            did: mf.did,
+            handle: mf.handle ?? '',
+            surface: summary.slice(cs, ce),
+          })
+        }
+        return out
+      }}
     />
   )
 }

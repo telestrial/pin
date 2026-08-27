@@ -15,6 +15,7 @@ vi.mock('../lib/docs', async () =>
 
 import {
   comment_collection,
+  comment_files_collection,
   comment_subject,
   endorsement_verify,
   engagement_subject,
@@ -25,6 +26,7 @@ import { CommentThread } from '../components/engagement/CommentThread'
 import type { ChannelManifest } from '../core/types'
 import { maxCommentBytes } from '../lib/comments'
 import { listRecords } from '../lib/docs'
+import { useComposeStore } from '../stores/compose'
 import { useFeedStore } from '../stores/feed'
 import { fakeDocStore as docStore } from './fakeModules'
 import { createFakeApp, mountAs, resetAllStores } from './setupFakeApp'
@@ -176,7 +178,9 @@ describe('integration: a post’s conversation', () => {
       picker,
       new File(['png bytes'], 'shot.png', { type: 'image/png' }),
     )
-    expect(await screen.findByText('shot.png')).toBeTruthy()
+    // Shown as a PREVIEW of what was picked, the same as a post's composer shows it —
+    // so the filename is the image's accessible name rather than a label beside it.
+    expect(await screen.findByAltText('shot.png')).toBeTruthy()
 
     await userEvent.click(screen.getByRole('button', { name: 'Reply' }))
 
@@ -193,7 +197,7 @@ describe('integration: a post’s conversation', () => {
     // Still a record the author would take, files and all.
     expect(() => endorsement_verify(JSON.stringify(record))).not.toThrow()
     // And the picker is empty again, so the next comment does not re-send it.
-    expect(screen.queryByText('shot.png')).toBeNull()
+    expect(screen.queryByAltText('shot.png')).toBeNull()
   })
 
   it('lets a picked file be taken back before anything is uploaded', async () => {
@@ -207,13 +211,13 @@ describe('integration: a post’s conversation', () => {
       picker,
       new File(['x'], 'mistake.png', { type: 'image/png' }),
     )
-    expect(await screen.findByText('mistake.png')).toBeTruthy()
+    expect(await screen.findByAltText('mistake.png')).toBeTruthy()
 
     await userEvent.click(
       screen.getByRole('button', { name: 'Remove mistake.png' }),
     )
     await waitFor(() => {
-      expect(screen.queryByText('mistake.png')).toBeNull()
+      expect(screen.queryByAltText('mistake.png')).toBeNull()
     })
 
     // Nothing was written and nothing was uploaded — a comment that is never submitted must
@@ -230,6 +234,79 @@ describe('integration: a post’s conversation', () => {
     const raw = docStore.get(`${comment_collection()}/${rkeys[0]}`)
     const record = JSON.parse(new TextDecoder().decode(raw as Uint8Array))
     expect(record.attachments).toBeUndefined()
+  })
+
+  it('carries a comment of files and no words', async () => {
+    // A post with only an image is ordinary, and a remark with only an image is the same
+    // act — so the form allows it and the record takes it. Refusing it would have been the
+    // composer disagreeing with what a comment is.
+    manifestSays(true)
+    render(<CommentThread item={ITEM} />)
+
+    const picker = document.querySelector(
+      'input[type="file"]',
+    ) as HTMLInputElement
+    await userEvent.upload(
+      picker,
+      new File(['png bytes'], 'wordless.png', { type: 'image/png' }),
+    )
+    expect(await screen.findByAltText('wordless.png')).toBeTruthy()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Reply' }))
+    await waitFor(async () => {
+      expect(await listRecords(comment_collection())).toHaveLength(1)
+    })
+    const rkeys = await listRecords(comment_collection())
+    const raw = docStore.get(`${comment_collection()}/${rkeys[0]}`)
+    const record = JSON.parse(new TextDecoder().decode(raw as Uint8Array))
+    expect(record.body).toBe('')
+    expect(record.attachments).toHaveLength(1)
+    // And it is still a record the author's fold would take.
+    expect(() => endorsement_verify(JSON.stringify(record))).not.toThrow()
+  })
+
+  it('references a library item rather than reclaiming it', async () => {
+    // Attaching something already in this scope must never make it deletable: the library
+    // still points at those bytes, so naming it in the reclaim mark would have withdrawing
+    // a comment delete somebody's pin.
+    manifestSays(true)
+    useComposeStore.setState({
+      armedItem: {
+        item: {
+          id: 'lib-1',
+          itemURL: 'sia://already-mine',
+          mimeType: 'image/png',
+          byteSize: 9,
+          contentHash: 'bafkreialreadymine',
+          filename: 'kept.png',
+        },
+        channel: { authorHandle: '', channelID: 'library', name: 'Library' },
+        objectID: 'obj-in-my-library',
+      },
+    } as never)
+    render(<CommentThread item={ITEM} />)
+
+    // Clicking the box with something armed is what attaches it — the same gesture the
+    // feed's composer has.
+    await userEvent.click(await screen.findByPlaceholderText('Say something'))
+    await userEvent.type(
+      await screen.findByPlaceholderText('Say something'),
+      'this one',
+    )
+    await userEvent.click(screen.getByRole('button', { name: 'Reply' }))
+
+    await waitFor(async () => {
+      expect(await listRecords(comment_collection())).toHaveLength(1)
+    })
+    const rkeys = await listRecords(comment_collection())
+    const raw = docStore.get(`${comment_collection()}/${rkeys[0]}`)
+    const record = JSON.parse(new TextDecoder().decode(raw as Uint8Array))
+    // Referenced where it stands, at the URL it already had.
+    expect(record.attachments).toHaveLength(1)
+    expect(record.attachments[0].url).toBe('sia://already-mine')
+    expect(record.attachments[0].contentHash).toBe('bafkreialreadymine')
+    // And nothing was written that would give those bytes back.
+    expect(await listRecords(comment_files_collection())).toHaveLength(0)
   })
 
   it('takes only as many files as a record can hold, and says so', async () => {
@@ -256,8 +333,8 @@ describe('integration: a post’s conversation', () => {
     expect(
       await screen.findByText(`A comment can carry at most ${cap} files`),
     ).toBeTruthy()
-    expect(screen.queryByText(`f${cap}.png`)).toBeNull()
-    expect(screen.getByText(`f${cap - 1}.png`)).toBeTruthy()
+    expect(screen.queryByAltText(`f${cap}.png`)).toBeNull()
+    expect(screen.getByAltText(`f${cap - 1}.png`)).toBeTruthy()
   })
 
   it('shows the files a published comment carries', async () => {

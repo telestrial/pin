@@ -126,7 +126,10 @@ export type CommentFileSource = {
  *  attachment rather than inside it. */
 export type UploadedCommentFile = {
   attachment: CommentAttachment
-  objectID: string
+  /** Absent when the bytes were already in this scope for another reason — an armed library
+   *  item, referenced rather than uploaded. Those must never enter the reclaim mark: the
+   *  library still holds them, so giving them back on withdrawal would delete a pin. */
+  objectID?: string
 }
 
 /** Put a comment's files on Sia, ready for a record to name them.
@@ -270,13 +273,17 @@ export async function writeComment(
   // not exist, which is exactly what the Curator's reclaim sweep collects. Written after
   // the upload because that is when the object ids exist, so a crash in between is the one
   // window that orphans anything — the same window a post's upload has.
-  if (carried.length > 0) {
+  // Only what this comment MINTED. A file referenced out of the library came with its own
+  // reason to exist and keeps it; naming it here would make withdrawing the comment delete
+  // bytes the library still points at.
+  const mintedIDs = carried
+    .map((c) => c.objectID)
+    .filter((id): id is string => !!id)
+  if (mintedIDs.length > 0) {
     await putRecord(
       await filesCollection(),
       rkey,
-      new TextEncoder().encode(
-        JSON.stringify({ ids: carried.map((c) => c.objectID) }),
-      ),
+      new TextEncoder().encode(JSON.stringify({ ids: mintedIDs })),
     )
   }
   await putRecord(

@@ -1,27 +1,27 @@
-import { Paperclip, X } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
+import type { SiaClient } from '../../core/siaClient'
 import type { PublishedComment } from '../../lib/channelConversations'
 import {
-  bodyBytes,
-  type CommentFileSource,
+  type UploadedCommentFile,
   uploadCommentFiles,
   withdrawComment,
   writeComment,
 } from '../../lib/comments'
 import type { EndorsedItem } from '../../lib/engagement'
 import { referenceAuthorFor } from '../../lib/engagement'
-import { buildMentionFacets } from '../../lib/facets'
-import { formatBytes } from '../../lib/format'
 import { useConversation } from '../../lib/hooks/useConversation'
 import {
   useIdentityName,
   useIdentityProfile,
 } from '../../lib/hooks/useIdentityName'
-import { useMentionBox } from '../../lib/hooks/useMentionBox'
 import { useAuthStore } from '../../stores/auth'
 import { useFeedStore } from '../../stores/feed'
+import {
+  type AttachmentDraft,
+  Composer,
+  type ComposerSubmission,
+} from '../Composer'
 import { IdentityAvatar } from '../IdentityAvatar'
-import { MentionPicker } from '../MentionPicker'
 import { PostRow } from '../PostRow'
 import { RichBody } from '../RichBody'
 import { CommentFiles } from './CommentFiles'
@@ -59,9 +59,52 @@ const LIMIT_UNKNOWN = 0
  *  record could not hold would fail at the signature, having uploaded it first. */
 const FILE_CAP_UNKNOWN = 0
 
-/** A file chosen but not yet uploaded. Held as bytes because that is what the upload takes,
- *  and because a comment that is never submitted must leave nothing behind on Sia. */
-type PickedFile = CommentFileSource & { id: string }
+/** A comment's files, ready for the record to name them.
+ *
+ *  Two kinds arrive from the composer and they are handled differently for one reason:
+ *  whether the bytes exist yet. Something picked off the disk is uploaded into the
+ *  commenter's own scope and becomes reclaimable when the comment goes. Something already
+ *  in that scope — an armed library item — is referenced where it stands and carries NO
+ *  object id, because the library still holds those bytes and withdrawing the comment must
+ *  not take them from it.
+ *
+ *  A library item with no content hash is refused rather than patched over: the record
+ *  requires one and every reader self-checks the URL against it, so there is nothing honest
+ *  to put there. Only items predating the field are affected. */
+async function carryFiles(
+  client: SiaClient | null,
+  drafts: AttachmentDraft[],
+): Promise<UploadedCommentFile[]> {
+  const referenced: UploadedCommentFile[] = []
+  const sources = []
+  for (const a of drafts) {
+    if (a.source === 'bytes') {
+      sources.push({
+        bytes: a.bytes,
+        mimeType: a.mimeType,
+        filename: a.filename,
+      })
+      continue
+    }
+    if (!a.contentHash) {
+      throw new Error(`${a.filename} has no content hash and can't be attached`)
+    }
+    referenced.push({
+      attachment: {
+        url: a.url,
+        mimeType: a.mimeType,
+        filename: a.filename,
+        byteSize: a.byteSize,
+        contentHash: a.contentHash,
+      },
+    })
+  }
+  const uploaded =
+    sources.length > 0 && client
+      ? await uploadCommentFiles(client, sources)
+      : []
+  return [...uploaded, ...referenced]
+}
 
 function CommentRow({
   comment,
@@ -136,22 +179,10 @@ export function CommentThread({
 
   const client = useAuthStore((s) => s.client)
 
-  const [draft, setDraft] = useState('')
   const [limit, setLimit] = useState(LIMIT_UNKNOWN)
   const [fileCap, setFileCap] = useState(FILE_CAP_UNKNOWN)
-  const [picked, setPicked] = useState<PickedFile[]>([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const filePicker = useRef<HTMLInputElement>(null)
-  const textarea = useRef<HTMLTextAreaElement>(null)
-  // The same `@` behaviour a post's composer has, from the same place. A comment carries
-  // facets exactly as a post does, so a mention here anchors to a DID rather than being an
-  // @name that resolves to nobody.
-  const mentionBox = useMentionBox({
-    value: draft,
-    setValue: setDraft,
-    textarea,
-  })
 
   useEffect(() => {
     let cancelled = false
@@ -175,70 +206,38 @@ export function CommentThread({
 
   if (!takesComments) return null
 
-  const used = bodyBytes(draft)
-  const overLimit = limit !== LIMIT_UNKNOWN && used > limit
-  // Near enough that the number is worth showing — a tenth of the way from the end.
-  const nearLimit = limit !== LIMIT_UNKNOWN && used > limit * 0.9
-  const full = fileCap !== FILE_CAP_UNKNOWN && picked.length >= fileCap
-
-  async function submit(e: React.FormEvent) {
-    e.preventDefault()
-    const body = draft.trim()
-    if (!storedKeyHex || !body || overLimit || busy) return
-    if (picked.length > 0 && !client) {
-      setError('Not connected to Sia yet')
-      return
+  // The ONE thing that differs from writing a post, which is why everything else is shared:
+  // a post hands its bytes to the channel it is published on, and a comment goes on
+  // carrying its own — the record points at objects in the commenter's own scope.
+  async function submit(submission: ComposerSubmission) {
+    if (!storedKeyHex) throw new Error('Not signed in')
+    if (submission.attachments.length > 0 && !client) {
+      const message = 'Not connected to Sia yet'
+      setError(message)
+      throw new Error(message)
     }
     setBusy(true)
     setError(null)
     try {
       // Bytes first, then the record that names them — an outage surfaces before anything
       // is written, and a record never points at files that failed to land.
-      const carried =
-        picked.length > 0 && client
-          ? await uploadCommentFiles(client, picked)
-          : []
+      const carried = await carryFiles(client, submission.attachments)
       await writeComment(
         storedKeyHex,
         item,
         await referenceAuthorFor(item.channelID),
-        body,
+        submission.body,
         carried,
-        // Resolved against the FINAL body, which is what gets signed — so the offsets a
-        // reader slices by are the ones the words actually have. A mention whose surface
-        // the author edited away is dropped rather than left pointing at nothing.
-        buildMentionFacets(body, mentionBox.mentions),
+        submission.facets,
       )
-      setDraft('')
-      setPicked([])
-      mentionBox.clear()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not add that comment')
+      // Rethrown so the composer keeps the draft: nothing was published, so nothing the
+      // person wrote should disappear.
+      throw e
     } finally {
       setBusy(false)
     }
-  }
-
-  async function pick(files: FileList | null) {
-    if (!files || files.length === 0) return
-    setError(null)
-    const room = fileCap - picked.length
-    if (room <= 0) return
-    const taken = Array.from(files).slice(0, room)
-    if (taken.length < files.length) {
-      // Said rather than silently dropped: a picker that quietly took three of five would
-      // publish a comment missing files the person believed they had attached.
-      setError(`A comment can carry at most ${fileCap} files`)
-    }
-    const read = await Promise.all(
-      taken.map(async (f) => ({
-        id: `${f.name}:${f.size}:${f.lastModified}`,
-        bytes: new Uint8Array(await f.arrayBuffer()),
-        mimeType: f.type || 'application/octet-stream',
-        filename: f.name,
-      })),
-    )
-    setPicked((held) => [...held, ...read])
   }
 
   async function remove(comment: PublishedComment) {
@@ -268,124 +267,29 @@ export function CommentThread({
           says what it is; a heading over it is the app explaining its own furniture. It
           sits above the replies for the same reason every microblog puts it there — the
           thing you came to do is nearer than the thing you came to read. */}
-      <form
-        onSubmit={submit}
-        className="bg-white border border-neutral-200 rounded-lg p-3"
-      >
-        <div className="flex items-start gap-3">
-          {/* Yourself, not a channel: a comment is written as you. The feed's composer
-              shows the voice you are publishing AS, and a comment has none. */}
+      <Composer
+        avatar={
+          /* Yourself, not a channel: a comment is written as you. The feed's composer
+             shows the voice you are publishing AS, and a comment has none to pick. */
           <IdentityAvatar
             didDht={myDidDht ?? ''}
             name={myName}
             avatarURL={myProfile?.avatarURL ?? undefined}
           />
-          <div className="flex-1 min-w-0">
-            <textarea
-              ref={textarea}
-              value={draft}
-              onChange={(e) => {
-                setDraft(e.target.value)
-                mentionBox.onTextChanged(
-                  e.target.value,
-                  e.target.selectionStart ?? e.target.value.length,
-                )
-              }}
-              onSelect={(e) =>
-                mentionBox.onTextChanged(
-                  e.currentTarget.value,
-                  e.currentTarget.selectionStart ?? 0,
-                )
-              }
-              onKeyDown={mentionBox.onKeyDown}
-              disabled={busy}
-              rows={1}
-              placeholder="Say something"
-              className="block w-full mt-1.5 bg-transparent text-sm text-black placeholder-neutral-400 focus:outline-none resize-none border-0 p-0 field-sizing-content max-h-60 overflow-y-auto"
-            />
-          </div>
-        </div>
-
-        {mentionBox.picker && (
-          <MentionPicker
-            candidates={mentionBox.picker.candidates}
-            loading={mentionBox.picker.loading}
-            activeIndex={mentionBox.picker.activeIndex}
-            onPick={mentionBox.picker.pick}
-          />
-        )}
-
-        {picked.length > 0 && (
-          <ul className="mt-3 flex flex-wrap gap-2">
-            {picked.map((f) => (
-              <li
-                key={f.id}
-                className="flex items-center gap-1.5 px-2 py-1 bg-neutral-100 rounded-lg text-xs text-neutral-700"
-              >
-                <span className="max-w-40 truncate">{f.filename}</span>
-                <span className="text-neutral-400">
-                  {formatBytes(f.bytes.length)}
-                </span>
-                <button
-                  type="button"
-                  onClick={() =>
-                    setPicked((held) => held.filter((h) => h.id !== f.id))
-                  }
-                  disabled={busy}
-                  aria-label={`Remove ${f.filename}`}
-                  className="text-neutral-400 hover:text-neutral-900 cursor-pointer disabled:cursor-default"
-                >
-                  <X size={12} />
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-
-        <div className="mt-2 flex items-center justify-end gap-2">
-          {/* Only when it matters. A running byte count on an empty box is chrome; the
-              same number as you approach a limit you can actually hit is information. */}
-          {(error || nearLimit) && (
-            <p
-              className={`mr-auto text-xs ${overLimit ? 'text-red-600' : 'text-neutral-500'}`}
-            >
-              {error ??
-                (overLimit
-                  ? `${used - limit} bytes too long`
-                  : // Bytes, because bytes are what the receiver counts.
-                    `${limit - used} bytes left`)}
-            </p>
-          )}
-          <input
-            ref={filePicker}
-            type="file"
-            multiple
-            hidden
-            onChange={(e) => {
-              void pick(e.target.files)
-              // Cleared so picking the same file twice in a row still fires a change.
-              e.target.value = ''
-            }}
-          />
-          <button
-            type="button"
-            onClick={() => filePicker.current?.click()}
-            disabled={busy || fileCap === FILE_CAP_UNKNOWN || full}
-            aria-label="Attach a file"
-            title={full ? `At most ${fileCap} files` : 'Attach a file'}
-            className="p-1.5 text-neutral-500 hover:text-neutral-900 cursor-pointer disabled:text-neutral-300 disabled:cursor-default"
-          >
-            <Paperclip size={16} />
-          </button>
-          <button
-            type="submit"
-            disabled={busy || overLimit || draft.trim() === ''}
-            className="px-4 py-1.5 bg-green-600 hover:bg-green-700 disabled:bg-neutral-200 disabled:text-neutral-400 text-white text-sm font-medium rounded-md transition-colors"
-          >
-            {busy ? 'Adding…' : 'Reply'}
-          </button>
-        </div>
-      </form>
+        }
+        placeholder="Say something"
+        submitLabel="Reply"
+        busyLabel="Adding…"
+        busy={busy}
+        error={error}
+        /* BYTES, not characters: a host counts bytes and would refuse a longer record, so
+           counting anything else here would let someone write what cannot be published. */
+        limit={{ unit: 'bytes', max: limit === LIMIT_UNKNOWN ? null : limit }}
+        attachmentCap={fileCap === FILE_CAP_UNKNOWN ? 0 : fileCap}
+        attachmentCapMessage={`A comment can carry at most ${fileCap} files`}
+        bodyTextClass="text-sm"
+        onSubmit={submit}
+      />
 
       {comments.length > 0 && (
         <ul className="bg-white border border-neutral-200 rounded-lg p-5 space-y-3">
