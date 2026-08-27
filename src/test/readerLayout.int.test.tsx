@@ -1,4 +1,4 @@
-// Where a post's conversation SITS on the page.
+// Where a post's conversation and its gestures SIT on the page.
 //
 // Caught in the app rather than by a test: the thread was a sibling of the post inside the
 // page's `lg:flex-row`, so on a wide screen it became a fourth column beside the post
@@ -132,5 +132,27 @@ describe('integration: where a post’s conversation sits', () => {
     // conversation in there is a column of its own again.
     expect(column?.querySelector('[data-testid="sidebar"]')).toBeNull()
     expect(column?.querySelector('[data-testid="right-sidebar"]')).toBeNull()
+  })
+
+  // The gestures belong to the post, not to the page. Sitting in the top bar beside Back
+  // and Edit they were page chrome, and a post read on its own page disagreed with the same
+  // post read in a row and with every comment under it.
+  it('puts the gestures under the post, not in the bar with Back', async () => {
+    takesComments()
+    render(<ReadText {...readerProps()} onEdit={() => {}} />)
+
+    const like = await screen.findByTitle('Like')
+    const bar = screen.getByText('Back').parentElement
+    expect(bar).toBeTruthy()
+    // Edit stays up there; the row does not.
+    expect(bar?.contains(screen.getByText('Edit'))).toBe(true)
+    expect(bar?.contains(like)).toBe(false)
+
+    // And it is under the post rather than above it: the header naming the channel comes
+    // first in document order.
+    const header = screen.getByText('A channel')
+    expect(
+      header.compareDocumentPosition(like) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
   })
 })

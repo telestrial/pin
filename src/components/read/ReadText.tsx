@@ -98,18 +98,15 @@ export function ReadText({
               >
                 {backLabel}
               </button>
-              <div className="flex items-center gap-1.5">
-                {onEdit && (
-                  <button
-                    type="button"
-                    onClick={onEdit}
-                    className="px-2.5 py-1 text-xs font-medium text-neutral-600 hover:text-neutral-900 bg-neutral-100 hover:bg-neutral-200 rounded-full transition-colors cursor-pointer"
-                  >
-                    Edit
-                  </button>
-                )}
-                <EngagementRow input={pinInput} entry={entry} />
-              </div>
+              {onEdit && (
+                <button
+                  type="button"
+                  onClick={onEdit}
+                  className="px-2.5 py-1 text-xs font-medium text-neutral-600 hover:text-neutral-900 bg-neutral-100 hover:bg-neutral-200 rounded-full transition-colors cursor-pointer"
+                >
+                  Edit
+                </button>
+              )}
             </div>
 
             <header className="space-y-2">
@@ -207,6 +204,11 @@ export function ReadText({
                 </>
               )}
             </footer>
+
+            {/* Under the post, as it is under a row in the feed and under a comment
+                anywhere. Up beside Edit it read as page chrome rather than as the
+                gestures on the thing being read. */}
+            <EngagementRow input={pinInput} entry={entry} />
           </article>
           {/* Under the post, and only on a channel that takes comments — the component
             decides that for itself, so every reader page asks the same way. */}
