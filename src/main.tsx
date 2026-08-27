@@ -36,6 +36,7 @@ if (import.meta.env.DEV || inTauri()) {
     __pinCuratorDocsList?: () => Promise<string>
     __pinSubDiag?: () => Promise<string>
     __pinDeliverProbe?: () => Promise<string>
+    __pinDirDiag?: () => Promise<string>
     __pinChannelDocs?: {
       author: (hexOverride?: string) => Promise<string>
       subscriber: (ticket: string, hexOverride?: string) => Promise<string>
@@ -518,6 +519,102 @@ if (import.meta.env.DEV || inTauri()) {
     if (!hex) return 'not signed in'
     const { deliverProbeNative } = await import('./lib/tauriDocs')
     return deliverProbeNative(hex)
+  }
+  // Why your own profile page won't load. Walks the EXACT chain HandleDirectory walks —
+  // did:dht → the pkarr packet → the `_dir` pointer → the Sia download — and reports what
+  // each hop said, next to what this identity thinks it last published. A failure at any
+  // hop reads the same on the page ("object not found"), and the three causes want
+  // different fixes: a stale record nothing has overwritten yet, a publish state naming a
+  // deleted blob (so the fingerprint says "unchanged" and it never re-uploads), or an
+  // identity with nothing to advertise, which publishes nothing at all.
+  g.__pinDirDiag = async () => {
+    const { client, hex } = await session()
+    if (!client || !hex) return 'not signed in'
+    const out: string[] = []
+
+    const { deriveDidDht, reassembleTxt } = await import('./lib/pkarr')
+    const { did } = await deriveDidDht(hexToBytes(hex))
+    out.push(`did: ${did}`)
+
+    // What the DHT (native) or the relays (web) currently serve under that key.
+    const { pkarrTransport } = await import('./lib/pkarrTransport')
+    let records: { name: string; value: string }[] = []
+    try {
+      records = await (await pkarrTransport()).resolve(did)
+    } catch (e) {
+      out.push(`pkarr resolve THREW: ${e instanceof Error ? e.message : e}`)
+    }
+    out.push(
+      `pkarr records (${records.length}): ${records.map((r) => r.name).join(', ') || '(none)'}`,
+    )
+    const url = await reassembleTxt(records, '_dir')
+    out.push(`_dir: ${url ?? 'ABSENT — nothing published under this key'}`)
+
+    // What the identity loop believes it published. When its fingerprint matches the
+    // directory it would assemble, it reuses this URL instead of uploading — so a dead
+    // object here is a state that repairs itself never.
+    const { readPublished } = await import('./lib/publishState')
+    // `fp` is written by the Rust identity loop and isn't in the frontend's own type;
+    // this reads a record another writer produces.
+    const held = (await readPublished(hex, 'directory')) as {
+      id: string
+      url?: string
+      fp?: string
+    } | null
+    out.push(
+      held
+        ? `published/directory: id=${held.id} fp=${held.fp ?? '(none)'}
+  url=${held.url ?? '(none)'}
+  matches _dir: ${held.url === url}`
+        : 'published/directory: (no record — the loop has not published since the last reset)',
+    )
+
+    // The hop that actually errors on the page.
+    if (url) {
+      try {
+        const bytes = await client.downloadItem(url)
+        const doc = JSON.parse(new TextDecoder().decode(bytes))
+        out.push(
+          `download: OK, ${bytes.length} bytes, version=${doc?.version}, ${doc?.channels?.length ?? 0} channel(s), profile=${doc?.profile?.username ?? '(none)'}`,
+        )
+      } catch (e) {
+        out.push(`download FAILED: ${e instanceof Error ? e.message : e}`)
+        // Is the object simply gone from this scope, or is it a fetch that failed?
+        try {
+          const id = await client.resolveObjectID(url)
+          const held = await client.getObjectSlabs(id)
+          out.push(
+            `  object ${id}: ${held ? 'present in this scope' : 'NOT HELD'}`,
+          )
+        } catch (e2) {
+          out.push(
+            `  resolveObjectID: ${e2 instanceof Error ? e2.message : e2}`,
+          )
+        }
+      }
+    }
+
+    // The identity loop's own last word, which says whether it published this pass and
+    // what it carried. Nothing here at all means the loop has not completed a pass.
+    try {
+      const { curatorStatus } = await import('./lib/curator')
+      const st = await curatorStatus()
+      out.push(
+        `curator: running=${st.running} identity=${st.didDhtPublished ?? '(no pass reported)'}`,
+      )
+    } catch (e) {
+      out.push(`curator status: ${e instanceof Error ? e.message : e}`)
+    }
+
+    // Whether there is anything to publish at all — an identity with no profile, no
+    // advertised channels, no follows and no endorsements publishes nothing, which leaves
+    // whatever the DHT already held standing until it expires.
+    const { useAuthStore } = await import('./stores/auth')
+    const st = useAuthStore.getState()
+    out.push(
+      `local: profile=${st.profile?.username ?? '(none)'} channels=${st.myChannels?.length ?? 0} subs=${st.subscriptions?.length ?? 0}`,
+    )
+    return out.join('\n')
   }
   // Sync-loopback harness (slice 1a): drive docs.ts's OWN sync verbs across two
   // browser tabs to prove two replicas of one identity converge bidirectionally
