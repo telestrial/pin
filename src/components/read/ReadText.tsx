@@ -12,6 +12,7 @@ import { type PinInput, usePinStore } from '../../stores/pin'
 import { AttachmentGrid } from '../AttachmentMedia'
 import { CommentThread } from '../engagement/CommentThread'
 import { EngagementRow } from '../engagement/EngagementRow'
+import { FilePinButton } from '../pin/FilePinButton'
 
 export function ReadText({
   item,
@@ -196,9 +197,14 @@ export function ReadText({
             {displayItem.attachments && displayItem.attachments.length > 0 && (
               <AttachmentGrid
                 attachments={displayItem.attachments}
-                channelID={channelID}
-                itemID={item.id}
-                publishedAt={item.publishedAt}
+                pin={(a) => (
+                  <FilePinButton
+                    attachment={a}
+                    channelID={channelID}
+                    itemID={item.id}
+                    publishedAt={item.publishedAt}
+                  />
+                )}
               />
             )}
 

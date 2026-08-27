@@ -1,11 +1,11 @@
 import { AppWindow, FileText } from 'lucide-react'
+import type { ReactNode } from 'react'
 import { useEffect, useMemo, useRef } from 'react'
 import { type AttachmentRef, isValidAttachment } from '../core/types'
 import { installAppBridge } from '../lib/appBridge'
 import { APP_SANDBOX } from '../lib/constants'
 import { formatBytes } from '../lib/format'
 import { useItemBlobURL, useItemBytes } from '../lib/hooks/useItemBytes'
-import { FilePinButton } from './pin/FilePinButton'
 
 export type AttachmentKind = 'image' | 'audio' | 'video' | 'app' | 'file'
 
@@ -99,25 +99,43 @@ export function MediaPreview({
   )
 }
 
-function MediaAttachment({
+function MediaTile({
   attachment,
   kind,
+  pin,
 }: {
   attachment: AttachmentRef
   kind: AttachmentKind
+  pin?: ReactNode
 }) {
-  const { url } = useItemBlobURL(
+  const { url, error } = useItemBlobURL(
     attachment.url,
     attachment.mimeType,
     attachment.contentHash,
   )
+  const name = attachment.filename ?? 'item'
   return (
-    <MediaPreview
-      previewURL={url}
-      kind={kind}
-      filename={attachment.filename ?? 'item'}
-      byteSize={attachment.byteSize}
-    />
+    <div className="group relative bg-neutral-50 border border-neutral-200 rounded-lg overflow-hidden">
+      {error ? (
+        // Said plainly rather than left as a blank tile, because for some files this is
+        // ordinary rather than alarming: a comment's bytes belong to whoever wrote it, so a
+        // repack on their side moves the URL until the host next crawls them. Words intact,
+        // media broken.
+        <p className="p-3 text-xs text-neutral-400 truncate" title={name}>
+          {name} — unavailable
+        </p>
+      ) : (
+        <MediaPreview
+          previewURL={url}
+          kind={kind}
+          filename={name}
+          byteSize={attachment.byteSize}
+        />
+      )}
+      {/* No custody control on something that cannot be fetched. Pinning is paying to keep
+          bytes, and these are bytes nobody here can read in order to keep them. */}
+      {!error && pin}
+    </div>
   )
 }
 
@@ -156,55 +174,50 @@ function AppAttachment({ attachment }: { attachment: AttachmentRef }) {
 
 function AttachmentTile({
   attachment,
-  channelID,
-  itemID,
-  publishedAt,
+  pin,
 }: {
   attachment: AttachmentRef
-  channelID: string
-  itemID: string
-  publishedAt: string
+  /** The custody control for this one file. Supplied by whoever owns the grid, because a
+   *  post's attachment and a comment's are addressed differently — one names a manifest
+   *  entry, the other names the comment that carries it — while the tile around them is
+   *  the same tile. */
+  pin?: ReactNode
 }) {
   const kind = kindForMime(attachment.mimeType)
+  if (kind !== 'app') {
+    return <MediaTile attachment={attachment} kind={kind} pin={pin} />
+  }
   return (
     <div className="group relative bg-neutral-50 border border-neutral-200 rounded-lg overflow-hidden">
-      {kind === 'app' ? (
-        <AppAttachment attachment={attachment} />
-      ) : (
-        <MediaAttachment attachment={attachment} kind={kind} />
-      )}
-      <FilePinButton
-        attachment={attachment}
-        channelID={channelID}
-        itemID={itemID}
-        publishedAt={publishedAt}
-      />
+      <AppAttachment attachment={attachment} />
+      {pin}
     </div>
   )
 }
 
 const DISPLAY_CAP = 4
 
-export function AttachmentGrid({
+/** The files something carries, wherever it is met.
+ *
+ *  ONE grid for a post's attachments and a comment's. They were two — a full grid for a
+ *  post and small capped tiles for a comment — on the reasoning that a comment is a remark
+ *  with something attached where a post is the attachment with a remark on it. That
+ *  reasoning is retired: a comment IS a post, so meeting the same picture under one and
+ *  under the other and getting two different sizes is the app disagreeing with itself.
+ *
+ *  What legitimately differs is custody, which is why `pin` is a slot rather than a
+ *  branch. */
+export function AttachmentGrid<A extends AttachmentRef>({
   attachments,
-  channelID,
-  itemID,
-  publishedAt,
+  pin,
 }: {
-  attachments: AttachmentRef[]
-  // Channel + item the attachments belong to — lets each tile's FilePinButton
-  // determine ownership (retract-the-file vs mirror-to-library) and target the
-  // right manifest entry on retract.
-  channelID: string
-  itemID: string
-  // The post's publish time: half of its identity, which a per-file pin needs to name
-  // the post whose attachment it is keeping.
-  publishedAt: string
+  attachments: A[]
+  pin?: (attachment: A) => ReactNode
 }) {
   // Drop malformed entries — pre-AttachmentRef-schema posts (slice 1's URL-only
   // shape) would arrive as bare strings here. Render nothing rather than crash;
   // the user can republish if they want them rendered.
-  const valid = attachments.filter(isValidAttachment)
+  const valid = attachments.filter((a): a is A => isValidAttachment(a))
   if (valid.length === 0) return null
   const showAll = valid.length <= DISPLAY_CAP
   const visible = showAll ? valid : valid.slice(0, DISPLAY_CAP - 1)
@@ -217,13 +230,7 @@ export function AttachmentGrid({
       }`}
     >
       {visible.map((a, i) => (
-        <AttachmentTile
-          key={i}
-          attachment={a}
-          channelID={channelID}
-          itemID={itemID}
-          publishedAt={publishedAt}
-        />
+        <AttachmentTile key={i} attachment={a} pin={pin?.(a)} />
       ))}
       {overflow > 0 && (
         <div className="bg-neutral-100 border border-neutral-200 rounded-lg flex items-center justify-center min-h-32">

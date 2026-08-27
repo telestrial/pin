@@ -9,6 +9,7 @@ import { AttachmentGrid } from './AttachmentMedia'
 import { CommentBody, ReplyingTo } from './engagement/CommentBody'
 import { EngagementRow } from './engagement/EngagementRow'
 import { PostRow } from './PostRow'
+import { FilePinButton } from './pin/FilePinButton'
 import { RichBody } from './RichBody'
 
 export function HomeFeed({
@@ -195,9 +196,14 @@ function PostBody({
       {hasAttachments && item.attachments && (
         <AttachmentGrid
           attachments={item.attachments}
-          channelID={channelID}
-          itemID={item.id}
-          publishedAt={item.publishedAt}
+          pin={(a) => (
+            <FilePinButton
+              attachment={a}
+              channelID={channelID}
+              itemID={item.id}
+              publishedAt={item.publishedAt}
+            />
+          )}
         />
       )}
     </>
