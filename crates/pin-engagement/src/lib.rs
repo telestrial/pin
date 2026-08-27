@@ -567,7 +567,15 @@ impl Endorsement {
         match self.kind.as_str() {
             KIND_COMMENT => {
                 match self.body.as_deref() {
-                    None | Some("") => return Err("a comment carries no body".into()),
+                    // No body FIELD at all is malformed — `sign_comment` always writes one.
+                    None => return Err("a comment carries no body".into()),
+                    // Words or files, but not neither. A picture with nothing said is a
+                    // perfectly ordinary remark, and refusing it would be the form telling
+                    // someone their comment is not a comment; a record carrying neither is
+                    // an assertion about nothing, which is what this rule is for.
+                    Some("") if self.attachments.is_empty() => {
+                        return Err("a comment carries no body".into())
+                    }
                     Some(body) if body.len() > MAX_BODY_BYTES => {
                         return Err(format!(
                             "body is {} bytes, over the {MAX_BODY_BYTES} byte limit",
@@ -1315,6 +1323,25 @@ mod tests {
         .unwrap();
         assert!(empty.check_shape().is_err());
         assert!(empty.verify().is_err());
+    }
+
+    #[test]
+    fn a_comment_may_carry_files_and_no_words() {
+        // The other half of the rule above: neither is refused, but EITHER is enough. A post
+        // with only an image is ordinary, and a remark with only an image is the same act.
+        let wordless = Endorsement::sign_comment(
+            &SEED,
+            SUBJECT,
+            VERSION,
+            WHEN,
+            None,
+            "",
+            vec![carried("bafkreiwordless")],
+            Vec::new(),
+        )
+        .unwrap();
+        assert!(wordless.check_shape().is_ok());
+        assert!(wordless.verify().is_ok());
     }
 
     #[test]
