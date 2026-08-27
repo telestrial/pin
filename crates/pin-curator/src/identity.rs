@@ -568,6 +568,31 @@ fn has_anything(doc: &DirectoryDoc) -> bool {
         || doc.comments_url.is_some()
 }
 
+/// Which generation to reclaim, and which to keep alive, after publishing `current`.
+///
+/// Keep-2, exactly as a channel manifest does it, and for the same reason — which the
+/// first cut of this got wrong. Publishing a new pointer does not make the old one stop
+/// being served: a pkarr record takes time to propagate, and a reader resolving through
+/// the public relays is handed the previous pointer for minutes afterwards. Deleting the
+/// object that pointer names turns "slightly stale" into "object not found". So the
+/// current AND immediately-previous generations stay alive, and only the one two
+/// publishes back is reclaimed.
+///
+/// Pulled out of the pass so the rule is testable on its own — whether an object is given
+/// up, and which object, is small and easy to get backwards.
+fn reclaim_plan(held: Option<&PublishedState>, current: &str) -> (Option<String>, Option<String>) {
+    match held {
+        // Same object as last time — a keep-alive pass. Nothing was superseded, so no
+        // generation shifts and nothing is reclaimed. Otherwise every pass would re-issue
+        // the same delete forever.
+        Some(h) if h.id == current => (h.older_id.clone(), None),
+        // A new object supersedes the current one, which becomes the grace generation.
+        // The one it displaces is two publishes back, past any propagation window.
+        Some(h) => (Some(h.id.clone()), h.older_id.clone()),
+        None => (None, None),
+    }
+}
+
 /// One pass: assemble, upload if the content moved, and publish the packet.
 ///
 /// The publish happens every pass even when nothing changed — that IS the keep-alive.
@@ -610,17 +635,16 @@ pub async fn publish_identity_once(
     let held = read_published(ctx, &published_key, DIRECTORY_RKEY).await;
     let fp = fingerprint(&doc);
 
-    // Reuse the existing blob when the content hasn't moved; otherwise mint a new one
-    // and hand the superseded id to the reclaim below.
-    let (item_url, object_id, superseded) = match &held {
+    // Reuse the existing blob when the content hasn't moved; otherwise mint a new one.
+    let (item_url, object_id) = match &held {
         Some(h) if h.fp.as_deref() == Some(fp.as_str()) && h.url.is_some() => {
-            (h.url.clone().unwrap(), h.id.clone(), None)
+            (h.url.clone().unwrap(), h.id.clone())
         }
         _ => {
             let bytes = serde_json::to_vec(&doc).map_err(|e| format!("encode directory: {e}"))?;
             let up = ctx.sia.upload_item(bytes, None).await?;
             outcome.uploaded = true;
-            (up.item_url, up.id, held.as_ref().map(|h| h.id.clone()))
+            (up.item_url, up.id)
         }
     };
 
@@ -649,6 +673,8 @@ pub async fn publish_identity_once(
     pin_pkarr::publish(&seed, &records).await?;
     outcome.published = true;
 
+    let (older_id, to_reclaim) = reclaim_plan(held.as_ref(), &object_id);
+
     crate::write_published(
         &ctx.doc,
         ctx.author_id,
@@ -657,7 +683,7 @@ pub async fn publish_identity_once(
         &PublishedState {
             id: object_id,
             url: Some(item_url),
-            older_id: None,
+            older_id,
             fp: Some(fp),
         },
     )
@@ -683,10 +709,12 @@ pub async fn publish_identity_once(
         .await;
     }
 
-    // Reclaim the blobs nothing points at any more. No grace window, unlike a channel
-    // manifest: these are read on demand by a visitor rather than polled, and a reader
-    // mid-resolve holds the URL they already fetched.
-    for old in [superseded, comments.superseded].into_iter().flatten() {
+    // Reclaim the blobs nothing points at any more. The directory keeps a grace
+    // generation (see `reclaim_plan`); the comments blob does not yet, so a reader served
+    // a stale directory can follow its pointer to an object already given up — that
+    // degrades to an empty conversation rather than to the hard failure this window used
+    // to cause on the directory itself.
+    for old in [to_reclaim, comments.superseded].into_iter().flatten() {
         let _ = ctx.sia.delete_object(&old).await;
     }
     Ok(outcome)
@@ -1258,6 +1286,51 @@ mod tests {
         // Published, but every endpoint names itself without saying where it is — which a
         // peer skips, so this identity is advertised and unreachable at the same time.
         assert!(!settled(&outcome(true, 0, false)));
+    }
+
+    fn published(id: &str, older: Option<&str>) -> PublishedState {
+        PublishedState {
+            id: id.into(),
+            url: Some(format!("sia://{id}")),
+            older_id: older.map(Into::into),
+            fp: None,
+        }
+    }
+
+    #[test]
+    fn the_previous_generation_is_kept_alive() {
+        // The bug this exists for: publishing a new pointer does not stop the old one
+        // being served. A reader resolving through the public relays is handed the
+        // previous pointer for minutes afterwards, so deleting the object it names turns
+        // "slightly stale" into "object not found" — which is what a browser hit.
+        let (older, reclaim) = reclaim_plan(Some(&published("gen1", None)), "gen2");
+        assert_eq!(older.as_deref(), Some("gen1"));
+        assert_eq!(reclaim, None);
+    }
+
+    #[test]
+    fn only_the_generation_two_back_is_reclaimed() {
+        let (older, reclaim) = reclaim_plan(Some(&published("gen2", Some("gen1"))), "gen3");
+        assert_eq!(older.as_deref(), Some("gen2"));
+        assert_eq!(reclaim.as_deref(), Some("gen1"));
+    }
+
+    #[test]
+    fn a_keep_alive_pass_supersedes_nothing() {
+        // Most passes republish the SAME object to refresh its TTL. Nothing was
+        // superseded, so no generation shifts and no delete is issued — otherwise every
+        // pass would re-issue the same delete, and the pass after a real supersede would
+        // reclaim the generation still being served.
+        let (older, reclaim) = reclaim_plan(Some(&published("gen2", Some("gen1"))), "gen2");
+        assert_eq!(older.as_deref(), Some("gen1"));
+        assert_eq!(reclaim, None);
+    }
+
+    #[test]
+    fn a_first_publish_reclaims_nothing() {
+        let (older, reclaim) = reclaim_plan(None, "gen1");
+        assert_eq!(older, None);
+        assert_eq!(reclaim, None);
     }
 
     #[test]
