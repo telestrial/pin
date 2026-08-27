@@ -1,13 +1,13 @@
 import { Recycle } from 'lucide-react'
 import { useEffect, useMemo } from 'react'
-import { type FeedChannel, type FeedEntry, feedTimeOf } from '../core/feed'
+import { type FeedEntry, feedTimeOf } from '../core/feed'
 import type { ItemRef } from '../core/types'
 import { useIdentityName } from '../lib/hooks/useIdentityName'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
 import { AttachmentGrid } from './AttachmentMedia'
-import { CommentFiles } from './engagement/CommentFiles'
-import { CommentEngagementRow, EngagementRow } from './engagement/EngagementRow'
+import { CommentBody, ReplyingTo } from './engagement/CommentBody'
+import { EngagementRow } from './engagement/EngagementRow'
 import { PostRow } from './PostRow'
 import { RichBody } from './RichBody'
 
@@ -217,14 +217,6 @@ function PostBody({
  *  link, because the row itself already opens the post it names and a second affordance to
  *  the same place is one to get wrong.
  */
-function ReplyingTo({ channel }: { channel: FeedChannel }) {
-  return (
-    <p className="text-xs text-neutral-500 truncate">
-      Replying to {channel.name}
-    </p>
-  )
-}
-
 function RepostedBy({
   repost,
   onHandleClick,
@@ -288,18 +280,12 @@ export function FeedRow({
           onOpen={() => onItemClick(entry)}
           onOpenPerson={onHandleClick}
         >
-          <ReplyingTo channel={channel} />
-          <RichBody
-            body={entry.comment.body ?? ''}
-            facets={entry.comment.facets}
-            onHandleClick={onHandleClick}
-          />
-          <CommentFiles
-            files={entry.comment.attachments}
+          <ReplyingTo name={channel.name} />
+          <CommentBody
             comment={entry.comment}
             post={post}
+            onHandleClick={onHandleClick}
           />
-          <CommentEngagementRow comment={entry.comment} post={post} />
         </PostRow>
       </li>
     )

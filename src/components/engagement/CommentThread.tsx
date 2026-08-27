@@ -23,9 +23,7 @@ import {
 } from '../Composer'
 import { IdentityAvatar } from '../IdentityAvatar'
 import { PostRow } from '../PostRow'
-import { RichBody } from '../RichBody'
-import { CommentFiles } from './CommentFiles'
-import { CommentEngagementRow } from './EngagementRow'
+import { CommentBody } from './CommentBody'
 
 // A post's conversation, and somewhere to add to it.
 //
@@ -128,17 +126,11 @@ function CommentRow({
         onOpen={onOpen}
         onOpenPerson={onOpenPerson}
       >
-        <RichBody
-          body={comment.body ?? ''}
-          facets={comment.facets}
-          onHandleClick={onOpenPerson}
-        />
-        <CommentFiles
-          files={comment.attachments}
+        <CommentBody
           comment={comment}
           post={post}
+          onHandleClick={onOpenPerson}
         />
-        <CommentEngagementRow comment={comment} post={post} />
         {/* Taking your own back. Below the gestures rather than in the header, because it
             is not one of them: the others are things anybody does to a comment, and this is
             the only thing only its author can do. */}

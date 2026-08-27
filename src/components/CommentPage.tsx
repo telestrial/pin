@@ -1,11 +1,9 @@
 import type { FeedChannel } from '../core/feed'
 import type { PublishedComment } from '../lib/channelConversations'
 import type { EndorsedItem } from '../lib/engagement'
-import { CommentFiles } from './engagement/CommentFiles'
+import { CommentBody, ReplyingTo } from './engagement/CommentBody'
 import { CommentThread } from './engagement/CommentThread'
-import { CommentEngagementRow } from './engagement/EngagementRow'
 import { PostRow } from './PostRow'
-import { RichBody } from './RichBody'
 
 // One comment, and what was said back to it.
 //
@@ -76,20 +74,12 @@ export function CommentPage({
               at={comment.createdAt}
               onOpenPerson={onHandleClick}
             >
-              <p className="text-xs text-neutral-500 truncate">
-                Replying to {channel.name}
-              </p>
-              <RichBody
-                body={comment.body ?? ''}
-                facets={comment.facets}
-                onHandleClick={onHandleClick}
-              />
-              <CommentFiles
-                files={comment.attachments}
+              <ReplyingTo name={channel.name} />
+              <CommentBody
                 comment={comment}
                 post={post}
+                onHandleClick={onHandleClick}
               />
-              <CommentEngagementRow comment={comment} post={post} />
             </PostRow>
           </div>
 
