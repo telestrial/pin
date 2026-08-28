@@ -25,6 +25,7 @@ import type {
   Facet,
   ItemRef,
   ItemType,
+  OwnedChannel,
   PortalAddress,
   RepostRef,
 } from './types'
@@ -410,4 +411,21 @@ export async function parseSubscribeURL(url: string): Promise<{
   return author.startsWith('did:dht:')
     ? { authorHandle: '', didDht: author, channelID, channelKey }
     : { authorHandle: author, channelID, channelKey }
+}
+
+/** The owned channels that are advertised in this identity's directory.
+ *
+ *  MIRRORS `advertised_channels` in `pin-curator`'s identity loop, which is what actually
+ *  publishes the list — so the two must agree or your own profile shows you a channel the
+ *  world cannot see, or hides one it can. Both halves matter and neither is the default:
+ *  `advertised` is undefined until Unclaim sets it false, and `visibility` is undefined on
+ *  a channel created before the field existed. ABSENT VISIBILITY IS UNKNOWN AND UNKNOWN IS
+ *  NOT ADVERTISED — guessing public there would enumerate an unlisted channel, the one
+ *  thing the directory must never do. */
+export function advertisedChannels(
+  owned: readonly OwnedChannel[],
+): OwnedChannel[] {
+  return owned.filter(
+    (c) => c.advertised !== false && c.visibility === 'public',
+  )
 }

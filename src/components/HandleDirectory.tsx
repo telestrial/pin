@@ -1,8 +1,12 @@
 import { Plus } from 'lucide-react'
 import { useEffect, useState } from 'react'
+import { advertisedChannels } from '../core/channels'
 import type { ProfileRecord } from '../core/profile'
 import type { ChannelManifest, FollowEdge } from '../core/types'
-import { resolveChannelViaLocator } from '../lib/channelLocator'
+import {
+  readOwnManifest,
+  resolveChannelViaLocator,
+} from '../lib/channelLocator'
 import { formatBytes } from '../lib/format'
 import { useItemBlobURL } from '../lib/hooks/useItemBytes'
 import { resolveIdentityDoc } from '../lib/identityDoc'
@@ -33,6 +37,47 @@ type State =
       follows: FollowEdge[]
     }
   | { kind: 'error'; message: string }
+
+/** This identity's own directory, out of local state.
+ *
+ *  The same three parts a resolved one has, from the sources the publisher reads: settings
+ *  for the profile, the advertised set and the follows, and the doc for each manifest. A
+ *  manifest that isn't in the doc yet is SKIPPED rather than resolved — the record is
+ *  written as part of the commit that publishes a channel, so its absence means a channel
+ *  this device has not synced, and one missing hero card is a better answer than a network
+ *  round trip on a screen that is otherwise instant. */
+async function readOwnDirectory(): Promise<{
+  profile: ProfileRecord | null
+  ownChannels: ChannelEntry[]
+  follows: FollowEdge[]
+}> {
+  const { profile, myChannels, follows, storedKeyHex } = useAuthStore.getState()
+  const advertised = advertisedChannels(myChannels)
+  const resolved = storedKeyHex
+    ? await Promise.all(
+        advertised.map(async (c): Promise<ChannelEntry | null> => {
+          const manifest = await readOwnManifest(
+            storedKeyHex,
+            c.channelID,
+            c.channelKey,
+          )
+          return manifest
+            ? {
+                authorDID: '',
+                authorHandle: '',
+                channelID: c.channelID,
+                manifest,
+              }
+            : null
+        }),
+      )
+    : []
+  return {
+    profile,
+    ownChannels: resolved.filter((c): c is ChannelEntry => c !== null),
+    follows,
+  }
+}
 
 export function HandleDirectory({
   handle: rawHandle,
@@ -92,6 +137,23 @@ export function HandleDirectory({
         if (!cancelled) setState({ kind: 'not-found' })
         return
       }
+      // YOUR OWN directory is assembled here rather than resolved. Every part of it is
+      // something the Curator publishes FROM: the profile, the advertised set and the
+      // follow edges are settings, and each manifest is in the doc under `channel/<id>`.
+      // So resolving your own did:dht spends a DHT lookup and a Sia download to learn
+      // what this process already holds — and worse, it shows what was last PUBLISHED, so
+      // a channel you created a minute ago is missing from your own profile until the
+      // identity loop's next pass.
+      //
+      // What this gives up is that your profile page no longer doubles as proof that the
+      // publish is working. That belongs on the Curate page, which reports the identity
+      // loop's every pass, rather than being inferred from a screen that has another job.
+      if (handle === useAuthStore.getState().myDidDht) {
+        const local = await readOwnDirectory()
+        if (!cancelled) setState({ kind: 'loaded', did: handle, ...local })
+        return
+      }
+
       const doc = await resolveIdentityDoc(client, handle)
       if (!doc) {
         if (!cancelled) setState({ kind: 'not-found' })
