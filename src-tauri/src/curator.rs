@@ -711,15 +711,18 @@ pub async fn curator_start_pull(
         pin_curator::run_pull_loop(ctx, PULL_CADENCE, |result| match result {
             Ok(o) => {
                 if o.cached > 0 || o.dropped > 0 || o.failed > 0 {
-                    println!(
+                    log::info!(
                         "curator pull: cached {} unresolved {} failed {} dropped {}",
-                        o.cached, o.unresolved, o.failed, o.dropped
+                        o.cached,
+                        o.unresolved,
+                        o.failed,
+                        o.dropped
                     );
                 }
             }
             // Expected while the engine warms up (no settings record yet, Sia not
             // connected), so this is a note rather than an alarm.
-            Err(e) => println!("curator pull: {e}"),
+            Err(e) => log::warn!("curator pull: {e}"),
         })
         .await
     });
@@ -762,25 +765,26 @@ pub async fn curator_start_repack(
         sia: sia.session(),
         app_key,
     };
-    let loop_handle = sia.detach(async move {
-        pin_curator::run_repack_loop(
-            ctx,
-            REPACK_CADENCE,
-            || chrono::Utc::now().timestamp(),
-            || chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-            |result| match result {
-                Ok(Some(o)) => println!(
+    let loop_handle =
+        sia.detach(async move {
+            pin_curator::run_repack_loop(
+                ctx,
+                REPACK_CADENCE,
+                || chrono::Utc::now().timestamp(),
+                || chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                |result| match result {
+                    Ok(Some(o)) => log::info!(
                     "curator repack: reclaimed {} slabs, moved {} objects ({} channels, {} pins)",
                     o.reclaimed_slabs, o.moved, o.channels, o.pins
                 ),
-                // Nothing worth doing is the ordinary case; saying so every 20 minutes
-                // would bury the passes that did something.
-                Ok(None) => {}
-                Err(e) => println!("curator repack: {e}"),
-            },
-        )
-        .await
-    });
+                    // Nothing worth doing is the ordinary case; saying so every 20 minutes
+                    // would bury the passes that did something.
+                    Ok(None) => {}
+                    Err(e) => log::warn!("curator repack: {e}"),
+                },
+            )
+            .await
+        });
     curator.0.lock().unwrap().loops.push(loop_handle);
     Ok(())
 }
@@ -819,7 +823,7 @@ pub async fn curator_start_keep_alive(
                     && o.tallies_failed == 0
                     && o.settings == pin_curator::SettingsLocator::Unknown;
                 if !quiet {
-                    println!(
+                    log::info!(
                         "curator keep-alive: refreshed {} unknown {} failed {} tallies {} tallies-failed {} settings {:?}",
                         o.refreshed,
                         o.unknown,
@@ -831,7 +835,7 @@ pub async fn curator_start_keep_alive(
                 }
             }
             // Expected while the engine warms up (no settings record yet).
-            Err(e) => println!("curator keep-alive: {e}"),
+            Err(e) => log::warn!("curator keep-alive: {e}"),
         })
         .await
     });
@@ -875,14 +879,14 @@ pub async fn curator_start_channel_docs(
                 // Quiet once every channel is served and unchanged — the steady state,
                 // which happens every four minutes and is not news.
                 if o.copied > 0 || o.failed > 0 || o.unpublished > 0 {
-                    println!(
+                    log::info!(
                         "curator channel docs: copied {} unchanged {} advertised {} unpublished {} failed {}",
                         o.copied, o.unchanged, o.advertised, o.unpublished, o.failed
                     );
                 }
             }
             // Expected while the engine warms up (no settings record yet).
-            Err(e) => println!("curator channel docs: {e}"),
+            Err(e) => log::warn!("curator channel docs: {e}"),
         })
         .await
     });
@@ -934,14 +938,14 @@ pub async fn curator_start_channel_sync(
                 // Quiet when nothing changed and nothing arrived — the steady state of a
                 // subscriber whose authors are idle.
                 if o.imported > 0 || o.pushed > 0 || o.failed > 0 || o.stale > 0 || o.tallies > 0 {
-                    println!(
+                    log::info!(
                         "curator channel sync: imported {} watching {} unavailable {} failed {} pushed {} stale {} tallies {}",
                         o.imported, o.watching, o.unavailable, o.failed, o.pushed, o.stale, o.tallies
                     );
                 }
             }
             // Expected while the engine warms up (no settings record yet).
-            Err(e) => println!("curator channel sync: {e}"),
+            Err(e) => log::warn!("curator channel sync: {e}"),
         })
         .await
     });
@@ -986,13 +990,15 @@ pub async fn curator_start_snapshot(
                 match result {
                     Ok(o) => {
                         if !o.unchanged {
-                            println!(
+                            log::info!(
                                 "curator snapshot: {} records mirrored (published {} pruned {})",
-                                o.records, o.published, o.pruned
+                                o.records,
+                                o.published,
+                                o.pruned
                             );
                         }
                     }
-                    Err(e) => println!("curator snapshot: {e}"),
+                    Err(e) => log::warn!("curator snapshot: {e}"),
                 }
             })
             .await
@@ -1051,10 +1057,10 @@ pub async fn curator_start_instance(
             |result| match result {
                 Ok(o) => {
                     if o.pruned > 0 {
-                        println!("curator instance: {} live, {} pruned", o.live, o.pruned);
+                        log::info!("curator instance: {} live, {} pruned", o.live, o.pruned);
                     }
                 }
-                Err(e) => println!("curator instance: {e}"),
+                Err(e) => log::warn!("curator instance: {e}"),
             },
         )
         .await
@@ -1105,13 +1111,13 @@ pub async fn curator_start_rendezvous(
                 Ok(o) => {
                     // Quiet in the steady state: advertised, peers reached, nothing new.
                     if o.reached > 0 || o.unreachable > 0 || !o.advertised {
-                        println!(
+                        log::info!(
                             "curator rendezvous: advertised {} peers {} reached {} syncing {} unreachable {}",
                             o.advertised, o.peers, o.reached, o.syncing, o.unreachable
                         );
                     }
                 }
-                Err(e) => println!("curator rendezvous: {e}"),
+                Err(e) => log::warn!("curator rendezvous: {e}"),
             },
         )
         .await
@@ -1217,7 +1223,7 @@ pub async fn curator_start_engagement(
                         || o.published > 0
                         || o.publish_failed > 0
                     {
-                        println!(
+                        log::info!(
                             "curator engagement: reached {} unreachable {} added {} withdrawn {} tallies {} cleared {} rejected {} not-ours {} published {} publish-failed {} | knocks: accepted {} rejected {} not-ours {} stale {} | withdrawals: applied {} rejected {} not-ours {} ignored {}",
                             o.reached, o.unreachable, o.added, o.withdrawn, o.tallies,
                             o.cleared, o.rejected, o.not_ours, o.published,
@@ -1228,7 +1234,7 @@ pub async fn curator_start_engagement(
                         );
                     }
                 }
-                Err(e) => println!("curator engagement: {e}"),
+                Err(e) => log::warn!("curator engagement: {e}"),
             }
         })
         .await
@@ -1310,7 +1316,7 @@ pub async fn curator_start_deliver(
                         || o.retracted > 0
                         || o.retract_failed > 0
                     {
-                        println!(
+                        log::info!(
                             "curator deliver: delivered {} already {} unreachable {} no-target {} own {} | withdrawn: told {} unreachable {} forgotten {}",
                             o.delivered,
                             o.already,
@@ -1323,7 +1329,7 @@ pub async fn curator_start_deliver(
                         );
                     }
                 }
-                Err(e) => println!("curator deliver: {e}"),
+                Err(e) => log::warn!("curator deliver: {e}"),
             },
         )
         .await
@@ -1433,7 +1439,13 @@ pub async fn curator_start_identity(
                     ),
                     Err(e) => format!("failed: {e}"),
                 };
-                println!("curator identity: {note}");
+                // The note carries its own outcome, so the level follows it rather than
+                // logging a failed pass as news.
+                if result.is_err() {
+                    log::warn!("curator identity: {note}");
+                } else {
+                    log::info!("curator identity: {note}");
+                }
                 report(note);
             },
         )
