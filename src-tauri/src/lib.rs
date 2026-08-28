@@ -52,6 +52,55 @@ fn apply_instance_suffix(config: &mut tauri::utils::config::Config) {
     }
 }
 
+/// Our own crates, so the log filter is a WHITELIST.
+///
+/// A blacklist of the noisy dependencies is a list somebody has to maintain, and the cost
+/// of missing an entry is the whole file: one dependency logging per packet buries every
+/// line we wrote. This way a new dependency arrives quiet.
+const OURS: [&str; 11] = [
+    "app_lib",
+    "pin_channel",
+    "pin_core",
+    "pin_crypto",
+    "pin_curator",
+    "pin_derive",
+    "pin_engagement",
+    "pin_manifest",
+    "pin_pkarr",
+    "pin_rpc",
+    "pin_sia",
+];
+
+/// What level our own crates log at, from `PIN_LOG`.
+///
+/// Taken as an argument rather than read here so the rule is testable without touching
+/// process-wide environment. A value that doesn't parse is IGNORED: a typo in a debugging
+/// session must not be able to turn the log off, which is the one outcome that would be
+/// indistinguishable from the app having stopped working.
+fn ours_level(raw: Option<String>) -> log::LevelFilter {
+    raw.and_then(|v| v.trim().parse::<log::LevelFilter>().ok())
+        .unwrap_or(log::LevelFilter::Info)
+}
+
+/// The desktop log, filtered so it can answer a question about our own loops.
+///
+/// It could not before: a session was hundreds of `iroh_blobs` and `iroh::socket` lines at
+/// INFO — one per stored blob, one per datagram — with nothing of ours in it, because the
+/// global level admitted every dependency at that level. Everything else stays at WARN,
+/// which is where a dependency's genuine problem still surfaces.
+///
+/// `PIN_LOG` overrides the level our crates log at (`debug`, `trace`, `off`), for a session
+/// that needs more than a pass report without a rebuild. An unparseable value is ignored
+/// rather than silencing anything.
+fn log_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
+    let ours = ours_level(std::env::var("PIN_LOG").ok());
+    let mut builder = tauri_plugin_log::Builder::default().level(log::LevelFilter::Warn);
+    for target in OURS {
+        builder = builder.level_for(target, ours);
+    }
+    builder.build()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let mut context = tauri::generate_context!();
@@ -121,15 +170,39 @@ pub fn run() {
         .on_window_event(tray::handle_window_event)
         .setup(|app| {
             if cfg!(debug_assertions) {
-                app.handle().plugin(
-                    tauri_plugin_log::Builder::default()
-                        .level(log::LevelFilter::Info)
-                        .build(),
-                )?;
+                app.handle().plugin(log_plugin())?;
             }
             tray::init(app.handle())?;
             Ok(())
         })
         .run(context)
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ours_level;
+    use log::LevelFilter;
+
+    #[test]
+    fn the_default_is_info() {
+        assert_eq!(ours_level(None), LevelFilter::Info);
+    }
+
+    #[test]
+    fn a_named_level_is_taken() {
+        assert_eq!(ours_level(Some("debug".into())), LevelFilter::Debug);
+        assert_eq!(ours_level(Some(" TRACE ".into())), LevelFilter::Trace);
+        // Turning our own lines off is a legitimate thing to ask for; only a value that
+        // means nothing is refused.
+        assert_eq!(ours_level(Some("off".into())), LevelFilter::Off);
+    }
+
+    #[test]
+    fn a_value_that_means_nothing_leaves_the_log_alone() {
+        // The failure this prevents: a typo silencing the log, which reads exactly like
+        // the loops having stopped running.
+        assert_eq!(ours_level(Some("verbose".into())), LevelFilter::Info);
+        assert_eq!(ours_level(Some(String::new())), LevelFilter::Info);
+    }
 }
