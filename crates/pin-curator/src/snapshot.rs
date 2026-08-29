@@ -19,7 +19,12 @@
 //! FINGERPRINTED so a quiet pass is free. Uploading is a Sia object plus a DHT publish
 //! plus a prune of the object it supersedes; doing that when nothing moved would make
 //! every idle cadence expensive. The fingerprint travels in the publish state rather
-//! than in memory, so restarting doesn't re-upload an unchanged doc.
+//! than in memory, so restarting doesn't re-upload an unchanged doc — and so a second
+//! device reading the synced doc knows the mirror is current without taking its own.
+//!
+//! And it EXCLUDES publish state from what it covers, which is the one thing to keep
+//! straight here: the record carrying the fingerprint cannot be inside the fingerprint.
+//! See `fingerprint_of`.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -148,13 +153,33 @@ pub async fn snapshot_once(ctx: &SnapshotContext) -> Result<SnapshotOutcome, Str
     })
 }
 
-/// The fingerprint a pass compares against.
+/// The fingerprint a pass compares against, over every record EXCEPT publish state.
+///
+/// A SELF-EXCLUDING CHECKSUM, the same construction TCP zeroes its checksum field for and
+/// X.509 signs `tbsCertificate` for: the thing carrying the checksum cannot be inside it.
+/// Publishing writes `published/<rkey>` — the object id, the generation it supersedes, and
+/// this very fingerprint — so a hash that covered publish state would be a hash of a value
+/// derived from itself. There is no fixed point, and the loop re-uploaded every ~17s
+/// forever: hash, upload, record the hash, observe that recording it changed the doc.
+///
+/// The exclusion is the whole record and not merely its `fp` field, because the object ids
+/// move on every pass too — omitting only the hash would spin just as fast on those.
+///
+/// Publish state is still MIRRORED; it is only excluded from the comparison. A restored
+/// device keeps its reclaim pointers, and two snapshots differing only in publish state
+/// hash alike — which is what a checksum that excludes itself means.
+///
+/// Substance still triggers a pass: a manifest lives in `channel/<id>` and settings in
+/// `settings/self`, both covered here.
 ///
 /// SORTED, so the answer never depends on the order the doc happened to stream records in.
 /// An ordering that varied between passes would be a second way to see a change that was
 /// not one, and nothing downstream could tell the two apart.
 fn fingerprint_of(entries: &[SnapshotEntry]) -> Result<String, String> {
-    let mut covered: Vec<&SnapshotEntry> = entries.iter().collect();
+    let mut covered: Vec<&SnapshotEntry> = entries
+        .iter()
+        .filter(|e| e.c != pin_derive::PUBLISHED_COLLECTION)
+        .collect();
     covered.sort_by(|a, b| (&a.c, &a.k).cmp(&(&b.c, &b.k)));
     let json = serde_json::to_string(&covered).map_err(|e| format!("snapshot encode: {e}"))?;
     Ok(pin_crypto::content_hash(json.as_bytes()))
@@ -287,6 +312,66 @@ mod tests {
             k: k.into(),
             v: v.into(),
         }
+    }
+
+    #[test]
+    fn publishing_does_not_change_the_fingerprint_it_records() {
+        // THE regression. A pass hashes the doc, uploads, then writes the object id, the
+        // superseded generation and this very hash into `published/…`. If that write is
+        // covered, the next pass sees a doc that differs BECAUSE it recorded the hash —
+        // no fixed point exists, and the loop re-uploads forever (observed: every ~17s).
+        let before = vec![
+            entry("settings", "self", "sealed-settings"),
+            entry("published", "channel:settings", r#"{"id":"X","fp":"H0"}"#),
+        ];
+        let after = vec![
+            entry("settings", "self", "sealed-settings"),
+            entry(
+                "published",
+                "channel:settings",
+                r#"{"id":"Y","older":"X","fp":"H1"}"#,
+            ),
+        ];
+        assert_eq!(
+            fingerprint_of(&before).unwrap(),
+            fingerprint_of(&after).unwrap()
+        );
+    }
+
+    #[test]
+    fn omitting_only_the_hash_field_would_not_have_been_enough() {
+        // Worth pinning as its own case, because the obvious reading of a self-excluding
+        // checksum is "leave out the hash" — and here that still spins. The record also
+        // carries the object ids, and publishing moves those on every pass, so the unit
+        // to omit is the RECORD.
+        let a = vec![entry("published", "channel:settings", r#"{"id":"X"}"#)];
+        let b = vec![entry(
+            "published",
+            "channel:settings",
+            r#"{"id":"Y","older":"X"}"#,
+        )];
+        assert_eq!(fingerprint_of(&a).unwrap(), fingerprint_of(&b).unwrap());
+    }
+
+    #[test]
+    fn a_real_change_still_triggers_a_pass() {
+        // The other half, and the one that would make this a data-loss bug rather than a
+        // performance one: excluding too much would leave real edits unmirrored.
+        let before = vec![entry("settings", "self", "sealed-v1")];
+        let after = vec![entry("settings", "self", "sealed-v2")];
+        assert_ne!(
+            fingerprint_of(&before).unwrap(),
+            fingerprint_of(&after).unwrap()
+        );
+
+        let added = vec![
+            entry("settings", "self", "sealed-v1"),
+            entry("channel", "abc", "sealed-manifest"),
+        ];
+        assert_ne!(
+            fingerprint_of(&before).unwrap(),
+            fingerprint_of(&added).unwrap()
+        );
     }
 
     #[test]
