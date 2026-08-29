@@ -85,7 +85,7 @@ struct SnapshotEntry {
 pub async fn snapshot_once(ctx: &SnapshotContext) -> Result<SnapshotOutcome, String> {
     let entries = read_all(ctx).await?;
     let json = serde_json::to_string(&entries).map_err(|e| format!("snapshot encode: {e}"))?;
-    let fingerprint = pin_crypto::content_hash(json.as_bytes());
+    let fingerprint = fingerprint_of(&entries)?;
 
     let rkey = published_channel_rkey(PUBLISHED_SETTINGS_RKEY);
     let published_key = pin_derive::published_key(&ctx.app_key);
@@ -146,6 +146,18 @@ pub async fn snapshot_once(ctx: &SnapshotContext) -> Result<SnapshotOutcome, Str
         published,
         pruned,
     })
+}
+
+/// The fingerprint a pass compares against.
+///
+/// SORTED, so the answer never depends on the order the doc happened to stream records in.
+/// An ordering that varied between passes would be a second way to see a change that was
+/// not one, and nothing downstream could tell the two apart.
+fn fingerprint_of(entries: &[SnapshotEntry]) -> Result<String, String> {
+    let mut covered: Vec<&SnapshotEntry> = entries.iter().collect();
+    covered.sort_by(|a, b| (&a.c, &a.k).cmp(&(&b.c, &b.k)));
+    let json = serde_json::to_string(&covered).map_err(|e| format!("snapshot encode: {e}"))?;
+    Ok(pin_crypto::content_hash(json.as_bytes()))
 }
 
 /// Whether the doc is already mirrored — the guard that keeps a quiet pass free.
@@ -267,6 +279,34 @@ mod tests {
         // existed. Mirror it — a snapshot taken twice costs an object; one never
         // taken costs the account.
         assert!(!already_mirrored(None, "cid-1"));
+    }
+
+    fn entry(c: &str, k: &str, v: &str) -> SnapshotEntry {
+        SnapshotEntry {
+            c: c.into(),
+            k: k.into(),
+            v: v.into(),
+        }
+    }
+
+    #[test]
+    fn the_order_records_arrive_in_does_not_change_the_answer() {
+        // The doc streams records; depending on that order would let a pass see a change
+        // nobody made, and an upload is a Sia object plus a DHT publish plus a prune.
+        let one = vec![
+            entry("channel", "b", "2"),
+            entry("settings", "self", "1"),
+            entry("channel", "a", "3"),
+        ];
+        let other = vec![
+            entry("settings", "self", "1"),
+            entry("channel", "a", "3"),
+            entry("channel", "b", "2"),
+        ];
+        assert_eq!(
+            fingerprint_of(&one).unwrap(),
+            fingerprint_of(&other).unwrap()
+        );
     }
 
     #[test]
