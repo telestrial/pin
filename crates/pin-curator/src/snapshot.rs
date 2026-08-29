@@ -24,7 +24,8 @@
 //!
 //! And it EXCLUDES publish state from what it covers, which is the one thing to keep
 //! straight here: the record carrying the fingerprint cannot be inside the fingerprint.
-//! See `fingerprint_of`.
+//! See `fingerprint_of`, which has the reasoning and the rule for where a new collection
+//! belongs.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -162,27 +163,78 @@ pub async fn snapshot_once(ctx: &SnapshotContext) -> Result<SnapshotOutcome, Str
 /// derived from itself. There is no fixed point, and the loop re-uploaded every ~17s
 /// forever: hash, upload, record the hash, observe that recording it changed the doc.
 ///
-/// The exclusion is the whole record and not merely its `fp` field, because the object ids
-/// move on every pass too — omitting only the hash would spin just as fast on those.
+/// The rule, stated so the next collection lands on the right side of it: THE FINGERPRINT
+/// MUST EXCLUDE EVERYTHING THE ACT OF PUBLISHING MUTATES, or publishing is its own
+/// trigger. That is the whole record and not merely its `fp` field — the object ids move
+/// on every pass too, so omitting only the hash would spin just as fast on those.
 ///
 /// Publish state is still MIRRORED; it is only excluded from the comparison. A restored
 /// device keeps its reclaim pointers, and two snapshots differing only in publish state
-/// hash alike — which is what a checksum that excludes itself means.
+/// hash alike — which is exactly what a checksum that excludes itself means, and is why
+/// this is the standard shape rather than a carve-out.
+///
+/// One field is dropped for a DIFFERENT reason — see `covered_value`. Publish state moves
+/// because we published; an instance's `at` moves because time passed. Both are noise the
+/// hash should not see, but they are not the same rule, and a third collection should be
+/// judged against whichever it actually resembles rather than added to a list.
 ///
 /// Substance still triggers a pass: a manifest lives in `channel/<id>` and settings in
 /// `settings/self`, both covered here.
 ///
 /// SORTED, so the answer never depends on the order the doc happened to stream records in.
-/// An ordering that varied between passes would be a second way to see a change that was
-/// not one, and nothing downstream could tell the two apart.
+/// An ordering that varied between passes would be a second way to see a change that
+/// wasn't one, and it would look exactly like the bug this function exists to fix.
 fn fingerprint_of(entries: &[SnapshotEntry]) -> Result<String, String> {
-    let mut covered: Vec<&SnapshotEntry> = entries
+    let mut covered: Vec<SnapshotEntry> = entries
         .iter()
         .filter(|e| e.c != pin_derive::PUBLISHED_COLLECTION)
+        .map(|e| SnapshotEntry {
+            c: e.c.clone(),
+            k: e.k.clone(),
+            v: covered_value(e),
+        })
         .collect();
     covered.sort_by(|a, b| (&a.c, &a.k).cmp(&(&b.c, &b.k)));
     let json = serde_json::to_string(&covered).map_err(|e| format!("snapshot encode: {e}"))?;
     Ok(pin_crypto::content_hash(json.as_bytes()))
+}
+
+/// A record's value as the fingerprint sees it — verbatim, except that an instance
+/// registration's `at` is dropped.
+///
+/// `at` is a LIVENESS heartbeat and nothing else. Its one consumer is `live_instances`,
+/// which keeps registrations under an hour old so `identity` advertises only endpoints a
+/// peer could actually reach — so it is rewritten every 15 minutes whether or not anything
+/// about this instance moved, and covering it made a timer re-upload the whole doc ~96
+/// times a day.
+///
+/// It is also the one field that cannot survive the trip it would be making. A snapshot
+/// restored more than an hour later has every `at` aged out and pruned; restored sooner,
+/// the instances are still running and re-registering, so the doc already carries the
+/// live value. Either way the mirrored heartbeat is never what answers.
+///
+/// The REST of the record stays covered, which is the point of cutting at the field rather
+/// than the collection: a new instance appearing or an endpoint's home relay moving is
+/// real news about where this identity can be reached, and still takes a snapshot.
+///
+/// Plaintext, so this can read it — the registration is written unsealed (its rkey is the
+/// node id, already in the clear). An unparseable value falls through verbatim: that costs
+/// the redundant uploads this exists to stop, where guessing at a shape we don't recognise
+/// could drop a field that mattered.
+fn covered_value(entry: &SnapshotEntry) -> String {
+    if entry.c != pin_derive::INSTANCE_COLLECTION {
+        return entry.v.clone();
+    }
+    let stripped = pin_crypto::b64_decode(&entry.v)
+        .and_then(|raw| serde_json::from_slice::<serde_json::Value>(&raw).ok())
+        .and_then(|mut value| {
+            value.as_object_mut()?.remove("at");
+            serde_json::to_vec(&value).ok()
+        });
+    match stripped {
+        Some(bytes) => pin_crypto::b64_encode(&bytes),
+        None => entry.v.clone(),
+    }
 }
 
 /// Whether the doc is already mirrored — the guard that keeps a quiet pass free.
@@ -326,6 +378,7 @@ mod tests {
         ];
         let after = vec![
             entry("settings", "self", "sealed-settings"),
+            // What publishing writes: new object, new supersession, new hash.
             entry(
                 "published",
                 "channel:settings",
@@ -343,7 +396,7 @@ mod tests {
         // Worth pinning as its own case, because the obvious reading of a self-excluding
         // checksum is "leave out the hash" — and here that still spins. The record also
         // carries the object ids, and publishing moves those on every pass, so the unit
-        // to omit is the RECORD.
+        // to omit is the RECORD, not the field.
         let a = vec![entry("published", "channel:settings", r#"{"id":"X"}"#)];
         let b = vec![entry(
             "published",
@@ -355,8 +408,8 @@ mod tests {
 
     #[test]
     fn a_real_change_still_triggers_a_pass() {
-        // The other half, and the one that would make this a data-loss bug rather than a
-        // performance one: excluding too much would leave real edits unmirrored.
+        // The other half, and the one that would make this fix a data-loss bug rather
+        // than a performance one: excluding too much would leave real edits unmirrored.
         let before = vec![entry("settings", "self", "sealed-v1")];
         let after = vec![entry("settings", "self", "sealed-v2")];
         assert_ne!(
@@ -364,6 +417,7 @@ mod tests {
             fingerprint_of(&after).unwrap()
         );
 
+        // A new channel is substance too, not bookkeeping.
         let added = vec![
             entry("settings", "self", "sealed-v1"),
             entry("channel", "abc", "sealed-manifest"),
@@ -374,10 +428,86 @@ mod tests {
         );
     }
 
+    fn instance(node: &str, at: u64, relay: Option<&str>) -> SnapshotEntry {
+        let json = serde_json::json!({
+            "at": at,
+            "durable": true,
+            "relay": relay,
+        });
+        entry(
+            "instance",
+            node,
+            &pin_crypto::b64_encode(&serde_json::to_vec(&json).unwrap()),
+        )
+    }
+
+    #[test]
+    fn a_heartbeat_alone_does_not_take_a_snapshot() {
+        // `at` is rewritten every 15 minutes whether or not anything moved, and covering
+        // it made a timer re-upload the whole doc ~96 times a day.
+        let before = vec![instance("node-a", 1_700_000_000, Some("https://relay/"))];
+        let after = vec![instance("node-a", 1_700_000_900, Some("https://relay/"))];
+        assert_eq!(
+            fingerprint_of(&before).unwrap(),
+            fingerprint_of(&after).unwrap()
+        );
+    }
+
+    #[test]
+    fn everything_about_an_instance_except_its_heartbeat_still_does() {
+        // The half that makes this a field cut rather than a collection cut. A relay that
+        // moved or an instance that appeared is real news about where this identity can be
+        // reached, and excluding the whole collection would have lost both.
+        let base = vec![instance("node-a", 1_700_000_000, Some("https://relay/"))];
+
+        let moved_relay = vec![instance("node-a", 1_700_000_000, Some("https://other/"))];
+        assert_ne!(
+            fingerprint_of(&base).unwrap(),
+            fingerprint_of(&moved_relay).unwrap()
+        );
+
+        let joined = vec![
+            instance("node-a", 1_700_000_000, Some("https://relay/")),
+            instance("node-b", 1_700_000_000, Some("https://relay/")),
+        ];
+        assert_ne!(
+            fingerprint_of(&base).unwrap(),
+            fingerprint_of(&joined).unwrap()
+        );
+
+        // And a relay that moved is still seen when the heartbeat moved in the same pass,
+        // which is the ordinary case — both fields change on one write.
+        let both = vec![instance("node-a", 1_700_000_900, Some("https://other/"))];
+        assert_ne!(
+            fingerprint_of(&base).unwrap(),
+            fingerprint_of(&both).unwrap()
+        );
+    }
+
+    #[test]
+    fn an_unreadable_instance_record_is_covered_verbatim() {
+        // Falls toward redundant uploads rather than toward dropping a field we failed to
+        // recognise — the same direction the denylist errs in.
+        let a = vec![entry("instance", "node-a", "not-base64-json")];
+        let b = vec![entry("instance", "node-a", "something-else")];
+        assert_ne!(fingerprint_of(&a).unwrap(), fingerprint_of(&b).unwrap());
+    }
+
+    #[test]
+    fn only_an_instance_records_at_is_dropped() {
+        // `at` is not a reserved word anywhere else. A record in another collection that
+        // happens to carry one is substance, and losing it would be silent.
+        let payload = pin_crypto::b64_encode(br#"{"at":1,"body":"x"}"#);
+        let other = pin_crypto::b64_encode(br#"{"at":2,"body":"x"}"#);
+        let a = vec![entry("comment", "c1", &payload)];
+        let b = vec![entry("comment", "c1", &other)];
+        assert_ne!(fingerprint_of(&a).unwrap(), fingerprint_of(&b).unwrap());
+    }
+
     #[test]
     fn the_order_records_arrive_in_does_not_change_the_answer() {
-        // The doc streams records; depending on that order would let a pass see a change
-        // nobody made, and an upload is a Sia object plus a DHT publish plus a prune.
+        // The doc streams records; relying on that order would be a second way to see a
+        // change that wasn't one, and it would present exactly as the bug above.
         let one = vec![
             entry("channel", "b", "2"),
             entry("settings", "self", "1"),
