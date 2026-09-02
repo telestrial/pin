@@ -1706,6 +1706,18 @@ pub fn thread_collection() -> String {
     pin_derive::THREAD_COLLECTION.to_string()
 }
 
+/// The collection holding what this identity knows about other identities — their
+/// profile, where to reach them, the channels they advertise and who they point at.
+///
+/// The rkey is the other identity's `did:dht` verbatim, so there is no builder to spell
+/// twice. The collection name still comes from Rust for the reason `tally_rkey` does: the
+/// crawl writes these records and the frontend reads them, and an address spelled twice
+/// would have one side writing where the other never looks.
+#[wasm_bindgen]
+pub fn directory_collection() -> String {
+    pin_derive::DIRECTORY_COLLECTION.to_string()
+}
+
 /// Where one subject's conversation is cached. From Rust for the reason `tally_rkey` is:
 /// the Curator's loops write these records and the frontend reads them, and an address
 /// spelled twice would have one side writing where the other never looks.

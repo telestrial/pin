@@ -221,6 +221,17 @@ export function derive_settings_locator_seed(app_key: Uint8Array): Uint8Array;
 export function derive_snapshot_key(app_key: Uint8Array): Uint8Array;
 
 /**
+ * The collection holding what this identity knows about other identities — their
+ * profile, where to reach them, the channels they advertise and who they point at.
+ *
+ * The rkey is the other identity's `did:dht` verbatim, so there is no builder to spell
+ * twice. The collection name still comes from Rust for the reason `tally_rkey` does: the
+ * crawl writes these records and the frontend reads them, and an address spelled twice
+ * would have one side writing where the other never looks.
+ */
+export function directory_collection(): string;
+
+/**
  * Seal a UTF-8 string under a channel key, returning the base64 blob.
  */
 export function encrypt_for_channel(key: Uint8Array, plaintext: string): string;
@@ -899,6 +910,7 @@ export interface InitOutput {
     readonly derive_settings_key: (a: number, b: number) => [number, number];
     readonly derive_settings_locator_seed: (a: number, b: number) => [number, number];
     readonly derive_snapshot_key: (a: number, b: number) => [number, number];
+    readonly directory_collection: () => [number, number];
     readonly encrypt_for_channel: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly encrypt_settings: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly endorse_collection: () => [number, number];
