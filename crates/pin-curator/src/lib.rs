@@ -72,6 +72,7 @@ mod channeldoc;
 mod channelsync;
 mod comments;
 mod deliver;
+mod discover;
 mod engagement;
 mod identity;
 mod instance;

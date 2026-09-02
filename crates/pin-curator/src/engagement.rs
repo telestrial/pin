@@ -276,7 +276,10 @@ struct CrawlMark {
 /// An unchanged pointer proves the bytes are identical; it says nothing about whether our
 /// reading of them is still current. Without this, changing the parse would skip every
 /// actor indefinitely and the change would never take effect on anyone already crawled.
-const CRAWL_EPOCH: u32 = 1;
+/// 2 widened the extraction from endorsements alone to the whole directory: the profile,
+/// the advertised channels and the follows now become a `discover` record, so every actor
+/// already crawled has to be read once more to produce one.
+const CRAWL_EPOCH: u32 = 2;
 
 /// Whether an actor's directory can be answered from the log instead of downloaded.
 ///
@@ -288,13 +291,23 @@ fn may_skip(held: Option<&CrawlMark>, current: &CrawlMark) -> bool {
 }
 
 /// Where an actor's directory currently is, or an error meaning we couldn't find out.
-async fn resolve_directory_url(did: &str) -> Result<String, String> {
-    let records = pin_pkarr::resolve(did).await?;
-    let url = pin_pkarr::rejoin_txt(&records, crate::identity::DIR_PREFIX);
+///
+/// Hands back the whole packet alongside the pointer it came for. One resolve answers two
+/// questions — where their directory is (`_dir`) and where they can be dialed (`_iroh`) —
+/// and the second was being thrown away here while `deliver` resolved the same key again
+/// to ask it.
+struct Resolved {
+    url: String,
+    txt: Vec<pin_pkarr::TxtRecord>,
+}
+
+async fn resolve_directory(did: &str) -> Result<Resolved, String> {
+    let txt = pin_pkarr::resolve(did).await?;
+    let url = pin_pkarr::rejoin_txt(&txt, crate::identity::DIR_PREFIX);
     if url.is_empty() {
         return Err(format!("{did}: no directory published"));
     }
-    Ok(url)
+    Ok(Resolved { url, txt })
 }
 
 /// The mark held for an actor, or None if we've never read them to completion.
@@ -447,7 +460,14 @@ async fn download_directory(
     ctx: &EngagementContext,
     did: &str,
     url: &str,
-) -> Result<(Vec<Endorsement>, crate::comments::CommentsAt), String> {
+) -> Result<
+    (
+        Vec<Endorsement>,
+        crate::comments::CommentsAt,
+        serde_json::Value,
+    ),
+    String,
+> {
     let bytes = ctx.sia.download_item(url).await?;
     let doc: serde_json::Value =
         serde_json::from_slice(&bytes).map_err(|e| format!("{did}: directory: {e}"))?;
@@ -459,16 +479,18 @@ async fn download_directory(
     let Some(list) = doc.get("endorsements").and_then(|v| v.as_array()) else {
         // A directory from before endorsements existed, or one with none. Either way the
         // answer is "none", which is a successful read.
-        return Ok((Vec::new(), comments));
+        return Ok((Vec::new(), comments, doc));
     };
     // Skip anything that won't parse rather than failing the actor: one malformed record
     // must not make everything else they endorsed unreadable.
-    Ok((
-        list.iter()
-            .filter_map(|v| serde_json::from_value::<Endorsement>(v.clone()).ok())
-            .collect(),
-        comments,
-    ))
+    let endorsements = list
+        .iter()
+        .filter_map(|v| serde_json::from_value::<Endorsement>(v.clone()).ok())
+        .collect();
+    // The whole document travels back too. This pass came for the endorsements, but the
+    // same bytes carry the profile, the advertised channels and the follows — everything
+    // `discover` records — and re-reading them would mean downloading this twice.
+    Ok((endorsements, comments, doc))
 }
 
 /// This identity's OWN endorsements, read straight out of the doc.
@@ -723,8 +745,8 @@ pub async fn engagement_once(
             all.push((did, held_endorsements(ctx, &rkeys).await));
             continue;
         }
-        let url = match resolve_directory_url(&did).await {
-            Ok(url) => url,
+        let resolved = match resolve_directory(&did).await {
+            Ok(resolved) => resolved,
             Err(_) => {
                 outcome.unreachable += 1;
                 continue;
@@ -735,7 +757,7 @@ pub async fn engagement_once(
         // IS what we would extract now. Answering from the log skips the download — the
         // heavy half, and the flaky one, since it is the QUIC path.
         let mark = CrawlMark {
-            url,
+            url: resolved.url,
             epoch: CRAWL_EPOCH,
         };
         if may_skip(read_crawl_mark(ctx, &did).await.as_ref(), &mark) {
@@ -745,16 +767,37 @@ pub async fn engagement_once(
             // Their comments pointer lives IN the directory, so a directory that hasn't
             // moved means the blob hasn't either.
             comments_at.insert(did.clone(), crate::comments::CommentsAt::Unchanged);
+            // Their ENDPOINTS can still have moved: those ride in the packet, not the
+            // blob, so an unchanged directory pointer says nothing about them. The packet
+            // is already resolved, so keeping reach current here costs nothing.
+            if let Some(held) =
+                crate::discover::read_directory(&ctx.doc, &ctx.blobs, ctx.author_id, &did).await
+            {
+                let fresh = crate::discover::with_reach(&held, &resolved.txt, &now_iso);
+                crate::discover::record_directory(&ctx.doc, &ctx.blobs, ctx.author_id, &did, fresh)
+                    .await;
+            }
             outcome.skipped += 1;
             all.push((did, records));
             continue;
         }
 
         match download_directory(ctx, &did, &mark.url).await {
-            Ok((records, where_comments_are)) => {
+            Ok((records, where_comments_are, blob)) => {
                 // After the parse, never before: a mark written on a failed read would skip
                 // this actor forever with nothing in hand.
                 write_crawl_mark(ctx, &did, &mark).await;
+                // What this pass learned about them as an identity, from the bytes it
+                // downloaded for their endorsements. Offered, never depended on: this is
+                // a second consumer of the fold's read, and it must not be able to fail it.
+                crate::discover::record_directory(
+                    &ctx.doc,
+                    &ctx.blobs,
+                    ctx.author_id,
+                    &did,
+                    crate::discover::parse_directory(&blob, &resolved.txt, &mark.url, &now_iso),
+                )
+                .await;
                 reached.insert(did.clone());
                 comments_at.insert(did.clone(), where_comments_are);
                 all.push((did, records));

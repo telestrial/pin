@@ -130,13 +130,12 @@ pub struct IdentityOutcome {
 
 /// One advertised public channel: enough for a resolver to read it — the channelID
 /// plus its key K, which is shareable by definition for a public channel.
-#[derive(serde::Serialize)]
-struct DirectoryChannel {
-    #[serde(rename = "channelID")]
-    channel_id: String,
-    key: String,
-    name: String,
-}
+///
+/// The same type the crawl parses somebody else's directory into, shared rather than
+/// re-declared: this is one side of a wire contract whose other side is `discover`, so two
+/// definitions could disagree about a field name with nothing to catch it — which is the
+/// one class of mistake neither compiler here can see.
+use crate::discover::DirectoryChannel;
 
 /// The directory document, byte-compatible with what the frontend published before it.
 ///

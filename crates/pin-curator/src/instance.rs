@@ -62,8 +62,15 @@ pub struct InstanceContext {
 }
 
 /// One instance's dial coordinates: who to dial, and where they can be reached.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Two encodings, both explicit. `encode_endpoints`/`parse_endpoints` pack it into the
+/// published TXT record, where every byte counts against a ~1000-byte packet; serde carries
+/// it into the directory records the crawl holds, where it is ordinary JSON. Field names
+/// are spelled out rather than left to `rename_all`, which knows word boundaries and not
+/// acronyms — the mistake that once shipped an `itemUrl` everything read as `itemURL`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct InstanceAddr {
+    #[serde(rename = "nodeID")]
     pub node_id: String,
     /// The home relay this instance is reachable through, when it has one.
     ///

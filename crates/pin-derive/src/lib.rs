@@ -499,6 +499,29 @@ pub const TALLY_PULL_COLLECTION: &str = "tally-pull";
 /// already read instead of repeating it.
 pub const CRAWL_COLLECTION: &str = "crawl";
 
+/// The collection recording what this identity knows about another one — their profile,
+/// where to reach them, the channels they advertise and who they point at. Keyed by that
+/// identity's `did:dht`.
+///
+/// Everything in it comes from a read some other loop was already making: the crawl
+/// resolves an actor's key to find `_dir` and downloads the blob behind it, and both the
+/// whole TXT record set and the whole blob are in hand at that moment. Recording them
+/// costs no fetch, and without this collection they are parsed for endorsements and
+/// dropped.
+///
+/// Apart from `CRAWL_COLLECTION` even though one read fills both, and the split is the
+/// same one `COMMENT_CRAWL_COLLECTION` draws: a mark says whether a read can be SKIPPED
+/// and holds a pointer, this holds what the read produced. Merging them would make a
+/// skip decision depend on parsing a record it only needs a URL from, and would rewrite
+/// everything we know about someone every time their pointer moved.
+///
+/// The frontier — identities we know exist because a held directory follows them, but
+/// have never read — is DERIVED from these records rather than stored beside them.
+/// `list_rkeys` scans the whole doc and filters by prefix, so entry count is what costs,
+/// and materializing the frontier would multiply it by the graph's fan-out to hold
+/// nothing a held record doesn't already carry.
+pub const DIRECTORY_COLLECTION: &str = "directory";
+
 /// The collection recording, per subscribed channel, the manifest pointer the pull loop
 /// last cached AND the cached record it produced. Keyed by channel id.
 ///
@@ -843,6 +866,31 @@ mod tests {
         assert_ne!(CONVERSATION_COLLECTION, THREAD_COLLECTION);
         assert_ne!(CRAWL_COLLECTION, ENGAGEMENT_LOG_COLLECTION);
         assert_ne!(CRAWL_COLLECTION, ENGAGEMENT_COLLECTION);
+    }
+
+    #[test]
+    fn what_we_read_and_what_it_produced_are_two_collections() {
+        // Both are keyed by a bare did:dht, so their rkeys are byte-identical for the same
+        // actor and the collection is the ONLY thing separating them. A shared name would
+        // not collide loudly — it would make the crawl's pointer mark and everything known
+        // about that actor overwrite each other at one key, so a skip decision would start
+        // reading a profile and a profile lookup would get a URL.
+        let did = "did:dht:iy8yq8fgjbnqbsphq1a5rnf3pdxrsp1zt8ycqmoy3zj4txhjjc9y";
+        assert_eq!(
+            record_key(CRAWL_COLLECTION, did),
+            record_key(CRAWL_COLLECTION, did)
+        );
+        assert_ne!(
+            record_key(CRAWL_COLLECTION, did),
+            record_key(DIRECTORY_COLLECTION, did)
+        );
+        assert_ne!(CRAWL_COLLECTION, DIRECTORY_COLLECTION);
+
+        // And it is not any of the collections a prefix scan already runs over per pass.
+        assert_ne!(DIRECTORY_COLLECTION, ENGAGEMENT_LOG_COLLECTION);
+        assert_ne!(DIRECTORY_COLLECTION, COMMENT_LOG_COLLECTION);
+        assert_ne!(DIRECTORY_COLLECTION, DELIVER_COLLECTION);
+        assert_ne!(DIRECTORY_COLLECTION, PULL_COLLECTION);
     }
 
     #[test]
