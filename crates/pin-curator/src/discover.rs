@@ -18,10 +18,24 @@
 //! the frontier would multiply it by the graph's fan-out while holding nothing a held
 //! record does not already carry.
 
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
+
 use iroh_blobs::api::Store;
 use iroh_docs::{api::Doc, AuthorId};
 
 use crate::InstanceAddr;
+
+/// How many identities one pass will go and read.
+///
+/// A cap on work per wake rather than a loop that runs until the frontier is empty, which
+/// is the shape `repack` settled on for the same reason: a pass moves real bytes over the
+/// network, and the frontier is unbounded by construction while an evening is not. The
+/// crawl is never finished, so what matters is that it advances every pass and stops.
+///
+/// Each one costs a DHT resolve and a Sia download — the slow, QUIC-flaky half — so this
+/// is small on purpose. The measured question it answers is "how many passes to cover a
+/// graph", and `discovery.test.ts` is where that gets answered rather than guessed.
+pub const MAX_RESOLVES_PER_PASS: usize = 8;
 
 /// Bumped when what we EXTRACT from a directory changes — a new field, a schema move, a
 /// fix to the parse.
@@ -167,6 +181,142 @@ pub(crate) fn with_reach(
     fresh.reach = crate::parse_endpoints(&pin_pkarr::rejoin_txt(txt, crate::identity::IROH_PREFIX));
     fresh.seen_at = now_iso.to_string();
     fresh
+}
+
+/// The identities a held record points at: channel-follows and wholesale follows alike.
+///
+/// One set, because for discovery they are the same edge — a pointer at another server.
+/// Which KIND of pointer it is matters to a feed and not to a crawl.
+pub fn edges_of(record: &DirectoryRecord) -> Vec<String> {
+    let mut out = Vec::new();
+    for f in &record.follows {
+        if let Some(did) = f.get("didDht").and_then(|v| v.as_str()) {
+            out.push(did.to_string());
+        }
+    }
+    out.extend(record.handle_follows.iter().cloned());
+    out
+}
+
+/// An identity known to exist and never read.
+///
+/// Not stored anywhere. The frontier is recomputed from held records each pass, because
+/// materializing it would multiply doc entries by the graph's fan-out to hold nothing a
+/// held record does not already carry — and `list_rkeys` scans the whole doc, so entry
+/// count is the cost that matters.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct Candidate {
+    pub did: String,
+    /// Hops from this identity's own graph. 0 means somebody it follows directly points
+    /// at them.
+    pub distance: u32,
+    /// How many held directories point at them. Corroboration, and the tiebreak among
+    /// equals — somebody four of your follows point at is a better guess than somebody
+    /// one does.
+    pub references: usize,
+    /// Whether a screen asked for them and had to fall back to the network to answer.
+    pub nominated: bool,
+}
+
+/// Unreachable from the seeds. Held records reached some other way — a portal, a knock —
+/// have no distance from the graph, and sorting them ahead of it would let an arbitrary
+/// stranger's follows outrank the people you actually follow.
+const UNREACHED: u32 = u32::MAX;
+
+/// How far each held identity sits from this identity's own graph.
+///
+/// A breadth-first walk over held records only: no network, no fetching, and it terminates
+/// on what is in hand. Anything held but not reachable from the seeds keeps `UNREACHED`,
+/// which is a real answer rather than a missing one.
+fn distances(r0: &BTreeSet<String>, held: &BTreeMap<String, Vec<String>>) -> BTreeMap<String, u32> {
+    let mut dist: BTreeMap<String, u32> = BTreeMap::new();
+    let mut queue: VecDeque<String> = VecDeque::new();
+
+    for did in r0 {
+        if held.contains_key(did) {
+            dist.insert(did.clone(), 0);
+            queue.push_back(did.clone());
+        }
+    }
+    while let Some(cur) = queue.pop_front() {
+        let step = dist[&cur].saturating_add(1);
+        for next in held.get(&cur).map(Vec::as_slice).unwrap_or_default() {
+            if held.contains_key(next) && !dist.contains_key(next) {
+                dist.insert(next.clone(), step);
+                queue.push_back(next.clone());
+            }
+        }
+    }
+    for did in held.keys() {
+        dist.entry(did.clone()).or_insert(UNREACHED);
+    }
+    dist
+}
+
+/// Everyone known to exist and not yet read, in the order they should be read.
+///
+/// `r0` is this identity's own graph — the people it follows and subscribes to. They are
+/// EXCLUDED from the result even when unread, because the engagement crawl reads exactly
+/// that set on its own cadence: two loops resolving one key on different schedules would
+/// race to write the same record and spend the DHT lookup twice.
+///
+/// The ordering is provenance, not a score. Nominations first — somebody asked for them
+/// out loud — then nearest, then best-corroborated, then by did so two instances of one
+/// identity agree. Nothing here ranks people by anything they did; it decides which of the
+/// unread to read next, and everything unread is eventually read.
+pub fn frontier(
+    r0: &BTreeSet<String>,
+    held: &BTreeMap<String, Vec<String>>,
+    nominations: &BTreeSet<String>,
+) -> Vec<Candidate> {
+    let dist = distances(r0, held);
+    let mut found: BTreeMap<String, (u32, usize)> = BTreeMap::new();
+
+    for (holder, edges) in held {
+        let from = dist.get(holder).copied().unwrap_or(UNREACHED);
+        let step = if from == UNREACHED {
+            UNREACHED
+        } else {
+            from.saturating_add(1)
+        };
+        for target in edges {
+            if held.contains_key(target) || r0.contains(target) {
+                continue;
+            }
+            let entry = found.entry(target.clone()).or_insert((step, 0));
+            entry.0 = entry.0.min(step);
+            entry.1 += 1;
+        }
+    }
+
+    // A nomination for somebody nothing points at is still a candidate: a screen reached
+    // for them, which is the strongest signal there is that they are worth reading, and it
+    // is the one signal that does not come from the graph.
+    for did in nominations {
+        if held.contains_key(did) || r0.contains(did) {
+            continue;
+        }
+        found.entry(did.clone()).or_insert((UNREACHED, 0));
+    }
+
+    let mut out: Vec<Candidate> = found
+        .into_iter()
+        .map(|(did, (distance, references))| Candidate {
+            nominated: nominations.contains(&did),
+            did,
+            distance,
+            references,
+        })
+        .collect();
+
+    out.sort_by(|a, b| {
+        b.nominated
+            .cmp(&a.nominated)
+            .then(a.distance.cmp(&b.distance))
+            .then(b.references.cmp(&a.references))
+            .then(a.did.cmp(&b.did))
+    });
+    out
 }
 
 /// Whether two readings of an identity differ in anything but when they were taken.
@@ -416,6 +566,236 @@ mod tests {
         let held = record();
         let same = with_reach(&held, &packet(&held.reach.clone()), NOW);
         assert!(same_substance(&held, &same));
+    }
+
+    fn set(dids: &[&str]) -> BTreeSet<String> {
+        dids.iter().map(|d| d.to_string()).collect()
+    }
+
+    fn graph(edges: &[(&str, &[&str])]) -> BTreeMap<String, Vec<String>> {
+        edges
+            .iter()
+            .map(|(from, to)| {
+                (
+                    from.to_string(),
+                    to.iter().map(|t| t.to_string()).collect::<Vec<_>>(),
+                )
+            })
+            .collect()
+    }
+
+    fn dids(candidates: &[Candidate]) -> Vec<&str> {
+        candidates.iter().map(|c| c.did.as_str()).collect()
+    }
+
+    #[test]
+    fn the_frontier_is_who_is_pointed_at_and_not_held() {
+        // alice is followed and read; she points at bob and carol, neither read. They are
+        // the frontier — known to exist, never looked at.
+        let f = frontier(
+            &set(&["alice"]),
+            &graph(&[("alice", &["bob", "carol"])]),
+            &BTreeSet::new(),
+        );
+        assert_eq!(dids(&f), ["bob", "carol"]);
+    }
+
+    #[test]
+    fn somebody_already_held_is_not_on_the_frontier() {
+        // The frontier is the UNREAD. Re-reading a held identity is the crawl mark's
+        // decision on its own cadence, not this one's.
+        let f = frontier(
+            &set(&["alice"]),
+            &graph(&[("alice", &["bob"]), ("bob", &[])]),
+            &BTreeSet::new(),
+        );
+        assert!(f.is_empty());
+    }
+
+    #[test]
+    fn this_identitys_own_graph_is_left_to_the_engagement_crawl() {
+        // carol is followed directly, so the engagement crawl reads her every crawling
+        // pass. Listing her here would have two loops resolving one key on two cadences,
+        // racing to write the same record and paying the DHT lookup twice.
+        let f = frontier(
+            &set(&["alice", "carol"]),
+            &graph(&[("alice", &["bob", "carol"])]),
+            &BTreeSet::new(),
+        );
+        assert_eq!(dids(&f), ["bob"]);
+    }
+
+    #[test]
+    fn the_frontier_advances_one_ring_at_a_time() {
+        // What somebody points at only becomes visible once they have been read. So the
+        // crawl cannot leap: it learns of dave by reading bob, and it learns of bob by
+        // reading alice. That is what keeps the far graph from arriving before the near
+        // one, without anything having to enforce an order.
+        let before = frontier(
+            &set(&["alice"]),
+            &graph(&[("alice", &["bob"])]),
+            &BTreeSet::new(),
+        );
+        assert_eq!(dids(&before), ["bob"]);
+        assert_eq!(before[0].distance, 1);
+
+        // Now bob has been read, and what HE points at appears for the first time.
+        let after = frontier(
+            &set(&["alice"]),
+            &graph(&[("alice", &["bob"]), ("bob", &["dave"])]),
+            &BTreeSet::new(),
+        );
+        assert_eq!(dids(&after), ["dave"]);
+        assert_eq!(after[0].distance, 2);
+    }
+
+    #[test]
+    fn a_ring_further_out_sorts_after_a_nearer_one() {
+        // Both unread and both on the frontier at once: `near` is pointed at by somebody
+        // this identity follows, `far` by somebody one hop past that.
+        let f = frontier(
+            &set(&["alice"]),
+            &graph(&[("alice", &["bob", "near"]), ("bob", &["far"])]),
+            &BTreeSet::new(),
+        );
+        assert_eq!(dids(&f), ["near", "far"]);
+        assert_eq!(f[0].distance, 1);
+        assert_eq!(f[1].distance, 2);
+    }
+
+    #[test]
+    fn corroboration_breaks_a_tie_between_equals() {
+        // Two candidates the same distance out: the one more of your graph points at is
+        // the better guess. A tiebreak among equals, never a ranking across distances.
+        let f = frontier(
+            &set(&["alice", "bob"]),
+            &graph(&[("alice", &["popular", "obscure"]), ("bob", &["popular"])]),
+            &BTreeSet::new(),
+        );
+        assert_eq!(dids(&f), ["popular", "obscure"]);
+        assert_eq!(f[0].references, 2);
+        assert_eq!(f[1].references, 1);
+    }
+
+    #[test]
+    fn somebody_asked_for_is_read_first() {
+        // The one signal that does not come from the graph: a screen reached for them and
+        // had to go to the network to answer. That outranks every graph-derived reason.
+        let f = frontier(
+            &set(&["alice"]),
+            &graph(&[("alice", &["popular", "wanted"]), ("other", &["popular"])]),
+            &set(&["wanted"]),
+        );
+        assert_eq!(dids(&f)[0], "wanted");
+        assert!(f[0].nominated);
+    }
+
+    #[test]
+    fn somebody_asked_for_that_nobody_points_at_is_still_a_candidate() {
+        // A pasted link, or a knock from outside the graph. Nothing in the graph names
+        // them, and the request is the whole reason they are worth reading.
+        let f = frontier(&set(&["alice"]), &graph(&[]), &set(&["stranger"]));
+        assert_eq!(dids(&f), ["stranger"]);
+        assert!(f[0].nominated);
+        assert_eq!(f[0].references, 0);
+    }
+
+    #[test]
+    fn the_order_is_the_same_every_time_it_is_computed() {
+        // Two instances of one identity compute this independently and must agree, or
+        // they resolve different people and each writes what the other did not.
+        let r0 = set(&["alice", "bob"]);
+        let g = graph(&[
+            ("alice", &["one", "two", "three"]),
+            ("bob", &["two", "three"]),
+        ]);
+        let first = frontier(&r0, &g, &BTreeSet::new());
+        let again = frontier(&r0, &g, &BTreeSet::new());
+        assert_eq!(first, again);
+        // And the tiebreak past references is the did itself, so equals never shuffle.
+        assert_eq!(dids(&first), ["three", "two", "one"]);
+    }
+
+    #[test]
+    fn nobody_reachable_is_left_off_the_frontier_forever() {
+        // The starvation property, checked at the unit level and again over real graphs
+        // in `discovery.test.ts`. Everything a held record points at appears, however
+        // lightly referenced — an ordering that dropped the tail would leave somebody
+        // permanently unread rather than merely last.
+        let g = graph(&[("alice", &["a", "b", "c", "d", "e"])]);
+        let f = frontier(&set(&["alice"]), &g, &BTreeSet::new());
+        assert_eq!(dids(&f), ["a", "b", "c", "d", "e"]);
+    }
+
+    #[test]
+    fn a_stranger_we_hold_never_outranks_the_graph() {
+        // A record reached some other way — a portal, a knock — has no distance from this
+        // identity's graph. Its follows are still candidates, but behind everything the
+        // graph points at: otherwise reposting one stranger would redirect the crawl.
+        let f = frontier(
+            &set(&["alice"]),
+            &graph(&[
+                ("alice", &["from-my-graph"]),
+                ("stranger", &["from-a-stranger"]),
+            ]),
+            &BTreeSet::new(),
+        );
+        assert_eq!(dids(&f), ["from-my-graph", "from-a-stranger"]);
+        assert_eq!(f[0].distance, 1);
+        assert_eq!(f[1].distance, UNREACHED);
+    }
+
+    #[test]
+    fn this_identity_is_never_its_own_candidate() {
+        // Anyone in your graph who follows one of YOUR channels names you as an edge
+        // target, so without this the crawl goes and reads your own directory over the
+        // network — a DHT resolve and a download to be told what local state already
+        // holds, and told it as of the last publish rather than as of now.
+        //
+        // `r0` is what the engagement crawl covers, and that set includes this identity
+        // itself: `engagement_once` inserts `own_did` into its graph for the same reason.
+        // Found by simulating the crawl over whole graphs, where the held set came back
+        // exactly one larger than the oracle's every single time.
+        let f = frontier(
+            &set(&["alice", "me"]),
+            &graph(&[("alice", &["me", "bob"])]),
+            &BTreeSet::new(),
+        );
+        assert_eq!(dids(&f), ["bob"]);
+
+        // Not even when something asks for you by name.
+        let asked = frontier(
+            &set(&["alice", "me"]),
+            &graph(&[("alice", &["me"])]),
+            &set(&["me"]),
+        );
+        assert!(asked.is_empty());
+    }
+
+    #[test]
+    fn a_cycle_terminates() {
+        // Follows are mutual all the time, so the walk has to survive one. A visited-set
+        // that missed this would hang the pass rather than fail it.
+        let f = frontier(
+            &set(&["alice"]),
+            &graph(&[
+                ("alice", &["bob"]),
+                ("bob", &["alice", "carol"]),
+                ("carol", &["bob", "dave"]),
+            ]),
+            &BTreeSet::new(),
+        );
+        assert_eq!(dids(&f), ["dave"]);
+    }
+
+    #[test]
+    fn the_edges_of_a_record_are_both_kinds_of_follow() {
+        // A channel-follow and a wholesale follow are one edge for a crawl: both point at
+        // another server. Dropping either would make half the graph undiscoverable.
+        let mut r = record();
+        r.follows = vec![serde_json::json!({"didDht": "did:dht:bob", "channelID": "c1"})];
+        r.handle_follows = vec!["did:dht:carol".into()];
+        assert_eq!(edges_of(&r), ["did:dht:bob", "did:dht:carol"]);
     }
 
     #[test]

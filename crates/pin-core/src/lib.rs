@@ -1718,6 +1718,42 @@ pub fn directory_collection() -> String {
     pin_derive::DIRECTORY_COLLECTION.to_string()
 }
 
+/// Who the crawl should read next, in order.
+///
+/// Exported so the decision can be exercised over whole synthetic graphs rather than only
+/// over hand-built cases: the frontier grows as records are recorded, so the questions
+/// worth answering about it — does coverage converge, how many passes does a budget need,
+/// does anybody starve — are about many passes rather than one call. This is the REAL
+/// function the loop runs, not a copy of its rules in another language, which is the only
+/// way the answers say anything about what ships.
+///
+/// `held` is `{did: [dids they point at]}` — the edges alone, since that is all the order
+/// depends on. `r0` is this identity's own graph, excluded from the result because the
+/// engagement crawl reads exactly that set already.
+#[wasm_bindgen]
+pub fn discovery_frontier(
+    r0_json: &str,
+    held_json: &str,
+    nominations_json: &str,
+) -> Result<String, JsValue> {
+    let r0: std::collections::BTreeSet<String> =
+        serde_json::from_str(r0_json).map_err(|e| JsValue::from_str(&format!("r0: {e}")))?;
+    let held: std::collections::BTreeMap<String, Vec<String>> =
+        serde_json::from_str(held_json).map_err(|e| JsValue::from_str(&format!("held: {e}")))?;
+    let nominations: std::collections::BTreeSet<String> = serde_json::from_str(nominations_json)
+        .map_err(|e| JsValue::from_str(&format!("nominations: {e}")))?;
+
+    let candidates = pin_curator::frontier(&r0, &held, &nominations);
+    serde_json::to_string(&candidates).map_err(|e| JsValue::from_str(&e.to_string()))
+}
+
+/// How many identities one discovery pass will read. Exported so a simulation reports
+/// against the value that actually ships rather than one written down beside it.
+#[wasm_bindgen]
+pub fn discovery_budget() -> usize {
+    pin_curator::MAX_RESOLVES_PER_PASS
+}
+
 /// Where one subject's conversation is cached. From Rust for the reason `tally_rkey` is:
 /// the Curator's loops write these records and the frontend reads them, and an address
 /// spelled twice would have one side writing where the other never looks.

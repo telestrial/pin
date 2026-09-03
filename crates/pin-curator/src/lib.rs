@@ -85,6 +85,7 @@ pub use channeldoc::{
 };
 pub use channelsync::{run_channel_sync_loop, ChannelSyncContext, ChannelSyncOutcome};
 pub use deliver::{deliver_once, run_deliver_loop, DeliverContext, DeliverOutcome};
+pub use discover::{edges_of, frontier, Candidate, DirectoryRecord, MAX_RESOLVES_PER_PASS};
 pub use engagement::{engagement_once, run_engagement_loop, EngagementContext, EngagementOutcome};
 pub use identity::{
     publish_identity_once, run_identity_loop, IdentityContext, IdentityOutcome,

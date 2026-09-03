@@ -232,6 +232,28 @@ export function derive_snapshot_key(app_key: Uint8Array): Uint8Array;
 export function directory_collection(): string;
 
 /**
+ * How many identities one discovery pass will read. Exported so a simulation reports
+ * against the value that actually ships rather than one written down beside it.
+ */
+export function discovery_budget(): number;
+
+/**
+ * Who the crawl should read next, in order.
+ *
+ * Exported so the decision can be exercised over whole synthetic graphs rather than only
+ * over hand-built cases: the frontier grows as records are recorded, so the questions
+ * worth answering about it — does coverage converge, how many passes does a budget need,
+ * does anybody starve — are about many passes rather than one call. This is the REAL
+ * function the loop runs, not a copy of its rules in another language, which is the only
+ * way the answers say anything about what ships.
+ *
+ * `held` is `{did: [dids they point at]}` — the edges alone, since that is all the order
+ * depends on. `r0` is this identity's own graph, excluded from the result because the
+ * engagement crawl reads exactly that set already.
+ */
+export function discovery_frontier(r0_json: string, held_json: string, nominations_json: string): string;
+
+/**
  * Seal a UTF-8 string under a channel key, returning the base64 blob.
  */
 export function encrypt_for_channel(key: Uint8Array, plaintext: string): string;
@@ -911,6 +933,8 @@ export interface InitOutput {
     readonly derive_settings_locator_seed: (a: number, b: number) => [number, number];
     readonly derive_snapshot_key: (a: number, b: number) => [number, number];
     readonly directory_collection: () => [number, number];
+    readonly discovery_budget: () => number;
+    readonly discovery_frontier: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
     readonly encrypt_for_channel: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly encrypt_settings: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly endorse_collection: () => [number, number];
