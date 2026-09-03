@@ -7,6 +7,7 @@
 // only the network stocked, a broken index still passes. So every case here stocks the two
 // rungs with DIFFERENT answers and asserts which one came back.
 
+import { waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('../lib/pkarr', async () =>
@@ -16,7 +17,10 @@ vi.mock('../lib/docs', async () =>
   (await import('./fakeModules')).fakeDocsModule(),
 )
 
-import { directory_collection } from '../../crates/pin-core/pkg/pin_core.js'
+import {
+  directory_collection,
+  nominate_collection,
+} from '../../crates/pin-core/pkg/pin_core.js'
 import { DIRECTORY_DOC_VERSION } from '../core/identityDoc'
 import { makeReach } from '../lib/reach'
 import {
@@ -123,6 +127,52 @@ describe('the reach ladder', () => {
 
     expect(await fetch(THEM)).toEqual([HELD_FOLLOW])
     expect((await resolve(THEM))?.username).toBe('from-the-index')
+  })
+
+  it('asks the crawl to read anyone it had to resolve', async () => {
+    // The one input to the crawl's order that does not come from the graph. A walk that
+    // went to the network is a walk that will go again next session unless something
+    // records that this person was wanted.
+    await publish(THEM, 'from-the-network', [NETWORK_FOLLOW])
+
+    const { resolve } = makeReach(me.client, FAKE_APP_KEY_HEX)
+    await resolve(THEM)
+
+    await waitFor(() =>
+      expect(docStore.has(`${nominate_collection()}/${THEM}`)).toBe(true),
+    )
+  })
+
+  it('asks for nobody it could answer from what is held', async () => {
+    // A request is for somebody who could not be answered. Nominating a held identity
+    // would have the crawl spend its budget re-reading what it already has.
+    hold(THEM, 'from-the-index', [HELD_FOLLOW])
+
+    const { resolve } = makeReach(me.client, FAKE_APP_KEY_HEX)
+    await resolve(THEM)
+
+    expect(docStore.has(`${nominate_collection()}/${THEM}`)).toBe(false)
+  })
+
+  it('asks once however many times the same person is looked at', async () => {
+    // Every write to this doc is announced to every syncing instance AND a reason to
+    // mirror the whole doc to Sia. A feed re-rendering the same unresolved person must not
+    // cost a write per render — that is the shape of the churn bug of 2026-08-29, which
+    // re-uploaded an idle account's entire doc every seventeen seconds.
+    await publish(THEM, 'from-the-network', [NETWORK_FOLLOW])
+
+    const { resolve } = makeReach(me.client, FAKE_APP_KEY_HEX)
+    await resolve(THEM)
+    await waitFor(() =>
+      expect(docStore.has(`${nominate_collection()}/${THEM}`)).toBe(true),
+    )
+    const first = docStore.get(`${nominate_collection()}/${THEM}`)
+
+    // A fresh build, so the per-build memo does not answer instead of the doc.
+    await makeReach(me.client, FAKE_APP_KEY_HEX).resolve(THEM)
+    await new Promise((r) => setTimeout(r, 10))
+
+    expect(docStore.get(`${nominate_collection()}/${THEM}`)).toBe(first)
   })
 
   it('names an identity it can reach on neither rung by a short did', async () => {

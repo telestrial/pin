@@ -1381,6 +1381,24 @@ export function max_comment_bytes() {
 }
 
 /**
+ * The collection naming identities a screen reached for and could not answer from what
+ * is held.
+ * @returns {string}
+ */
+export function nominate_collection() {
+    let deferred1_0;
+    let deferred1_1;
+    try {
+        const ret = wasm.nominate_collection();
+        deferred1_0 = ret[0];
+        deferred1_1 = ret[1];
+        return getStringFromWasm0(ret[0], ret[1]);
+    } finally {
+        wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+    }
+}
+
+/**
  * Open (create) the in-memory doc engine, with the namespace + author derived from
  * the Sia AppKey. Returns the namespace id. A second call rebuilds from scratch.
  * @param {string} app_key_hex

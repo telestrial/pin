@@ -441,6 +441,11 @@ pub struct DiscoverOutcome {
     /// Tried and couldn't be read. They stay on the frontier and come round again — an
     /// unreachable identity is somebody asleep, not somebody gone.
     pub unreachable: usize,
+    /// Outstanding requests from a screen: people looked at whose name could not be
+    /// answered from what is held. They sort ahead of everything the graph suggests, so a
+    /// number that stays high means the crawl is not keeping up with what is being asked
+    /// of it.
+    pub nominated: usize,
 }
 
 /// The identities the engagement crawl already covers, and which discovery therefore
@@ -478,6 +483,34 @@ async fn held_edges(ctx: &DiscoverContext) -> BTreeMap<String, Vec<String>> {
     held
 }
 
+/// Identities a screen asked for and could not answer from what is held.
+///
+/// A failed read yields none rather than failing the pass: a nomination is a hint about
+/// ORDER, so losing one costs a few passes of priority and nothing else.
+async fn read_nominations(ctx: &DiscoverContext) -> BTreeSet<String> {
+    crate::list_rkeys(&ctx.doc, ctx.author_id, pin_derive::NOMINATE_COLLECTION)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .collect()
+}
+
+/// Drop a request that has been answered.
+///
+/// Only ever after the record it asked for is written, so a failure between the two leaves
+/// the request standing and the next pass tries again. The other way round loses the
+/// request on any failure, which is the one outcome that matters here — the person who
+/// asked is still looking at a name we could not resolve.
+async fn clear_nomination(ctx: &DiscoverContext, did: &str) {
+    let _ = crate::delete_record(
+        &ctx.doc,
+        ctx.author_id,
+        pin_derive::NOMINATE_COLLECTION,
+        did,
+    )
+    .await;
+}
+
 /// Go and read some of the identities this one knows about and has never looked at.
 ///
 /// The only part of discovery that spends anything. Everything else — hop one, and every
@@ -488,7 +521,6 @@ pub async fn discover_once(
     ctx: &DiscoverContext,
     own_did: &str,
     now_iso: String,
-    nominations: &BTreeSet<String>,
 ) -> Result<DiscoverOutcome, String> {
     let mut outcome = DiscoverOutcome::default();
     let settings = crate::read_settings(&ctx.doc, &ctx.blobs, ctx.author_id, &ctx.app_key).await?;
@@ -497,7 +529,10 @@ pub async fn discover_once(
     let held = held_edges(ctx).await;
     outcome.held = held.len();
 
-    let candidates = frontier(&covered, &held, nominations);
+    let nominations = read_nominations(ctx).await;
+    outcome.nominated = nominations.len();
+
+    let candidates = frontier(&covered, &held, &nominations);
     outcome.frontier = candidates.len();
 
     for candidate in candidates.iter().take(MAX_RESOLVES_PER_PASS) {
@@ -520,6 +555,11 @@ pub async fn discover_once(
             parse_directory(&blob, &resolved.txt, &resolved.url, &now_iso),
         )
         .await;
+        // After the record, never before: a request cleared on a pass that then failed to
+        // write is a person left unresolved with nothing left saying they were asked for.
+        if candidate.nominated {
+            clear_nomination(ctx, &candidate.did).await;
+        }
         outcome.resolved += 1;
     }
     Ok(outcome)
@@ -539,7 +579,7 @@ pub async fn run_discover_loop(
     on_pass: impl Fn(Result<DiscoverOutcome, String>),
 ) -> ! {
     loop {
-        on_pass(discover_once(&ctx, &own_did, now_iso(), &BTreeSet::new()).await);
+        on_pass(discover_once(&ctx, &own_did, now_iso()).await);
         n0_future::time::sleep(cadence).await;
     }
 }

@@ -59,6 +59,7 @@ export const manifest_remove_attachment: (a: number, b: number, c: number, d: nu
 export const manifest_remove_repost: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
 export const max_comment_attachments: () => number;
 export const max_comment_bytes: () => number;
+export const nominate_collection: () => [number, number];
 export const open: (a: number, b: number) => any;
 export const open_channel_doc: (a: number, b: number) => any;
 export const pinned_collection: () => [number, number];

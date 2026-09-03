@@ -1777,6 +1777,13 @@ pub fn directory_collection() -> String {
     pin_derive::DIRECTORY_COLLECTION.to_string()
 }
 
+/// The collection naming identities a screen reached for and could not answer from what
+/// is held.
+#[wasm_bindgen]
+pub fn nominate_collection() -> String {
+    pin_derive::NOMINATE_COLLECTION.to_string()
+}
+
 /// Who the crawl should read next, in order.
 ///
 /// Exported so the decision can be exercised over whole synthetic graphs rather than only

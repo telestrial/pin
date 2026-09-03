@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useAuthStore } from '../../stores/auth'
-import { readDirectory } from '../directories'
+import { nominate, readDirectory } from '../directories'
 import { resolveIdentityDoc } from '../identityDoc'
 
 // What a did:dht's identity-doc says about them, as anything rendering a person needs it.
@@ -71,6 +71,9 @@ function resolve(
       const held = await fromIndex(appKeyHex, didDht).catch(() => undefined)
       if (held !== undefined) return held
     }
+    // Held nowhere, so this row is paying a DHT lookup and a download to put a name on
+    // somebody. Asking for them is what makes the next session a doc read.
+    if (appKeyHex) void nominate(appKeyHex, didDht)
     const doc = await resolveIdentityDoc(
       // biome-ignore lint/suspicious/noExplicitAny: client typed loosely to keep the hook off the SDK import
       client as any,

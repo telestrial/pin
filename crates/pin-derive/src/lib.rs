@@ -522,6 +522,24 @@ pub const CRAWL_COLLECTION: &str = "crawl";
 /// nothing a held record doesn't already carry.
 pub const DIRECTORY_COLLECTION: &str = "directory";
 
+/// The collection naming identities a screen reached for and could not answer from what
+/// is held. Keyed by that identity's `did:dht`.
+///
+/// The one input to the crawl's order that does not come from the graph. Everything else
+/// it decides is derived from who points at whom, which is a guess about what is worth
+/// reading; this is somebody actually asking. So it sorts ahead of all of it.
+///
+/// Written by the frontend, which is unusual here and deliberate: forming intent is the
+/// UI's half of the boundary, and "the person on screen was not in the index" is intent
+/// rather than state. The Curator still owns what comes of it — it does the resolving, and
+/// it clears the request once the answer is held.
+///
+/// Presence is the whole signal. The value records when the request was made, which
+/// nothing reads yet; a nomination for somebody who can never be resolved otherwise has
+/// no age to be judged on, and that is a decision waiting to be made rather than one made
+/// here.
+pub const NOMINATE_COLLECTION: &str = "nominate";
+
 /// The collection recording, per subscribed channel, the manifest pointer the pull loop
 /// last cached AND the cached record it produced. Keyed by channel id.
 ///
@@ -891,6 +909,18 @@ mod tests {
         assert_ne!(DIRECTORY_COLLECTION, COMMENT_LOG_COLLECTION);
         assert_ne!(DIRECTORY_COLLECTION, DELIVER_COLLECTION);
         assert_ne!(DIRECTORY_COLLECTION, PULL_COLLECTION);
+
+        // A request to read somebody and the record of having read them are also keyed by
+        // a bare did, and they are the pair most likely to be confused: one is cleared the
+        // moment the other is written. Sharing a name would have a nomination read as a
+        // directory with no channels and no follows — an identity that looks read and
+        // published nothing.
+        assert_ne!(NOMINATE_COLLECTION, DIRECTORY_COLLECTION);
+        assert_ne!(NOMINATE_COLLECTION, CRAWL_COLLECTION);
+        assert_ne!(
+            record_key(NOMINATE_COLLECTION, did),
+            record_key(DIRECTORY_COLLECTION, did)
+        );
     }
 
     #[test]

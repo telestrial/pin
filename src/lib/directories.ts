@@ -10,9 +10,12 @@
 // having two spellings and what makes "the repo is the only contract" true in this
 // direction: the Curator writes, the frontend reads.
 
-import { directory_collection } from '../../crates/pin-core/pkg/pin_core.js'
+import {
+  directory_collection,
+  nominate_collection,
+} from '../../crates/pin-core/pkg/pin_core.js'
 import { ensureWasm } from '../core/wasm'
-import { getRecord, listRecords, openDocs } from './docs'
+import { getRecord, listRecords, openDocs, putRecord } from './docs'
 
 /** One channel an identity advertises, as their directory publishes it.
  *
@@ -82,6 +85,42 @@ export async function readDirectory(
     // the same branch a caller takes for anyone never crawled. Nothing about a cached
     // profile is worth failing a render over.
     return null
+  }
+}
+
+/** Ask the crawl to read someone, because a screen needed them and the index had nothing.
+ *
+ *  The one input to the crawl's order that does not come from the graph: everything else
+ *  it decides is a guess about who is worth reading, and this is somebody actually asking.
+ *  So it sorts ahead of all of it, and the Curator clears the request once the answer is
+ *  held.
+ *
+ *  Best-effort and unawaited by its callers. A lost nomination costs a few passes of
+ *  priority — the person is still reachable over the network this session, and still on
+ *  the frontier if anybody points at them.
+ *
+ *  Silent when one already stands: every write to this doc is announced to every syncing
+ *  instance and is a reason to mirror the whole doc to Sia, so a feed re-rendering the
+ *  same unresolved person must not cost a write per render. */
+export async function nominate(
+  appKeyHex: string,
+  didDht: string,
+): Promise<void> {
+  try {
+    await openDocs(appKeyHex)
+    await ensureWasm()
+    const collection = nominate_collection()
+    if (await getRecord(collection, didDht)) return
+    await putRecord(
+      collection,
+      didDht,
+      new TextEncoder().encode(
+        JSON.stringify({ at: new Date().toISOString() }),
+      ),
+    )
+  } catch {
+    // Asking is an optimization on top of a fallback that already worked. Nothing about
+    // it is worth failing a render over.
   }
 }
 

@@ -422,6 +422,12 @@ export function max_comment_attachments(): number;
 export function max_comment_bytes(): number;
 
 /**
+ * The collection naming identities a screen reached for and could not answer from what
+ * is held.
+ */
+export function nominate_collection(): string;
+
+/**
  * Open (create) the in-memory doc engine, with the namespace + author derived from
  * the Sia AppKey. Returns the namespace id. A second call rebuilds from scratch.
  */
@@ -970,6 +976,7 @@ export interface InitOutput {
     readonly manifest_remove_repost: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
     readonly max_comment_attachments: () => number;
     readonly max_comment_bytes: () => number;
+    readonly nominate_collection: () => [number, number];
     readonly open: (a: number, b: number) => any;
     readonly open_channel_doc: (a: number, b: number) => any;
     readonly pinned_collection: () => [number, number];
