@@ -88,7 +88,7 @@ export async function readDirectory(
 /** Every identity the crawl has read, by did:dht.
  *
  *  Backed by a prefix scan over the whole doc, so this is for building an index — search,
- *  a reach walk, the frontier — rather than for drawing one row. A row wants
+ *  a reach walk, the frontier — rather than for rendering one row. A row wants
  *  {@link readDirectory}. */
 export async function listDirectoryDids(appKeyHex: string): Promise<string[]> {
   try {

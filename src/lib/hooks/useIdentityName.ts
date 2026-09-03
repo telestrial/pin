@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useAuthStore } from '../../stores/auth'
+import { readDirectory } from '../directories'
 import { resolveIdentityDoc } from '../identityDoc'
 
 // What a did:dht's identity-doc says about them, as anything rendering a person needs it.
@@ -23,33 +24,64 @@ export type IdentityProfile = {
 const cache = new Map<string, IdentityProfile | null>()
 const inFlight = new Map<string, Promise<IdentityProfile | null>>()
 
+/** The three fields a row renders, from whichever source produced them. */
+function displayable(profile: {
+  username?: string
+  displayName?: string
+  avatarURL?: string
+}): IdentityProfile {
+  return {
+    username: profile.username ?? null,
+    displayName: profile.displayName ?? null,
+    avatarURL: profile.avatarURL ?? null,
+  }
+}
+
+// What the Curator's crawl already recorded about them, or undefined when it has never
+// read them. A held record with no profile answers `null` — that is a real answer, not a
+// miss, so it stops here rather than spending a lookup to be told the same thing.
+async function fromIndex(
+  appKeyHex: string,
+  didDht: string,
+): Promise<IdentityProfile | null | undefined> {
+  const held = await readDirectory(appKeyHex, didDht)
+  if (!held) return undefined
+  return held.profile ? displayable(held.profile) : null
+}
+
+// The people half of the resolution ladder, and the reason a reload no longer costs a DHT
+// lookup and a Sia download per person in the feed. `PostRow` asks for three of these per
+// row, so a fifty-row feed used to spend fifty round trips to resolve names it had
+// resolved a moment earlier.
+//
+// Preference-ordered: the session map, then what the crawl holds, then the network. The
+// crawl's copy can lag a rename by a crawl cadence, which is the ladder's ordinary trade —
+// it wrote what it read from the same place this fallback reads.
 function resolve(
   client: unknown,
+  appKeyHex: string | null,
   didDht: string,
 ): Promise<IdentityProfile | null> {
   const cached = cache.get(didDht)
   if (cached !== undefined) return Promise.resolve(cached)
   const existing = inFlight.get(didDht)
   if (existing) return existing
-  const p = resolveIdentityDoc(
-    // biome-ignore lint/suspicious/noExplicitAny: client typed loosely to keep the hook off the SDK import
-    client as any,
-    didDht,
-  )
-    .then((doc) => {
-      const profile = doc?.profile
-        ? {
-            username: doc.profile.username ?? null,
-            displayName: doc.profile.displayName ?? null,
-            avatarURL: doc.profile.avatarURL ?? null,
-          }
-        : null
+  const p = (async () => {
+    if (appKeyHex) {
+      const held = await fromIndex(appKeyHex, didDht).catch(() => undefined)
+      if (held !== undefined) return held
+    }
+    const doc = await resolveIdentityDoc(
+      // biome-ignore lint/suspicious/noExplicitAny: client typed loosely to keep the hook off the SDK import
+      client as any,
+      didDht,
+    )
+    return doc?.profile ? displayable(doc.profile) : null
+  })()
+    .catch(() => null)
+    .then((profile) => {
       cache.set(didDht, profile)
       return profile
-    })
-    .catch(() => {
-      cache.set(didDht, null)
-      return null
     })
     .finally(() => {
       inFlight.delete(didDht)
@@ -64,6 +96,7 @@ function resolve(
  *  and the published doc lags local edits and may not have propagated at all. */
 export function useIdentityProfile(didDht: string): IdentityProfile | null {
   const client = useAuthStore((s) => s.client)
+  const storedKeyHex = useAuthStore((s) => s.storedKeyHex)
   const myDidDht = useAuthStore((s) => s.myDidDht)
   const mine = useAuthStore((s) => s.profile)
   const isSelf = !!didDht && didDht === myDidDht
@@ -79,13 +112,13 @@ export function useIdentityProfile(didDht: string): IdentityProfile | null {
       return
     }
     let cancelled = false
-    resolve(client, didDht).then((p) => {
+    resolve(client, storedKeyHex, didDht).then((p) => {
       if (!cancelled) setProfile(p)
     })
     return () => {
       cancelled = true
     }
-  }, [didDht, client, isSelf])
+  }, [didDht, client, storedKeyHex, isSelf])
 
   if (isSelf) {
     return {
@@ -102,6 +135,7 @@ export function useIdentityProfile(didDht: string): IdentityProfile | null {
 // so feeds render instantly and upgrade as identity-docs resolve.
 export function useIdentityName(didDht: string): string {
   const client = useAuthStore((s) => s.client)
+  const storedKeyHex = useAuthStore((s) => s.storedKeyHex)
   // Your own identity resolves locally: profile is the source of truth (and the
   // published doc may lag local edits / not have propagated yet on the DHT), so
   // never network-resolve yourself.
@@ -120,13 +154,13 @@ export function useIdentityName(didDht: string): string {
       return
     }
     let cancelled = false
-    resolve(client, didDht).then((p) => {
+    resolve(client, storedKeyHex, didDht).then((p) => {
       if (!cancelled) setUsername(p?.username ?? null)
     })
     return () => {
       cancelled = true
     }
-  }, [didDht, client, isSelf])
+  }, [didDht, client, storedKeyHex, isSelf])
 
   // Fallback: `did:dht:iyyp…db4o` (last chars are the most distinguishing).
   const key = didDht.replace(/^did:dht:/, '')

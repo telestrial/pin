@@ -10,7 +10,7 @@ function shortDid(didDht: string): string {
 }
 
 // The three fields a reach walk actually reads out of somebody's directory: who they
-// point at, and what to draw for them. Narrow on purpose, because it is the shape BOTH
+// point at, and what to render for them. Narrow on purpose, because it is the shape BOTH
 // backings have to produce — a record the crawl holds and a document resolved over the
 // network are different types carrying the same answers, and the walk should not know
 // which one it got.
