@@ -5,6 +5,7 @@ import {
   startChannelDocLoop,
   startChannelSyncLoop,
   startDeliverLoop,
+  startDiscoverLoop,
   startEngagementLoop,
   startIdentityLoop,
   startInstanceLoop,
@@ -79,6 +80,7 @@ export function useCuratorLoops() {
         ['identity', startIdentityLoop(appKeyHex, namespaceId)],
         ['engagement', startEngagementLoop(appKeyHex)],
         ['deliver', startDeliverLoop(appKeyHex)],
+        ['discover', startDiscoverLoop(appKeyHex)],
       ]
       const results = await Promise.allSettled(named.map(([, p]) => p))
       results.forEach((r, i) => {

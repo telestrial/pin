@@ -114,6 +114,8 @@ pub struct DocEngine {
     engagement_started: AtomicBool,
     /// Endorsement delivery loop guard (see `curator_start_deliver`).
     deliver_started: AtomicBool,
+    /// Discovery crawl loop guard (see `curator_start_discover`).
+    discover_started: AtomicBool,
 }
 
 /// Bring up (or reopen) the Curator's persistent iroh-docs engine on `endpoint`,
@@ -198,6 +200,7 @@ pub async fn open_or_create(
         rendezvous_started: AtomicBool::new(false),
         engagement_started: AtomicBool::new(false),
         deliver_started: AtomicBool::new(false),
+        discover_started: AtomicBool::new(false),
     })
 }
 
@@ -417,6 +420,11 @@ impl DocEngine {
     /// Whether the engagement loop was already running; marks it started.
     pub fn engagement_started(&self) -> bool {
         self.engagement_started.swap(true, Ordering::SeqCst)
+    }
+
+    /// Whether the discovery loop was already running; marks it started.
+    pub fn discover_started(&self) -> bool {
+        self.discover_started.swap(true, Ordering::SeqCst)
     }
 
     /// Whether the delivery loop was already running; marks it started.

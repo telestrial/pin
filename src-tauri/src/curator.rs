@@ -1243,6 +1243,69 @@ pub async fn curator_start_engagement(
     Ok(())
 }
 
+/// How often the crawl widens the circle.
+///
+/// Minutes, and the budget rather than this is what bounds the work: a pass reads at most
+/// `MAX_RESOLVES_PER_PASS` identities, each a DHT resolve and a Sia download. Nothing here
+/// is latency-sensitive — discovery is how the network becomes visible over days, not how
+/// a count arrives — so this is paced to be unnoticeable rather than prompt.
+const DISCOVER_CADENCE: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
+/// Start the discovery loop — read some of the identities this one knows about and has
+/// never looked at, and record what they publish.
+///
+/// Idempotent (the engine keeps one loop), so a remounting caller can just call it.
+#[tauri::command]
+pub async fn curator_start_discover(
+    curator: tauri::State<'_, CuratorState>,
+    sia: tauri::State<'_, crate::sia::SiaState>,
+    app_key_hex: String,
+) -> Result<(), String> {
+    let engine = current_engine(&curator)?;
+    let app_key = pin_derive::decode_app_key(&app_key_hex).ok_or("app key hex must be 32 bytes")?;
+    // This identity's own did:dht, so the crawl leaves itself off its own frontier: anyone
+    // in the graph who follows one of this identity's channels names it as an edge, and
+    // reading yourself over the network answers with what local state already holds.
+    let own_did = crate::identity::did_dht(&crate::identity::derive_identity(&app_key)?);
+    let ctx = pin_curator::DiscoverContext {
+        doc: engine.doc.clone(),
+        blobs: (*engine.blobs).clone(),
+        author_id: engine.author_id,
+        sia: sia.session(),
+        app_key,
+    };
+    // Marked started only once everything the loop needs is in hand, for the reason
+    // `curator_start_engagement` spells out: a flag set before setup makes a transient
+    // failure permanent.
+    if engine.discover_started() {
+        return Ok(());
+    }
+    let loop_handle = sia.detach(async move {
+        pin_curator::run_discover_loop(ctx, own_did, DISCOVER_CADENCE, now_iso, |result| {
+            match result {
+                Ok(o) => {
+                    // Quiet when a settled graph has nothing left to read. The frontier is
+                    // reported whenever anything happened, because it is the number that
+                    // says whether the crawl is keeping up with what it is finding.
+                    if o.resolved > 0 || o.unreachable > 0 {
+                        log::info!(
+                            "curator discover: held {} frontier {} resolved {} unreachable {}",
+                            o.held,
+                            o.frontier,
+                            o.resolved,
+                            o.unreachable
+                        );
+                    }
+                }
+                Err(e) => log::warn!("curator discover: {e}"),
+            }
+        })
+        .await
+    });
+    curator.0.lock().unwrap().loops.push(loop_handle);
+    Ok(())
+}
+
 /// How often delivery looks for endorsements nobody has been told about.
 ///
 /// The backstop, not the schedule: an endorsement being written wakes the loop, and this

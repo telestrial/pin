@@ -210,6 +210,10 @@ export function startEngagementLoopNative(appKeyHex: string): Promise<void> {
   return call<void>('curator_start_engagement', { appKeyHex })
 }
 
+export function startDiscoverLoopNative(appKeyHex: string): Promise<void> {
+  return call<void>('curator_start_discover', { appKeyHex })
+}
+
 /** Run one delivery pass now and report every decision it made. Diagnostic — it is the
  *  same pass the loop runs, so it can only report behaviour the loop actually has. */
 export function deliverProbeNative(appKeyHex: string): Promise<string> {

@@ -722,6 +722,17 @@ export function start_channel_sync_loop(app_key_hex: string, cadence_secs: numbe
 export function start_deliver_loop(app_key_hex: string, cadence_secs: number, retry_secs: number, settle_secs: number, on_pass: Function): Promise<void>;
 
 /**
+ * Start the discovery loop in this tab — go and read some of the identities this one
+ * knows about and has never looked at.
+ *
+ * A tab resolves and downloads exactly as well as a desktop, so this is the same loop
+ * from the same crate. What differs is only how long it stays open to keep going: a tab
+ * that reads eight identities and closes has genuinely widened the circle, because what
+ * it recorded is in the doc every instance of this identity syncs.
+ */
+export function start_discover_loop(app_key_hex: string, cadence_secs: number, on_pass: Function): Promise<void>;
+
+/**
  * Start the engagement loop in this tab — read what the graph endorsed, hold what
  * verifies, publish a tally per subject.
  *
@@ -1003,6 +1014,7 @@ export interface InitOutput {
     readonly start_channel_doc_loop: (a: number, b: number, c: number, d: any) => any;
     readonly start_channel_sync_loop: (a: number, b: number, c: number, d: number, e: any) => any;
     readonly start_deliver_loop: (a: number, b: number, c: number, d: number, e: number, f: any) => any;
+    readonly start_discover_loop: (a: number, b: number, c: number, d: any) => any;
     readonly start_engagement_loop: (a: number, b: number, c: number, d: number, e: any) => any;
     readonly start_identity_loop: (a: number, b: number, c: number, d: number, e: number, f: number, g: any) => any;
     readonly start_instance_loop: (a: number, b: number, c: any) => any;

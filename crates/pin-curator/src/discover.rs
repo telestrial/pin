@@ -19,11 +19,12 @@
 //! record does not already carry.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::time::Duration;
 
 use iroh_blobs::api::Store;
 use iroh_docs::{api::Doc, AuthorId};
 
-use crate::InstanceAddr;
+use crate::{InstanceAddr, SettingsView};
 
 /// How many identities one pass will go and read.
 ///
@@ -108,6 +109,43 @@ pub struct DirectoryRecord {
     /// still worth keeping rather than whether someone answered the phone.
     #[serde(default, rename = "seenAt")]
     pub seen_at: String,
+}
+
+/// Where an identity's directory currently is, and where they can be dialed.
+///
+/// Hands back the whole packet alongside the pointer it came for. One resolve answers two
+/// questions — `_dir` and `_iroh` — and the second used to be thrown away by the crawl
+/// while `deliver` resolved the same key again to ask it.
+pub(crate) struct Resolved {
+    pub url: String,
+    pub txt: Vec<pin_pkarr::TxtRecord>,
+}
+
+/// Resolve one identity's published packet, or fail meaning we couldn't find out.
+///
+/// Here rather than beside either caller, because both loops that read somebody's
+/// directory start with this exact step and a second copy would be a second answer to
+/// "what counts as no directory".
+pub(crate) async fn resolve_directory(did: &str) -> Result<Resolved, String> {
+    let txt = pin_pkarr::resolve(did).await?;
+    let url = pin_pkarr::rejoin_txt(&txt, crate::identity::DIR_PREFIX);
+    if url.is_empty() {
+        return Err(format!("{did}: no directory published"));
+    }
+    Ok(Resolved { url, txt })
+}
+
+/// Download and parse one identity's directory blob.
+///
+/// Shared for the same reason `resolve_directory` is: engagement reads it for endorsements
+/// and discovery for everything else, and it is one object either way.
+pub(crate) async fn download_directory_blob(
+    sia: &pin_sia::Session,
+    did: &str,
+    url: &str,
+) -> Result<serde_json::Value, String> {
+    let bytes = sia.download_item(url).await?;
+    serde_json::from_slice(&bytes).map_err(|e| format!("{did}: directory: {e}"))
 }
 
 /// Build a record from a directory blob and the packet that pointed at it.
@@ -376,6 +414,134 @@ pub(crate) async fn record_directory(
         return;
     };
     let _ = crate::write_record(doc, author_id, pin_derive::DIRECTORY_COLLECTION, did, bytes).await;
+}
+
+/// Everything a discovery pass needs.
+pub struct DiscoverContext {
+    pub doc: Doc,
+    pub blobs: Store,
+    pub author_id: AuthorId,
+    /// A connected Sia session: a directory's contents live in a blob, and reading
+    /// somebody new means downloading it.
+    pub sia: std::sync::Arc<pin_sia::Session>,
+    pub app_key: [u8; 32],
+}
+
+/// What one pass did.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct DiscoverOutcome {
+    /// Identities held after this pass.
+    pub held: usize,
+    /// Identities known to exist and not yet read, before this pass spent its budget. The
+    /// number that says whether the crawl is keeping up: it shrinks toward zero on a
+    /// settled graph and grows on one that is opening up.
+    pub frontier: usize,
+    /// Read for the first time this pass.
+    pub resolved: usize,
+    /// Tried and couldn't be read. They stay on the frontier and come round again — an
+    /// unreachable identity is somebody asleep, not somebody gone.
+    pub unreachable: usize,
+}
+
+/// The identities the engagement crawl already covers, and which discovery therefore
+/// leaves alone.
+///
+/// This identity's own did is in the set, which is the whole reason this is a function
+/// rather than a call to `graph_actors`: anyone in your graph who follows one of your
+/// channels names YOU as an edge, so leaving yourself out sends the crawl to read your own
+/// directory over the network — a lookup and a download to be told, staler, what local
+/// state already holds. `engagement_once` inserts `own_did` into its own graph for the
+/// same reason.
+fn covered_elsewhere(settings: &SettingsView, own_did: &str) -> BTreeSet<String> {
+    let mut covered = crate::engagement::graph_actors(settings);
+    covered.insert(own_did.to_string());
+    covered
+}
+
+/// Every identity held, with the identities it points at.
+///
+/// The edges alone, because that is all the frontier depends on — carrying whole records
+/// would hold a profile and a channel list per identity for a computation that reads
+/// neither.
+async fn held_edges(ctx: &DiscoverContext) -> BTreeMap<String, Vec<String>> {
+    let mut held = BTreeMap::new();
+    let Ok(dids) =
+        crate::list_rkeys(&ctx.doc, ctx.author_id, pin_derive::DIRECTORY_COLLECTION).await
+    else {
+        return held;
+    };
+    for did in dids {
+        if let Some(record) = read_directory(&ctx.doc, &ctx.blobs, ctx.author_id, &did).await {
+            held.insert(did, edges_of(&record));
+        }
+    }
+    held
+}
+
+/// Go and read some of the identities this one knows about and has never looked at.
+///
+/// The only part of discovery that spends anything. Everything else — hop one, and every
+/// edge the frontier is derived from — falls out of reads the engagement crawl was making
+/// anyway; this is the loop that widens the circle, and it is budgeted because the frontier
+/// is unbounded by construction.
+pub async fn discover_once(
+    ctx: &DiscoverContext,
+    own_did: &str,
+    now_iso: String,
+    nominations: &BTreeSet<String>,
+) -> Result<DiscoverOutcome, String> {
+    let mut outcome = DiscoverOutcome::default();
+    let settings = crate::read_settings(&ctx.doc, &ctx.blobs, ctx.author_id, &ctx.app_key).await?;
+
+    let covered = covered_elsewhere(&settings, own_did);
+    let held = held_edges(ctx).await;
+    outcome.held = held.len();
+
+    let candidates = frontier(&covered, &held, nominations);
+    outcome.frontier = candidates.len();
+
+    for candidate in candidates.iter().take(MAX_RESOLVES_PER_PASS) {
+        let Ok(resolved) = resolve_directory(&candidate.did).await else {
+            // Asleep, or a relay that didn't answer. They stay on the frontier, and an
+            // inability to read is never turned into a record saying they have nothing.
+            outcome.unreachable += 1;
+            continue;
+        };
+        let Ok(blob) = download_directory_blob(&ctx.sia, &candidate.did, &resolved.url).await
+        else {
+            outcome.unreachable += 1;
+            continue;
+        };
+        record_directory(
+            &ctx.doc,
+            &ctx.blobs,
+            ctx.author_id,
+            &candidate.did,
+            parse_directory(&blob, &resolved.txt, &resolved.url, &now_iso),
+        )
+        .await;
+        outcome.resolved += 1;
+    }
+    Ok(outcome)
+}
+
+/// Pass, wait, repeat — forever.
+///
+/// Timer-driven, with no wake source, and that is deliberate: every input this reads is a
+/// record in this doc, so waking on doc changes would have the loop's own writes wake it —
+/// the shape `deliver` calls "a loop feeding itself". Nothing here is latency-sensitive
+/// either. Discovery is how the network becomes visible over days, not how a count arrives.
+pub async fn run_discover_loop(
+    ctx: DiscoverContext,
+    own_did: String,
+    cadence: Duration,
+    now_iso: impl Fn() -> String,
+    on_pass: impl Fn(Result<DiscoverOutcome, String>),
+) -> ! {
+    loop {
+        on_pass(discover_once(&ctx, &own_did, now_iso(), &BTreeSet::new()).await);
+        n0_future::time::sleep(cadence).await;
+    }
 }
 
 #[cfg(test)]
@@ -743,6 +909,34 @@ mod tests {
         assert_eq!(dids(&f), ["from-my-graph", "from-a-stranger"]);
         assert_eq!(f[0].distance, 1);
         assert_eq!(f[1].distance, UNREACHED);
+    }
+
+    #[test]
+    fn what_the_other_loop_covers_includes_this_identity() {
+        // The self-exclusion made structural rather than remembered. Building this set by
+        // hand at the call site is exactly how you forget yourself — and forgetting sends
+        // the crawl to read your own directory over the network, which is a lookup and a
+        // download to be told, staler, what local state already holds.
+        //
+        // Parsed from a JSON literal rather than constructed, the way `graph_actors`' own
+        // test is: it pins the settings field names too, which is the class of mistake no
+        // compiler on either side of this can see.
+        let settings: SettingsView = serde_json::from_str(
+            r#"{
+                "follows":[{"didDht":"did:dht:alice","channelID":"c1"}],
+                "handleFollows":["did:dht:bob"],
+                "subscriptions":[
+                  {"channelID":"c2","channelKey":"KK","didDht":"did:dht:carol"}
+                ]
+            }"#,
+        )
+        .unwrap();
+
+        let covered = covered_elsewhere(&settings, "did:dht:me");
+        assert!(covered.contains("did:dht:me"));
+        assert!(covered.contains("did:dht:alice"));
+        assert!(covered.contains("did:dht:bob"));
+        assert!(covered.contains("did:dht:carol"));
     }
 
     #[test]

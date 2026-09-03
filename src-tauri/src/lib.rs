@@ -141,6 +141,7 @@ pub fn run() {
             curator::curator_start_rendezvous,
             curator::curator_start_identity,
             curator::curator_start_engagement,
+            curator::curator_start_discover,
             curator::curator_start_deliver,
             curator::curator_deliver_probe,
             curator::curator_start_sync,

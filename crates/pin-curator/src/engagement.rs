@@ -241,7 +241,7 @@ fn own_channel_keys(settings: &SettingsView) -> Vec<[u8; 32]> {
 /// Everyone this identity has a reason to read: the channels it follows, the people it
 /// follows wholesale, and the authors it subscribes to. A crawl reaches no further, and
 /// deliberately — engagement from outside the graph comes by knock.
-fn graph_actors(settings: &SettingsView) -> BTreeSet<String> {
+pub(crate) fn graph_actors(settings: &SettingsView) -> BTreeSet<String> {
     let mut actors = BTreeSet::new();
     for f in &settings.follows {
         if let Some(did) = f.get("didDht").and_then(|v| v.as_str()) {
@@ -290,25 +290,7 @@ fn may_skip(held: Option<&CrawlMark>, current: &CrawlMark) -> bool {
     held == Some(current)
 }
 
-/// Where an actor's directory currently is, or an error meaning we couldn't find out.
-///
-/// Hands back the whole packet alongside the pointer it came for. One resolve answers two
-/// questions — where their directory is (`_dir`) and where they can be dialed (`_iroh`) —
-/// and the second was being thrown away here while `deliver` resolved the same key again
-/// to ask it.
-struct Resolved {
-    url: String,
-    txt: Vec<pin_pkarr::TxtRecord>,
-}
-
-async fn resolve_directory(did: &str) -> Result<Resolved, String> {
-    let txt = pin_pkarr::resolve(did).await?;
-    let url = pin_pkarr::rejoin_txt(&txt, crate::identity::DIR_PREFIX);
-    if url.is_empty() {
-        return Err(format!("{did}: no directory published"));
-    }
-    Ok(Resolved { url, txt })
-}
+use crate::discover::resolve_directory;
 
 /// The mark held for an actor, or None if we've never read them to completion.
 async fn read_crawl_mark(ctx: &EngagementContext, did: &str) -> Option<CrawlMark> {
@@ -468,9 +450,7 @@ async fn download_directory(
     ),
     String,
 > {
-    let bytes = ctx.sia.download_item(url).await?;
-    let doc: serde_json::Value =
-        serde_json::from_slice(&bytes).map_err(|e| format!("{did}: directory: {e}"))?;
+    let doc = crate::discover::download_directory_blob(&ctx.sia, did, url).await?;
 
     // Read, so a directory naming no blob is a positive "they have none" — see
     // `comments::comments_at` for why that distinction is kept where it can be tested.

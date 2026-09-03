@@ -87,6 +87,7 @@ struct Engine {
     rendezvous_running: Cell<bool>,
     /// Same, for the engagement crawl/fold loop.
     engagement_running: Cell<bool>,
+    discover_running: Cell<bool>,
     deliver_running: Cell<bool>,
     _gossip: Gossip,
     docs: Docs,
@@ -169,6 +170,7 @@ pub async fn open(app_key_hex: String) -> Result<String, JsValue> {
         snapshot_running: Cell::new(false),
         rendezvous_running: Cell::new(false),
         engagement_running: Cell::new(false),
+        discover_running: Cell::new(false),
         deliver_running: Cell::new(false),
         _gossip: gossip,
         docs,
@@ -752,6 +754,63 @@ pub async fn start_engagement_loop(
                         "notOurs": o.not_ours,
                         "published": o.published,
                         "publishFailed": o.publish_failed,
+                    })
+                    .to_string(),
+                    Err(e) => serde_json::json!({ "error": e }).to_string(),
+                };
+                let _ = on_pass.call1(&JsValue::NULL, &JsValue::from_str(&report));
+            },
+        )
+        .await
+    });
+    Ok(())
+}
+
+/// Start the discovery loop in this tab — go and read some of the identities this one
+/// knows about and has never looked at.
+///
+/// A tab resolves and downloads exactly as well as a desktop, so this is the same loop
+/// from the same crate. What differs is only how long it stays open to keep going: a tab
+/// that reads eight identities and closes has genuinely widened the circle, because what
+/// it recorded is in the doc every instance of this identity syncs.
+#[wasm_bindgen]
+pub async fn start_discover_loop(
+    app_key_hex: String,
+    cadence_secs: u32,
+    on_pass: js_sys::Function,
+) -> Result<(), JsValue> {
+    let eng = engine()?;
+    if eng.discover_running.replace(true) {
+        return Ok(());
+    }
+    let app_key = decode_app_key(&app_key_hex)
+        .ok_or_else(|| JsValue::from_str("app key hex must be 32 bytes (64 hex chars)"))?;
+    let own_did = format!(
+        "did:dht:{}",
+        pin_pkarr::public_key_from_seed(&pin_derive::did_dht_seed(&app_key))
+            .map_err(|e| JsValue::from_str(&e))?
+    );
+    let ctx = pin_curator::DiscoverContext {
+        doc: eng.doc.clone(),
+        blobs: (*eng.blobs).clone(),
+        author_id: eng.author_id,
+        sia: sia(),
+        app_key,
+    };
+    wasm_bindgen_futures::spawn_local(async move {
+        pin_curator::run_discover_loop(
+            ctx,
+            own_did,
+            std::time::Duration::from_secs(cadence_secs as u64),
+            // From JS: neither SystemTime nor a date formatter is available on this target.
+            || js_sys::Date::new_0().to_iso_string().into(),
+            |result| {
+                let report = match &result {
+                    Ok(o) => serde_json::json!({
+                        "held": o.held,
+                        "frontier": o.frontier,
+                        "resolved": o.resolved,
+                        "unreachable": o.unreachable,
                     })
                     .to_string(),
                     Err(e) => serde_json::json!({ "error": e }).to_string(),

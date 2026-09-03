@@ -32,6 +32,7 @@ import {
   start_channel_doc_loop,
   start_channel_sync_loop,
   start_deliver_loop,
+  start_discover_loop,
   start_engagement_loop,
   start_identity_loop,
   start_instance_loop,
@@ -63,6 +64,7 @@ import {
   startChannelDocLoopNative,
   startChannelSyncLoopNative,
   startDeliverLoopNative,
+  startDiscoverLoopNative,
   startEngagementLoopNative,
   startIdentityLoopNative,
   startInstanceLoopNative,
@@ -617,6 +619,34 @@ export async function startEngagementLoop(
     appKeyHex,
     ENGAGEMENT_CADENCE_SECS,
     ENGAGEMENT_CRAWL_EVERY,
+    (report: string) => onPass?.(report),
+  )
+}
+
+/** How often the crawl widens the circle.
+ *
+ *  Minutes, and the per-pass budget rather than this is what bounds the work: a pass reads
+ *  at most a handful of identities, each a DHT resolve and a Sia download. Nothing here is
+ *  latency-sensitive — discovery is how the network becomes visible over days, not how a
+ *  count arrives. Matches the native Curator's cadence. */
+const DISCOVER_CADENCE_SECS = 10 * 60
+
+/** Start the discovery loop — go and read some of the identities this one knows about and
+ *  has never looked at, and record what they publish.
+ *
+ *  The same loop on both platforms. A tab that reads a few and closes has genuinely widened
+ *  the circle, because what it recorded is in the doc every instance of this identity syncs.
+ *
+ *  Idempotent (each engine keeps one loop). Requires an open doc ({@link openDocs}). */
+export async function startDiscoverLoop(
+  appKeyHex: string,
+  onPass?: (report: string) => void,
+): Promise<void> {
+  if (inTauri()) return startDiscoverLoopNative(appKeyHex)
+  await ensureWasm()
+  await start_discover_loop(
+    appKeyHex,
+    DISCOVER_CADENCE_SECS,
     (report: string) => onPass?.(report),
   )
 }
