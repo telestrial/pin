@@ -42,7 +42,7 @@ export function useMentionCandidates(): {
       const r0 = [
         ...new Set(subs.map((s) => s.didDht).filter((d): d is string => !!d)),
       ]
-      const { fetch, resolve } = makeReach(client)
+      const { fetch, resolve } = makeReach(client, storedKeyHex)
       const p = buildReachablePeople(me, r0, { fetch, resolve })
       inFlight.set(me, p)
       p.then((people) => {

@@ -43,7 +43,7 @@ export function useReachablePeople(): {
       ]
       try {
         const res = await countReachablePeople(me, r0, {
-          fetch: makeReach(client).fetch,
+          fetch: makeReach(client, storedKeyHex).fetch,
         })
         if (cancelled) return
         cache.set(me, res)

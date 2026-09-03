@@ -1,6 +1,7 @@
 import type { DirectoryDoc } from '../core/identityDoc'
 import type { IdentityResolver, ReachFetcher } from '../core/network'
 import type { SiaClient } from '../core/siaClient'
+import { readDirectory } from './directories'
 import { resolveIdentityDoc } from './identityDoc'
 
 // Short, readable fallback label for a did:dht with no chosen @-name.
@@ -8,18 +9,63 @@ function shortDid(didDht: string): string {
   return `did:dht:…${didDht.replace(/^did:dht:/, '').slice(-6)}`
 }
 
-// The production reach edges + display resolver, both backed by identity-doc
-// resolution (pkarr → Sia) and sharing a per-build memo so each person's doc is
-// fetched at most once across the fetch (edges) and resolve (display) passes.
-export function makeReach(client: SiaClient): {
+// The three fields a reach walk actually reads out of somebody's directory: who they
+// point at, and what to draw for them. Narrow on purpose, because it is the shape BOTH
+// backings have to produce — a record the crawl holds and a document resolved over the
+// network are different types carrying the same answers, and the walk should not know
+// which one it got.
+type ReachView = {
+  profile: { username?: string; avatarURL?: string } | null
+  follows: { didDht: string }[]
+  handleFollows: string[]
+}
+
+// The production reach edges + display resolver, both sharing a per-build memo so each
+// person is looked up at most once across the fetch (edges) and resolve (display) passes.
+//
+// Two backings, preference-ordered — the content-resolution ladder applied to people.
+// What the Curator's crawl already holds is read from the doc; anyone it has not reached
+// is resolved over the network (pkarr → Sia) exactly as before. Passing no `appKeyHex`
+// skips the first rung entirely, which is what the socialGraph harness does.
+//
+// The rungs are ordered this way rather than the other because the crawl's records are
+// both cheaper AND no staler: it writes what it read from the same two sources this
+// fallback reads, so preferring the network would spend a DHT lookup and a download to
+// learn what is already held.
+export function makeReach(
+  client: SiaClient,
+  appKeyHex?: string,
+): {
   fetch: ReachFetcher
   resolve: IdentityResolver
 } {
-  const memo = new Map<string, Promise<DirectoryDoc | null>>()
-  const doc = (didDht: string) => {
+  const memo = new Map<string, Promise<ReachView | null>>()
+
+  const fromDoc = (d: DirectoryDoc): ReachView => ({
+    profile: d.profile ?? null,
+    follows: d.follows,
+    handleFollows: d.handleFollows,
+  })
+
+  const view = (didDht: string) => {
     let p = memo.get(didDht)
     if (!p) {
-      p = resolveIdentityDoc(client, didDht).catch(() => null)
+      p = (async () => {
+        if (appKeyHex) {
+          const held = await readDirectory(appKeyHex, didDht)
+          if (held) {
+            return {
+              profile: held.profile,
+              follows: held.follows,
+              handleFollows: held.handleFollows,
+            }
+          }
+        }
+        const resolved = await resolveIdentityDoc(client, didDht).catch(
+          () => null,
+        )
+        return resolved ? fromDoc(resolved) : null
+      })()
       memo.set(didDht, p)
     }
     return p
@@ -28,7 +74,7 @@ export function makeReach(client: SiaClient): {
   return {
     // A person's public connections: channel-follow authors + handle-follows.
     fetch: async (didDht) => {
-      const d = await doc(didDht)
+      const d = await view(didDht)
       if (!d) return []
       const ids = new Set<string>()
       for (const f of d.follows) ids.add(f.didDht)
@@ -38,7 +84,7 @@ export function makeReach(client: SiaClient): {
     // did:dht → display identity from their profile; handle falls back to a
     // short did so a person is never dropped for lacking a chosen @-name.
     resolve: async (didDht) => {
-      const p = (await doc(didDht))?.profile
+      const p = (await view(didDht))?.profile
       return {
         handle: p?.username ?? shortDid(didDht),
         username: p?.username,
