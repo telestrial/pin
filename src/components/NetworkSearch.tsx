@@ -72,7 +72,7 @@ export function NetworkSearch({
   }
 
   return (
-    <div ref={box} className="relative w-full max-w-md">
+    <div ref={box} className="relative w-full">
       <div className="relative">
         <Search className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-neutral-400" />
         <input
