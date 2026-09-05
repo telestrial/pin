@@ -580,9 +580,23 @@ struct Held {
 /// by distance and keeping the nearest N bounds the set for real while still meaning
 /// "the people closest to you".
 ///
-/// This is also what bounds REFRESH, which walks the full tier: the rotation's period is
-/// this divided by the refresh budget, so the two numbers together decide how out of date
-/// a profile can get.
+/// **It is a freshness cap, not a storage cap**, and the distinction is the whole of what
+/// picks the number. A full record is about 1.5 KB, so even ten thousand of them is 15 MB
+/// and bytes never bind. What binds is that the full tier IS the refresh set:
+///
+/// ```text
+/// MAX_FULL = staleness you accept × passes per day × REFRESH_PER_PASS
+/// ```
+///
+/// At three a pass on a ten-minute cadence, this buys about a day and a bit. What would
+/// object before the disk does, in order: the snapshot mirrors the WHOLE doc on every
+/// substance change and refresh causes those, so around five thousand full records each
+/// pass starts pushing ten megabytes at Sia; past ten thousand HELD, ranking the frontier
+/// measures 600 ms a pass.
+///
+/// **OPEN (2026-09-05, John): the value is provisional.** 500 is a round number, not a
+/// decision — the decision is how out of date somebody's name and avatar may be, and that
+/// has not been made. Set this from that answer when it exists, and say so here.
 pub const MAX_FULL: usize = 500;
 
 /// How many keep their edges as well as their endpoints.
@@ -590,6 +604,10 @@ pub const MAX_FULL: usize = 500;
 /// Beyond this only the endpoints survive, which stops distance propagating through them —
 /// so this is the real edge of the map. Generous relative to `MAX_FULL`, because an edge is
 /// tens of bytes and it is what lets the graph be walked at all.
+///
+/// Nothing here is refreshed, so unlike `MAX_FULL` this one really is only about bytes:
+/// five thousand reduced records is about 2.5 MB. Provisional for the same reason and
+/// probably low — the cost it guards against barely exists.
 const MAX_REDUCED: usize = 5_000;
 
 /// How long a record is left alone before it can fade.
