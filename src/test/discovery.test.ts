@@ -48,19 +48,19 @@ type Candidate = {
   did: string
   distance: number
   references: number
-  nominated: boolean
+  requested: boolean
 }
 
 function nextToRead(
   r0: string[],
   held: Map<string, string[]>,
-  nominations: string[] = [],
+  requests: string[] = [],
 ): Candidate[] {
   return JSON.parse(
     discovery_frontier(
       JSON.stringify(r0),
       JSON.stringify(Object.fromEntries(held)),
-      JSON.stringify(nominations),
+      JSON.stringify(requests),
     ),
   ) as Candidate[]
 }
@@ -193,7 +193,7 @@ describe('the discovery crawl over synthetic graphs', () => {
   })
 
   it('reads somebody asked for before the graph', () => {
-    // A nomination is written when a screen reached for someone and had to go to the
+    // A request is written when a screen reached for someone and had to go to the
     // network to answer. It is the only input that does not come from the graph, and it
     // outranks everything that does.
     const viewer = 'did:test:alice'
@@ -205,9 +205,9 @@ describe('the discovery crawl over synthetic graphs', () => {
     expect(plain.length).toBeGreaterThan(0)
     const last = plain[plain.length - 1].did
 
-    const nominated = nextToRead(r0, held, [last])
-    expect(nominated[0].did).toBe(last)
-    expect(nominated[0].nominated).toBe(true)
+    const requested = nextToRead(r0, held, [last])
+    expect(requested[0].did).toBe(last)
+    expect(requested[0].requested).toBe(true)
   })
 
   // SCALES is declared further down; the describe body finishes before any test callback

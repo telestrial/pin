@@ -535,10 +535,10 @@ pub const DIRECTORY_COLLECTION: &str = "directory";
 /// it clears the request once the answer is held.
 ///
 /// Presence is the whole signal. The value records when the request was made, which
-/// nothing reads yet; a nomination for somebody who can never be resolved otherwise has
+/// nothing reads yet; a request for somebody who can never be resolved otherwise has
 /// no age to be judged on, and that is a decision waiting to be made rather than one made
 /// here.
-pub const NOMINATE_COLLECTION: &str = "nominate";
+pub const REQUEST_COLLECTION: &str = "request";
 
 /// The collection recording, per subscribed channel, the manifest pointer the pull loop
 /// last cached AND the cached record it produced. Keyed by channel id.
@@ -912,13 +912,13 @@ mod tests {
 
         // A request to read somebody and the record of having read them are also keyed by
         // a bare did, and they are the pair most likely to be confused: one is cleared the
-        // moment the other is written. Sharing a name would have a nomination read as a
+        // moment the other is written. Sharing a name would have a request read as a
         // directory with no channels and no follows — an identity that looks read and
         // published nothing.
-        assert_ne!(NOMINATE_COLLECTION, DIRECTORY_COLLECTION);
-        assert_ne!(NOMINATE_COLLECTION, CRAWL_COLLECTION);
+        assert_ne!(REQUEST_COLLECTION, DIRECTORY_COLLECTION);
+        assert_ne!(REQUEST_COLLECTION, CRAWL_COLLECTION);
         assert_ne!(
-            record_key(NOMINATE_COLLECTION, did),
+            record_key(REQUEST_COLLECTION, did),
             record_key(DIRECTORY_COLLECTION, did)
         );
     }

@@ -61,7 +61,6 @@ export const manifest_remove_attachment: (a: number, b: number, c: number, d: nu
 export const manifest_remove_repost: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
 export const max_comment_attachments: () => number;
 export const max_comment_bytes: () => number;
-export const nominate_collection: () => [number, number];
 export const open: (a: number, b: number) => any;
 export const open_channel_doc: (a: number, b: number) => any;
 export const pinned_collection: () => [number, number];
@@ -76,6 +75,7 @@ export const published_collection: () => [number, number];
 export const published_settings_rkey: () => [number, number];
 export const put_channel_record: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => any;
 export const put_record: (a: number, b: number, c: number, d: number, e: number, f: number) => any;
+export const request_collection: () => [number, number];
 export const settings_pad_size: () => number;
 export const settings_pointer_prefix: () => [number, number];
 export const share: () => any;

@@ -1,7 +1,7 @@
 import type { DirectoryDoc } from '../core/identityDoc'
 import type { IdentityResolver, ReachFetcher } from '../core/network'
 import type { SiaClient } from '../core/siaClient'
-import { nominate, readDirectory } from './directories'
+import { readDirectory, request } from './directories'
 import { resolveIdentityDoc } from './identityDoc'
 
 // Short, readable fallback label for a did:dht with no chosen @-name.
@@ -64,7 +64,7 @@ export function makeReach(
         // The index had nothing, so this walk is paying a DHT lookup and a download for
         // somebody the crawl has never read. Asking for them is what stops the next walk
         // paying it again.
-        if (appKeyHex) void nominate(appKeyHex, didDht)
+        if (appKeyHex) void request(appKeyHex, didDht)
         const resolved = await resolveIdentityDoc(client, didDht).catch(
           () => null,
         )

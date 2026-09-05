@@ -810,7 +810,7 @@ pub async fn start_discover_loop(
                     Ok(o) => serde_json::json!({
                         "held": o.held,
                         "frontier": o.frontier,
-                        "nominated": o.nominated,
+                        "requested": o.requested,
                         "resolved": o.resolved,
                         "refreshed": o.refreshed,
                         "unchanged": o.unchanged,
@@ -1786,8 +1786,8 @@ pub fn directory_collection() -> String {
 /// The collection naming identities a screen reached for and could not answer from what
 /// is held.
 #[wasm_bindgen]
-pub fn nominate_collection() -> String {
-    pin_derive::NOMINATE_COLLECTION.to_string()
+pub fn request_collection() -> String {
+    pin_derive::REQUEST_COLLECTION.to_string()
 }
 
 /// Who the crawl should read next, in order.
@@ -1806,16 +1806,16 @@ pub fn nominate_collection() -> String {
 pub fn discovery_frontier(
     r0_json: &str,
     held_json: &str,
-    nominations_json: &str,
+    requests_json: &str,
 ) -> Result<String, JsValue> {
     let r0: std::collections::BTreeSet<String> =
         serde_json::from_str(r0_json).map_err(|e| JsValue::from_str(&format!("r0: {e}")))?;
     let held: std::collections::BTreeMap<String, Vec<String>> =
         serde_json::from_str(held_json).map_err(|e| JsValue::from_str(&format!("held: {e}")))?;
-    let nominations: std::collections::BTreeSet<String> = serde_json::from_str(nominations_json)
-        .map_err(|e| JsValue::from_str(&format!("nominations: {e}")))?;
+    let requests: std::collections::BTreeSet<String> = serde_json::from_str(requests_json)
+        .map_err(|e| JsValue::from_str(&format!("requests: {e}")))?;
 
-    let candidates = pin_curator::frontier(&r0, &held, &nominations);
+    let candidates = pin_curator::frontier(&r0, &held, &requests);
     serde_json::to_string(&candidates).map_err(|e| JsValue::from_str(&e.to_string()))
 }
 

@@ -12,7 +12,7 @@
 
 import {
   directory_collection,
-  nominate_collection,
+  request_collection,
 } from '../../crates/pin-core/pkg/pin_core.js'
 import { ensureWasm } from '../core/wasm'
 import { getRecord, listRecords, openDocs, putRecord } from './docs'
@@ -77,7 +77,7 @@ export type DirectoryRecord = {
  *
  *  Null is ordinary rather than an error: it means they are unresolved — possibly known
  *  to exist because somebody we hold follows them, possibly not known at all. Either way
- *  the caller's fallback is the network, and asking is what nominates them to be read. */
+ *  the caller's fallback is the network, and asking is what requests them to be read. */
 export async function readDirectory(
   appKeyHex: string,
   didDht: string,
@@ -103,21 +103,21 @@ export async function readDirectory(
  *  So it sorts ahead of all of it, and the Curator clears the request once the answer is
  *  held.
  *
- *  Best-effort and unawaited by its callers. A lost nomination costs a few passes of
+ *  Best-effort and unawaited by its callers. A lost request costs a few passes of
  *  priority — the person is still reachable over the network this session, and still on
  *  the frontier if anybody points at them.
  *
  *  Silent when one already stands: every write to this doc is announced to every syncing
  *  instance and is a reason to mirror the whole doc to Sia, so a feed re-rendering the
  *  same unresolved person must not cost a write per render. */
-export async function nominate(
+export async function request(
   appKeyHex: string,
   didDht: string,
 ): Promise<void> {
   try {
     await openDocs(appKeyHex)
     await ensureWasm()
-    const collection = nominate_collection()
+    const collection = request_collection()
     if (await getRecord(collection, didDht)) return
     await putRecord(
       collection,

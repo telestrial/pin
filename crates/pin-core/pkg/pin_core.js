@@ -721,10 +721,10 @@ export function discovery_budget() {
  * engagement crawl reads exactly that set already.
  * @param {string} r0_json
  * @param {string} held_json
- * @param {string} nominations_json
+ * @param {string} requests_json
  * @returns {string}
  */
-export function discovery_frontier(r0_json, held_json, nominations_json) {
+export function discovery_frontier(r0_json, held_json, requests_json) {
     let deferred5_0;
     let deferred5_1;
     try {
@@ -732,7 +732,7 @@ export function discovery_frontier(r0_json, held_json, nominations_json) {
         const len0 = WASM_VECTOR_LEN;
         const ptr1 = passStringToWasm0(held_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len1 = WASM_VECTOR_LEN;
-        const ptr2 = passStringToWasm0(nominations_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const ptr2 = passStringToWasm0(requests_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len2 = WASM_VECTOR_LEN;
         const ret = wasm.discovery_frontier(ptr0, len0, ptr1, len1, ptr2, len2);
         var ptr4 = ret[0];
@@ -1399,24 +1399,6 @@ export function max_comment_bytes() {
 }
 
 /**
- * The collection naming identities a screen reached for and could not answer from what
- * is held.
- * @returns {string}
- */
-export function nominate_collection() {
-    let deferred1_0;
-    let deferred1_1;
-    try {
-        const ret = wasm.nominate_collection();
-        deferred1_0 = ret[0];
-        deferred1_1 = ret[1];
-        return getStringFromWasm0(ret[0], ret[1]);
-    } finally {
-        wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
-    }
-}
-
-/**
  * Open (create) the in-memory doc engine, with the namespace + author derived from
  * the Sia AppKey. Returns the namespace id. A second call rebuilds from scratch.
  * @param {string} app_key_hex
@@ -1699,6 +1681,24 @@ export function put_record(collection, rkey, value) {
     const len2 = WASM_VECTOR_LEN;
     const ret = wasm.put_record(ptr0, len0, ptr1, len1, ptr2, len2);
     return ret;
+}
+
+/**
+ * The collection naming identities a screen reached for and could not answer from what
+ * is held.
+ * @returns {string}
+ */
+export function request_collection() {
+    let deferred1_0;
+    let deferred1_1;
+    try {
+        const ret = wasm.request_collection();
+        deferred1_0 = ret[0];
+        deferred1_1 = ret[1];
+        return getStringFromWasm0(ret[0], ret[1]);
+    } finally {
+        wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+    }
 }
 
 /**

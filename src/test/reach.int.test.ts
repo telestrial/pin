@@ -19,7 +19,7 @@ vi.mock('../lib/docs', async () =>
 
 import {
   directory_collection,
-  nominate_collection,
+  request_collection,
 } from '../../crates/pin-core/pkg/pin_core.js'
 import { DIRECTORY_DOC_VERSION } from '../core/identityDoc'
 import { makeReach } from '../lib/reach'
@@ -139,7 +139,7 @@ describe('the reach ladder', () => {
     await resolve(THEM)
 
     await waitFor(() =>
-      expect(docStore.has(`${nominate_collection()}/${THEM}`)).toBe(true),
+      expect(docStore.has(`${request_collection()}/${THEM}`)).toBe(true),
     )
   })
 
@@ -151,7 +151,7 @@ describe('the reach ladder', () => {
     const { resolve } = makeReach(me.client, FAKE_APP_KEY_HEX)
     await resolve(THEM)
 
-    expect(docStore.has(`${nominate_collection()}/${THEM}`)).toBe(false)
+    expect(docStore.has(`${request_collection()}/${THEM}`)).toBe(false)
   })
 
   it('asks once however many times the same person is looked at', async () => {
@@ -164,15 +164,15 @@ describe('the reach ladder', () => {
     const { resolve } = makeReach(me.client, FAKE_APP_KEY_HEX)
     await resolve(THEM)
     await waitFor(() =>
-      expect(docStore.has(`${nominate_collection()}/${THEM}`)).toBe(true),
+      expect(docStore.has(`${request_collection()}/${THEM}`)).toBe(true),
     )
-    const first = docStore.get(`${nominate_collection()}/${THEM}`)
+    const first = docStore.get(`${request_collection()}/${THEM}`)
 
     // A fresh build, so the per-build memo does not answer instead of the doc.
     await makeReach(me.client, FAKE_APP_KEY_HEX).resolve(THEM)
     await new Promise((r) => setTimeout(r, 10))
 
-    expect(docStore.get(`${nominate_collection()}/${THEM}`)).toBe(first)
+    expect(docStore.get(`${request_collection()}/${THEM}`)).toBe(first)
   })
 
   it('names an identity it can reach on neither rung by a short did', async () => {

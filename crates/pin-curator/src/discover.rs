@@ -306,7 +306,7 @@ pub struct Candidate {
     /// one does.
     pub references: usize,
     /// Whether a screen asked for them and had to fall back to the network to answer.
-    pub nominated: bool,
+    pub requested: bool,
 }
 
 /// Unreachable from the seeds. Held records reached some other way — a portal, a knock —
@@ -351,14 +351,14 @@ fn distances(r0: &BTreeSet<String>, held: &BTreeMap<String, Vec<String>>) -> BTr
 /// that set on its own cadence: two loops resolving one key on different schedules would
 /// race to write the same record and spend the DHT lookup twice.
 ///
-/// The ordering is provenance, not a score. Nominations first — somebody asked for them
+/// The ordering is provenance, not a score. Requests first — somebody asked for them
 /// out loud — then nearest, then best-corroborated, then by did so two instances of one
 /// identity agree. Nothing here ranks people by anything they did; it decides which of the
 /// unread to read next, and everything unread is eventually read.
 pub fn frontier(
     r0: &BTreeSet<String>,
     held: &BTreeMap<String, Vec<String>>,
-    nominations: &BTreeSet<String>,
+    requests: &BTreeSet<String>,
 ) -> Vec<Candidate> {
     let dist = distances(r0, held);
     let mut found: BTreeMap<String, (u32, usize)> = BTreeMap::new();
@@ -380,10 +380,10 @@ pub fn frontier(
         }
     }
 
-    // A nomination for somebody nothing points at is still a candidate: a screen reached
+    // A request for somebody nothing points at is still a candidate: a screen reached
     // for them, which is the strongest signal there is that they are worth reading, and it
     // is the one signal that does not come from the graph.
-    for did in nominations {
+    for did in requests {
         if held.contains_key(did) || r0.contains(did) {
             continue;
         }
@@ -393,7 +393,7 @@ pub fn frontier(
     let mut out: Vec<Candidate> = found
         .into_iter()
         .map(|(did, (distance, references))| Candidate {
-            nominated: nominations.contains(&did),
+            requested: requests.contains(&did),
             did,
             distance,
             references,
@@ -401,8 +401,8 @@ pub fn frontier(
         .collect();
 
     out.sort_by(|a, b| {
-        b.nominated
-            .cmp(&a.nominated)
+        b.requested
+            .cmp(&a.requested)
             .then(a.distance.cmp(&b.distance))
             .then(b.references.cmp(&a.references))
             .then(a.did.cmp(&b.did))
@@ -498,7 +498,7 @@ pub struct DiscoverOutcome {
     /// answered from what is held. They sort ahead of everything the graph suggests, so a
     /// number that stays high means the crawl is not keeping up with what is being asked
     /// of it.
-    pub nominated: usize,
+    pub requested: usize,
     /// Held identities re-read whose pointer had moved, so the blob was downloaded again.
     pub refreshed: usize,
     /// Held identities re-read whose pointer had NOT moved. The number this loop most wants
@@ -746,10 +746,10 @@ fn refresh_rotation(
 
 /// Identities a screen asked for and could not answer from what is held.
 ///
-/// A failed read yields none rather than failing the pass: a nomination is a hint about
+/// A failed read yields none rather than failing the pass: a request is a hint about
 /// ORDER, so losing one costs a few passes of priority and nothing else.
-async fn read_nominations(ctx: &DiscoverContext) -> BTreeSet<String> {
-    crate::list_rkeys(&ctx.doc, ctx.author_id, pin_derive::NOMINATE_COLLECTION)
+async fn read_requests(ctx: &DiscoverContext) -> BTreeSet<String> {
+    crate::list_rkeys(&ctx.doc, ctx.author_id, pin_derive::REQUEST_COLLECTION)
         .await
         .unwrap_or_default()
         .into_iter()
@@ -762,14 +762,9 @@ async fn read_nominations(ctx: &DiscoverContext) -> BTreeSet<String> {
 /// the request standing and the next pass tries again. The other way round loses the
 /// request on any failure, which is the one outcome that matters here — the person who
 /// asked is still looking at a name we could not resolve.
-async fn clear_nomination(ctx: &DiscoverContext, did: &str) {
-    let _ = crate::delete_record(
-        &ctx.doc,
-        ctx.author_id,
-        pin_derive::NOMINATE_COLLECTION,
-        did,
-    )
-    .await;
+async fn clear_request(ctx: &DiscoverContext, did: &str) {
+    let _ =
+        crate::delete_record(&ctx.doc, ctx.author_id, pin_derive::REQUEST_COLLECTION, did).await;
 }
 
 /// Go and read some of the identities this one knows about and has never looked at.
@@ -793,10 +788,10 @@ pub async fn discover_once(
     outcome.held = held.edges.len();
     outcome.unread = held.unread;
 
-    let nominations = read_nominations(ctx).await;
-    outcome.nominated = nominations.len();
+    let requests = read_requests(ctx).await;
+    outcome.requested = requests.len();
 
-    let candidates = frontier(&covered, &held.edges, &nominations);
+    let candidates = frontier(&covered, &held.edges, &requests);
     outcome.frontier = candidates.len();
 
     // Two jobs out of one budget, with a reservation rather than a ranking. Reading
@@ -842,8 +837,8 @@ pub async fn discover_once(
         .await;
         // After the record, never before: a request cleared on a pass that then failed to
         // write is a person left unresolved with nothing left saying they were asked for.
-        if candidate.nominated {
-            clear_nomination(ctx, &candidate.did).await;
+        if candidate.requested {
+            clear_request(ctx, &candidate.did).await;
         }
         outcome.resolved += 1;
     }
@@ -1248,7 +1243,7 @@ mod tests {
             &set(&["wanted"]),
         );
         assert_eq!(dids(&f)[0], "wanted");
-        assert!(f[0].nominated);
+        assert!(f[0].requested);
     }
 
     #[test]
@@ -1257,7 +1252,7 @@ mod tests {
         // them, and the request is the whole reason they are worth reading.
         let f = frontier(&set(&["alice"]), &graph(&[]), &set(&["stranger"]));
         assert_eq!(dids(&f), ["stranger"]);
-        assert!(f[0].nominated);
+        assert!(f[0].requested);
         assert_eq!(f[0].references, 0);
     }
 

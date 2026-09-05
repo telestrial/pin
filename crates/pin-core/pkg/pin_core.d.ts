@@ -251,7 +251,7 @@ export function discovery_budget(): number;
  * depends on. `r0` is this identity's own graph, excluded from the result because the
  * engagement crawl reads exactly that set already.
  */
-export function discovery_frontier(r0_json: string, held_json: string, nominations_json: string): string;
+export function discovery_frontier(r0_json: string, held_json: string, requests_json: string): string;
 
 /**
  * How many identities are kept in full, and so are in the refresh rotation.
@@ -432,12 +432,6 @@ export function max_comment_attachments(): number;
 export function max_comment_bytes(): number;
 
 /**
- * The collection naming identities a screen reached for and could not answer from what
- * is held.
- */
-export function nominate_collection(): string;
-
-/**
  * Open (create) the in-memory doc engine, with the namespace + author derived from
  * the Sia AppKey. Returns the namespace id. A second call rebuilds from scratch.
  */
@@ -523,6 +517,12 @@ export function put_channel_record(ns_id: string, collection: string, rkey: stri
  * Write a record. `value` is opaque bytes (the app's encrypted blob).
  */
 export function put_record(collection: string, rkey: string, value: Uint8Array): Promise<void>;
+
+/**
+ * The collection naming identities a screen reached for and could not answer from what
+ * is held.
+ */
+export function request_collection(): string;
 
 /**
  * The settings pad size, exposed so the app has one definition of it rather than a
@@ -988,7 +988,6 @@ export interface InitOutput {
     readonly manifest_remove_repost: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
     readonly max_comment_attachments: () => number;
     readonly max_comment_bytes: () => number;
-    readonly nominate_collection: () => [number, number];
     readonly open: (a: number, b: number) => any;
     readonly open_channel_doc: (a: number, b: number) => any;
     readonly pinned_collection: () => [number, number];
@@ -1003,6 +1002,7 @@ export interface InitOutput {
     readonly published_settings_rkey: () => [number, number];
     readonly put_channel_record: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => any;
     readonly put_record: (a: number, b: number, c: number, d: number, e: number, f: number) => any;
+    readonly request_collection: () => [number, number];
     readonly settings_pad_size: () => number;
     readonly settings_pointer_prefix: () => [number, number];
     readonly share: () => any;
