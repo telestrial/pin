@@ -711,6 +711,22 @@ fn faded(record: &DirectoryRecord, tier: DirectoryTier) -> DirectoryRecord {
     out
 }
 
+/// Whether a held record is confirmed current by its pointer alone, no download.
+///
+/// Sia is content-addressed, so an unchanged share URL is proof the bytes are identical
+/// rather than a hint — which is what makes the common case one DHT resolve and nothing
+/// else.
+///
+/// The tier is the other half, and without it the shortcut is a trap. It claims our copy
+/// already holds what a download would produce, and a faded copy does not: it dropped the
+/// profile and channels deliberately. So a faded record whose author has published nothing
+/// since would be confirmed on every pass and restored on none — and reading a faded
+/// identity back when it comes close again is the one thing the rotation goes out of its
+/// way to do.
+fn confirmed_by_pointer(record: &DirectoryRecord, url: &str) -> bool {
+    record.url == url && record.tier == DirectoryTier::Full
+}
+
 /// Which held records this pass re-reads, and in what order.
 ///
 /// Round-robin in did order from wherever the last pass stopped, rather than by a
@@ -854,10 +870,10 @@ pub async fn discover_once(
             outcome.unreachable += 1;
             continue;
         };
-        if resolved.url == record.url {
-            // Their blob is byte-identical, so only the packet can have changed — and it
-            // is already in hand. `record_directory` compares substance, so an endpoint
-            // that has not moved writes nothing at all.
+        if confirmed_by_pointer(&record, &resolved.url) {
+            // Only the packet can have changed, and it is already in hand.
+            // `record_directory` compares substance, so an endpoint that has not moved
+            // writes nothing at all.
             record_directory(
                 &ctx.doc,
                 &ctx.blobs,
@@ -1122,6 +1138,25 @@ mod tests {
         let held = record();
         let same = with_reach(&held, &packet(&held.reach.clone()), NOW);
         assert!(same_substance(&held, &same));
+    }
+
+    #[test]
+    fn an_unmoved_pointer_confirms_a_full_record_without_a_download() {
+        let held = record();
+        assert!(confirmed_by_pointer(&held, &held.url));
+        assert!(!confirmed_by_pointer(&held, "sia://somewhere-else"));
+    }
+
+    #[test]
+    fn an_unmoved_pointer_confirms_nothing_about_a_faded_record() {
+        // The shortcut claims our copy already holds what a download would produce, and a
+        // faded copy does not — it dropped the profile and channels on purpose. Confirming
+        // one would leave the rotation unable to do the thing it re-reads faded records
+        // FOR: read somebody back in full when they come close again.
+        for tier in [DirectoryTier::Reduced, DirectoryTier::Minimal] {
+            let stripped = faded(&record(), tier);
+            assert!(!confirmed_by_pointer(&stripped, &stripped.url));
+        }
     }
 
     fn set(dids: &[&str]) -> BTreeSet<String> {
