@@ -53,18 +53,25 @@ export function makeReach(
       p = (async () => {
         if (appKeyHex) {
           const held = await readDirectory(appKeyHex, didDht)
-          if (held) {
+          // A minimal record kept only the way back to them — the crawl dropped the edges
+          // to make room — so reading it as an answer says this person follows nobody,
+          // and a walk would stop at them rather than through them. A reduced record still
+          // carries its edges, which is what that tier is FOR, and the profile it lost
+          // degrades to a short did: the same fallback as somebody who chose no @-name.
+          if (held && held.tier !== 'minimal') {
             return {
               profile: held.profile,
               follows: held.follows,
               handleFollows: held.handleFollows,
             }
           }
+          // Nothing asked for a faded one. A record fades because the crawl decided this
+          // person is past the horizon, and a transitive hop in a walk is not somebody
+          // looking at them — asking would read them back in full only to fade them again,
+          // for every walk, forever. A screen that actually renders them still asks.
+          if (!held) void request(appKeyHex, didDht)
         }
-        // The index had nothing, so this walk is paying a DHT lookup and a download for
-        // somebody the crawl has never read. Asking for them is what stops the next walk
-        // paying it again.
-        if (appKeyHex) void request(appKeyHex, didDht)
+        // The index could not answer, so this walk is paying a DHT lookup and a download.
         const resolved = await resolveIdentityDoc(client, didDht).catch(
           () => null,
         )

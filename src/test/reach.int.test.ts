@@ -39,16 +39,25 @@ const THEM = 'did:dht:them'
 const HELD_FOLLOW = 'did:dht:heldfollow'
 const NETWORK_FOLLOW = 'did:dht:networkfollow'
 
-/** What the crawl recorded about them. */
-function hold(didDht: string, username: string, follows: string[]) {
+/** What the crawl recorded about them, at the tier it still holds them. */
+function hold(
+  didDht: string,
+  username: string,
+  follows: string[],
+  tier = 'full',
+) {
   docStore.set(
     `${directory_collection()}/${didDht}`,
     new TextEncoder().encode(
       JSON.stringify({
-        profile: { username },
+        tier,
+        profile: tier === 'full' ? { username } : null,
         channels: [],
         reach: [],
-        follows: follows.map((f) => ({ didDht: f, channelID: 'c1' })),
+        follows:
+          tier === 'minimal'
+            ? []
+            : follows.map((f) => ({ didDht: f, channelID: 'c1' })),
         handleFollows: [],
         url: 'sia://held',
         epoch: 1,
@@ -141,6 +150,47 @@ describe('the reach ladder', () => {
     await waitFor(() =>
       expect(docStore.has(`${request_collection()}/${THEM}`)).toBe(true),
     )
+  })
+
+  it('walks through a reduced record on the edges it still carries', async () => {
+    // The reduced tier exists so distance keeps propagating and the horizon fades rather
+    // than cutting. Its profile is gone, which degrades to a short did — the same fallback
+    // as somebody who chose no @-name — but its edges are real and cost nothing.
+    hold(THEM, '', [HELD_FOLLOW], 'reduced')
+    await publish(THEM, 'from-the-network', [NETWORK_FOLLOW])
+
+    const { fetch, resolve } = makeReach(me.client, FAKE_APP_KEY_HEX)
+
+    expect(await fetch(THEM)).toEqual([HELD_FOLLOW])
+    expect((await resolve(THEM))?.handle).toBe('did:dht:…them')
+  })
+
+  it('resolves a minimal record rather than reading it as nobody to walk to', async () => {
+    // A minimal record kept the way back to them and nothing else, so its empty follows
+    // are what the crawl dropped rather than what they publish. Reading that as an answer
+    // stops a walk AT them instead of THROUGH them, and every branch behind them goes
+    // missing — deny-by-absence, in the shape of the sweep that once near-wiped an account.
+    hold(THEM, '', [], 'minimal')
+    await publish(THEM, 'from-the-network', [NETWORK_FOLLOW])
+
+    const { fetch } = makeReach(me.client, FAKE_APP_KEY_HEX)
+
+    expect(await fetch(THEM)).toEqual([NETWORK_FOLLOW])
+  })
+
+  it('asks for nobody whose record the crawl faded on purpose', async () => {
+    // A record fades because the crawl decided this person is past the horizon. A
+    // transitive hop in a walk is not somebody looking at them, so asking would read them
+    // back in full only to fade them again, on every walk, forever. A screen that actually
+    // renders them still asks.
+    hold(THEM, '', [], 'minimal')
+    await publish(THEM, 'from-the-network', [NETWORK_FOLLOW])
+
+    const { fetch } = makeReach(me.client, FAKE_APP_KEY_HEX)
+    await fetch(THEM)
+    await new Promise((r) => setTimeout(r, 10))
+
+    expect(docStore.has(`${request_collection()}/${THEM}`)).toBe(false)
   })
 
   it('asks for nobody it could answer from what is held', async () => {
