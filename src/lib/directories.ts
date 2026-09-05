@@ -14,6 +14,7 @@ import {
   directory_collection,
   request_collection,
 } from '../../crates/pin-core/pkg/pin_core.js'
+import type { SearchablePerson } from '../core/directorySearch'
 import { ensureWasm } from '../core/wasm'
 import { getRecord, listRecords, openDocs, putRecord } from './docs'
 
@@ -130,6 +131,30 @@ export async function request(
     // Asking is an optimization on top of a fallback that already worked. Nothing about
     // it is worth failing a render over.
   }
+}
+
+/** The whole held index, in the shape a search reads.
+ *
+ *  Only FULL records contribute. A faded one dropped its profile and channels to make room,
+ *  so it carries no name to match — including it would put people in the corpus that no
+ *  query can ever reach, and would make the corpus size say something untrue about what is
+ *  findable.
+ *
+ *  Built once and queried many times: this is one doc read per held identity, so a query
+ *  running it per keystroke would scan the entire index every character. */
+export async function searchableDirectories(
+  appKeyHex: string,
+): Promise<SearchablePerson[]> {
+  const held = await listDirectories(appKeyHex)
+  return held
+    .filter(({ record }) => record.tier === 'full' || !record.tier)
+    .map(({ didDht, record }) => ({
+      didDht,
+      username: record.profile?.username,
+      displayName: record.profile?.displayName,
+      avatarURL: record.profile?.avatarURL,
+      channels: record.channels,
+    }))
 }
 
 /** Every identity the crawl has read, by did:dht.
