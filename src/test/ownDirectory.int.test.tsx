@@ -21,6 +21,10 @@ vi.mock('../lib/identityDoc', () => ({
   resolveIdentityDoc: (...args: unknown[]) => resolveIdentityDoc(...args),
 }))
 
+import {
+  directory_collection,
+  request_collection,
+} from '../../crates/pin-core/pkg/pin_core.js'
 import { HandleDirectory } from '../components/HandleDirectory'
 import { channelKeyFromBase64, encryptForChannel } from '../core/crypto'
 import type { ChannelManifest, OwnedChannel } from '../core/types'
@@ -29,6 +33,7 @@ import { fakeDocStore as docStore } from './fakeModules'
 import { createFakeApp, mountAs, resetAllStores } from './setupFakeApp'
 
 const ME = 'did:dht:me'
+const THEM = 'did:dht:them'
 // 32 bytes of base64, the shape a channel key travels in.
 const KEY = 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8='
 
@@ -80,6 +85,36 @@ function signedInWith(myChannels: OwnedChannel[]) {
       updatedAt: '2026-08-27T10:00:00.000Z',
     },
   })
+}
+
+/** A directory record the crawl has read, at the tier it still holds them. */
+function hold(didDht: string, displayName: string, tier = 'full') {
+  docStore.set(
+    `${directory_collection()}/${didDht}`,
+    new TextEncoder().encode(
+      JSON.stringify({
+        tier,
+        profile:
+          tier === 'full' ? { username: displayName, displayName } : null,
+        channels: [],
+        reach: [],
+        follows: [],
+        handleFollows: [],
+        url: 'sia://held',
+        epoch: 1,
+        seenAt: '2026-09-01T12:00:00.000Z',
+      }),
+    ),
+  )
+}
+
+/** What they currently publish, as the revalidation finds it. */
+function published(displayName: string) {
+  return {
+    profile: { username: displayName, displayName },
+    channels: [],
+    follows: [],
+  }
 }
 
 function directory(handle: string) {
@@ -143,6 +178,101 @@ describe('integration: your own directory comes from local state', () => {
     // Visibility absent means UNKNOWN, and unknown is never advertised — the rule that
     // stops a channel written before the field existed being enumerated on a guess.
     expect(screen.queryByText('Older')).toBeNull()
+  })
+
+  it('renders a held profile before the network has answered', async () => {
+    // The landing costs a doc read rather than a DHT lookup and a Sia download, which is
+    // the whole of what the crawl's index buys a page. Holding the resolve open is what
+    // makes the assertion about ORDER rather than about the eventual answer.
+    signedInWith([owned()])
+    hold(THEM, 'from-the-index')
+    let answer: (doc: unknown) => void = () => {}
+    resolveIdentityDoc.mockReturnValue(
+      new Promise((resolve) => {
+        answer = resolve
+      }),
+    )
+
+    render(directory(THEM))
+
+    await waitFor(() =>
+      expect(screen.getByText('from-the-index')).toBeInTheDocument(),
+    )
+    answer(published('from-the-network'))
+  })
+
+  it('goes out and looks even when the index answered', async () => {
+    // What landing MEANS. The index is only ever as fresh as the crawl's last pass, so a
+    // rename or a new channel reaches this page only if it asks.
+    signedInWith([owned()])
+    hold(THEM, 'from-the-index')
+    resolveIdentityDoc.mockResolvedValue(published('from-the-network'))
+
+    render(directory(THEM))
+
+    await waitFor(() =>
+      expect(screen.getByText('from-the-network')).toBeInTheDocument(),
+    )
+    expect(resolveIdentityDoc).toHaveBeenCalled()
+  })
+
+  it('keeps a rendered page when the revalidation cannot answer', async () => {
+    // A resolve that failed says nothing about whether this identity exists. Replacing a
+    // page that rendered with "that identity doesn't resolve" is an inability to read
+    // converted into a decision — the shape this codebase has paid for three times.
+    signedInWith([owned()])
+    hold(THEM, 'from-the-index')
+    resolveIdentityDoc.mockResolvedValue(null)
+
+    render(directory(THEM))
+
+    await waitFor(() => expect(resolveIdentityDoc).toHaveBeenCalled())
+    expect(screen.getByText('from-the-index')).toBeInTheDocument()
+    expect(screen.queryByText(/doesn't resolve/)).toBeNull()
+  })
+
+  it('reports an identity it could reach on neither rung as not found', async () => {
+    // The other direction, and the reason the one above is a guard rather than a blanket
+    // refusal to ever say not-found: with nothing rendered there is no page to protect.
+    signedInWith([owned()])
+    resolveIdentityDoc.mockResolvedValue(null)
+
+    render(directory(THEM))
+
+    await waitFor(() =>
+      expect(screen.getByText(/doesn't resolve/)).toBeInTheDocument(),
+    )
+  })
+
+  it('asks the crawl for somebody the index could not render', async () => {
+    // A faded record dropped its profile and channels to make room, so rendering from one
+    // would show a person with no name and no work. That is a miss, and a miss is what a
+    // request is for.
+    signedInWith([owned()])
+    hold(THEM, '', 'reduced')
+    resolveIdentityDoc.mockResolvedValue(published('from-the-network'))
+
+    render(directory(THEM))
+
+    await waitFor(() =>
+      expect(docStore.has(`${request_collection()}/${THEM}`)).toBe(true),
+    )
+  })
+
+  it('asks for nobody it could render from the index', async () => {
+    // A page that rendered from a full record is holding the fresh answer already, and
+    // the crawl keeps a full record current on its own rotation. Asking on every landing
+    // would spend the refresh budget on people whose answer is already on screen.
+    signedInWith([owned()])
+    hold(THEM, 'from-the-index')
+    resolveIdentityDoc.mockResolvedValue(published('from-the-network'))
+
+    render(directory(THEM))
+
+    await waitFor(() =>
+      expect(screen.getByText('from-the-network')).toBeInTheDocument(),
+    )
+    expect(docStore.has(`${request_collection()}/${THEM}`)).toBe(false)
   })
 
   it('still resolves somebody else', async () => {

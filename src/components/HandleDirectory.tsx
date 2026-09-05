@@ -1,12 +1,12 @@
 import { Plus } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { advertisedChannels } from '../core/channels'
-import type { ProfileRecord } from '../core/profile'
 import type { ChannelManifest, FollowEdge } from '../core/types'
 import {
   readOwnManifest,
   resolveChannelViaLocator,
 } from '../lib/channelLocator'
+import { readDirectory, request } from '../lib/directories'
 import { formatBytes } from '../lib/format'
 import { useItemBlobURL } from '../lib/hooks/useItemBytes'
 import { resolveIdentityDoc } from '../lib/identityDoc'
@@ -22,13 +22,53 @@ type ChannelEntry = {
   manifest: ChannelManifest
 }
 
+/** The profile fields this page renders.
+ *
+ *  Narrower than `ProfileRecord` on purpose, because it is the shape all THREE sources
+ *  have to produce — settings for your own, a record the crawl holds, and a document
+ *  resolved over the network — and the page should not know which one it got. */
+type DisplayProfile = {
+  username?: string
+  displayName?: string
+  bio?: string
+  avatarURL?: string
+  coverURL?: string
+}
+
+/** Each advertised channel's manifest, resolved from the key their directory publishes.
+ *
+ *  A channel that will not resolve is dropped rather than failing the page: one missing
+ *  hero card is a better answer than a profile that would not open. */
+async function resolveChannels(
+  channels: { channelID: string; key: string }[],
+): Promise<ChannelEntry[]> {
+  const resolved = await Promise.all(
+    channels.map(async (c): Promise<ChannelEntry | null> => {
+      try {
+        const manifest = await resolveChannelViaLocator(c.key)
+        return manifest
+          ? {
+              authorDID: '',
+              authorHandle: '',
+              channelID: c.channelID,
+              manifest,
+            }
+          : null
+      } catch {
+        return null
+      }
+    }),
+  )
+  return resolved.filter((c): c is ChannelEntry => c !== null)
+}
+
 type State =
   | { kind: 'loading' }
   | { kind: 'not-found' }
   | {
       kind: 'loaded'
       did: string
-      profile: ProfileRecord | null
+      profile: DisplayProfile | null
       ownChannels: ChannelEntry[]
       // Channel-follows from the identity-doc (did:dht + channelID + cached
       // name, no K). Lightweight rows — they link to the author's directory
@@ -47,7 +87,7 @@ type State =
  *  this device has not synced, and one missing hero card is a better answer than a network
  *  round trip on a screen that is otherwise instant. */
 async function readOwnDirectory(): Promise<{
-  profile: ProfileRecord | null
+  profile: DisplayProfile | null
   ownChannels: ChannelEntry[]
   follows: FollowEdge[]
 }> {
@@ -154,34 +194,59 @@ export function HandleDirectory({
         return
       }
 
+      // Rung one: what the crawl already recorded. The header and the follow list are on
+      // screen for the price of a doc read, where they used to wait on a DHT lookup and a
+      // Sia download — and no card claims anything about channels until the read below
+      // says so, because an empty list here renders nothing rather than "none".
+      //
+      // Only a FULL record. A faded one dropped its profile to make room, so rendering
+      // from one would show a person with no name — the pair `tier` is recorded to tell
+      // apart, since the empty fields cannot.
+      const { storedKeyHex } = useAuthStore.getState()
+      const held = storedKeyHex
+        ? await readDirectory(storedKeyHex, handle)
+        : null
+      const indexed = held?.tier === 'full' ? held : null
+      if (indexed && !cancelled) {
+        // The profile and the follow edges, which the record carries whole. NOT the
+        // channels: the record names them but not their manifests, so drawing hero cards
+        // from here would resolve every one of them and then the revalidation would
+        // resolve every one again — two DHT lookups and two Sia downloads per channel to
+        // put the cards up slightly sooner. They come from the read that is happening
+        // anyway.
+        setState({
+          kind: 'loaded',
+          did: handle,
+          profile: indexed.profile,
+          ownChannels: [],
+          follows: indexed.follows,
+        })
+      } else if (storedKeyHex) {
+        // The index could not answer, so this landing is paying the lookup. Asking is what
+        // makes the next one a doc read — and it is asked only here, because a page that
+        // DID render from the index is holding the fresh answer already, and the crawl
+        // keeps a full record current on its own rotation.
+        void request(storedKeyHex, handle)
+      }
+
+      // Rung two, and it runs even when the index answered — this is what landing means.
+      // The index is only ever as fresh as the crawl's last pass, so a rename, a new
+      // channel or a channel withdrawn shows up on this page only if it goes and looks.
       const doc = await resolveIdentityDoc(client, handle)
       if (!doc) {
-        if (!cancelled) setState({ kind: 'not-found' })
+        // Never over a page that already rendered. A resolve that did not answer says
+        // nothing about whether this identity exists, and turning that into "not found"
+        // is an inability to read converted into a decision.
+        if (!cancelled && !indexed) setState({ kind: 'not-found' })
         return
       }
-      const resolved = await Promise.all(
-        doc.channels.map(async (c): Promise<ChannelEntry | null> => {
-          try {
-            const manifest = await resolveChannelViaLocator(c.key)
-            return manifest
-              ? {
-                  authorDID: '',
-                  authorHandle: '',
-                  channelID: c.channelID,
-                  manifest,
-                }
-              : null
-          } catch {
-            return null
-          }
-        }),
-      )
+      const ownChannels = await resolveChannels(doc.channels)
       if (!cancelled) {
         setState({
           kind: 'loaded',
           did: handle,
           profile: doc.profile,
-          ownChannels: resolved.filter((c): c is ChannelEntry => c !== null),
+          ownChannels,
           follows: doc.follows,
         })
       }
@@ -301,7 +366,7 @@ function LoadedDirectory({
   handle: string
   did: string
   isSelf: boolean
-  profile: ProfileRecord | null
+  profile: DisplayProfile | null
   ownChannels: ChannelEntry[]
   follows: FollowEdge[]
   onBack?: () => void
@@ -410,7 +475,7 @@ function ProfileHeader({
   handle: string
   did: string
   isSelf: boolean
-  profile: ProfileRecord | null
+  profile: DisplayProfile | null
   followingCount: number
   onBack?: () => void
   onEdit?: () => void
@@ -513,7 +578,7 @@ function ProfileAvatar({
   profile,
   handle,
 }: {
-  profile: ProfileRecord | null
+  profile: DisplayProfile | null
   handle: string
 }) {
   // Mirrors ChannelAvatar's mark fallback: render bytes if avatarURL is
