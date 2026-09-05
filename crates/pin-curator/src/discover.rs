@@ -38,6 +38,17 @@ use crate::{InstanceAddr, SettingsView};
 /// graph", and `discovery.test.ts` is where that gets answered rather than guessed.
 pub const MAX_RESOLVES_PER_PASS: usize = 8;
 
+/// How much of that budget is reserved for re-reading identities already held.
+///
+/// A reservation rather than a ranking, because widening the circle and keeping it true are
+/// not comparable jobs: scored against each other, whichever scored higher would starve the
+/// other outright — and both failures are silent. Discovery stalling looks like a settled
+/// network; refresh stalling looks like one where nobody ever changes their name.
+///
+/// Neither side loses what it does not use: what discovery leaves unspent goes to refresh
+/// on the same pass, and the reservation only binds when both have work.
+pub const REFRESH_PER_PASS: usize = 3;
+
 /// Bumped when what we EXTRACT from a directory changes — a new field, a schema move, a
 /// fix to the parse.
 ///
@@ -488,6 +499,11 @@ pub struct DiscoverOutcome {
     /// number that stays high means the crawl is not keeping up with what is being asked
     /// of it.
     pub nominated: usize,
+    /// Held identities re-read whose pointer had moved, so the blob was downloaded again.
+    pub refreshed: usize,
+    /// Held identities re-read whose pointer had NOT moved. The number this loop most wants
+    /// to be large: a settled graph confirmed for one DHT resolve each and no downloads.
+    pub unchanged: usize,
     /// Records faded a tier, because they now rank beyond what is kept in full.
     pub faded: usize,
     /// Records listed and not readable this pass. Nonzero switches decay off entirely,
@@ -677,6 +693,39 @@ fn faded(record: &DirectoryRecord, tier: DirectoryTier) -> DirectoryRecord {
     out
 }
 
+/// Which held records this pass re-reads, and in what order.
+///
+/// Round-robin in did order from wherever the last pass stopped, rather than by a
+/// last-checked timestamp. A timestamp would have to advance on every check whether or not
+/// anything moved, and a field that moves on a timer re-mirrors the whole doc to Sia on the
+/// snapshot's next wake — the instance-heartbeat bug of 2026-08-29. The cursor lives in the
+/// loop instead, so a restart resumes from the top and costs nothing.
+///
+/// Everyone the ranking wants FULL, whatever they currently are. Two things at once, and
+/// deliberately the same thing: keeping the near set current, and reading a faded record
+/// back in full when it comes close again. A re-read produces the whole record either way.
+///
+/// Nobody beyond the full tier. Out there a record is kept because losing somebody is worse
+/// than holding a stale address, not because it is being maintained — refreshing it would
+/// spend the budget that keeps the near set true.
+fn refresh_rotation(
+    wanted: &BTreeMap<String, DirectoryTier>,
+    after: &str,
+    budget: usize,
+) -> Vec<String> {
+    let full: Vec<&String> = wanted
+        .iter()
+        .filter(|(_, tier)| **tier == DirectoryTier::Full)
+        .map(|(did, _)| did)
+        .collect();
+    full.iter()
+        .filter(|did| did.as_str() > after)
+        .chain(full.iter())
+        .take(budget.min(full.len()))
+        .map(|did| (*did).clone())
+        .collect()
+}
+
 /// Identities a screen asked for and could not answer from what is held.
 ///
 /// A failed read yields none rather than failing the pass: a nomination is a hint about
@@ -716,7 +765,8 @@ pub async fn discover_once(
     own_did: &str,
     now_iso: String,
     now_secs: i64,
-) -> Result<DiscoverOutcome, String> {
+    resume_after: &str,
+) -> Result<(DiscoverOutcome, String), String> {
     let mut outcome = DiscoverOutcome::default();
     let settings = crate::read_settings(&ctx.doc, &ctx.blobs, ctx.author_id, &ctx.app_key).await?;
 
@@ -731,9 +781,28 @@ pub async fn discover_once(
     let candidates = frontier(&covered, &held.edges, &nominations);
     outcome.frontier = candidates.len();
 
+    // Two jobs out of one budget, with a reservation rather than a ranking. Reading
+    // somebody new and re-reading somebody held are not comparable — one widens the circle
+    // and the other keeps it true — so scoring them against each other would let whichever
+    // scored higher starve the other outright. A reservation cannot, and what neither uses
+    // the other takes.
+    let refresh_share = REFRESH_PER_PASS.min(MAX_RESOLVES_PER_PASS);
+    let read_now: Vec<&Candidate> = candidates
+        .iter()
+        .take(MAX_RESOLVES_PER_PASS - refresh_share)
+        .collect();
     let wanted = wanted_tiers(&held, &covered);
+    let refresh_now = refresh_rotation(
+        &wanted,
+        resume_after,
+        MAX_RESOLVES_PER_PASS - read_now.len(),
+    );
+    let cursor = refresh_now
+        .last()
+        .cloned()
+        .unwrap_or_else(|| resume_after.to_string());
 
-    for candidate in candidates.iter().take(MAX_RESOLVES_PER_PASS) {
+    for candidate in read_now {
         let Ok(resolved) = resolve_directory(&candidate.did).await else {
             // Asleep, or a relay that didn't answer. They stay on the frontier, and an
             // inability to read is never turned into a record saying they have nothing.
@@ -761,6 +830,47 @@ pub async fn discover_once(
         outcome.resolved += 1;
     }
 
+    // Re-read what is already held, stopping at the pointer wherever nothing has moved.
+    // Sia is content-addressed, so an unchanged share URL is proof the bytes are identical
+    // rather than a hint — which makes the common case one DHT resolve and no download.
+    for did in &refresh_now {
+        let Some(record) = read_directory(&ctx.doc, &ctx.blobs, ctx.author_id, did).await else {
+            continue;
+        };
+        let Ok(resolved) = resolve_directory(did).await else {
+            outcome.unreachable += 1;
+            continue;
+        };
+        if resolved.url == record.url {
+            // Their blob is byte-identical, so only the packet can have changed — and it
+            // is already in hand. `record_directory` compares substance, so an endpoint
+            // that has not moved writes nothing at all.
+            record_directory(
+                &ctx.doc,
+                &ctx.blobs,
+                ctx.author_id,
+                did,
+                with_reach(&record, &resolved.txt, &now_iso),
+            )
+            .await;
+            outcome.unchanged += 1;
+            continue;
+        }
+        let Ok(blob) = download_directory_blob(&ctx.sia, did, &resolved.url).await else {
+            outcome.unreachable += 1;
+            continue;
+        };
+        record_directory(
+            &ctx.doc,
+            &ctx.blobs,
+            ctx.author_id,
+            did,
+            parse_directory(&blob, &resolved.txt, &resolved.url, &now_iso),
+        )
+        .await;
+        outcome.refreshed += 1;
+    }
+
     for (did, tier) in decay_plan(&held, &wanted, now_secs) {
         let Some(record) = read_directory(&ctx.doc, &ctx.blobs, ctx.author_id, &did).await else {
             continue;
@@ -775,7 +885,7 @@ pub async fn discover_once(
         .await;
         outcome.faded += 1;
     }
-    Ok(outcome)
+    Ok((outcome, cursor))
 }
 
 /// Pass, wait, repeat — forever.
@@ -792,8 +902,20 @@ pub async fn run_discover_loop(
     now_secs: impl Fn() -> i64,
     on_pass: impl Fn(Result<DiscoverOutcome, String>),
 ) -> ! {
+    // Where the refresh rotation resumes, kept here rather than in the doc. A last-checked
+    // timestamp per record would advance whether or not anything moved, and a field that
+    // moves on a timer re-mirrors the whole doc to Sia every time the snapshot loop wakes —
+    // which is the instance-heartbeat bug of 2026-08-29. A restart resumes from the top and
+    // costs one extra look at whoever sorts first.
+    let mut cursor = String::new();
     loop {
-        on_pass(discover_once(&ctx, &own_did, now_iso(), now_secs()).await);
+        match discover_once(&ctx, &own_did, now_iso(), now_secs(), &cursor).await {
+            Ok((outcome, next)) => {
+                cursor = next;
+                on_pass(Ok(outcome));
+            }
+            Err(e) => on_pass(Err(e)),
+        }
         n0_future::time::sleep(cadence).await;
     }
 }
@@ -1271,6 +1393,48 @@ mod tests {
         let (held, _) = holding(&[("mine", &[]), ("far", &[])], DirectoryTier::Full, 400, 0);
         let wanted = wanted_tiers(&held, &set(&["mine"]));
         assert_eq!(wanted["mine"], DirectoryTier::Full);
+    }
+
+    #[test]
+    fn what_fades_is_what_gets_re_read_when_it_comes_back() {
+        // The two consumers of one ranking. A record the ranking wants FULL is in the
+        // rotation whatever it currently is, so a faded identity that comes close again is
+        // read back whole — and computing the boundary twice would let it fade on one pass
+        // and be re-read on the next, forever.
+        let wanted = want(&[
+            ("near", DirectoryTier::Full),
+            ("far", DirectoryTier::Minimal),
+        ]);
+        assert_eq!(refresh_rotation(&wanted, "", 8), ["near"]);
+    }
+
+    #[test]
+    fn the_rotation_resumes_where_the_last_pass_stopped() {
+        // Round-robin rather than a last-checked timestamp, because a timestamp advancing
+        // on every check is a field moving on a timer — which re-mirrors the whole doc to
+        // Sia on the snapshot's next wake.
+        let wanted = want(&[
+            ("a", DirectoryTier::Full),
+            ("b", DirectoryTier::Full),
+            ("c", DirectoryTier::Full),
+            ("d", DirectoryTier::Full),
+        ]);
+
+        assert_eq!(refresh_rotation(&wanted, "", 2), ["a", "b"]);
+        assert_eq!(refresh_rotation(&wanted, "b", 2), ["c", "d"]);
+        // And wraps, so the last of them is followed by the first rather than by nothing.
+        assert_eq!(refresh_rotation(&wanted, "d", 2), ["a", "b"]);
+    }
+
+    #[test]
+    fn the_rotation_never_offers_the_same_identity_twice_in_one_pass() {
+        // Wrapping is what makes that possible: with fewer held than budget, chaining the
+        // list to itself hands the pass the same did more than once and spends the budget
+        // re-reading one person.
+        let wanted = want(&[("a", DirectoryTier::Full), ("b", DirectoryTier::Full)]);
+        let rotation = refresh_rotation(&wanted, "", 8);
+        assert_eq!(rotation.len(), 2);
+        assert_eq!(rotation.iter().collect::<BTreeSet<_>>().len(), 2);
     }
 
     #[test]

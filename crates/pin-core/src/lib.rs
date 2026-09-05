@@ -812,6 +812,8 @@ pub async fn start_discover_loop(
                         "frontier": o.frontier,
                         "nominated": o.nominated,
                         "resolved": o.resolved,
+                        "refreshed": o.refreshed,
+                        "unchanged": o.unchanged,
                         "faded": o.faded,
                         "unreachable": o.unreachable,
                         "unread": o.unread,
@@ -1822,6 +1824,12 @@ pub fn discovery_frontier(
 #[wasm_bindgen]
 pub fn discovery_budget() -> usize {
     pin_curator::MAX_RESOLVES_PER_PASS
+}
+
+/// How much of that budget is reserved for re-reading identities already held.
+#[wasm_bindgen]
+pub fn discovery_refresh_share() -> usize {
+    pin_curator::REFRESH_PER_PASS
 }
 
 /// How many identities are kept in full, and so are in the refresh rotation.

@@ -259,6 +259,11 @@ export function discovery_frontier(r0_json: string, held_json: string, nominatio
 export function discovery_full_cap(): number;
 
 /**
+ * How much of that budget is reserved for re-reading identities already held.
+ */
+export function discovery_refresh_share(): number;
+
+/**
  * Seal a UTF-8 string under a channel key, returning the base64 blob.
  */
 export function encrypt_for_channel(key: Uint8Array, plaintext: string): string;
@@ -958,6 +963,7 @@ export interface InitOutput {
     readonly discovery_budget: () => number;
     readonly discovery_frontier: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
     readonly discovery_full_cap: () => number;
+    readonly discovery_refresh_share: () => number;
     readonly encrypt_for_channel: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly encrypt_settings: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly endorse_collection: () => [number, number];

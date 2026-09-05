@@ -88,6 +88,7 @@ pub use deliver::{deliver_once, run_deliver_loop, DeliverContext, DeliverOutcome
 pub use discover::{
     discover_once, edges_of, frontier, run_discover_loop, Candidate, DirectoryRecord,
     DirectoryTier, DiscoverContext, DiscoverOutcome, MAX_FULL, MAX_RESOLVES_PER_PASS,
+    REFRESH_PER_PASS,
 };
 pub use engagement::{engagement_once, run_engagement_loop, EngagementContext, EngagementOutcome};
 pub use identity::{

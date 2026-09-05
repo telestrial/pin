@@ -1295,13 +1295,20 @@ pub async fn curator_start_discover(
                     // says whether the crawl is keeping up with what it is finding — and
                     // `unread` because a nonzero one means the eviction sweep sat this
                     // pass out, which is worth seeing if it never stops.
-                    if o.resolved > 0 || o.unreachable > 0 || o.faded > 0 || o.unread > 0 {
+                    if o.resolved > 0
+                        || o.refreshed > 0
+                        || o.unreachable > 0
+                        || o.faded > 0
+                        || o.unread > 0
+                    {
                         log::info!(
-                            "curator discover: held {} frontier {} nominated {} resolved {} faded {} unreachable {} unread {}",
+                            "curator discover: held {} frontier {} nominated {} resolved {} refreshed {} unchanged {} faded {} unreachable {} unread {}",
                             o.held,
                             o.frontier,
                             o.nominated,
                             o.resolved,
+                            o.refreshed,
+                            o.unchanged,
                             o.faded,
                             o.unreachable,
                             o.unread

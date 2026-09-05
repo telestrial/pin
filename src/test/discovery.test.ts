@@ -17,6 +17,7 @@ import {
   discovery_budget,
   discovery_frontier,
   discovery_full_cap,
+  discovery_refresh_share,
 } from '../../crates/pin-core/pkg/pin_core.js'
 import { ensureWasm } from '../core/wasm'
 import {
@@ -128,7 +129,11 @@ describe('the discovery crawl over synthetic graphs', () => {
 
   it('converges on everyone reachable, checked against the oracle', () => {
     const viewer = 'did:test:alice'
-    const { held } = crawl(STANDARD_GRAPH, viewer, discovery_budget())
+    const { held } = crawl(
+      STANDARD_GRAPH,
+      viewer,
+      discovery_budget() - discovery_refresh_share(),
+    )
 
     // Not "the crawl agrees with itself": `reachablePeople` walks the same graph by a
     // different route, so agreeing with it is evidence rather than a tautology.
@@ -208,9 +213,10 @@ describe('the discovery crawl over synthetic graphs', () => {
   // SCALES is declared further down; the describe body finishes before any test callback
   // runs, so referencing it here is fine and keeps the tripwire beside the cases it uses.
   it('reports what the shipped constants cost at each scale', () => {
-    // The numbers behind the tuning choices, measured rather than guessed: how much of the
-    // graph the crawl holds in full, and how long a cold start takes to see everybody. Both
-    // fall out of constants the Curator actually uses, so changing one moves this table.
+    // The numbers behind the two tuning choices, measured rather than guessed: how much of
+    // the graph the crawl holds in full, how long the refresh rotation takes to come back
+    // round to any one of them, and how long a cold start takes to see everybody. All of it
+    // falls out of constants the Curator actually uses, so changing one moves this table.
     //
     // Coverage is SIMULATED up to LARGE and projected for HUGE, because ten thousand
     // identities at five a pass is two thousand passes and this tier has to stay quick.
@@ -218,7 +224,7 @@ describe('the discovery crawl over synthetic graphs', () => {
     // every scale where both are affordable — so the one projected number rests on a model
     // that was verified rather than assumed.
     const cadenceMins = 10
-    const perPass = discovery_budget()
+    const perPass = discovery_budget() - discovery_refresh_share()
     const days = (passes: number) =>
       +((passes * cadenceMins) / 60 / 24).toFixed(1)
 
@@ -241,18 +247,25 @@ describe('the discovery crawl over synthetic graphs', () => {
         reachable,
         'days to cover': days(passes) + (simulate ? '' : ' (projected)'),
         'held full': full,
+        'refresh period (days)': days(
+          Math.ceil(full / discovery_refresh_share()),
+        ),
       }
     })
     // Printed for whoever is tuning the constants. The runner swallows console output on a
-    // passing test, so the ASSERTIONS are what hold the line — this is a convenience for a
-    // person changing `MAX_FULL` and wanting to see what it did.
+    // passing test, so the ASSERTIONS below are what actually holds the line — this is a
+    // convenience for a person changing `MAX_FULL` or `REFRESH_PER_PASS` and wanting to see
+    // what it did.
     console.table(rows)
 
+    // Gated, so this is a measurement rather than a print statement: every scale has
+    // somebody to find, and the near set comes round inside a month or a held profile could
+    // be a season out of date.
     for (const r of rows) {
       expect(r.reachable).toBeGreaterThan(0)
-      // The full tier is capped, which is the whole point of it: past that, holding more
-      // costs more to keep true than it is worth.
-      expect(r['held full']).toBeLessThanOrEqual(discovery_full_cap())
+      expect(
+        Number.parseFloat(r['refresh period (days)'] as never),
+      ).toBeLessThan(30)
     }
   })
 
