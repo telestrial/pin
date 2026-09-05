@@ -1,4 +1,3 @@
-import { useState } from 'react'
 import type { FeedChannel, FeedEntry } from '../core/feed'
 import type { ItemRef } from '../core/types'
 import type { PublishedComment } from '../lib/channelConversations'
@@ -63,7 +62,7 @@ function opened(entry: FeedEntry, returnTo: View): View {
   }
 }
 
-type View =
+export type View =
   | { kind: 'idle' }
   | { kind: 'creating' }
   | { kind: 'created'; subscribeURL: string; name: string }
@@ -106,8 +105,16 @@ type View =
   | { kind: 'handle-directory'; handle: string; returnTo?: View }
   | { kind: 'editing-profile'; returnTo: View }
 
-export function Home() {
-  const [view, setView] = useState<View>({ kind: 'idle' })
+/** The view state lives in `App` rather than here, so the navbar's search box can
+ *  navigate: it is rendered a level above this and a pick has to land somewhere. Nothing
+ *  else about it changed — `setView` is the same call at the same sixty-odd sites. */
+export function Home({
+  view,
+  setView,
+}: {
+  view: View
+  setView: (view: View) => void
+}) {
   const subscriptions = useAuthStore((s) => s.subscriptions)
   const myChannels = useAuthStore((s) => s.myChannels)
   const myDidDht = useAuthStore((s) => s.myDidDht)

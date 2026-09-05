@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { AuthFlow } from './components/auth/AuthFlow'
 import { NamingScreen } from './components/auth/NamingScreen'
-import { Home } from './components/Home'
+import { Home, type View } from './components/Home'
 import { LockScreen } from './components/LockScreen'
 import { Navbar } from './components/Navbar'
 import { Toasts } from './components/ui/Toast'
@@ -141,6 +141,11 @@ export default function App() {
     }
   }, [client])
 
+  // Where in the app the user is. Here rather than inside `Home` because the navbar is a
+  // sibling of it and carries the search box, and a search result has to be able to open
+  // the thing it found.
+  const [view, setView] = useState<View>({ kind: 'idle' })
+
   const connected = step === 'connected'
   // Genesis naming gate: a connected identity with no chosen @name yet lands on
   // the naming beat before Home. settingsLoaded first so we don't flash it while
@@ -152,7 +157,9 @@ export default function App() {
       id="app-shell"
       className="min-h-screen lg:h-screen flex flex-col lg:overflow-hidden"
     >
-      {connected && !locked && !needsNaming && <Navbar onLock={lock} />}
+      {connected && !locked && !needsNaming && (
+        <Navbar onLock={lock} onNavigate={setView} />
+      )}
       {/* Desktop (lg+): the app is locked to the viewport — the navbar is a
           fixed-height flex child and this region fills the rest without
           scrolling itself (lg:overflow-hidden). Each column inside then
@@ -165,7 +172,7 @@ export default function App() {
           ) : needsNaming ? (
             <NamingScreen />
           ) : (
-            <Home />
+            <Home view={view} setView={setView} />
           )
         ) : (
           <AuthFlow />
