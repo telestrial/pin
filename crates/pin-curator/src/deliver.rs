@@ -135,6 +135,9 @@ pub struct DeliverStep {
     /// unreachable, which is invisible from every other angle.
     pub endpoints: usize,
     pub dialable: usize,
+    /// Where those endpoints came from: `held` (the crawl had already read this identity)
+    /// or `resolved` (a lookup, because nothing was held or what was held did not answer).
+    pub endpoints_from: &'static str,
     /// delivered | already | no target | own | unreachable.
     pub result: &'static str,
 }
@@ -310,6 +313,80 @@ async fn resolve_endpoints(did: &str) -> Vec<InstanceAddr> {
     ))
 }
 
+/// A held record's endpoints, when there is reason to believe they are current.
+///
+/// Only a FULL record's, and the tier is standing in for freshness because nothing else
+/// can. `seen_at` says when somebody's substance last changed, not when we last looked, so
+/// a record re-read yesterday but unchanged for six months reads as six months old — it
+/// cannot answer "is this address current". What can is the tier: the full set is the
+/// refresh rotation, so its endpoints were re-read within a rotation period, while a faded
+/// record's are as old as whenever it was last read.
+///
+/// The cost of getting that wrong is not abstract. A dial waits `DIAL_TIMEOUT`, and knock
+/// walks the endpoints in turn, so three dead addresses is thirty seconds spent before the
+/// fallback even begins — on a loop that runs every five minutes.
+fn fresh_endpoints(record: &crate::DirectoryRecord) -> Vec<InstanceAddr> {
+    if record.tier != crate::DirectoryTier::Full {
+        return Vec::new();
+    }
+    record.reach.clone()
+}
+
+/// Where a target was last known to be, from what the crawl already read.
+///
+/// The crawl resolves a packet to find somebody's directory and keeps `_iroh` out of the
+/// same answer, so for anyone it has read this is a lookup already paid for — and this
+/// loop was resolving the very same key a second time to ask the very same question.
+///
+/// Empty for an identity nobody has crawled, which is ordinary: a knock's whole purpose is
+/// reaching people outside the graph, and those are exactly the ones no crawl has read.
+async fn held_endpoints(ctx: &DeliverContext, did: &str) -> Vec<InstanceAddr> {
+    crate::discover::read_directory(&ctx.doc, &ctx.blobs, ctx.author_id, did)
+        .await
+        .as_ref()
+        .map(fresh_endpoints)
+        .unwrap_or_default()
+}
+
+/// What reaching one target took.
+struct Reached {
+    sent: bool,
+    endpoints: usize,
+    dialable: usize,
+    from: &'static str,
+}
+
+/// Hand a record to a target, preferring endpoints the crawl already read.
+///
+/// Two rungs, ordered by what they cost. The crawl resolves a packet to find somebody's
+/// directory and keeps `_iroh` out of the same answer, so for anyone it has read the
+/// address is a doc read — this loop used to resolve that identical key a second time to
+/// ask the identical question.
+///
+/// Falls back on FAILURE and not merely on absence, which is the part that makes a cached
+/// address safe to trust. Endpoints rot: a relay moves, a device stops. Held coordinates
+/// that no longer answer cost one dial attempt and then the lookup that would have
+/// happened anyway, where trusting them to the end would quietly stop delivering to
+/// anybody whose address had changed since the crawl last read them.
+async fn reach_target(ctx: &DeliverContext, did: &str, value: &serde_json::Value) -> Reached {
+    let held = held_endpoints(ctx, did).await;
+    if !held.is_empty() && knock(ctx, &held, value).await {
+        return Reached {
+            sent: true,
+            endpoints: held.len(),
+            dialable: held.iter().filter_map(dialable).count(),
+            from: "held",
+        };
+    }
+    let live = resolve_endpoints(did).await;
+    Reached {
+        sent: knock(ctx, &live, value).await,
+        endpoints: live.len(),
+        dialable: live.iter().filter_map(dialable).count(),
+        from: "resolved",
+    }
+}
+
 /// Knock once, at whichever advertised endpoint answers first.
 ///
 /// Returns whether the record was handed over. There is no reply to read — a knock is a
@@ -421,6 +498,7 @@ async fn deliver_lane(
             target: None,
             endpoints: 0,
             dialable: 0,
+            endpoints_from: "none",
             result: "already",
         };
         if !needs_delivery(held.as_ref(), &record.sig) {
@@ -448,16 +526,17 @@ async fn deliver_lane(
             continue;
         }
 
-        let endpoints = resolve_endpoints(&target).await;
-        step.endpoints = endpoints.len();
-        step.dialable = endpoints.iter().filter_map(dialable).count();
         let Ok(value) = serde_json::to_value(record) else {
             outcome.no_target += 1;
             step.result = "no target";
             outcome.steps.push(step);
             continue;
         };
-        let sent = knock(ctx, &endpoints, &value).await;
+        let reached = reach_target(ctx, &target, &value).await;
+        step.endpoints = reached.endpoints;
+        step.dialable = reached.dialable;
+        step.endpoints_from = reached.from;
+        let sent = reached.sent;
         step.result = if sent { "delivered" } else { "unreachable" };
         outcome.steps.push(step);
         if sent {
@@ -554,8 +633,7 @@ async fn retract_orphans(
             continue;
         };
 
-        let endpoints = resolve_endpoints(target).await;
-        if knock(ctx, &endpoints, &value).await && forget_mark(ctx, lane, &rkey).await {
+        if reach_target(ctx, target, &value).await.sent && forget_mark(ctx, lane, &rkey).await {
             out.retracted += 1;
         } else {
             out.failed += 1;
@@ -889,6 +967,46 @@ mod tests {
             .parse::<iroh::EndpointId>()
             .expect("a valid key")
             .to_string()
+    }
+
+    /// A held record at `tier` with one dialable endpoint.
+    fn held(tier: crate::DirectoryTier) -> crate::DirectoryRecord {
+        crate::DirectoryRecord {
+            tier,
+            profile: None,
+            channels: Vec::new(),
+            reach: vec![InstanceAddr {
+                node_id: node_id(),
+                relay: Some("https://use1-1.relay.n0.iroh.link./".into()),
+            }],
+            follows: Vec::new(),
+            handle_follows: Vec::new(),
+            url: "sia://theirs".into(),
+            epoch: 1,
+            seen_at: "2026-09-05T00:00:00.000Z".into(),
+        }
+    }
+
+    #[test]
+    fn a_full_records_endpoints_are_fresh_enough_to_dial() {
+        // What the crawl read stays usable, which is the whole saving: the packet that
+        // named their directory carried their endpoints too, so this loop no longer
+        // resolves the same key a second time to learn the same thing.
+        assert_eq!(fresh_endpoints(&held(crate::DirectoryTier::Full)).len(), 1);
+    }
+
+    #[test]
+    fn a_faded_records_endpoints_are_not_fresh_enough() {
+        // Tier standing in for freshness, because nothing else can: `seen_at` says when
+        // their substance last changed, not when we last looked, so a record re-read
+        // yesterday but unchanged for months reads as months old. Only the full tier is in
+        // the refresh rotation, so only its addresses were checked recently.
+        //
+        // The cost of trusting a dead one is not abstract — a dial waits DIAL_TIMEOUT and
+        // knock walks the endpoints in turn, so three stale addresses is thirty seconds
+        // before the live resolve even starts, on a loop that runs every five minutes.
+        assert!(fresh_endpoints(&held(crate::DirectoryTier::Reduced)).is_empty());
+        assert!(fresh_endpoints(&held(crate::DirectoryTier::Minimal)).is_empty());
     }
 
     #[test]
