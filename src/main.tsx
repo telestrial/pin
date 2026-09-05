@@ -37,6 +37,7 @@ if (import.meta.env.DEV || inTauri()) {
     __pinSubDiag?: () => Promise<string>
     __pinDeliverProbe?: () => Promise<string>
     __pinDirDiag?: () => Promise<string>
+    __pinDiscoverDiag?: (howMany?: number) => Promise<string>
     __pinChannelDocs?: {
       author: (hexOverride?: string) => Promise<string>
       subscriber: (ticket: string, hexOverride?: string) => Promise<string>
@@ -613,6 +614,130 @@ if (import.meta.env.DEV || inTauri()) {
     const st = useAuthStore.getState()
     out.push(
       `local: profile=${st.profile?.username ?? '(none)'} channels=${st.myChannels?.length ?? 0} subs=${st.subscriptions?.length ?? 0}`,
+    )
+    return out.join('\n')
+  }
+  // What the crawl has read, and who it would read next.
+  //
+  // The index is state that no log can show you: a pass reports what it DID, and the
+  // question after a live run is what it is now sitting on — how much of the network is
+  // held, how much of it has faded past being findable, and whether the order it will read
+  // in makes sense. `Pin.log` on desktop already carries the pass outcomes (`curator
+  // discover:` lines), so nothing here duplicates them.
+  //
+  // The frontier is computed by THE REAL RUST FUNCTION the loop uses, over this identity's
+  // actual records, so the order printed is the order the next pass will take rather than a
+  // second implementation that agrees with it on a good day.
+  g.__pinDiscoverDiag = async (howMany = 10) => {
+    const { hex } = await session()
+    if (!hex) return 'not signed in'
+    const out: string[] = []
+
+    const { listDirectories } = await import('./lib/directories')
+    const held = await listDirectories(hex)
+
+    // Tier is the number that says how much of what is held is still USABLE: a faded record
+    // keeps the way back to somebody and nothing else, so it is in the index without being
+    // findable, resolvable for a name, or walkable for its edges.
+    const tiers = { full: 0, reduced: 0, minimal: 0, untiered: 0 }
+    let withProfile = 0
+    let channels = 0
+    for (const { record } of held) {
+      const tier = record.tier ?? 'untiered'
+      tiers[tier as keyof typeof tiers] =
+        (tiers[tier as keyof typeof tiers] ?? 0) + 1
+      if (record.profile) withProfile++
+      channels += record.channels?.length ?? 0
+    }
+    out.push(`held: ${held.length}`)
+    out.push(
+      `  tiers: full=${tiers.full} reduced=${tiers.reduced} minimal=${tiers.minimal}${tiers.untiered ? ` untiered=${tiers.untiered}` : ''}`,
+    )
+    out.push(`  searchable: ${withProfile} profile(s), ${channels} channel(s)`)
+
+    // This identity's own graph, which the crawl deliberately does NOT read: the engagement
+    // crawl covers exactly that set, and two loops on two cadences would race to write one
+    // record and pay the lookup twice. Own did included — anyone in your graph who follows
+    // one of your channels names YOU as an edge.
+    //
+    // This has to agree with `covered_elsewhere` in `pin-curator` — `graph_actors` over
+    // follows, handle-follows and subscriptions, plus own did — or the order printed below
+    // is not the order the next pass takes, and an instrument that disagrees with the thing
+    // it is measuring is worse than none. The same two-languages hazard `advertisedChannels`
+    // carries.
+    const { useAuthStore } = await import('./stores/auth')
+    const st = useAuthStore.getState()
+    const r0 = new Set<string>(st.myDidDht ? [st.myDidDht] : [])
+    for (const f of st.follows ?? []) r0.add(f.didDht)
+    for (const h of st.handleFollows ?? []) r0.add(h)
+    for (const sub of st.subscriptions ?? []) {
+      // `didDht` is absent on a legacy handle subscription, which the crawl then has no
+      // did to exclude by — and reporting one it cannot name would be worse than not
+      // counting it.
+      if (sub.didDht) r0.add(sub.didDht)
+    }
+    out.push(`covered by the engagement crawl (not read here): ${r0.size}`)
+
+    const { listRecords } = await import('./lib/docs')
+    const { request_collection } = await import(
+      '../crates/pin-core/pkg/pin_core.js'
+    )
+    let requests: string[] = []
+    try {
+      requests = await listRecords(request_collection())
+    } catch {
+      // A listing that will not open is not an absence of requests, so say so rather than
+      // reporting zero.
+      out.push('requests: COULD NOT READ')
+    }
+    out.push(
+      `requests outstanding: ${requests.length}${requests.length ? ` — ${requests.slice(0, 5).join(', ')}` : ''}`,
+    )
+
+    // The real ordering function, over the real records.
+    const { ensureWasm } = await import('./core/wasm')
+    await ensureWasm()
+    const { discovery_frontier, discovery_budget, discovery_refresh_share } =
+      await import('../crates/pin-core/pkg/pin_core.js')
+    const edges: Record<string, string[]> = {}
+    for (const { didDht, record } of held) {
+      edges[didDht] = [
+        ...(record.follows ?? []).map((f) => f.didDht),
+        ...(record.handleFollows ?? []),
+      ]
+    }
+    const candidates: {
+      did: string
+      distance: number
+      references: number
+      requested: boolean
+    }[] = JSON.parse(
+      discovery_frontier(
+        JSON.stringify([...r0]),
+        JSON.stringify(edges),
+        JSON.stringify(requests),
+      ),
+    )
+    const budget = discovery_budget()
+    const reserved = discovery_refresh_share()
+    out.push(`frontier: ${candidates.length} known to exist and never read`)
+    out.push(
+      `budget: ${budget} resolves a pass, ${reserved} reserved for re-reading held records`,
+    )
+    // Why each sits where it does, which is the half a count cannot answer. UNREACHED is
+    // u32::MAX — held some other way (a portal, a knock) with no distance from the graph.
+    for (const [i, c] of candidates.slice(0, howMany).entries()) {
+      const distance =
+        c.distance === 0xffffffff ? 'unreached' : `${c.distance} hop(s)`
+      out.push(
+        `  ${i + 1}. ${c.did}${c.requested ? ' [REQUESTED]' : ''} ${distance}, ${c.references} reference(s)`,
+      )
+    }
+    if (candidates.length > howMany) {
+      out.push(`  … and ${candidates.length - howMany} more`)
+    }
+    out.push(
+      'pass outcomes: `curator discover:` lines in Pin.log (desktop); the loop does not report into the tab',
     )
     return out.join('\n')
   }
