@@ -1281,19 +1281,30 @@ pub async fn curator_start_discover(
         return Ok(());
     }
     let loop_handle = sia.detach(async move {
-        pin_curator::run_discover_loop(ctx, own_did, DISCOVER_CADENCE, now_iso, |result| {
+        pin_curator::run_discover_loop(
+            ctx,
+            own_did,
+            DISCOVER_CADENCE,
+            now_iso,
+            || now_secs() as i64,
+            |result| {
             match result {
                 Ok(o) => {
                     // Quiet when a settled graph has nothing left to read. The frontier is
                     // reported whenever anything happened, because it is the number that
-                    // says whether the crawl is keeping up with what it is finding.
-                    if o.resolved > 0 || o.unreachable > 0 {
+                    // says whether the crawl is keeping up with what it is finding — and
+                    // `unread` because a nonzero one means the eviction sweep sat this
+                    // pass out, which is worth seeing if it never stops.
+                    if o.resolved > 0 || o.unreachable > 0 || o.faded > 0 || o.unread > 0 {
                         log::info!(
-                            "curator discover: held {} frontier {} resolved {} unreachable {}",
+                            "curator discover: held {} frontier {} nominated {} resolved {} faded {} unreachable {} unread {}",
                             o.held,
                             o.frontier,
+                            o.nominated,
                             o.resolved,
-                            o.unreachable
+                            o.faded,
+                            o.unreachable,
+                            o.unread
                         );
                     }
                 }

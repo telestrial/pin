@@ -61,6 +61,37 @@ pub struct DirectoryChannel {
     pub name: String,
 }
 
+/// How much of an identity is still kept.
+///
+/// Nothing is ever deleted: the far network fades rather than disappearing, so what is
+/// always left is the DID this is filed under and where it was last reachable. That is the
+/// floor, and it is deliberate — losing a record entirely would lose the way back to
+/// somebody, where losing their profile only loses what they looked like.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Default,
+    serde::Serialize,
+    serde::Deserialize,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum DirectoryTier {
+    /// Everything one read yields.
+    #[default]
+    Full,
+    /// The edges and the endpoints. Enough to keep walking the graph through them and to
+    /// reach them, without their profile or their channel keys — so distance still
+    /// propagates and the horizon fades rather than cutting.
+    Reduced,
+    /// They exist, and here is where. The floor.
+    Minimal,
+}
+
 /// Everything one read of another identity's directory yields.
 ///
 /// `profile` and `follows` are opaque `Value`s for the reason the identity publisher keeps
@@ -69,6 +100,14 @@ pub struct DirectoryChannel {
 /// the floor by a stricter type.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct DirectoryRecord {
+    /// How much of them is still held.
+    ///
+    /// Recorded rather than inferred from which fields are empty, because an identity that
+    /// publishes no profile and no channels is indistinguishable from one whose profile
+    /// and channels were dropped — and only the second should be read again in full when
+    /// they come back within the horizon.
+    #[serde(default)]
+    pub tier: DirectoryTier,
     /// Their self-asserted profile: username, display name, bio, avatar and cover URLs.
     /// `None` is a real answer — a directory with no profile in it — not a failed read.
     #[serde(default)]
@@ -165,6 +204,9 @@ pub(crate) fn parse_directory(
     now_iso: &str,
 ) -> DirectoryRecord {
     DirectoryRecord {
+        // A read always produces the whole thing. Fading is something that happens to a
+        // record later, so reading somebody again is also how a faded one comes back.
+        tier: DirectoryTier::Full,
         // `null` and absent both mean "they publish no profile" — the identity publisher
         // writes an explicit null, so treating one as a value would hold a profile whose
         // every field is missing rather than none at all.
@@ -446,6 +488,11 @@ pub struct DiscoverOutcome {
     /// number that stays high means the crawl is not keeping up with what is being asked
     /// of it.
     pub nominated: usize,
+    /// Records faded a tier, because they now rank beyond what is kept in full.
+    pub faded: usize,
+    /// Records listed and not readable this pass. Nonzero switches decay off entirely,
+    /// because an edge we could not read is not an edge that is gone.
+    pub unread: usize,
 }
 
 /// The identities the engagement crawl already covers, and which discovery therefore
@@ -468,19 +515,166 @@ fn covered_elsewhere(settings: &SettingsView, own_did: &str) -> BTreeSet<String>
 /// The edges alone, because that is all the frontier depends on — carrying whole records
 /// would hold a profile and a channel list per identity for a computation that reads
 /// neither.
-async fn held_edges(ctx: &DiscoverContext) -> BTreeMap<String, Vec<String>> {
-    let mut held = BTreeMap::new();
+async fn held_edges(ctx: &DiscoverContext) -> Held {
+    let mut held = Held::default();
     let Ok(dids) =
         crate::list_rkeys(&ctx.doc, ctx.author_id, pin_derive::DIRECTORY_COLLECTION).await
     else {
+        // A listing we couldn't take is not an empty index. Reporting one unread switches
+        // off every read-dependent decision below for this pass.
+        held.unread = 1;
         return held;
     };
     for did in dids {
-        if let Some(record) = read_directory(&ctx.doc, &ctx.blobs, ctx.author_id, &did).await {
-            held.insert(did, edges_of(&record));
+        match read_directory(&ctx.doc, &ctx.blobs, ctx.author_id, &did).await {
+            Some(record) => {
+                held.seen_at.insert(did.clone(), record.seen_at.clone());
+                held.tier.insert(did.clone(), record.tier);
+                held.edges.insert(did, edges_of(&record));
+            }
+            None => held.unread += 1,
         }
     }
     held
+}
+
+/// What this identity holds, as one pass read it.
+#[derive(Default)]
+struct Held {
+    /// Who each held identity points at.
+    edges: BTreeMap<String, Vec<String>>,
+    /// When each held record last changed.
+    seen_at: BTreeMap<String, String>,
+    /// How much of each is still kept.
+    tier: BTreeMap<String, DirectoryTier>,
+    /// Records listed and not readable this pass.
+    ///
+    /// Counted rather than shrugged off, because it is the whole difference between "they
+    /// are far away" and "we could not see how far away they are". One unreadable record
+    /// hides every edge it carried, so everything it pointed at looks unreachable — and
+    /// unreachable is what decay acts on. That is deny-by-absence, the shape of the sweep
+    /// that once near-wiped an account.
+    unread: usize,
+}
+
+/// How many identities stay FULL — profile, channels and all.
+///
+/// A count rather than a hop count, because a hop count does not bound anything: at a
+/// fan-out of fifty, two hops is 2,500 identities and at two hundred it is 40,000. Sorting
+/// by distance and keeping the nearest N bounds the set for real while still meaning
+/// "the people closest to you".
+///
+/// This is also what bounds REFRESH, which walks the full tier: the rotation's period is
+/// this divided by the refresh budget, so the two numbers together decide how out of date
+/// a profile can get.
+pub const MAX_FULL: usize = 500;
+
+/// How many keep their edges as well as their endpoints.
+///
+/// Beyond this only the endpoints survive, which stops distance propagating through them —
+/// so this is the real edge of the map. Generous relative to `MAX_FULL`, because an edge is
+/// tens of bytes and it is what lets the graph be walked at all.
+const MAX_REDUCED: usize = 5_000;
+
+/// How long a record is left alone before it can fade.
+///
+/// So a burst of new reads is not immediately undone, and so an identity that keeps
+/// publishing keeps its place: `seen_at` moves when their substance moves, so staying
+/// active resets this.
+const DECAY_AFTER_SECS: i64 = 7 * 24 * 60 * 60;
+
+/// How much of each held identity is worth keeping, ranked nearest first.
+///
+/// One ranking, two consumers: what should fade, and what should be re-read. Computing it
+/// twice would let the two disagree about where the boundary is, and then a record could
+/// fade out of the full tier on one pass and be re-read into it on the next, forever.
+///
+/// Ranked by distance and then by did, so the boundary is stable — the same held set
+/// decides the same way twice, and two instances of one identity agree without
+/// coordinating.
+fn wanted_tiers(held: &Held, covered: &BTreeSet<String>) -> BTreeMap<String, DirectoryTier> {
+    let dist = distances(covered, &held.edges);
+    let mut ranked: Vec<&String> = held.edges.keys().collect();
+    ranked.sort_by_key(|did| (dist.get(*did).copied().unwrap_or(UNREACHED), *did));
+
+    ranked
+        .into_iter()
+        .enumerate()
+        .map(|(rank, did)| {
+            // Somebody this identity follows is the engagement crawl's to keep current, and
+            // never fades however far the graph happens to place them.
+            let tier = if covered.contains(did) || rank < MAX_FULL {
+                DirectoryTier::Full
+            } else if rank < MAX_REDUCED {
+                DirectoryTier::Reduced
+            } else {
+                DirectoryTier::Minimal
+            };
+            (did.clone(), tier)
+        })
+        .collect()
+}
+
+/// Which held records should fade a step, and to what.
+///
+/// Nothing is deleted here or anywhere: the floor is `Minimal`, which keeps the DID this is
+/// filed under and where they were last reachable. Losing a record entirely would lose the
+/// way back to somebody; losing their profile only loses what they looked like.
+///
+/// Only downward. Coming back within the horizon is handled by reading them again in full,
+/// not by inventing fields we no longer hold.
+///
+/// Runs only over a COMPLETE reading. Decay acts on how far away somebody is, and a record
+/// we could not open hides every edge it carried — so one unreadable entry makes whole
+/// branches look unreachable and fades them. Doing nothing on a partial read costs a pass;
+/// the alternative is the shape of the sweep that once near-wiped an account.
+fn decay_plan(
+    held: &Held,
+    wanted: &BTreeMap<String, DirectoryTier>,
+    now_secs: i64,
+) -> Vec<(String, DirectoryTier)> {
+    if held.unread > 0 {
+        return Vec::new();
+    }
+    let mut plan = Vec::new();
+    for (did, want) in wanted {
+        let have = held.tier.get(did).copied().unwrap_or_default();
+        if *want <= have {
+            continue;
+        }
+        let Some(seen_at) = held.seen_at.get(did) else {
+            continue;
+        };
+        // Never on an inability to read. A timestamp that will not parse means we cannot
+        // tell how old this is, and unknown must not become a decision to discard.
+        let Some(t) = crate::iso_secs(seen_at) else {
+            continue;
+        };
+        if now_secs.saturating_sub(t) < DECAY_AFTER_SECS {
+            continue;
+        }
+        plan.push((did.clone(), *want));
+    }
+    plan
+}
+
+/// The record as it survives at `tier`.
+///
+/// `reach` and `url` are kept at every tier: the first is how to get to them without a
+/// lookup, and the second is what lets a later pass tell, from the pointer alone, whether
+/// anything has changed.
+fn faded(record: &DirectoryRecord, tier: DirectoryTier) -> DirectoryRecord {
+    let mut out = record.clone();
+    out.tier = tier;
+    if tier >= DirectoryTier::Reduced {
+        out.profile = None;
+        out.channels = Vec::new();
+    }
+    if tier >= DirectoryTier::Minimal {
+        out.follows = Vec::new();
+        out.handle_follows = Vec::new();
+    }
+    out
 }
 
 /// Identities a screen asked for and could not answer from what is held.
@@ -521,19 +715,23 @@ pub async fn discover_once(
     ctx: &DiscoverContext,
     own_did: &str,
     now_iso: String,
+    now_secs: i64,
 ) -> Result<DiscoverOutcome, String> {
     let mut outcome = DiscoverOutcome::default();
     let settings = crate::read_settings(&ctx.doc, &ctx.blobs, ctx.author_id, &ctx.app_key).await?;
 
     let covered = covered_elsewhere(&settings, own_did);
     let held = held_edges(ctx).await;
-    outcome.held = held.len();
+    outcome.held = held.edges.len();
+    outcome.unread = held.unread;
 
     let nominations = read_nominations(ctx).await;
     outcome.nominated = nominations.len();
 
-    let candidates = frontier(&covered, &held, &nominations);
+    let candidates = frontier(&covered, &held.edges, &nominations);
     outcome.frontier = candidates.len();
+
+    let wanted = wanted_tiers(&held, &covered);
 
     for candidate in candidates.iter().take(MAX_RESOLVES_PER_PASS) {
         let Ok(resolved) = resolve_directory(&candidate.did).await else {
@@ -562,6 +760,21 @@ pub async fn discover_once(
         }
         outcome.resolved += 1;
     }
+
+    for (did, tier) in decay_plan(&held, &wanted, now_secs) {
+        let Some(record) = read_directory(&ctx.doc, &ctx.blobs, ctx.author_id, &did).await else {
+            continue;
+        };
+        record_directory(
+            &ctx.doc,
+            &ctx.blobs,
+            ctx.author_id,
+            &did,
+            faded(&record, tier),
+        )
+        .await;
+        outcome.faded += 1;
+    }
     Ok(outcome)
 }
 
@@ -576,10 +789,11 @@ pub async fn run_discover_loop(
     own_did: String,
     cadence: Duration,
     now_iso: impl Fn() -> String,
+    now_secs: impl Fn() -> i64,
     on_pass: impl Fn(Result<DiscoverOutcome, String>),
 ) -> ! {
     loop {
-        on_pass(discover_once(&ctx, &own_did, now_iso()).await);
+        on_pass(discover_once(&ctx, &own_did, now_iso(), now_secs()).await);
         n0_future::time::sleep(cadence).await;
     }
 }
@@ -590,6 +804,7 @@ mod tests {
 
     fn record() -> DirectoryRecord {
         DirectoryRecord {
+            tier: DirectoryTier::Full,
             profile: Some(serde_json::json!({"username": "alice"})),
             channels: vec![DirectoryChannel {
                 channel_id: "chan-one".into(),
@@ -951,6 +1166,138 @@ mod tests {
         assert_eq!(f[1].distance, UNREACHED);
     }
 
+    /// Epoch seconds, and an ISO stamp for a record last changed `days` ago.
+    fn aged(days: i64) -> (String, i64) {
+        let now = 1_800_000_000_i64;
+        let then = now - days * 24 * 60 * 60;
+        (
+            chrono::DateTime::from_timestamp(then, 0)
+                .unwrap()
+                .to_rfc3339(),
+            now,
+        )
+    }
+
+    /// A held set as one pass read it: who points at whom, how much of each is kept, when
+    /// each last changed, and how many were listed and unreadable.
+    fn holding(
+        edges: &[(&str, &[&str])],
+        tier: DirectoryTier,
+        days_old: i64,
+        unread: usize,
+    ) -> (Held, i64) {
+        let (seen, now) = aged(days_old);
+        let e = graph(edges);
+        (
+            Held {
+                seen_at: e.keys().map(|d| (d.clone(), seen.clone())).collect(),
+                tier: e.keys().map(|d| (d.clone(), tier)).collect(),
+                edges: e,
+                unread,
+            },
+            now,
+        )
+    }
+
+    fn want(pairs: &[(&str, DirectoryTier)]) -> BTreeMap<String, DirectoryTier> {
+        pairs.iter().map(|(d, t)| (d.to_string(), *t)).collect()
+    }
+
+    fn plan_of(plan: &[(String, DirectoryTier)]) -> Vec<(&str, DirectoryTier)> {
+        plan.iter().map(|(d, t)| (d.as_str(), *t)).collect()
+    }
+
+    #[test]
+    fn a_partial_reading_fades_nothing_at_all() {
+        // THE guard. Decay acts on how far away somebody is, and one record that would not
+        // open hides every edge it carried — so whole branches look unreachable. A pass
+        // that could not read everything does not get to decide who is far away.
+        let (held, now) = holding(&[("alice", &[])], DirectoryTier::Full, 400, 1);
+        let wanted = want(&[("alice", DirectoryTier::Minimal)]);
+        assert!(decay_plan(&held, &wanted, now).is_empty());
+
+        // The same reading, complete: now it is a fact about the graph and the record fades.
+        let (whole, now) = holding(&[("alice", &[])], DirectoryTier::Full, 400, 0);
+        assert_eq!(
+            plan_of(&decay_plan(&whole, &wanted, now)),
+            [("alice", DirectoryTier::Minimal)]
+        );
+    }
+
+    #[test]
+    fn nothing_fades_before_it_has_had_time_to() {
+        // So a burst of new reads is not immediately undone, and so an identity that keeps
+        // publishing keeps its place: `seen_at` moves when their substance moves.
+        let (held, now) = holding(&[("alice", &[])], DirectoryTier::Full, 1, 0);
+        let wanted = want(&[("alice", DirectoryTier::Reduced)]);
+        assert!(decay_plan(&held, &wanted, now).is_empty());
+    }
+
+    #[test]
+    fn fading_only_ever_goes_downward() {
+        // Coming back within the horizon is handled by READING them again, not by a plan
+        // that promotes a record to a tier whose fields we no longer hold — which would
+        // mint a full record with an empty profile and call it current.
+        let (held, now) = holding(&[("alice", &[])], DirectoryTier::Minimal, 400, 0);
+        let wanted = want(&[("alice", DirectoryTier::Full)]);
+        assert!(decay_plan(&held, &wanted, now).is_empty());
+    }
+
+    #[test]
+    fn a_timestamp_we_cannot_read_is_never_a_reason_to_discard() {
+        // Unknown must not become a decision to throw something away. `repack` reads an
+        // unparseable timestamp as very old and that is right THERE, where being wrong
+        // costs one redundant repack; here it would drop what is known about somebody on
+        // the strength of a field we could not parse.
+        let (_, now) = aged(400);
+        let held = Held {
+            seen_at: [("alice".to_string(), "not a timestamp".to_string())]
+                .into_iter()
+                .collect(),
+            tier: [("alice".to_string(), DirectoryTier::Full)]
+                .into_iter()
+                .collect(),
+            edges: graph(&[("alice", &[])]),
+            unread: 0,
+        };
+        let wanted = want(&[("alice", DirectoryTier::Minimal)]);
+        assert!(decay_plan(&held, &wanted, now).is_empty());
+    }
+
+    #[test]
+    fn somebody_this_identity_follows_never_fades() {
+        // Followed directly, so the engagement crawl keeps them current and their record is
+        // not this loop's to thin out — however far the graph happens to place them.
+        let (held, _) = holding(&[("mine", &[]), ("far", &[])], DirectoryTier::Full, 400, 0);
+        let wanted = wanted_tiers(&held, &set(&["mine"]));
+        assert_eq!(wanted["mine"], DirectoryTier::Full);
+    }
+
+    #[test]
+    fn a_faded_record_keeps_the_way_back_to_whoever_it_names() {
+        // The floor, and the reason nothing is deleted. What survives every tier is where
+        // they were last reachable and the pointer that says whether anything has moved —
+        // so a faded identity can always be read again, and the graph never loses a person
+        // outright, only what they looked like.
+        let full = record();
+
+        let reduced = faded(&full, DirectoryTier::Reduced);
+        assert_eq!(reduced.tier, DirectoryTier::Reduced);
+        assert_eq!(reduced.profile, None);
+        assert!(reduced.channels.is_empty());
+        // Edges survive a step, so distance still propagates and the horizon fades rather
+        // than cutting.
+        assert_eq!(reduced.follows, full.follows);
+        assert_eq!(reduced.reach, full.reach);
+        assert_eq!(reduced.url, full.url);
+
+        let minimal = faded(&full, DirectoryTier::Minimal);
+        assert!(minimal.follows.is_empty());
+        assert!(minimal.handle_follows.is_empty());
+        assert_eq!(minimal.reach, full.reach);
+        assert_eq!(minimal.url, full.url);
+    }
+
     #[test]
     fn what_the_other_loop_covers_includes_this_identity() {
         // The self-exclusion made structural rather than remembered. Building this set by
@@ -1141,6 +1488,7 @@ mod tests {
                 "profile",
                 "reach",
                 "seenAt",
+                "tier",
                 "url",
             ]
         );

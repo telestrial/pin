@@ -804,13 +804,17 @@ pub async fn start_discover_loop(
             std::time::Duration::from_secs(cadence_secs as u64),
             // From JS: neither SystemTime nor a date formatter is available on this target.
             || js_sys::Date::new_0().to_iso_string().into(),
+            || (js_sys::Date::now() / 1000.0) as i64,
             |result| {
                 let report = match &result {
                     Ok(o) => serde_json::json!({
                         "held": o.held,
                         "frontier": o.frontier,
+                        "nominated": o.nominated,
                         "resolved": o.resolved,
+                        "faded": o.faded,
                         "unreachable": o.unreachable,
+                        "unread": o.unread,
                     })
                     .to_string(),
                     Err(e) => serde_json::json!({ "error": e }).to_string(),
@@ -1818,6 +1822,12 @@ pub fn discovery_frontier(
 #[wasm_bindgen]
 pub fn discovery_budget() -> usize {
     pin_curator::MAX_RESOLVES_PER_PASS
+}
+
+/// How many identities are kept in full, and so are in the refresh rotation.
+#[wasm_bindgen]
+pub fn discovery_full_cap() -> usize {
+    pin_curator::MAX_FULL
 }
 
 /// Where one subject's conversation is cached. From Rust for the reason `tally_rkey` is:

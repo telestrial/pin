@@ -614,13 +614,16 @@ pub async fn run_repack_loop(
 /// Seconds since the epoch from an ISO-8601 timestamp, or 0 when it won't parse.
 ///
 /// 0 reads as "very old", which makes an unparseable timestamp ELIGIBLE for repack
-/// rather than exempt. That's the safe direction: the age check exists to avoid
+/// rather than exempt. That's the safe direction HERE: the age check exists to avoid
 /// churning a burst of fresh publishes, and a timestamp we can't read is far more
 /// likely to be old than to be from the last two minutes.
+///
+/// The fallback is chosen at the call site rather than inside the parse, because the safe
+/// direction is not a property of parsing — `discover`'s eviction reads an unparseable
+/// timestamp the opposite way, since there the cost of being wrong is a deleted record
+/// instead of a redundant repack.
 fn parse_iso_secs(iso: &str) -> i64 {
-    chrono::DateTime::parse_from_rfc3339(iso)
-        .map(|d| d.timestamp())
-        .unwrap_or(0)
+    crate::iso_secs(iso).unwrap_or(0)
 }
 
 #[cfg(test)]

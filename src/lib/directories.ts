@@ -54,7 +54,15 @@ export type DirectoryProfile = {
  *  a record only when its substance moved, so an identity that is alive but has published
  *  nothing keeps an old stamp. That is the honest reading: it says how old what we hold
  *  is. */
+/** How much of an identity is still kept.
+ *
+ *  Nothing is ever deleted: the far network fades rather than disappearing, so what is
+ *  always left is the DID and where they were last reachable. A reduced record has lost its
+ *  profile and channels; a minimal one has lost its edges too. */
+export type DirectoryTier = 'full' | 'reduced' | 'minimal'
+
 export type DirectoryRecord = {
+  tier: DirectoryTier
   profile: DirectoryProfile | null
   channels: DirectoryChannel[]
   reach: DirectoryReach[]

@@ -35,6 +35,7 @@ export const derive_snapshot_key: (a: number, b: number) => [number, number];
 export const directory_collection: () => [number, number];
 export const discovery_budget: () => number;
 export const discovery_frontier: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
+export const discovery_full_cap: () => number;
 export const encrypt_for_channel: (a: number, b: number, c: number, d: number) => [number, number, number, number];
 export const encrypt_settings: (a: number, b: number, c: number, d: number) => [number, number, number, number];
 export const endorse_collection: () => [number, number];

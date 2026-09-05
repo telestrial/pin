@@ -16,6 +16,7 @@ import { beforeAll, describe, expect, it } from 'vitest'
 import {
   discovery_budget,
   discovery_frontier,
+  discovery_full_cap,
 } from '../../crates/pin-core/pkg/pin_core.js'
 import { ensureWasm } from '../core/wasm'
 import {
@@ -202,6 +203,57 @@ describe('the discovery crawl over synthetic graphs', () => {
     const nominated = nextToRead(r0, held, [last])
     expect(nominated[0].did).toBe(last)
     expect(nominated[0].nominated).toBe(true)
+  })
+
+  // SCALES is declared further down; the describe body finishes before any test callback
+  // runs, so referencing it here is fine and keeps the tripwire beside the cases it uses.
+  it('reports what the shipped constants cost at each scale', () => {
+    // The numbers behind the tuning choices, measured rather than guessed: how much of the
+    // graph the crawl holds in full, and how long a cold start takes to see everybody. Both
+    // fall out of constants the Curator actually uses, so changing one moves this table.
+    //
+    // Coverage is SIMULATED up to LARGE and projected for HUGE, because ten thousand
+    // identities at five a pass is two thousand passes and this tier has to stay quick.
+    // The projection is `reachable / perPass`, and it is checked against the simulation on
+    // every scale where both are affordable — so the one projected number rests on a model
+    // that was verified rather than assumed.
+    const cadenceMins = 10
+    const perPass = discovery_budget()
+    const days = (passes: number) =>
+      +((passes * cadenceMins) / 60 / 24).toFixed(1)
+
+    const rows = SCALES.map((c) => {
+      const reachable = everyoneReachable(c.graph, c.viewer).size
+      const projected = Math.ceil(reachable / perPass)
+      const simulate = c.graph !== HUGE_GRAPH
+      const passes = simulate
+        ? crawl(c.graph, c.viewer, perPass).coverage.length
+        : projected
+
+      // The model, checked wherever simulating is affordable. A frontier that stays wider
+      // than the budget means every pass spends all of it, so coverage is just division —
+      // and if that stops being true, the projection below stops meaning anything.
+      if (simulate) expect(Math.abs(passes - projected)).toBeLessThanOrEqual(2)
+
+      const full = Math.min(reachable, discovery_full_cap())
+      return {
+        scale: c.name,
+        reachable,
+        'days to cover': days(passes) + (simulate ? '' : ' (projected)'),
+        'held full': full,
+      }
+    })
+    // Printed for whoever is tuning the constants. The runner swallows console output on a
+    // passing test, so the ASSERTIONS are what hold the line — this is a convenience for a
+    // person changing `MAX_FULL` and wanting to see what it did.
+    console.table(rows)
+
+    for (const r of rows) {
+      expect(r.reachable).toBeGreaterThan(0)
+      // The full tier is capped, which is the whole point of it: past that, holding more
+      // costs more to keep true than it is worth.
+      expect(r['held full']).toBeLessThanOrEqual(discovery_full_cap())
+    }
   })
 
   // One case per scale, each with its own budget — a merged assertion would hide which

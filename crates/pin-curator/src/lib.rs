@@ -87,7 +87,7 @@ pub use channelsync::{run_channel_sync_loop, ChannelSyncContext, ChannelSyncOutc
 pub use deliver::{deliver_once, run_deliver_loop, DeliverContext, DeliverOutcome};
 pub use discover::{
     discover_once, edges_of, frontier, run_discover_loop, Candidate, DirectoryRecord,
-    DiscoverContext, DiscoverOutcome, MAX_RESOLVES_PER_PASS,
+    DirectoryTier, DiscoverContext, DiscoverOutcome, MAX_FULL, MAX_RESOLVES_PER_PASS,
 };
 pub use engagement::{engagement_once, run_engagement_loop, EngagementContext, EngagementOutcome};
 pub use identity::{
@@ -715,6 +715,19 @@ pub(crate) async fn list_rkeys(
 ///
 /// Every loop starts here: settings is where the doc says what this identity
 /// subscribes to and what it owns.
+/// Seconds since the epoch from an ISO-8601 timestamp, or `None` when it won't parse.
+///
+/// Deliberately without a fallback. What an unreadable timestamp should mean depends
+/// entirely on what the caller does with the answer: `repack` reads it as very old,
+/// because the cost of being wrong is one redundant repack; `discover`'s eviction reads it
+/// as unknown and keeps the record, because the cost of being wrong there is a deletion.
+/// Baking either into the parse would hand the other one the wrong default silently.
+pub(crate) fn iso_secs(iso: &str) -> Option<i64> {
+    chrono::DateTime::parse_from_rfc3339(iso)
+        .map(|d| d.timestamp())
+        .ok()
+}
+
 pub(crate) async fn read_settings(
     doc: &Doc,
     blobs: &Store,
