@@ -662,9 +662,16 @@ fn wanted_tiers(held: &Held, covered: &BTreeSet<String>) -> BTreeMap<String, Dir
 /// we could not open hides every edge it carried — so one unreadable entry makes whole
 /// branches look unreachable and fades them. Doing nothing on a partial read costs a pass;
 /// the alternative is the shape of the sweep that once near-wiped an account.
+///
+/// And never over a reading this pass has already superseded. `reread` is who was gone back
+/// to since `held` was taken, so for them it describes a record that no longer exists —
+/// which would have a requested identity read back in full and faded again before the pass
+/// ended, spending the read to leave nothing behind. Deciding from a superseded reading is
+/// the same mistake as deciding from an unreadable one, one pass narrower.
 fn decay_plan(
     held: &Held,
     wanted: &BTreeMap<String, DirectoryTier>,
+    reread: &BTreeSet<String>,
     now_secs: i64,
 ) -> Vec<(String, DirectoryTier)> {
     if held.unread > 0 {
@@ -672,6 +679,9 @@ fn decay_plan(
     }
     let mut plan = Vec::new();
     for (did, want) in wanted {
+        if reread.contains(did) {
+            continue;
+        }
         let have = held.tier.get(did).copied().unwrap_or_default();
         if *want <= have {
             continue;
@@ -744,12 +754,13 @@ fn confirmed_by_pointer(record: &DirectoryRecord, url: &str) -> bool {
 /// spend the budget that keeps the near set true.
 fn refresh_rotation(
     wanted: &BTreeMap<String, DirectoryTier>,
+    already: &BTreeSet<String>,
     after: &str,
     budget: usize,
 ) -> Vec<String> {
     let full: Vec<&String> = wanted
         .iter()
-        .filter(|(_, tier)| **tier == DirectoryTier::Full)
+        .filter(|(did, tier)| **tier == DirectoryTier::Full && !already.contains(*did))
         .map(|(did, _)| did)
         .collect();
     full.iter()
@@ -758,6 +769,43 @@ fn refresh_rotation(
         .take(budget.min(full.len()))
         .map(|did| (*did).clone())
         .collect()
+}
+
+/// Which held records this pass re-reads, and where the rotation stopped.
+///
+/// Two sources, and the order between them is the whole point. The rotation is a guess
+/// about who has probably gone stale; a request is a screen that actually needed somebody
+/// and could not answer from what is held. So requests go first — the same precedence the
+/// frontier gives them among the unread, for the same reason.
+///
+/// It is also the ONLY thing that reads a faded record again. The rotation covers the full
+/// tier, and a faded record is by definition outside it: out there a record is kept because
+/// losing somebody is worse than holding a stale address, not because it is being
+/// maintained. Somebody asking by name is the one signal that changes that answer, and it
+/// is answered once — the request is cleared, and the horizon takes the record back on a
+/// later pass unless somebody asks again.
+///
+/// The cursor comes from the rotation alone. Requests arrive in did order like everything
+/// else here, so letting one advance the cursor would step the rotation past whoever sat
+/// between, and a record skipped that way is not read again until the cursor comes round.
+fn refresh_order(
+    wanted: &BTreeMap<String, DirectoryTier>,
+    requests: &BTreeSet<String>,
+    after: &str,
+    budget: usize,
+) -> (Vec<String>, String) {
+    let asked: BTreeSet<String> = requests
+        .iter()
+        .filter(|did| wanted.contains_key(*did))
+        .take(budget)
+        .cloned()
+        .collect();
+    let rotation = refresh_rotation(wanted, &asked, after, budget - asked.len());
+    let cursor = rotation
+        .last()
+        .cloned()
+        .unwrap_or_else(|| after.to_string());
+    (asked.into_iter().chain(rotation).collect(), cursor)
 }
 
 /// Identities a screen asked for and could not answer from what is held.
@@ -781,6 +829,18 @@ async fn read_requests(ctx: &DiscoverContext) -> BTreeSet<String> {
 async fn clear_request(ctx: &DiscoverContext, did: &str) {
     let _ =
         crate::delete_record(&ctx.doc, ctx.author_id, pin_derive::REQUEST_COLLECTION, did).await;
+}
+
+/// Clear a request if there was one, after the record it asked for was written.
+///
+/// Guarded rather than unconditional: a delete of a key that was never there is still a
+/// write, and every write to this doc is announced to every syncing instance and a reason
+/// to mirror the whole doc to Sia. The rotation re-reads a few identities every pass and
+/// almost none of them were asked for.
+async fn answer_request(ctx: &DiscoverContext, requests: &BTreeSet<String>, did: &str) {
+    if requests.contains(did) {
+        clear_request(ctx, did).await;
+    }
 }
 
 /// Go and read some of the identities this one knows about and has never looked at.
@@ -821,15 +881,12 @@ pub async fn discover_once(
         .take(MAX_RESOLVES_PER_PASS - refresh_share)
         .collect();
     let wanted = wanted_tiers(&held, &covered);
-    let refresh_now = refresh_rotation(
+    let (refresh_now, cursor) = refresh_order(
         &wanted,
+        &requests,
         resume_after,
         MAX_RESOLVES_PER_PASS - read_now.len(),
     );
-    let cursor = refresh_now
-        .last()
-        .cloned()
-        .unwrap_or_else(|| resume_after.to_string());
 
     for candidate in read_now {
         let Ok(resolved) = resolve_directory(&candidate.did).await else {
@@ -862,6 +919,11 @@ pub async fn discover_once(
     // Re-read what is already held, stopping at the pointer wherever nothing has moved.
     // Sia is content-addressed, so an unchanged share URL is proof the bytes are identical
     // rather than a hint — which makes the common case one DHT resolve and no download.
+    //
+    // Who was actually gone back to, which is what `held` no longer describes. Only the
+    // ones read: an identity that could not be reached left its record exactly as the
+    // reading above found it.
+    let mut reread: BTreeSet<String> = BTreeSet::new();
     for did in &refresh_now {
         let Some(record) = read_directory(&ctx.doc, &ctx.blobs, ctx.author_id, did).await else {
             continue;
@@ -882,6 +944,8 @@ pub async fn discover_once(
                 with_reach(&record, &resolved.txt, &now_iso),
             )
             .await;
+            reread.insert(did.clone());
+            answer_request(ctx, &requests, did).await;
             outcome.unchanged += 1;
             continue;
         }
@@ -897,10 +961,12 @@ pub async fn discover_once(
             parse_directory(&blob, &resolved.txt, &resolved.url, &now_iso),
         )
         .await;
+        reread.insert(did.clone());
+        answer_request(ctx, &requests, did).await;
         outcome.refreshed += 1;
     }
 
-    for (did, tier) in decay_plan(&held, &wanted, now_secs) {
+    for (did, tier) in decay_plan(&held, &wanted, &reread, now_secs) {
         let Some(record) = read_directory(&ctx.doc, &ctx.blobs, ctx.author_id, &did).await else {
             continue;
         };
@@ -1163,6 +1229,11 @@ mod tests {
         dids.iter().map(|d| d.to_string()).collect()
     }
 
+    /// Nobody asked for anything, and nothing was re-read.
+    fn none() -> BTreeSet<String> {
+        BTreeSet::new()
+    }
+
     fn graph(edges: &[(&str, &[&str])]) -> BTreeMap<String, Vec<String>> {
         edges
             .iter()
@@ -1384,12 +1455,12 @@ mod tests {
         // that could not read everything does not get to decide who is far away.
         let (held, now) = holding(&[("alice", &[])], DirectoryTier::Full, 400, 1);
         let wanted = want(&[("alice", DirectoryTier::Minimal)]);
-        assert!(decay_plan(&held, &wanted, now).is_empty());
+        assert!(decay_plan(&held, &wanted, &none(), now).is_empty());
 
         // The same reading, complete: now it is a fact about the graph and the record fades.
         let (whole, now) = holding(&[("alice", &[])], DirectoryTier::Full, 400, 0);
         assert_eq!(
-            plan_of(&decay_plan(&whole, &wanted, now)),
+            plan_of(&decay_plan(&whole, &wanted, &none(), now)),
             [("alice", DirectoryTier::Minimal)]
         );
     }
@@ -1400,7 +1471,7 @@ mod tests {
         // publishing keeps its place: `seen_at` moves when their substance moves.
         let (held, now) = holding(&[("alice", &[])], DirectoryTier::Full, 1, 0);
         let wanted = want(&[("alice", DirectoryTier::Reduced)]);
-        assert!(decay_plan(&held, &wanted, now).is_empty());
+        assert!(decay_plan(&held, &wanted, &none(), now).is_empty());
     }
 
     #[test]
@@ -1410,7 +1481,7 @@ mod tests {
         // mint a full record with an empty profile and call it current.
         let (held, now) = holding(&[("alice", &[])], DirectoryTier::Minimal, 400, 0);
         let wanted = want(&[("alice", DirectoryTier::Full)]);
-        assert!(decay_plan(&held, &wanted, now).is_empty());
+        assert!(decay_plan(&held, &wanted, &none(), now).is_empty());
     }
 
     #[test]
@@ -1431,7 +1502,7 @@ mod tests {
             unread: 0,
         };
         let wanted = want(&[("alice", DirectoryTier::Minimal)]);
-        assert!(decay_plan(&held, &wanted, now).is_empty());
+        assert!(decay_plan(&held, &wanted, &none(), now).is_empty());
     }
 
     #[test]
@@ -1453,7 +1524,7 @@ mod tests {
             ("near", DirectoryTier::Full),
             ("far", DirectoryTier::Minimal),
         ]);
-        assert_eq!(refresh_rotation(&wanted, "", 8), ["near"]);
+        assert_eq!(refresh_rotation(&wanted, &none(), "", 8), ["near"]);
     }
 
     #[test]
@@ -1468,10 +1539,10 @@ mod tests {
             ("d", DirectoryTier::Full),
         ]);
 
-        assert_eq!(refresh_rotation(&wanted, "", 2), ["a", "b"]);
-        assert_eq!(refresh_rotation(&wanted, "b", 2), ["c", "d"]);
+        assert_eq!(refresh_rotation(&wanted, &none(), "", 2), ["a", "b"]);
+        assert_eq!(refresh_rotation(&wanted, &none(), "b", 2), ["c", "d"]);
         // And wraps, so the last of them is followed by the first rather than by nothing.
-        assert_eq!(refresh_rotation(&wanted, "d", 2), ["a", "b"]);
+        assert_eq!(refresh_rotation(&wanted, &none(), "d", 2), ["a", "b"]);
     }
 
     #[test]
@@ -1480,9 +1551,96 @@ mod tests {
         // list to itself hands the pass the same did more than once and spends the budget
         // re-reading one person.
         let wanted = want(&[("a", DirectoryTier::Full), ("b", DirectoryTier::Full)]);
-        let rotation = refresh_rotation(&wanted, "", 8);
+        let rotation = refresh_rotation(&wanted, &none(), "", 8);
         assert_eq!(rotation.len(), 2);
         assert_eq!(rotation.iter().collect::<BTreeSet<_>>().len(), 2);
+    }
+
+    #[test]
+    fn somebody_asked_for_is_re_read_before_the_rotation() {
+        // The same precedence the frontier gives a request among the unread, for the same
+        // reason: the rotation is a guess about who has gone stale, and a request is a
+        // screen that actually needed somebody and could not answer.
+        let wanted = want(&[
+            ("a", DirectoryTier::Full),
+            ("b", DirectoryTier::Full),
+            ("c", DirectoryTier::Full),
+        ]);
+        let (order, _) = refresh_order(&wanted, &set(&["c"]), "", 2);
+        assert_eq!(order, ["c", "a"]);
+    }
+
+    #[test]
+    fn somebody_asked_for_is_re_read_however_far_they_have_faded() {
+        // The only thing that reads a faded record again. The rotation covers the full
+        // tier and a faded record is outside it by definition — out there a record is kept
+        // because losing somebody is worse than holding a stale address, not because it is
+        // being maintained. Somebody asking by name is what changes that answer.
+        let wanted = want(&[
+            ("near", DirectoryTier::Full),
+            ("gone", DirectoryTier::Minimal),
+        ]);
+        let (order, _) = refresh_order(&wanted, &set(&["gone"]), "", 8);
+        assert_eq!(order, ["gone", "near"]);
+    }
+
+    #[test]
+    fn a_request_for_somebody_unheld_is_left_to_the_frontier() {
+        // Requests are read by both halves of the pass. This one names nobody held, so it
+        // is the frontier's to answer by going and reading them — spending a refresh on a
+        // did with no record would resolve somebody and then take the branch that reads
+        // what is held, which is nothing.
+        let wanted = want(&[("a", DirectoryTier::Full)]);
+        let (order, _) = refresh_order(&wanted, &set(&["stranger"]), "", 8);
+        assert_eq!(order, ["a"]);
+    }
+
+    #[test]
+    fn a_request_does_not_step_the_rotation_past_anybody() {
+        // The cursor comes from the rotation alone. Requests arrive in did order like
+        // everything else, so letting one advance it would skip whoever sat between — and
+        // a record skipped that way is not read again until the cursor comes round.
+        let wanted = want(&[
+            ("a", DirectoryTier::Full),
+            ("b", DirectoryTier::Full),
+            ("c", DirectoryTier::Full),
+        ]);
+        // A pass whose whole share went to requests moves the cursor nowhere, which is
+        // where the two spellings of "last" part company: with a rotation behind them the
+        // requests are in front and invisible to it either way.
+        let (order, cursor) = refresh_order(&wanted, &set(&["c"]), "", 1);
+        assert_eq!(order, ["c"]);
+        assert_eq!(cursor, "");
+
+        // So the rotation resumes at "a" rather than at "c", which would have jumped both
+        // of the two identities nobody asked about.
+        let (next, _) = refresh_order(&wanted, &none(), &cursor, 1);
+        assert_eq!(next, ["a"]);
+    }
+
+    #[test]
+    fn somebody_asked_for_is_offered_once_however_the_rotation_falls() {
+        // A requested identity in the full tier is in both pools. Handing the pass the
+        // same did twice spends two of its eight resolves on one person.
+        let wanted = want(&[("a", DirectoryTier::Full), ("b", DirectoryTier::Full)]);
+        let (order, _) = refresh_order(&wanted, &set(&["a"]), "", 8);
+        assert_eq!(order, ["a", "b"]);
+    }
+
+    #[test]
+    fn a_record_re_read_this_pass_does_not_fade_on_it() {
+        // `held` was taken before the pass spent its budget, so for anybody gone back to
+        // since it describes a record that no longer exists. Without this a requested
+        // identity is read back in full and faded again before the pass ends — the read
+        // spent to leave nothing behind, and the request cleared saying it was answered.
+        let (held, now) = holding(&[("far", &[])], DirectoryTier::Full, 30, 0);
+        let wanted = want(&[("far", DirectoryTier::Reduced)]);
+
+        assert_eq!(
+            plan_of(&decay_plan(&held, &wanted, &none(), now)),
+            [("far", DirectoryTier::Reduced)]
+        );
+        assert!(decay_plan(&held, &wanted, &set(&["far"]), now).is_empty());
     }
 
     #[test]
