@@ -21,7 +21,10 @@ vi.mock('../lib/docs', async () =>
 )
 
 import { cleanup } from '@testing-library/react'
-import { directory_collection } from '../../crates/pin-core/pkg/pin_core.js'
+import {
+  directory_collection,
+  request_collection,
+} from '../../crates/pin-core/pkg/pin_core.js'
 import { DIRECTORY_DOC_VERSION } from '../core/identityDoc'
 import {
   useIdentityName,
@@ -43,12 +46,21 @@ function Person({ didDht }: { didDht: string }) {
   )
 }
 
-function hold(didDht: string, username: string, avatarURL: string) {
+function hold(
+  didDht: string,
+  username: string,
+  avatarURL: string,
+  tier = 'full',
+) {
   docStore.set(
     `${directory_collection()}/${didDht}`,
     new TextEncoder().encode(
       JSON.stringify({
-        profile: { username, displayName: username, avatarURL },
+        tier,
+        profile:
+          tier === 'full'
+            ? { username, displayName: username, avatarURL }
+            : null,
         channels: [],
         reach: [],
         follows: [],
@@ -107,6 +119,51 @@ describe('rendering a person', () => {
     await waitFor(() =>
       expect(screen.getByTestId('name')).toHaveTextContent('from-the-network'),
     )
+  })
+
+  it('resolves someone whose record has faded rather than reading it as no name', async () => {
+    // A faded record kept its endpoints and dropped its profile, so an empty profile
+    // there means the crawl let it go — not that they publish none. Reading it as an
+    // answer names them `did:dht:…` forever, because nothing else would ever look at
+    // them again.
+    const them = 'did:dht:fadedperson'
+    hold(them, '', '', 'reduced')
+    await publish(them, 'from-the-network', 'sia://network-avatar')
+
+    render(<Person didDht={them} />)
+
+    await waitFor(() =>
+      expect(screen.getByTestId('name')).toHaveTextContent('from-the-network'),
+    )
+  })
+
+  it('asks the crawl to read a faded record again', async () => {
+    // The other half, and the one that outlives the session: a request is the only thing
+    // that brings a faded profile back, since the refresh rotation re-reads the full tier
+    // and a faded record is by definition outside it.
+    const them = 'did:dht:fadedandwanted'
+    hold(them, '', '', 'minimal')
+    await publish(them, 'from-the-network', 'sia://network-avatar')
+
+    render(<Person didDht={them} />)
+
+    await waitFor(() =>
+      expect(docStore.has(`${request_collection()}/${them}`)).toBe(true),
+    )
+  })
+
+  it('asks for nobody it could name from a full record', async () => {
+    // A request spends the crawl's budget. A record that still carries its profile
+    // answered the question, so asking again would re-read what is already held.
+    const them = 'did:dht:heldandquiet'
+    hold(them, 'from-the-index', 'sia://held-avatar')
+
+    render(<Person didDht={them} />)
+
+    await waitFor(() =>
+      expect(screen.getByTestId('name')).toHaveTextContent('from-the-index'),
+    )
+    expect(docStore.has(`${request_collection()}/${them}`)).toBe(false)
   })
 
   it('renders your own name from local state, never from either rung', async () => {

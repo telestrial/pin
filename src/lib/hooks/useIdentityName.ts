@@ -40,12 +40,19 @@ function displayable(profile: {
 // What the Curator's crawl already recorded about them, or undefined when it has never
 // read them. A held record with no profile answers `null` — that is a real answer, not a
 // miss, so it stops here rather than spending a lookup to be told the same thing.
+//
+// Except when the record has faded. A distant identity keeps its endpoints and loses its
+// profile, so an empty profile then means the crawl dropped it rather than that they
+// publish none — the exact pair `tier` is recorded to tell apart, since a record's empty
+// fields cannot. Reading a faded record as an answer would name somebody `did:dht:…abc123`
+// forever with the crawl holding no reason to look at them again.
 async function fromIndex(
   appKeyHex: string,
   didDht: string,
 ): Promise<IdentityProfile | null | undefined> {
   const held = await readDirectory(appKeyHex, didDht)
   if (!held) return undefined
+  if (held.tier && held.tier !== 'full') return undefined
   return held.profile ? displayable(held.profile) : null
 }
 
@@ -71,8 +78,10 @@ function resolve(
       const held = await fromIndex(appKeyHex, didDht).catch(() => undefined)
       if (held !== undefined) return held
     }
-    // Held nowhere, so this row is paying a DHT lookup and a download to put a name on
-    // somebody. Asking for them is what makes the next session a doc read.
+    // Nothing held that can name them, so this row is paying a DHT lookup and a download
+    // to put a name on somebody. Asking for them is what makes the next session a doc
+    // read — and for a faded record it is the only thing that ever brings the profile
+    // back, since the crawl reads a held identity again only when somebody asks.
     if (appKeyHex) void request(appKeyHex, didDht)
     const doc = await resolveIdentityDoc(
       // biome-ignore lint/suspicious/noExplicitAny: client typed loosely to keep the hook off the SDK import
