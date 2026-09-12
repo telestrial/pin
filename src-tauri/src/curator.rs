@@ -1280,6 +1280,18 @@ pub async fn curator_start_discover(
     if engine.discover_started() {
         return Ok(());
     }
+    // Announced once, the way every other loop announces itself, and for a reason specific
+    // to this one: a pass is deliberately QUIET when it found nothing to do, so without
+    // this line a settled graph and a loop that never started read identically in the log
+    // — which are the two states anybody reading it is trying to tell apart. Once at
+    // startup rather than per pass, so it stays a fact about this process rather than a
+    // heartbeat.
+    log::info!(
+        "curator discover: loop started (cadence {}s, {} resolves a pass, {} reserved for re-reads; a pass that finds nothing logs nothing)",
+        DISCOVER_CADENCE.as_secs(),
+        pin_curator::MAX_RESOLVES_PER_PASS,
+        pin_curator::REFRESH_PER_PASS,
+    );
     let loop_handle = sia.detach(async move {
         pin_curator::run_discover_loop(
             ctx,
