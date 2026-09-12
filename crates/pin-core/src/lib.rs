@@ -714,6 +714,7 @@ pub async fn start_engagement_loop(
             .map_err(|e| JsValue::from_str(&e))?
     );
     let ctx = pin_curator::EngagementContext {
+        net: pin_curator::net::LiveNetwork::new(sia()),
         // Everything held, which is what this means until there is somewhere to review a
         // comment held back.
         comment_policy: Default::default(),
@@ -794,7 +795,7 @@ pub async fn start_discover_loop(
         doc: eng.doc.clone(),
         blobs: (*eng.blobs).clone(),
         author_id: eng.author_id,
-        sia: sia(),
+        net: pin_curator::net::LiveNetwork::new(sia()),
         app_key,
     };
     wasm_bindgen_futures::spawn_local(async move {

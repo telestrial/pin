@@ -77,6 +77,7 @@ mod engagement;
 mod identity;
 mod instance;
 mod keepalive;
+pub mod net;
 mod rendezvous;
 mod repack;
 mod snapshot;

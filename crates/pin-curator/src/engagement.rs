@@ -58,7 +58,7 @@ use pin_engagement::{Aggregate, Endorsement, Retraction};
 use crate::{read_record, read_settings, SettingsView};
 
 /// Everything a pass needs.
-pub struct EngagementContext {
+pub struct EngagementContext<N: crate::net::Network> {
     /// Which held comments this identity publishes. Defaults to everything — see
     /// `comments::CommentPolicy` for why that is the shipped answer and not the eventual one.
     pub comment_policy: crate::comments::CommentPolicy,
@@ -71,6 +71,10 @@ pub struct EngagementContext {
     /// A connected Sia session: a directory's records live in a blob, and reading somebody
     /// else's endorsements means downloading it.
     pub sia: Arc<pin_sia::Session>,
+    /// How this pass reads somebody else: resolve their key, download their directory.
+    /// Beside `sia` rather than replacing it, because a fold also PUBLISHES, and the
+    /// seam is only over the two reads a crawl makes.
+    pub net: N,
     pub app_key: [u8; 32],
     /// Knocks parked by whatever is serving `/hey` on this instance. Drained here rather
     /// than in a loop of its own, because turning one into a count needs this pass's
@@ -157,8 +161,8 @@ pub(crate) type SubjectTable = HashMap<String, String>;
 /// something you already hold. That is also what keeps an unlisted channel's counts private:
 /// nobody without K can compute its subjects, so nobody else can tell what a record for one
 /// refers to.
-async fn own_subjects(
-    ctx: &EngagementContext,
+async fn own_subjects<N: crate::net::Network>(
+    ctx: &EngagementContext<N>,
     settings: &SettingsView,
 ) -> Result<SubjectTable, String> {
     let mut table = SubjectTable::new();
@@ -293,7 +297,10 @@ fn may_skip(held: Option<&CrawlMark>, current: &CrawlMark) -> bool {
 use crate::discover::resolve_directory;
 
 /// The mark held for an actor, or None if we've never read them to completion.
-async fn read_crawl_mark(ctx: &EngagementContext, did: &str) -> Option<CrawlMark> {
+async fn read_crawl_mark<N: crate::net::Network>(
+    ctx: &EngagementContext<N>,
+    did: &str,
+) -> Option<CrawlMark> {
     let raw = read_record(
         &ctx.doc,
         &ctx.blobs,
@@ -310,7 +317,11 @@ async fn read_crawl_mark(ctx: &EngagementContext, did: &str) -> Option<CrawlMark
 ///
 /// Skipped when it would write what is already there: every write to this doc is a change
 /// announced to every instance syncing it, and a pass that changed nothing should be silent.
-async fn write_crawl_mark(ctx: &EngagementContext, did: &str, mark: &CrawlMark) {
+async fn write_crawl_mark<N: crate::net::Network>(
+    ctx: &EngagementContext<N>,
+    did: &str,
+    mark: &CrawlMark,
+) {
     if read_crawl_mark(ctx, did).await.as_ref() == Some(mark) {
         return;
     }
@@ -333,7 +344,10 @@ async fn write_crawl_mark(ctx: &EngagementContext, did: &str, mark: &CrawlMark) 
 /// what we extracted from that same blob last time, and the blob is byte-identical. Only the
 /// subjects we publish are in there, so an actor's endorsements of OTHER people's posts —
 /// discarded on a real read anyway — simply don't appear.
-async fn held_endorsements(ctx: &EngagementContext, rkeys: &[String]) -> Vec<Endorsement> {
+async fn held_endorsements<N: crate::net::Network>(
+    ctx: &EngagementContext<N>,
+    rkeys: &[String],
+) -> Vec<Endorsement> {
     let mut out = Vec::new();
     for rkey in rkeys {
         let Ok(Some(raw)) = read_record(
@@ -369,7 +383,10 @@ fn folds_into(rkey: &str, subject: &str) -> bool {
 /// A scan of the log, which is keyed subject-first for exactly this. Unreadable entries
 /// are skipped rather than failing the fold: one bad record must not take a whole count
 /// with it.
-async fn log_records_for(ctx: &EngagementContext, subject: &str) -> Vec<Endorsement> {
+async fn log_records_for<N: crate::net::Network>(
+    ctx: &EngagementContext<N>,
+    subject: &str,
+) -> Vec<Endorsement> {
     let rkeys = crate::list_rkeys(
         &ctx.doc,
         ctx.author_id,
@@ -412,7 +429,10 @@ fn log_key(record: &Endorsement) -> String {
 /// What a knock is compared against, so a replayed record can't displace something newer.
 /// Unreadable counts as absent, which lets the knock through — the write path compares
 /// bytes before writing anyway, so the worst case is re-writing what is already there.
-async fn held_created_at(ctx: &EngagementContext, rkey: &str) -> Option<String> {
+async fn held_created_at<N: crate::net::Network>(
+    ctx: &EngagementContext<N>,
+    rkey: &str,
+) -> Option<String> {
     let raw = read_record(
         &ctx.doc,
         &ctx.blobs,
@@ -438,8 +458,8 @@ async fn held_created_at(ctx: &EngagementContext, rkey: &str) -> Option<String> 
 /// Errors mean "couldn't read", which is what keeps their held records alive. An actor who
 /// has published a directory with no endorsements returns an empty list — a real answer,
 /// and the one that withdraws.
-async fn download_directory(
-    ctx: &EngagementContext,
+async fn download_directory<N: crate::net::Network>(
+    ctx: &EngagementContext<N>,
     did: &str,
     url: &str,
 ) -> Result<
@@ -450,7 +470,7 @@ async fn download_directory(
     ),
     String,
 > {
-    let doc = crate::discover::download_directory_blob(&ctx.sia, did, url).await?;
+    let doc = crate::discover::download_directory_blob(&ctx.net, did, url).await?;
 
     // Read, so a directory naming no blob is a positive "they have none" — see
     // `comments::comments_at` for why that distinction is kept where it can be tested.
@@ -478,7 +498,7 @@ async fn download_directory(
 /// Never over the network, for the same reason a display name isn't: the published copy lags
 /// local edits and may not have propagated. And they belong in the tally — an author is pin
 /// #1 on their own post, so leaving themselves out would make a fresh post read zero.
-async fn own_endorsements(ctx: &EngagementContext) -> Vec<Endorsement> {
+async fn own_endorsements<N: crate::net::Network>(ctx: &EngagementContext<N>) -> Vec<Endorsement> {
     let rkeys = crate::list_rkeys(&ctx.doc, ctx.author_id, pin_derive::ENDORSE_COLLECTION)
         .await
         .unwrap_or_default();
@@ -645,8 +665,8 @@ fn retraction_log_key(record: &Retraction) -> String {
 /// post, and the 1 that says you are keeping it alive — derived entirely from a record you
 /// just wrote — took as long to appear as reading everybody else's directories. So a
 /// fold-only pass runs often and a crawling pass runs on the slow cadence.
-pub async fn engagement_once(
-    ctx: &EngagementContext,
+pub async fn engagement_once<N: crate::net::Network>(
+    ctx: &EngagementContext<N>,
     own_did: &str,
     now_iso: String,
     crawl: bool,
@@ -725,7 +745,7 @@ pub async fn engagement_once(
             all.push((did, held_endorsements(ctx, &rkeys).await));
             continue;
         }
-        let resolved = match resolve_directory(&did).await {
+        let resolved = match resolve_directory(&ctx.net, &did).await {
             Ok(resolved) => resolved,
             Err(_) => {
                 outcome.unreachable += 1;
@@ -1133,8 +1153,8 @@ fn withdrawal(rkey: &str, found: &BTreeSet<String>, reached: &BTreeSet<String>) 
 ///
 /// Read author-agnostically, the way a subscriber reads a channel doc: only the author can
 /// write to that namespace, so any entry at this key is ours.
-async fn read_tally(
-    ctx: &EngagementContext,
+async fn read_tally<N: crate::net::Network>(
+    ctx: &EngagementContext<N>,
     channel_doc: &Doc,
     subject: &str,
 ) -> Option<Aggregate> {
@@ -1147,8 +1167,8 @@ async fn read_tally(
 }
 
 /// The retention time a subject's published tally already claims, if any.
-async fn held_retention(
-    ctx: &EngagementContext,
+async fn held_retention<N: crate::net::Network>(
+    ctx: &EngagementContext<N>,
     channel_doc: &Doc,
     subject: &str,
 ) -> Option<String> {
@@ -1170,8 +1190,8 @@ async fn held_retention(
 /// guard exists to prevent. The doc holds what was last written for EVERY subject,
 /// including ones this pass never touched, so the floor and the replica say the same
 /// thing by construction rather than by two folds agreeing.
-async fn read_tallies(
-    ctx: &EngagementContext,
+async fn read_tallies<N: crate::net::Network>(
+    ctx: &EngagementContext<N>,
     channel_doc: &Doc,
 ) -> Result<BTreeMap<String, Aggregate>, String> {
     let subjects = crate::list_rkeys(
@@ -1194,8 +1214,8 @@ async fn read_tallies(
 /// From the doc rather than re-gathered, for the reason `read_tallies` gives: the doc holds
 /// what was last written for every subject, including ones this pass never touched, so the
 /// floor and the replica agree by construction instead of by two gathers agreeing.
-async fn read_conversations(
-    ctx: &EngagementContext,
+async fn read_conversations<N: crate::net::Network>(
+    ctx: &EngagementContext<N>,
     channel_doc: &Doc,
 ) -> Result<BTreeMap<String, pin_engagement::Conversation>, String> {
     let subjects = crate::list_rkeys(
@@ -1255,8 +1275,8 @@ fn conversation_substance(
 ///
 /// The words' floor, and the same shape the counts' is: fingerprinted on substance, keep-2
 /// on reclaim, and self-gating so calling it when nothing moved costs one local read.
-pub async fn publish_channel_conversations(
-    ctx: &EngagementContext,
+pub async fn publish_channel_conversations<N: crate::net::Network>(
+    ctx: &EngagementContext<N>,
     channel_id: &str,
     channel_key: &[u8; 32],
 ) -> Result<bool, String> {
@@ -1328,8 +1348,8 @@ fn substance(map: &BTreeMap<String, Aggregate>) -> Result<String, String> {
 /// nothing moved costs one local read.
 ///
 /// Returns whether anything was uploaded.
-pub async fn publish_channel_tallies(
-    ctx: &EngagementContext,
+pub async fn publish_channel_tallies<N: crate::net::Network>(
+    ctx: &EngagementContext<N>,
     channel_id: &str,
     channel_key: &[u8; 32],
 ) -> Result<bool, String> {
@@ -1423,7 +1443,10 @@ pub(crate) fn conversation_key(subject: &str) -> Vec<u8> {
 
 /// Open one of this identity's channel docs. Idempotent, and the same derivation the
 /// channel-doc loop uses, so both reach the same replica.
-async fn open_channel_doc(ctx: &EngagementContext, channel_id: &str) -> Result<Doc, String> {
+async fn open_channel_doc<N: crate::net::Network>(
+    ctx: &EngagementContext<N>,
+    channel_id: &str,
+) -> Result<Doc, String> {
     let seed = pin_derive::channel_doc_seed(&ctx.app_key, channel_id);
     ctx.docs
         .import_namespace(Capability::Write(NamespaceSecret::from_bytes(&seed)))
@@ -1473,8 +1496,8 @@ enum Woke {
 /// reaches this identity no other way, and waiting out the cadence to fold one is the last
 /// stretch of delay between someone liking a post and its author showing it. What that
 /// wake does not do is crawl — see `crawl_this_pass`.
-pub async fn run_engagement_loop(
-    ctx: EngagementContext,
+pub async fn run_engagement_loop<N: crate::net::Network>(
+    ctx: EngagementContext<N>,
     own_did: String,
     cadence: Duration,
     crawl_every: u32,

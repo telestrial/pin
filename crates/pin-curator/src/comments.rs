@@ -147,7 +147,10 @@ fn pending_or_held(
 }
 
 /// When the comment already held at one address says it was made, if there is one.
-async fn held_created_at(ctx: &EngagementContext, rkey: &str) -> Option<String> {
+async fn held_created_at<N: crate::net::Network>(
+    ctx: &EngagementContext<N>,
+    rkey: &str,
+) -> Option<String> {
     let raw = read_record(
         &ctx.doc,
         &ctx.blobs,
@@ -231,7 +234,10 @@ fn unchanged_counts_as_read(held: Option<&CommentMark>) -> bool {
     matches!(held, Some(m) if m.epoch == COMMENT_EPOCH)
 }
 
-async fn read_mark(ctx: &EngagementContext, did: &str) -> Option<CommentMark> {
+async fn read_mark<N: crate::net::Network>(
+    ctx: &EngagementContext<N>,
+    did: &str,
+) -> Option<CommentMark> {
     let raw = read_record(
         &ctx.doc,
         &ctx.blobs,
@@ -244,7 +250,11 @@ async fn read_mark(ctx: &EngagementContext, did: &str) -> Option<CommentMark> {
     serde_json::from_slice(&raw).ok()
 }
 
-async fn write_mark(ctx: &EngagementContext, did: &str, mark: &CommentMark) {
+async fn write_mark<N: crate::net::Network>(
+    ctx: &EngagementContext<N>,
+    did: &str,
+    mark: &CommentMark,
+) {
     if read_mark(ctx, did).await.as_ref() == Some(mark) {
         return;
     }
@@ -299,8 +309,8 @@ pub(crate) fn open_entry(value: &serde_json::Value, keys: &[[u8; 32]]) -> Option
 ///
 /// Anything that won't parse is skipped rather than failing the actor: one malformed record
 /// must not make everything else they wrote unreadable.
-async fn download(
-    ctx: &EngagementContext,
+async fn download<N: crate::net::Network>(
+    ctx: &EngagementContext<N>,
     did: &str,
     url: &str,
     keys: &[[u8; 32]],
@@ -322,8 +332,8 @@ async fn download(
 /// `keys` are this identity's own channel keys, which is what opens a comment left on a
 /// channel of ours that isn't public — see `open_entry`. Only channels we publish, because
 /// only a comment on one of those has a subject we could match anyway.
-pub(crate) async fn crawl(
-    ctx: &EngagementContext,
+pub(crate) async fn crawl<N: crate::net::Network>(
+    ctx: &EngagementContext<N>,
     at: &BTreeMap<String, CommentsAt>,
     keys: &[[u8; 32]],
     outcome: &mut CommentsOutcome,
@@ -620,7 +630,7 @@ async fn read_mark_as<T: serde::de::DeserializeOwned>(
 ///
 /// Never over the network, for the reason the gesture lane gives: the published copy lags
 /// what has just been written, and a fold that read it would drop a comment made seconds ago.
-pub(crate) async fn own(ctx: &EngagementContext) -> Vec<Endorsement> {
+pub(crate) async fn own<N: crate::net::Network>(ctx: &EngagementContext<N>) -> Vec<Endorsement> {
     let rkeys = crate::list_rkeys(&ctx.doc, ctx.author_id, pin_derive::COMMENT_COLLECTION)
         .await
         .unwrap_or_default();
@@ -743,7 +753,10 @@ fn folds_into(rkey: &str, subject: &str) -> bool {
 /// A scan of the log, which is keyed subject-first for exactly this. Unreadable entries are
 /// skipped rather than failing the read: one bad record must not take a whole conversation
 /// with it.
-pub(crate) async fn held_for(ctx: &EngagementContext, subject: &str) -> Vec<Endorsement> {
+pub(crate) async fn held_for<N: crate::net::Network>(
+    ctx: &EngagementContext<N>,
+    subject: &str,
+) -> Vec<Endorsement> {
     let rkeys = crate::list_rkeys(&ctx.doc, ctx.author_id, pin_derive::COMMENT_LOG_COLLECTION)
         .await
         .unwrap_or_default();
@@ -790,8 +803,8 @@ pub(crate) fn withdrawal(
 /// Answers with the subjects whose conversation moved, and the actors whose comments were
 /// read — the second because a retention stamp may only claim what was actually confirmed,
 /// and being reachable for endorsements says nothing about the separate blob.
-pub async fn take_in(
-    ctx: &EngagementContext,
+pub async fn take_in<N: crate::net::Network>(
+    ctx: &EngagementContext<N>,
     own_did: &str,
     subjects: &SubjectTable,
     knocks: Vec<serde_json::Value>,

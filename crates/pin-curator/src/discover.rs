@@ -176,8 +176,11 @@ pub(crate) struct Resolved {
 /// Here rather than beside either caller, because both loops that read somebody's
 /// directory start with this exact step and a second copy would be a second answer to
 /// "what counts as no directory".
-pub(crate) async fn resolve_directory(did: &str) -> Result<Resolved, String> {
-    let txt = pin_pkarr::resolve(did).await?;
+pub(crate) async fn resolve_directory(
+    net: &impl crate::net::Network,
+    did: &str,
+) -> Result<Resolved, String> {
+    let txt = net.resolve(did).await?;
     let url = pin_pkarr::rejoin_txt(&txt, crate::identity::DIR_PREFIX);
     if url.is_empty() {
         return Err(format!("{did}: no directory published"));
@@ -190,11 +193,11 @@ pub(crate) async fn resolve_directory(did: &str) -> Result<Resolved, String> {
 /// Shared for the same reason `resolve_directory` is: engagement reads it for endorsements
 /// and discovery for everything else, and it is one object either way.
 pub(crate) async fn download_directory_blob(
-    sia: &pin_sia::Session,
+    net: &impl crate::net::Network,
     did: &str,
     url: &str,
 ) -> Result<serde_json::Value, String> {
-    let bytes = sia.download_item(url).await?;
+    let bytes = net.download(url).await?;
     serde_json::from_slice(&bytes).map_err(|e| format!("{did}: directory: {e}"))
 }
 
@@ -470,13 +473,13 @@ pub(crate) async fn record_directory(
 }
 
 /// Everything a discovery pass needs.
-pub struct DiscoverContext {
+pub struct DiscoverContext<N: crate::net::Network> {
     pub doc: Doc,
     pub blobs: Store,
     pub author_id: AuthorId,
-    /// A connected Sia session: a directory's contents live in a blob, and reading
-    /// somebody new means downloading it.
-    pub sia: std::sync::Arc<pin_sia::Session>,
+    /// How this pass reads the network: resolve a key, download the blob it names. A
+    /// directory's contents live in a blob, so reading somebody new is exactly those two.
+    pub net: N,
     pub app_key: [u8; 32],
 }
 
@@ -531,7 +534,7 @@ fn covered_elsewhere(settings: &SettingsView, own_did: &str) -> BTreeSet<String>
 /// The edges alone, because that is all the frontier depends on — carrying whole records
 /// would hold a profile and a channel list per identity for a computation that reads
 /// neither.
-async fn held_edges(ctx: &DiscoverContext) -> Held {
+async fn held_edges<N: crate::net::Network>(ctx: &DiscoverContext<N>) -> Held {
     let mut held = Held::default();
     let Ok(dids) =
         crate::list_rkeys(&ctx.doc, ctx.author_id, pin_derive::DIRECTORY_COLLECTION).await
@@ -812,7 +815,7 @@ fn refresh_order(
 ///
 /// A failed read yields none rather than failing the pass: a request is a hint about
 /// ORDER, so losing one costs a few passes of priority and nothing else.
-async fn read_requests(ctx: &DiscoverContext) -> BTreeSet<String> {
+async fn read_requests<N: crate::net::Network>(ctx: &DiscoverContext<N>) -> BTreeSet<String> {
     crate::list_rkeys(&ctx.doc, ctx.author_id, pin_derive::REQUEST_COLLECTION)
         .await
         .unwrap_or_default()
@@ -826,7 +829,7 @@ async fn read_requests(ctx: &DiscoverContext) -> BTreeSet<String> {
 /// the request standing and the next pass tries again. The other way round loses the
 /// request on any failure, which is the one outcome that matters here — the person who
 /// asked is still looking at a name we could not resolve.
-async fn clear_request(ctx: &DiscoverContext, did: &str) {
+async fn clear_request<N: crate::net::Network>(ctx: &DiscoverContext<N>, did: &str) {
     let _ =
         crate::delete_record(&ctx.doc, ctx.author_id, pin_derive::REQUEST_COLLECTION, did).await;
 }
@@ -837,7 +840,11 @@ async fn clear_request(ctx: &DiscoverContext, did: &str) {
 /// write, and every write to this doc is announced to every syncing instance and a reason
 /// to mirror the whole doc to Sia. The rotation re-reads a few identities every pass and
 /// almost none of them were asked for.
-async fn answer_request(ctx: &DiscoverContext, requests: &BTreeSet<String>, did: &str) {
+async fn answer_request<N: crate::net::Network>(
+    ctx: &DiscoverContext<N>,
+    requests: &BTreeSet<String>,
+    did: &str,
+) {
     if requests.contains(did) {
         clear_request(ctx, did).await;
     }
@@ -849,8 +856,8 @@ async fn answer_request(ctx: &DiscoverContext, requests: &BTreeSet<String>, did:
 /// edge the frontier is derived from — falls out of reads the engagement crawl was making
 /// anyway; this is the loop that widens the circle, and it is budgeted because the frontier
 /// is unbounded by construction.
-pub async fn discover_once(
-    ctx: &DiscoverContext,
+pub async fn discover_once<N: crate::net::Network>(
+    ctx: &DiscoverContext<N>,
     own_did: &str,
     now_iso: String,
     now_secs: i64,
@@ -889,13 +896,13 @@ pub async fn discover_once(
     );
 
     for candidate in read_now {
-        let Ok(resolved) = resolve_directory(&candidate.did).await else {
+        let Ok(resolved) = resolve_directory(&ctx.net, &candidate.did).await else {
             // Asleep, or a relay that didn't answer. They stay on the frontier, and an
             // inability to read is never turned into a record saying they have nothing.
             outcome.unreachable += 1;
             continue;
         };
-        let Ok(blob) = download_directory_blob(&ctx.sia, &candidate.did, &resolved.url).await
+        let Ok(blob) = download_directory_blob(&ctx.net, &candidate.did, &resolved.url).await
         else {
             outcome.unreachable += 1;
             continue;
@@ -928,7 +935,7 @@ pub async fn discover_once(
         let Some(record) = read_directory(&ctx.doc, &ctx.blobs, ctx.author_id, did).await else {
             continue;
         };
-        let Ok(resolved) = resolve_directory(did).await else {
+        let Ok(resolved) = resolve_directory(&ctx.net, did).await else {
             outcome.unreachable += 1;
             continue;
         };
@@ -949,7 +956,7 @@ pub async fn discover_once(
             outcome.unchanged += 1;
             continue;
         }
-        let Ok(blob) = download_directory_blob(&ctx.sia, did, &resolved.url).await else {
+        let Ok(blob) = download_directory_blob(&ctx.net, did, &resolved.url).await else {
             outcome.unreachable += 1;
             continue;
         };
@@ -989,8 +996,8 @@ pub async fn discover_once(
 /// record in this doc, so waking on doc changes would have the loop's own writes wake it —
 /// the shape `deliver` calls "a loop feeding itself". Nothing here is latency-sensitive
 /// either. Discovery is how the network becomes visible over days, not how a count arrives.
-pub async fn run_discover_loop(
-    ctx: DiscoverContext,
+pub async fn run_discover_loop<N: crate::net::Network>(
+    ctx: DiscoverContext<N>,
     own_did: String,
     cadence: Duration,
     now_iso: impl Fn() -> String,

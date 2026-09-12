@@ -1169,6 +1169,7 @@ pub async fn curator_start_engagement(
         .clone()
         .ok_or("curator inbox is not up yet")?;
     let ctx = pin_curator::EngagementContext {
+        net: pin_curator::net::LiveNetwork::new(sia.session()),
         // Everything held, which is what this means until there is somewhere to review a
         // comment held back.
         comment_policy: Default::default(),
@@ -1271,7 +1272,7 @@ pub async fn curator_start_discover(
         doc: engine.doc.clone(),
         blobs: (*engine.blobs).clone(),
         author_id: engine.author_id,
-        sia: sia.session(),
+        net: pin_curator::net::LiveNetwork::new(sia.session()),
         app_key,
     };
     // Marked started only once everything the loop needs is in hand, for the reason
