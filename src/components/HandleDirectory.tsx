@@ -241,17 +241,22 @@ export function HandleDirectory({
         : null
       const indexed = held?.tier === 'full' ? held : null
       if (indexed && !cancelled) {
-        // The profile and the follow edges, which the record carries whole. NOT the
-        // channels: the record names them but not their manifests, so drawing hero cards
-        // from here would resolve every one of them and then the revalidation would
-        // resolve every one again — two DHT lookups and two Sia downloads per channel to
-        // put the cards up slightly sooner. They come from the read that is happening
-        // anyway.
+        // The profile and the follow edges, which the record carries whole — and the cards
+        // for whichever channels it names that this device already holds. The record
+        // carries each channel's K but not its manifest, so a card it cannot answer from
+        // the doc is left for the read below rather than resolved from here: that would be
+        // a DHT lookup and a Sia download which the revalidation then pays again.
+        //
+        // The channel list is the CRAWL's, so it is only as fresh as its last pass — a
+        // channel published since then is missing and one withdrawn since is still here.
+        // Both are settled by the read below, which is what landing is for.
+        const fromIndex = await cachedChannels(storedKeyHex, indexed.channels)
+        if (cancelled) return
         setState({
           kind: 'loaded',
           did: handle,
           profile: indexed.profile,
-          ownChannels: [],
+          ownChannels: fromIndex,
           follows: indexed.follows,
         })
       } else if (storedKeyHex) {

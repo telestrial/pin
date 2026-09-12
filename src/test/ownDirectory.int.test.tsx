@@ -107,7 +107,12 @@ function signedInWith(myChannels: OwnedChannel[]) {
 }
 
 /** A directory record the crawl has read, at the tier it still holds them. */
-function hold(didDht: string, displayName: string, tier = 'full') {
+function hold(
+  didDht: string,
+  displayName: string,
+  tier = 'full',
+  channels: { channelID: string; key: string; name: string }[] = [],
+) {
   docStore.set(
     `${directory_collection()}/${didDht}`,
     new TextEncoder().encode(
@@ -115,7 +120,7 @@ function hold(didDht: string, displayName: string, tier = 'full') {
         tier,
         profile:
           tier === 'full' ? { username: displayName, displayName } : null,
-        channels: [],
+        channels,
         reach: [],
         follows: [],
         handleFollows: [],
@@ -335,6 +340,65 @@ describe("integration: somebody else's hero cards walk the resolution ladder", (
 
     await waitFor(() =>
       expect(screen.getByText('Resolved channel')).toBeInTheDocument(),
+    )
+  })
+
+  it('draws a card from the index before the directory resolves', async () => {
+    // The crawl's record names each channel and carries its K, so a channel this device
+    // already holds is a card for the price of a doc read — before any lookup. Holding the
+    // resolve open is what makes this about ORDER rather than the eventual answer.
+    signedInWith([owned()])
+    await inTheCache('theirs', 'From the index')
+    hold(THEM, 'them', 'full', [
+      { channelID: 'theirs', key: KEY, name: 'Their channel' },
+    ])
+    let answer: (doc: unknown) => void = () => {}
+    resolveIdentityDoc.mockReturnValue(
+      new Promise((resolve) => {
+        answer = resolve
+      }),
+    )
+
+    render(directory(THEM))
+
+    await waitFor(() =>
+      expect(screen.getByText('From the index')).toBeInTheDocument(),
+    )
+    answer(null)
+  })
+
+  it('leaves a channel the index names but this device does not hold', async () => {
+    // The record carries K but not the manifest, so a card it cannot answer from the doc
+    // would cost a DHT lookup and a Sia download that the read below pays again. It waits
+    // for the read that is happening anyway.
+    signedInWith([owned()])
+    hold(THEM, 'them', 'full', [
+      { channelID: 'theirs', key: KEY, name: 'Their channel' },
+    ])
+    const { publishLocator } = await import('../lib/channelLocatorNative')
+    await publishLocator(
+      channelKeyFromBase64(KEY),
+      JSON.stringify(manifest('Only from the network')),
+    )
+    let answer: (doc: unknown) => void = () => {}
+    resolveIdentityDoc.mockReturnValue(
+      new Promise((resolve) => {
+        answer = resolve
+      }),
+    )
+
+    render(directory(THEM))
+
+    await waitFor(() => expect(screen.getByText('them')).toBeInTheDocument())
+    expect(screen.queryByText('Only from the network')).toBeNull()
+
+    answer({
+      profile: { username: 'them', displayName: 'them' },
+      channels: [{ channelID: 'theirs', key: KEY, name: 'Their channel' }],
+      follows: [],
+    })
+    await waitFor(() =>
+      expect(screen.getByText('Only from the network')).toBeInTheDocument(),
     )
   })
 
