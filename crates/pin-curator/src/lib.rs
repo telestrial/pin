@@ -81,6 +81,7 @@ pub mod net;
 mod rendezvous;
 mod repack;
 mod snapshot;
+mod testnet;
 pub use channeldoc::{
     channel_docs_once, run_channel_doc_loop, ChannelDocContext, ChannelDocOutcome,
 };

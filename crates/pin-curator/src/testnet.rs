@@ -1,0 +1,670 @@
+//! A network several identities share, and the docs they each keep — so a PASS can run.
+//!
+//! Pin's substrate decides who can see whom, and that is a property of a SEQUENCE across
+//! identities: carol becomes visible to john once alice's record lands, and not before.
+//! No pure function holds that. `frontier` says what ORDER a pass would take, which is a
+//! different claim. So the only way to test the thing this codebase exists to get right
+//! is to run real passes, over real docs, against a network they share.
+//!
+//! The network is faked and nothing else is. The docs are genuine in-memory iroh-docs
+//! replicas, the records are written and read by the crate's own helpers, and every pass
+//! under test is the one that ships. What is replaced is the two reads in `net::Network`
+//! — which is the whole of what a crawl asks of the outside world.
+
+#![cfg(test)]
+
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+
+use pin_pkarr::TxtRecord;
+
+/// What every identity in a scenario can see: published packets, and the blobs they name.
+///
+/// One store, shared — that is the point. Alice publishing is john becoming ABLE to read
+/// her, and nothing more; whether he does is what the crawl decides.
+///
+/// A fake must behave neither better NOR worse than production, and worse is the dangerous
+/// direction. So this models the three answers the real thing gives — published, absent,
+/// and UNREACHABLE — because the crawl treats them differently and a fake that only ever
+/// succeeds would delete every one of those rules from coverage.
+#[derive(Default)]
+pub struct World {
+    packets: Mutex<HashMap<String, Vec<TxtRecord>>>,
+    blobs: Mutex<HashMap<String, Vec<u8>>>,
+    /// Keys whose resolve FAILS rather than answering — asleep, or the DHT not answering.
+    /// Distinct from having published nothing, which is a real answer that ends the asking.
+    unreachable: Mutex<Vec<String>>,
+    /// Packets published but not yet propagated: what a resolve WOULD return once the
+    /// store everyone reads catches up. Until then the old one is served, successfully.
+    pending: Mutex<HashMap<String, Vec<TxtRecord>>>,
+}
+
+impl World {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self::default())
+    }
+
+    /// Publish a packet under a key, and the blob it points at.
+    pub fn publish(self: &Arc<Self>, did: &str, dir_url: &str, directory: serde_json::Value) {
+        let mut txt = pin_pkarr::chunk_txt(crate::identity::DIR_PREFIX, dir_url);
+        txt.extend(pin_pkarr::chunk_txt(crate::identity::IROH_PREFIX, ""));
+        self.packets.lock().unwrap().insert(did.to_string(), txt);
+        self.blobs.lock().unwrap().insert(
+            dir_url.to_string(),
+            serde_json::to_vec(&directory).expect("directory serializes"),
+        );
+    }
+
+    /// Republish a key while readers keep being served the PREVIOUS packet.
+    ///
+    /// The answer a fake that models published/absent/unreachable leaves out, and the
+    /// dangerous one: a stale resolve SUCCEEDS. A browser reading through the public relays
+    /// is served the old pointer for minutes after a republish, and a first-responder read
+    /// can stay stale indefinitely — which is the shape behind the cross-device settings
+    /// wipe, where a pre-reset value was served long after the reset.
+    ///
+    /// The new blob lands immediately, because only the POINTER lags: Sia is
+    /// content-addressed, so the object exists the moment it is uploaded. That asymmetry is
+    /// exactly what the keep-2 grace generation is for — a reader holding the old pointer
+    /// must still find the object it names.
+    pub fn republish_lagging(
+        self: &Arc<Self>,
+        did: &str,
+        dir_url: &str,
+        directory: serde_json::Value,
+    ) {
+        let mut txt = pin_pkarr::chunk_txt(crate::identity::DIR_PREFIX, dir_url);
+        txt.extend(pin_pkarr::chunk_txt(crate::identity::IROH_PREFIX, ""));
+        self.pending.lock().unwrap().insert(did.to_string(), txt);
+        self.blobs.lock().unwrap().insert(
+            dir_url.to_string(),
+            serde_json::to_vec(&directory).expect("directory serializes"),
+        );
+    }
+
+    /// Let the store catch up: what was published is now what is served.
+    pub fn propagate(self: &Arc<Self>, did: &str) {
+        if let Some(txt) = self.pending.lock().unwrap().remove(did) {
+            self.packets.lock().unwrap().insert(did.to_string(), txt);
+        }
+    }
+
+    /// Take this key off the air without unpublishing it — the network cannot answer.
+    pub fn make_unreachable(self: &Arc<Self>, did: &str) {
+        self.unreachable.lock().unwrap().push(did.to_string());
+    }
+
+    /// Drop the blob a packet still points at. A pointer outliving its object is a real
+    /// state (grace deletion), and it reads as a failed read rather than an empty one.
+    pub fn drop_blob(self: &Arc<Self>, url: &str) {
+        self.blobs.lock().unwrap().remove(url);
+    }
+}
+
+/// One identity's view of the world. Cloned per identity; they all share the `World`.
+#[derive(Clone)]
+pub struct FakeNetwork {
+    world: Arc<World>,
+}
+
+impl FakeNetwork {
+    pub fn new(world: &Arc<World>) -> Self {
+        Self {
+            world: world.clone(),
+        }
+    }
+}
+
+impl crate::net::Network for FakeNetwork {
+    async fn resolve(&self, did: &str) -> Result<Vec<TxtRecord>, String> {
+        if self
+            .world
+            .unreachable
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|d| d == did)
+        {
+            return Err(format!("{did}: unreachable"));
+        }
+        self.world
+            .packets
+            .lock()
+            .unwrap()
+            .get(did)
+            .cloned()
+            .ok_or_else(|| format!("{did}: no packet"))
+    }
+
+    async fn download(&self, url: &str) -> Result<Vec<u8>, String> {
+        self.world
+            .blobs
+            .lock()
+            .unwrap()
+            .get(url)
+            .cloned()
+            .ok_or_else(|| format!("{url}: object not found"))
+    }
+}
+
+/// One identity in a scenario: a real in-memory doc, a real author, and a view of the
+/// shared world.
+///
+/// The doc is genuine iroh-docs — `Docs::memory()` over a `Minimal` endpoint, which binds
+/// nothing off the machine and joins no relay. So records are written and read by the
+/// crate's own helpers against the real store, and only the network is substituted.
+pub struct Identity {
+    pub did: String,
+    pub doc: iroh_docs::api::Doc,
+    pub blobs: iroh_blobs::api::Store,
+    pub author_id: iroh_docs::AuthorId,
+    pub app_key: [u8; 32],
+    pub net: FakeNetwork,
+    // Held so the router and endpoint outlive the doc.
+    _endpoint: iroh::Endpoint,
+}
+
+impl Identity {
+    /// Stand one up. `seed` decides the app key, so the same seed is the same identity.
+    pub async fn new(world: &Arc<World>, seed: u8) -> Self {
+        use iroh_blobs::store::mem::MemStore;
+        use iroh_docs::{protocol::Docs, Author, NamespaceSecret};
+        use iroh_gossip::net::Gossip;
+
+        let app_key = [seed; 32];
+        let ns_seed = pin_derive::hkdf32(&app_key, pin_derive::NS_INFO);
+        let author_seed = pin_derive::hkdf32(&app_key, pin_derive::AUTHOR_INFO);
+
+        let endpoint = iroh::Endpoint::bind(iroh::endpoint::presets::Minimal)
+            .await
+            .expect("bind");
+        let blobs = MemStore::default();
+        let gossip = Gossip::builder().spawn(endpoint.clone());
+        let docs = Docs::memory()
+            .spawn(endpoint.clone(), (*blobs).clone(), gossip.clone())
+            .await
+            .expect("docs");
+
+        let author = Author::from_bytes(&author_seed);
+        let author_id = author.id();
+        docs.api().author_import(author).await.expect("author");
+        let doc = docs
+            .api()
+            .import_namespace(iroh_docs::Capability::Write(NamespaceSecret::from_bytes(
+                &ns_seed,
+            )))
+            .await
+            .expect("namespace");
+
+        let did = format!(
+            "did:dht:{}",
+            pin_pkarr::public_key_from_seed(&pin_derive::did_dht_seed(&app_key)).expect("did")
+        );
+
+        Self {
+            did,
+            doc,
+            blobs: (*blobs).clone(),
+            author_id,
+            app_key,
+            net: FakeNetwork::new(world),
+            _endpoint: endpoint,
+        }
+    }
+
+    /// Seed this identity's settings — the record the frontend writes and every loop
+    /// reads. Sealed with the real settings key, so `read_settings` opens it exactly as
+    /// it opens the app's own.
+    ///
+    /// A scenario's whole graph is built from these: `handle_follows` is what `edges_of`
+    /// walks, so who-follows-whom needs no channels, no posts and no publishing gesture.
+    /// That is the "intent in, state out" boundary — write the intent, let the loops do
+    /// the rest.
+    pub async fn set_settings(&self, settings: serde_json::Value) {
+        let key = crate::settings_key(&self.app_key);
+        let blob = pin_crypto::encrypt_settings(
+            &key,
+            &serde_json::to_vec(&settings).expect("settings serialize"),
+        )
+        .expect("seal settings");
+        crate::write_record(
+            &self.doc,
+            self.author_id,
+            crate::SETTINGS_COLLECTION,
+            crate::SETTINGS_RKEY,
+            blob.into_bytes(),
+        )
+        .await
+        .expect("write settings");
+    }
+
+    /// Follow these identities wholesale, which is the edge `edges_of` walks.
+    pub async fn follows(&self, dids: &[&str]) {
+        self.set_settings(serde_json::json!({ "handleFollows": dids }))
+            .await;
+    }
+
+    /// What this identity's crawl currently holds about `did`, if anything.
+    pub async fn held(&self, did: &str) -> Option<crate::DirectoryRecord> {
+        let raw = crate::read_record(
+            &self.doc,
+            &self.blobs,
+            self.author_id,
+            pin_derive::DIRECTORY_COLLECTION,
+            did,
+        )
+        .await
+        .expect("read directory record")?;
+        serde_json::from_slice(&raw).ok()
+    }
+
+    /// Record somebody the way HOP ONE does — the free half, where the engagement crawl
+    /// is already resolving a graph actor's packet and downloading their directory, so
+    /// recording it is a parse rather than a fetch.
+    ///
+    /// Calls the crate's own `parse_directory` and `record_directory`, so this is the
+    /// shipped path with the loop's other work left out, never a second implementation
+    /// of what a record is.
+    pub async fn hop_one(&self, did: &str) {
+        let resolved = crate::discover::resolve_directory(&self.net, did)
+            .await
+            .expect("resolves");
+        let raw = crate::net::Network::download(&self.net, &resolved.url)
+            .await
+            .expect("directory downloads");
+        let blob: serde_json::Value = serde_json::from_slice(&raw).expect("directory parses");
+        let record = crate::discover::parse_directory(
+            &blob,
+            &resolved.txt,
+            &resolved.url,
+            "2026-09-12T00:00:00.000Z",
+        );
+        crate::discover::record_directory(&self.doc, &self.blobs, self.author_id, did, record)
+            .await;
+    }
+
+    /// Record somebody as if they had been read at `seen_iso`.
+    ///
+    /// The only way to test what happens to a record OVER TIME. Decay fires seven days
+    /// after a record was last seen, so on a real network every tier rule is a week of
+    /// waiting away — and it also needs the record ranked past `MAX_FULL`, which on a real
+    /// network means five hundred real identities. Both are a loop counter here.
+    pub async fn hold_at(&self, did: &str, directory: serde_json::Value, seen_iso: &str) {
+        let txt = pin_pkarr::chunk_txt(crate::identity::DIR_PREFIX, "sia://seeded");
+        let record = crate::discover::parse_directory(&directory, &txt, "sia://seeded", seen_iso);
+        crate::discover::record_directory(&self.doc, &self.blobs, self.author_id, did, record)
+            .await;
+    }
+
+    /// This identity's discovery context, as the loop builds one.
+    pub fn discover_ctx(&self) -> crate::DiscoverContext<FakeNetwork> {
+        crate::DiscoverContext {
+            doc: self.doc.clone(),
+            blobs: self.blobs.clone(),
+            author_id: self.author_id,
+            net: self.net.clone(),
+            app_key: self.app_key,
+        }
+    }
+}
+
+#[cfg(test)]
+mod probe {
+    use super::*;
+
+    /// The load-bearing unknown: a real doc, in a test, in this crate. Everything a
+    /// scenario does is built on it.
+    #[tokio::test]
+    async fn an_identity_keeps_a_doc_it_can_read_back() {
+        let world = World::new();
+        let me = Identity::new(&world, 1).await;
+
+        crate::write_record(&me.doc, me.author_id, "probe", "x", b"hello".to_vec())
+            .await
+            .expect("write");
+        let got = crate::read_record(&me.doc, &me.blobs, me.author_id, "probe", "x")
+            .await
+            .expect("read");
+
+        assert_eq!(got.as_deref(), Some(&b"hello"[..]));
+        assert!(me.did.starts_with("did:dht:"));
+    }
+
+    /// Two identities are genuinely separate: one's records are not the other's.
+    #[tokio::test]
+    async fn two_identities_do_not_share_a_doc() {
+        let world = World::new();
+        let a = Identity::new(&world, 1).await;
+        let b = Identity::new(&world, 2).await;
+
+        crate::write_record(&a.doc, a.author_id, "probe", "x", b"mine".to_vec())
+            .await
+            .expect("write");
+
+        assert_ne!(a.did, b.did);
+        assert_eq!(
+            crate::read_record(&b.doc, &b.blobs, b.author_id, "probe", "x")
+                .await
+                .expect("read"),
+            None,
+        );
+    }
+}
+
+/// Scenarios: who becomes visible to whom, and when.
+///
+/// Each of these runs the SHIPPED pass over real docs. The only substitution is the two
+/// reads in `net::Network`, so what is under test is the crawl itself rather than a second
+/// model of it.
+#[cfg(test)]
+mod visibility {
+    use super::*;
+
+    /// A directory as an identity publishes one.
+    fn directory(name: &str, follows: &[&str]) -> serde_json::Value {
+        serde_json::json!({
+            "profile": { "$type": "dev.sia.pin.profile", "username": name },
+            "channels": [],
+            "handleFollows": follows,
+        })
+    }
+
+    /// Run one discovery pass and return what it did.
+    async fn pass(who: &Identity) -> crate::DiscoverOutcome {
+        crate::discover_once(
+            &who.discover_ctx(),
+            &who.did,
+            "2026-09-12T00:00:00.000Z".to_string(),
+            1_789_000_000,
+            "",
+        )
+        .await
+        .expect("pass")
+        .0
+    }
+
+    /// THE scenario: john follows alice, alice follows carol, and carol is a stranger.
+    ///
+    /// Nobody has to hand john anything. Alice's published record names carol, the frontier
+    /// is derived from that edge, and one pass later john holds somebody he was never told
+    /// about — which is the whole claim the crawl makes.
+    #[tokio::test]
+    async fn a_stranger_two_hops_out_becomes_visible() {
+        let world = World::new();
+        let john = Identity::new(&world, 1).await;
+        let alice = Identity::new(&world, 2).await;
+        let carol = Identity::new(&world, 3).await;
+
+        world.publish(
+            &alice.did,
+            "sia://alice-dir",
+            directory("alice", &[&carol.did]),
+        );
+        world.publish(&carol.did, "sia://carol-dir", directory("carol", &[]));
+        john.follows(&[&alice.did]).await;
+
+        // Alice is john's own graph, so the engagement crawl owns her — discovery must
+        // leave her alone, and with nothing else known the frontier is empty.
+        let first = pass(&john).await;
+        assert_eq!(first.resolved, 0, "discovery must not read its own graph");
+        assert!(john.held(&alice.did).await.is_none());
+
+        // Hop one, as the engagement crawl records it out of a read it was making anyway.
+        john.hop_one(&alice.did).await;
+
+        // Now alice's edge is held, so carol is on the frontier and one pass reaches her.
+        let second = pass(&john).await;
+        assert_eq!(second.resolved, 1, "carol is read");
+        let held = john.held(&carol.did).await.expect("carol is held");
+        assert_eq!(
+            held.profile
+                .as_ref()
+                .and_then(|p| p.get("username"))
+                .and_then(|u| u.as_str()),
+            Some("carol"),
+            "and john knows who she is",
+        );
+    }
+
+    /// The same scenario with alice's edge removed: carol stays invisible.
+    ///
+    /// The negative half, and the one that makes the positive mean something — without it
+    /// a pass that read everybody would pass the test above.
+    #[tokio::test]
+    async fn a_stranger_nobody_points_at_stays_invisible() {
+        let world = World::new();
+        let john = Identity::new(&world, 1).await;
+        let alice = Identity::new(&world, 2).await;
+        let carol = Identity::new(&world, 3).await;
+
+        world.publish(&alice.did, "sia://alice-dir", directory("alice", &[]));
+        world.publish(&carol.did, "sia://carol-dir", directory("carol", &[]));
+        john.follows(&[&alice.did]).await;
+
+        john.hop_one(&alice.did).await;
+
+        let out = pass(&john).await;
+        assert_eq!(out.resolved, 0, "nothing points at carol");
+        assert!(
+            john.held(&carol.did).await.is_none(),
+            "carol is published and still not visible: reachability is the edge, not the network",
+        );
+    }
+
+    /// Somebody the network cannot answer for is NOT somebody who published nothing.
+    ///
+    /// The shape that has bitten this repo three times — the orphan sweep, the settings
+    /// wipe, the identity publisher — is an inability to read becoming a written claim.
+    /// Here it would mean recording carol as an identity with no name and no edges, which
+    /// then fades on schedule and takes her branch of the graph with it.
+    #[tokio::test]
+    async fn an_unreachable_stranger_is_not_recorded_as_empty() {
+        let world = World::new();
+        let john = Identity::new(&world, 1).await;
+        let alice = Identity::new(&world, 2).await;
+        let carol = Identity::new(&world, 3).await;
+
+        world.publish(
+            &alice.did,
+            "sia://alice-dir",
+            directory("alice", &[&carol.did]),
+        );
+        world.publish(&carol.did, "sia://carol-dir", directory("carol", &[]));
+        world.make_unreachable(&carol.did);
+        john.follows(&[&alice.did]).await;
+        john.hop_one(&alice.did).await;
+
+        let out = pass(&john).await;
+
+        assert_eq!(out.unreachable, 1, "the pass reports it could not read her");
+        assert_eq!(out.resolved, 0);
+        assert!(
+            john.held(&carol.did).await.is_none(),
+            "no record: silence is not an answer about what she publishes",
+        );
+    }
+
+    /// A pointer that outlives its object reads the same way — a failed read, not an
+    /// empty identity. Ordinary during the grace window after a republish.
+    #[tokio::test]
+    async fn a_pointer_with_no_object_behind_it_records_nothing() {
+        let world = World::new();
+        let john = Identity::new(&world, 1).await;
+        let alice = Identity::new(&world, 2).await;
+        let carol = Identity::new(&world, 3).await;
+
+        world.publish(
+            &alice.did,
+            "sia://alice-dir",
+            directory("alice", &[&carol.did]),
+        );
+        world.publish(&carol.did, "sia://carol-dir", directory("carol", &[]));
+        // Her packet still resolves and names a blob that is gone.
+        world.drop_blob("sia://carol-dir");
+        john.follows(&[&alice.did]).await;
+        john.hop_one(&alice.did).await;
+
+        let out = pass(&john).await;
+
+        assert_eq!(out.unreachable, 1);
+        assert!(john.held(&carol.did).await.is_none());
+    }
+
+    /// The crawl never reads YOU.
+    ///
+    /// Anyone in your graph who follows one of your channels names your own did as an
+    /// edge, so without the exclusion a pass spends a resolve and a download to be told,
+    /// staler, what local state already holds. Found once by simulation against an oracle;
+    /// this is the same claim asserted directly against a pass.
+    #[tokio::test]
+    async fn the_crawl_never_reads_its_own_identity() {
+        let world = World::new();
+        let john = Identity::new(&world, 1).await;
+        let alice = Identity::new(&world, 2).await;
+
+        // Alice follows john back, so john's own did is an edge on a record he holds.
+        world.publish(
+            &alice.did,
+            "sia://alice-dir",
+            directory("alice", &[&john.did]),
+        );
+        world.publish(&john.did, "sia://john-dir", directory("john", &[]));
+        john.follows(&[&alice.did]).await;
+        john.hop_one(&alice.did).await;
+
+        let out = pass(&john).await;
+
+        assert_eq!(
+            out.resolved, 0,
+            "john is on a held record's edge and is skipped"
+        );
+        assert!(john.held(&john.did).await.is_none());
+    }
+
+    /// A record too far out to keep current, and old enough to have gone stale, FADES —
+    /// and keeps the way back to whoever it names.
+    ///
+    /// Neither half of the condition is reachable on a real network in a test: decay needs
+    /// a record seven days old, and the tier boundary needs five hundred identities ranked
+    /// ahead of it. Here both are a parameter and a loop. This is the family of rules that
+    /// shipped on 2026-09-05 with nothing exercising them.
+    #[tokio::test]
+    async fn a_far_and_stale_record_fades_without_losing_the_way_back() {
+        let world = World::new();
+        let john = Identity::new(&world, 1).await;
+
+        john.follows(&[]).await;
+
+        let seeded = "2026-09-01T00:00:00.000Z";
+        let seen = crate::iso_secs(seeded).expect("seed stamp parses");
+
+        // Past MAX_FULL, so the tail of the ranking cannot stay in the refresh set.
+        for i in 0..(crate::discover::MAX_FULL + 20) {
+            john.hold_at(
+                &format!("did:dht:{i:04}"),
+                directory(&format!("person{i}"), &[]),
+                seeded,
+            )
+            .await;
+        }
+
+        // Eight days later.
+        let out = crate::discover_once(
+            &john.discover_ctx(),
+            &john.did,
+            "2026-09-09T00:00:00.000Z".to_string(),
+            seen + 8 * 24 * 60 * 60,
+            "",
+        )
+        .await
+        .expect("pass")
+        .0;
+
+        assert!(out.faded > 0, "the tail of the ranking fades");
+
+        // The last by did sorts last, so it is the one past the cap.
+        let far = john
+            .held("did:dht:0519")
+            .await
+            .expect("still held after fading");
+        assert_ne!(far.tier, crate::DirectoryTier::Full, "it faded");
+        assert!(
+            far.profile.is_none(),
+            "a faded record drops what it looked like",
+        );
+        assert!(
+            !far.url.is_empty(),
+            "and keeps the way back: losing the record entirely loses the person",
+        );
+    }
+
+    /// A resolve that succeeds with an OLD packet must not become a permanent answer.
+    ///
+    /// The nastiest thing a real network does, and the one the other four scenarios cannot
+    /// reach: not silence, but a confident wrong answer. Carol has followed dave and
+    /// republished; the store john reads still serves her previous packet. Dave is
+    /// genuinely reachable through her and john cannot see him yet — which is correct, and
+    /// the point is that it is TEMPORARY. Once the store catches up, the crawl's own
+    /// refresh has to notice and pick him up, with nobody re-asking.
+    #[tokio::test]
+    async fn a_stale_read_is_corrected_rather_than_kept() {
+        let world = World::new();
+        let john = Identity::new(&world, 1).await;
+        let alice = Identity::new(&world, 2).await;
+        let carol = Identity::new(&world, 3).await;
+        let dave = Identity::new(&world, 4).await;
+
+        world.publish(
+            &alice.did,
+            "sia://alice-dir",
+            directory("alice", &[&carol.did]),
+        );
+        world.publish(&carol.did, "sia://carol-v1", directory("carol", &[]));
+        world.publish(&dave.did, "sia://dave-dir", directory("dave", &[]));
+        john.follows(&[&alice.did]).await;
+        john.hop_one(&alice.did).await;
+
+        // John reads carol as she currently reads: following nobody.
+        let first = pass(&john).await;
+        assert_eq!(first.resolved, 1);
+        assert!(john
+            .held(&carol.did)
+            .await
+            .expect("carol")
+            .handle_follows
+            .is_empty());
+
+        // Carol follows dave and republishes. The store john reads has not caught up, and
+        // still answers — with her old packet, naming her old blob.
+        world.republish_lagging(
+            &carol.did,
+            "sia://carol-v2",
+            directory("carol", &[&dave.did]),
+        );
+
+        let stale = pass(&john).await;
+        assert_eq!(stale.resolved, 0, "dave is not on the frontier yet");
+        assert!(
+            john.held(&dave.did).await.is_none(),
+            "john cannot see through an edge the store has not served him",
+        );
+
+        // The store catches up. Nobody asks for anything; the rotation comes round.
+        world.propagate(&carol.did);
+        let caught_up = pass(&john).await;
+        assert!(
+            caught_up.refreshed >= 1,
+            "the pointer moved, so the refresh downloads rather than confirming",
+        );
+        assert_eq!(
+            john.held(&carol.did).await.expect("carol").handle_follows,
+            vec![dave.did.clone()],
+            "her new edge is held",
+        );
+
+        // And the ring beyond opens up on the next pass.
+        let onward = pass(&john).await;
+        assert_eq!(onward.resolved, 1);
+        assert!(john.held(&dave.did).await.is_some(), "dave becomes visible");
+    }
+}

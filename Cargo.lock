@@ -4622,6 +4622,7 @@ dependencies = [
  "iroh",
  "iroh-blobs",
  "iroh-docs",
+ "iroh-gossip",
  "n0-future",
  "pin-channel",
  "pin-crypto",
