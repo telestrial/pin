@@ -16,6 +16,15 @@ vi.mock('../lib/docs', async () =>
   (await import('./fakeModules')).fakeDocsModule(),
 )
 
+// The channel round-trip, so a hero card's manifest can be put in the doc cache and NOT
+// on the network — which is what tells the two rungs apart.
+vi.mock('../lib/pkarr', async () =>
+  (await import('./fakeModules')).fakePkarrModule(),
+)
+vi.mock('../lib/channelLocatorNative', async () =>
+  (await import('./fakeModules')).fakeChannelLocatorNativeModule(),
+)
+
 const resolveIdentityDoc = vi.fn()
 vi.mock('../lib/identityDoc', () => ({
   resolveIdentityDoc: (...args: unknown[]) => resolveIdentityDoc(...args),
@@ -57,6 +66,16 @@ async function inTheDoc(channelID: string, name: string) {
     JSON.stringify(manifest(name)),
   )
   docStore.set(`channel/${channelID}`, new TextEncoder().encode(sealed))
+}
+
+/** Put a channel's manifest where the pull loop caches a SUBSCRIBED one. Sealed under K
+ *  for real, so the read under test decodes it exactly as it decodes a cached resolve. */
+async function inTheCache(channelID: string, name: string) {
+  const sealed = await encryptForChannel(
+    channelKeyFromBase64(KEY),
+    JSON.stringify(manifest(name)),
+  )
+  docStore.set(`sub/${channelID}`, new TextEncoder().encode(sealed))
 }
 
 function owned(over: Partial<OwnedChannel> = {}): OwnedChannel {
@@ -286,5 +305,116 @@ describe('integration: your own directory comes from local state', () => {
     })
     // And it does not quietly show them YOUR channels.
     expect(screen.queryByText('A channel')).toBeNull()
+  })
+})
+
+describe("integration: somebody else's hero cards walk the resolution ladder", () => {
+  beforeEach(() => {
+    resetAllStores()
+    docStore.clear()
+    resolveIdentityDoc.mockReset()
+    resolveIdentityDoc.mockResolvedValue(null)
+  })
+
+  it('resolves a channel it holds nothing cached for', async () => {
+    // The other rung, and the reason the one above is a preference rather than the only
+    // path: a stranger's channel is in nobody's cache the first time.
+    signedInWith([owned()])
+    const { publishLocator } = await import('../lib/channelLocatorNative')
+    await publishLocator(
+      channelKeyFromBase64(KEY),
+      JSON.stringify(manifest('Resolved channel')),
+    )
+    resolveIdentityDoc.mockResolvedValue({
+      profile: { username: 'them', displayName: 'Them' },
+      channels: [{ channelID: 'theirs', key: KEY, name: 'Resolved channel' }],
+      follows: [],
+    })
+
+    render(directory(THEM))
+
+    await waitFor(() =>
+      expect(screen.getByText('Resolved channel')).toBeInTheDocument(),
+    )
+  })
+
+  it('re-reads a channel it drew from the cache', async () => {
+    // What landing means, for a card. `sub/` is only as fresh as the pull loop that fills
+    // it, and the curation kill switch turns that loop off — its contract being that reads
+    // still resolve on demand. A page that read the cache and stopped would be the one
+    // place that stopped honouring it.
+    signedInWith([owned()])
+    await inTheCache('theirs', 'Stale name')
+    const { publishLocator } = await import('../lib/channelLocatorNative')
+    await publishLocator(
+      channelKeyFromBase64(KEY),
+      JSON.stringify(manifest('Current name')),
+    )
+    resolveIdentityDoc.mockResolvedValue({
+      profile: { username: 'them', displayName: 'Them' },
+      channels: [{ channelID: 'theirs', key: KEY, name: 'Their channel' }],
+      follows: [],
+    })
+
+    render(directory(THEM))
+
+    await waitFor(() =>
+      expect(screen.getByText('Current name')).toBeInTheDocument(),
+    )
+    expect(screen.queryByText('Stale name')).toBeNull()
+  })
+
+  it('draws a cached card and keeps it when the re-read cannot answer', async () => {
+    // Both halves of the rung the page used to skip. A channel you subscribe to is already
+    // in the doc, so the card costs a doc read where it used to cost a DHT lookup and a
+    // Sia download for the same bytes — and nothing publishes the locator here, so the
+    // network CANNOT answer and the card on screen can be the cache's and nothing else.
+    //
+    // Then it stays. The network saying nothing is not the author saying the channel is
+    // gone; dropping the card on a failed re-read would be an inability to read converted
+    // into a decision.
+    signedInWith([owned()])
+    await inTheCache('theirs', 'From the cache')
+    resolveIdentityDoc.mockResolvedValue({
+      profile: { username: 'them', displayName: 'Them' },
+      channels: [{ channelID: 'theirs', key: KEY, name: 'Their channel' }],
+      follows: [],
+    })
+
+    render(directory(THEM))
+
+    await waitFor(() =>
+      expect(screen.getByText('From the cache')).toBeInTheDocument(),
+    )
+    // From the MANIFEST rather than the directory's name field, which carries a name and
+    // nothing else — so this could not have come from the channel list alone.
+    expect(screen.getByText('from the doc')).toBeInTheDocument()
+    // Held PAST the re-read rather than only up to it.
+    await waitFor(() => expect(resolveIdentityDoc).toHaveBeenCalled())
+    expect(screen.getByText('From the cache')).toBeInTheDocument()
+  })
+
+  it('does not write a browsed channel into the subscribed cache', async () => {
+    // `sub/` has one writer. The pull loop sweeps it down to the subscription set every
+    // pass, so a stranger's manifest recorded here is deleted on the next one — the write
+    // and the delete each re-mirroring the whole doc to Sia, to cache nothing.
+    signedInWith([owned()])
+    const { publishLocator } = await import('../lib/channelLocatorNative')
+    await publishLocator(
+      channelKeyFromBase64(KEY),
+      JSON.stringify(manifest('Resolved channel')),
+    )
+    resolveIdentityDoc.mockResolvedValue({
+      profile: { username: 'them', displayName: 'Them' },
+      channels: [{ channelID: 'theirs', key: KEY, name: 'Resolved channel' }],
+      follows: [],
+    })
+
+    render(directory(THEM))
+
+    await waitFor(() =>
+      expect(screen.getByText('Resolved channel')).toBeInTheDocument(),
+    )
+    expect(docStore.has('sub/theirs')).toBe(false)
   })
 })

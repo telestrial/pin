@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import { advertisedChannels } from '../core/channels'
 import type { ChannelManifest, FollowEdge } from '../core/types'
 import {
+  readCachedManifest,
   readOwnManifest,
   resolveChannelViaLocator,
 } from '../lib/channelLocator'
@@ -35,28 +36,60 @@ type DisplayProfile = {
   coverURL?: string
 }
 
-/** Each advertised channel's manifest, resolved from the key their directory publishes.
+function entry(channelID: string, manifest: ChannelManifest): ChannelEntry {
+  return { authorDID: '', authorHandle: '', channelID, manifest }
+}
+
+/** The advertised channels this device already holds, out of the shared doc (`sub/<id>`).
  *
- *  A channel that will not resolve is dropped rather than failing the page: one missing
- *  hero card is a better answer than a profile that would not open. */
-async function resolveChannels(
+ *  A hero card needs the same manifest the feed reads, and for a channel you subscribe to
+ *  the pull loop has already put it in the doc — so the card costs a doc read where it
+ *  used to cost a DHT lookup and a Sia download to arrive at the same bytes. The page was
+ *  the one reader skipping a rung the ladder defines.
+ *
+ *  Nothing is written back. `sub/` has one writer, and it sweeps the collection down to
+ *  the subscription set every pull pass, so a stranger's manifest recorded here is deleted
+ *  on the next one — two whole-doc Sia mirrors to cache nothing. */
+async function cachedChannels(
+  appKeyHex: string | null,
   channels: { channelID: string; key: string }[],
 ): Promise<ChannelEntry[]> {
+  if (!appKeyHex) return []
+  const held = await Promise.all(
+    channels.map(async (c): Promise<ChannelEntry | null> => {
+      const manifest = await readCachedManifest(appKeyHex, c.channelID, c.key)
+      return manifest ? entry(c.channelID, manifest) : null
+    }),
+  )
+  return held.filter((c): c is ChannelEntry => c !== null)
+}
+
+/** Each advertised channel's manifest, read from the key their directory publishes.
+ *
+ *  Runs even for a channel a card already rendered from the cache — the same thing landing
+ *  means for the profile above. `sub/` is only as fresh as the pull loop that fills it, and
+ *  that loop is exactly what the curation kill switch turns off, whose own contract is that
+ *  reads still resolve on demand. A page that read the cache and stopped would be the one
+ *  place that stopped honouring it.
+ *
+ *  `held` is what is already on screen, and a channel whose re-read fails keeps its card:
+ *  the network saying nothing is not the author saying the channel is gone. A channel in
+ *  neither is dropped rather than failing the page — one missing hero card is a better
+ *  answer than a profile that would not open. */
+async function resolveChannels(
+  channels: { channelID: string; key: string }[],
+  held: ChannelEntry[],
+): Promise<ChannelEntry[]> {
+  const onScreen = new Map(held.map((c) => [c.channelID, c]))
   const resolved = await Promise.all(
     channels.map(async (c): Promise<ChannelEntry | null> => {
       try {
         const manifest = await resolveChannelViaLocator(c.key)
-        return manifest
-          ? {
-              authorDID: '',
-              authorHandle: '',
-              channelID: c.channelID,
-              manifest,
-            }
-          : null
+        if (manifest) return entry(c.channelID, manifest)
       } catch {
-        return null
+        // Fall through: an unreadable locator is a read failure, never an absence.
       }
+      return onScreen.get(c.channelID) ?? null
     }),
   )
   return resolved.filter((c): c is ChannelEntry => c !== null)
@@ -240,7 +273,20 @@ export function HandleDirectory({
         if (!cancelled && !indexed) setState({ kind: 'not-found' })
         return
       }
-      const ownChannels = await resolveChannels(doc.channels)
+      // The cards this device holds, on screen before the re-read below goes out for them.
+      const cached = await cachedChannels(storedKeyHex, doc.channels)
+      if (cancelled) return
+      if (cached.length > 0) {
+        setState({
+          kind: 'loaded',
+          did: handle,
+          profile: doc.profile,
+          ownChannels: cached,
+          follows: doc.follows,
+        })
+      }
+
+      const ownChannels = await resolveChannels(doc.channels, cached)
       if (!cancelled) {
         setState({
           kind: 'loaded',

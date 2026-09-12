@@ -206,8 +206,14 @@ export function makeLocatorReader(): FetchChannel {
 
 /** Read a subscribed channel's manifest from the shared-doc cache (`sub/<id>`),
  *  decrypting the cached ciphertext with K. Null when there's no cached record
- *  (or it won't decode — fall through to a fresh resolve). */
-async function readCachedManifest(
+ *  (or it won't decode — fall through to a fresh resolve).
+ *
+ *  Exported because the feed is not the only screen that reads somebody's channel: a
+ *  profile page draws a hero card per advertised channel, and the ones you subscribe to
+ *  are already here. The pull loop is this record's only writer — it sweeps `sub/` down
+ *  to the subscription set every pass (`drop_unsubscribed`) — so a reader outside the
+ *  feed reads it and does not write back. */
+export async function readCachedManifest(
   appKeyHex: string,
   channelID: string,
   channelKey: string,
