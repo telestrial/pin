@@ -132,7 +132,11 @@ function hold(
   )
 }
 
-/** What they currently publish, as the revalidation finds it. */
+/** What they currently publish, as the revalidation finds it.
+ *
+ *  Deliberately missing `handleFollows`: the resolve casts raw JSON from somebody else's
+ *  blob, so a field they do not carry arrives undefined. A fixture that filled in every
+ *  field would hide exactly that. */
 function published(displayName: string) {
   return {
     profile: { username: displayName, displayName },
@@ -297,6 +301,43 @@ describe('integration: your own directory comes from local state', () => {
       expect(screen.getByText('from-the-network')).toBeInTheDocument(),
     )
     expect(docStore.has(`${request_collection()}/${THEM}`)).toBe(false)
+  })
+
+  it('counts people and channels as one Following', async () => {
+    // Following a person and following one of their channels are one act at two grains,
+    // and both are public edges the crawl walks. Split across two numbers a profile would
+    // report only half of what somebody follows — which is what it did, since the people
+    // half was published from the day it shipped and displayed nowhere.
+    signedInWith([owned()])
+    resolveIdentityDoc.mockResolvedValue({
+      profile: { username: 'them', displayName: 'Them' },
+      channels: [],
+      follows: [{ didDht: 'did:dht:x', channelID: 'c1', name: 'A channel' }],
+      handleFollows: ['did:dht:y', 'did:dht:z'],
+    })
+
+    render(directory(THEM))
+
+    // One channel plus two people. The number is the claim — "Following" itself
+    // appears twice on the page, as the stat's label and the section's heading.
+    await waitFor(() => expect(screen.getByText('3')).toBeInTheDocument())
+  })
+
+  it('renders a profile whose blob carries no follow fields at all', async () => {
+    // `resolveIdentityDoc` casts raw JSON, so every list field is whatever the blob holds.
+    // Somebody who follows nobody is the ordinary case, and mapping over undefined would
+    // take the whole page down rather than showing a person with no follows.
+    signedInWith([owned()])
+    resolveIdentityDoc.mockResolvedValue({
+      profile: { username: 'them', displayName: 'Them' },
+      channels: [],
+    })
+
+    render(directory(THEM))
+
+    await waitFor(() => expect(screen.getByText('Them')).toBeInTheDocument())
+    // The page stands, and reports following nobody rather than failing to render.
+    expect(screen.getByText('0')).toBeInTheDocument()
   })
 
   it('still resolves somebody else', async () => {

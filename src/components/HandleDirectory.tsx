@@ -9,12 +9,17 @@ import {
 } from '../lib/channelLocator'
 import { readDirectory, request } from '../lib/directories'
 import { formatBytes } from '../lib/format'
+import {
+  useIdentityName,
+  useIdentityProfile,
+} from '../lib/hooks/useIdentityName'
 import { useItemBlobURL } from '../lib/hooks/useItemBytes'
 import { resolveIdentityDoc } from '../lib/identityDoc'
 import { useAuthStore } from '../stores/auth'
 import { ChannelAvatar } from './channel/ChannelAvatar'
 import { ChannelHeroCard } from './channel/ChannelHeroCard'
 import { FollowHandleButton } from './FollowHandleButton'
+import { IdentityAvatar } from './IdentityAvatar'
 
 type ChannelEntry = {
   authorDID: string
@@ -108,6 +113,14 @@ type State =
       // rather than opening the channel directly (viewing needs K, which a
       // follow edge doesn't carry).
       follows: FollowEdge[]
+      // People followed wholesale. Published in the directory and walked by the crawl
+      // since the day it shipped, and shown nowhere until now — so a profile reported
+      // only the channels somebody followed and never the people.
+      //
+      // One list with the channel-follows, because they are one act at two grains: you
+      // follow a person, or you follow one of their voices. Both are public, both put
+      // their author on the crawl's frontier.
+      handleFollows: string[]
     }
   | { kind: 'error'; message: string }
 
@@ -123,8 +136,10 @@ async function readOwnDirectory(): Promise<{
   profile: DisplayProfile | null
   ownChannels: ChannelEntry[]
   follows: FollowEdge[]
+  handleFollows: string[]
 }> {
-  const { profile, myChannels, follows, storedKeyHex } = useAuthStore.getState()
+  const { profile, myChannels, follows, handleFollows, storedKeyHex } =
+    useAuthStore.getState()
   const advertised = advertisedChannels(myChannels)
   const resolved = storedKeyHex
     ? await Promise.all(
@@ -149,6 +164,7 @@ async function readOwnDirectory(): Promise<{
     profile,
     ownChannels: resolved.filter((c): c is ChannelEntry => c !== null),
     follows,
+    handleFollows,
   }
 }
 
@@ -257,7 +273,8 @@ export function HandleDirectory({
           did: handle,
           profile: indexed.profile,
           ownChannels: fromIndex,
-          follows: indexed.follows,
+          follows: indexed.follows ?? [],
+          handleFollows: indexed.handleFollows ?? [],
         })
       } else if (storedKeyHex) {
         // The index could not answer, so this landing is paying the lookup. Asking is what
@@ -287,7 +304,12 @@ export function HandleDirectory({
           did: handle,
           profile: doc.profile,
           ownChannels: cached,
-          follows: doc.follows,
+          // Defaulted because `resolveIdentityDoc` casts raw JSON: this is somebody
+          // ELSE's document, and a blob without these fields is a real answer — an
+          // identity that follows nobody, or one published before the field existed.
+          // The Rust parse is tolerant field by field for the same reason.
+          follows: doc.follows ?? [],
+          handleFollows: doc.handleFollows ?? [],
         })
       }
 
@@ -298,7 +320,12 @@ export function HandleDirectory({
           did: handle,
           profile: doc.profile,
           ownChannels,
-          follows: doc.follows,
+          // Defaulted because `resolveIdentityDoc` casts raw JSON: this is somebody
+          // ELSE's document, and a blob without these fields is a real answer — an
+          // identity that follows nobody, or one published before the field existed.
+          // The Rust parse is tolerant field by field for the same reason.
+          follows: doc.follows ?? [],
+          handleFollows: doc.handleFollows ?? [],
         })
       }
     }
@@ -387,6 +414,7 @@ export function HandleDirectory({
               profile={state.profile}
               ownChannels={state.ownChannels}
               follows={state.follows}
+              handleFollows={state.handleFollows}
               onBack={onBack}
               onChannelClick={onChannelClick}
               onHandleClick={onHandleClick}
@@ -408,6 +436,7 @@ function LoadedDirectory({
   profile,
   ownChannels,
   follows,
+  handleFollows,
   onBack,
   onChannelClick,
   onHandleClick,
@@ -420,13 +449,18 @@ function LoadedDirectory({
   profile: DisplayProfile | null
   ownChannels: ChannelEntry[]
   follows: FollowEdge[]
+  handleFollows: string[]
   onBack?: () => void
   onChannelClick: (authorHandle: string, channelID: string) => void
   onHandleClick: (handle: string) => void
   onEditProfile?: () => void
   onCreate?: () => void
 }) {
-  const isEmpty = !profile && ownChannels.length === 0 && follows.length === 0
+  const isEmpty =
+    !profile &&
+    ownChannels.length === 0 &&
+    follows.length === 0 &&
+    handleFollows.length === 0
 
   return (
     <div className="space-y-5">
@@ -435,7 +469,7 @@ function LoadedDirectory({
         did={did}
         isSelf={isSelf}
         profile={profile}
-        followingCount={follows.length}
+        followingCount={follows.length + handleFollows.length}
         onBack={onBack}
         onEdit={onEditProfile}
       />
@@ -488,8 +522,20 @@ function LoadedDirectory({
         </div>
       )}
 
-      {follows.length > 0 && (
+      {(handleFollows.length > 0 || follows.length > 0) && (
         <Section title="Following">
+          {/* People first, then channels. One section rather than two, because they are
+              one act at two grains — following a person, or following one of their
+              voices — and splitting them would ask a reader to hold a distinction the
+              gesture does not make. People lead because a person is the larger claim:
+              following someone takes everything they advertise. */}
+          {handleFollows.map((did) => (
+            <PersonFollowRow
+              key={did}
+              didDht={did}
+              onHandleClick={onHandleClick}
+            />
+          ))}
           {follows.map((f) => (
             <FollowRow
               key={`${f.didDht}:${f.channelID}`}
@@ -748,6 +794,41 @@ function channelContentBytes(manifest: ChannelManifest): number {
 // row — clicking navigates to the author's directory (viewing the channel
 // directly needs K, which a follow edge doesn't carry), where the channel
 // resolves properly from the advertised list.
+/** One person this identity follows.
+ *
+ *  The channel row's sibling, and deliberately the same shape: a mark, a name, and it
+ *  opens their directory. What differs is only where the name comes from — a channel
+ *  follow carries a cached one, and a person is named by their own published profile,
+ *  which `useIdentityName` reads out of the crawl's index before the network. */
+function PersonFollowRow({
+  didDht,
+  onHandleClick,
+}: {
+  didDht: string
+  onHandleClick: (handle: string) => void
+}) {
+  const name = useIdentityName(didDht)
+  const profile = useIdentityProfile(didDht)
+  return (
+    <button
+      type="button"
+      onClick={() => onHandleClick(didDht)}
+      className="w-full p-3 flex gap-3 items-center text-left hover:bg-neutral-50 cursor-pointer transition-colors"
+    >
+      <IdentityAvatar
+        didDht={didDht}
+        name={name}
+        avatarURL={profile?.avatarURL ?? undefined}
+      />
+      <div className="flex-1 min-w-0">
+        <div className="text-sm font-semibold text-neutral-900 truncate">
+          @{name}
+        </div>
+      </div>
+    </button>
+  )
+}
+
 function FollowRow({
   edge,
   onHandleClick,
