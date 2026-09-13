@@ -42,6 +42,8 @@ import type { CreatedChannel } from '../core/channels'
 import {
   reconcileOneHandle,
   sweepHandleFollow,
+  unwatchOneChannel,
+  watchOneChannel,
 } from '../lib/hooks/useHandleFollowReconciliation'
 import { useAuthStore } from '../stores/auth'
 import {
@@ -150,5 +152,57 @@ describe('handle-follow auto-Watch (integration)', () => {
     useAuthStore.getState().addHandleFollow(BOB_DID)
     const readded = await reconcileOneHandle(BOB_DID)
     expect(readded).toBe(2)
+  })
+
+  it('following one channel watches that channel and no others', async () => {
+    // Following a channel used to be write-only — a public edge with no K, so the
+    // follower got nothing. K is in the author's directory, which is where the
+    // person-follow path already reads it, so the only difference is keeping one.
+    const { ch1, ch2 } = await setup()
+
+    const watched = await watchOneChannel(BOB_DID, ch1.channelID)
+
+    expect(watched).toBe(true)
+    const subs = useAuthStore.getState().subscriptions
+    expect(subs.map((s) => s.channelID)).toEqual([ch1.channelID])
+    expect(subs[0]?.channelKey).toBe(ch1.channelKey)
+    expect(subs.some((s) => s.channelID === ch2.channelID)).toBe(false)
+  })
+
+  it('unfollowing one channel survives the person reconcile', async () => {
+    // The asymmetry with the person sweep, and it is deliberate. Dropping one channel
+    // of somebody you also follow wholesale has to outlast their next boot pass, or the
+    // reconcile puts it straight back and the gesture appears to do nothing.
+    const { ch1, ch2 } = await setup()
+    useAuthStore.getState().addHandleFollow(BOB_DID)
+    await reconcileOneHandle(BOB_DID)
+
+    await unwatchOneChannel(ch1.channelID)
+    expect(
+      useAuthStore.getState().subscriptions.map((s) => s.channelID),
+    ).toEqual([ch2.channelID])
+
+    const added = await reconcileOneHandle(BOB_DID)
+    expect(added).toBe(0)
+    expect(
+      useAuthStore.getState().subscriptions.map((s) => s.channelID),
+    ).toEqual([ch2.channelID])
+  })
+
+  it('following a channel back clears an earlier unwatch', async () => {
+    // The other half of that: leaving the tombstone standing would make an unwatched
+    // channel unfollowable forever, so an explicit follow clears it as the newer
+    // statement.
+    const { ch1 } = await setup()
+    await watchOneChannel(BOB_DID, ch1.channelID)
+    await unwatchOneChannel(ch1.channelID)
+    expect(useAuthStore.getState().dismissedAutoWatch).toContain(ch1.channelID)
+
+    const again = await watchOneChannel(BOB_DID, ch1.channelID)
+
+    expect(again).toBe(true)
+    expect(
+      useAuthStore.getState().subscriptions.map((s) => s.channelID),
+    ).toEqual([ch1.channelID])
   })
 })

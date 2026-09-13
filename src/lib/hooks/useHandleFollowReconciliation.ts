@@ -70,6 +70,44 @@ export async function reconcileOneHandle(
   return applyAutoWatch(candidates)
 }
 
+// Watch the ONE channel a channel-follow names.
+//
+// Following a channel used to be write-only: it published an edge and gave the follower
+// nothing, because a FollowEdge carries no K. It doesn't need to — a public channel
+// advertises its K in its author's directory, which is the same place the person-follow
+// path reads. So this resolves that directory and keeps the one channel, rather than
+// every channel the person advertises.
+//
+// Clears the tombstone first, because an explicit follow is a newer statement than an
+// earlier unwatch: without that, a channel you once unwatched could never be followed
+// back into your feed. Returns whether it was added.
+export async function watchOneChannel(
+  didDht: string,
+  channelID: string,
+): Promise<boolean> {
+  useAuthStore.getState().clearDismissedAutoWatch([channelID])
+  const candidates = await resolveAutoWatchCandidates(didDht)
+  const one = candidates.filter((c) => c.channelID === channelID)
+  return (await applyAutoWatch(one)) > 0
+}
+
+// Drop the one channel an unfollow names.
+//
+// The tombstone is LEFT standing, unlike the person sweep which clears them. Unfollowing
+// one channel of somebody you also follow wholesale has to survive that person's next
+// reconcile, or the boot pass would put it straight back and the gesture would appear to
+// do nothing. Re-following clears it, which is what makes the pair reversible.
+//
+// No network: what to drop is named by the follow being undone.
+export async function unwatchOneChannel(channelID: string): Promise<boolean> {
+  const auth = useAuthStore.getState()
+  if (!auth.subscriptions.some((s) => s.channelID === channelID)) return false
+  auth.removeSubscription(channelID)
+  useFeedStore.getState().removeChannel(channelID)
+  await flushSettingsBestEffort()
+  return true
+}
+
 // Unfollow sweep: remove all of the unfollowed person's feeds from my Watches.
 // "All their feeds" is re-derived live (their currently-advertised public
 // channels), matching the literal intent — including a channel I'd also
