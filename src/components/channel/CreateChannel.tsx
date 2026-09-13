@@ -242,7 +242,7 @@ export function CreateChannel({
             <VisibilityChoice
               value="obscure"
               label="Obscure"
-              description="Only people you send the subscribe URL to can read it. The channel record exists publicly as ciphertext but nothing links it to your other channels."
+              description="Only people you send the watch URL to can read it. The channel record exists publicly as ciphertext but nothing links it to your other channels."
               current={visibility}
               disabled={submitting}
               onChange={setVisibility}
@@ -250,7 +250,7 @@ export function CreateChannel({
             <p className="text-xs text-neutral-400 pt-1">
               Set at creation — can't be changed later. (Going public would
               require giving readers a key; going obscure would orphan existing
-              followers.)
+              watchers.)
             </p>
           </fieldset>
         </div>

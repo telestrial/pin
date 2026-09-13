@@ -80,7 +80,7 @@ export function ChannelsView({
                     <div className="shrink-0">
                       <CopyButton
                         value={buildSubscribeURL(didDht, c.channelKey)}
-                        label="Subscribe URL copied"
+                        label="Watch URL copied"
                       />
                     </div>
                   )}
@@ -97,7 +97,7 @@ export function ChannelsView({
         </h2>
         {subscriptions.length === 0 ? (
           <p className="text-sm text-neutral-500">
-            You haven't subscribed to anything yet.
+            You aren't watching anything yet.
           </p>
         ) : (
           <ul className="divide-y divide-neutral-200/80">

@@ -196,13 +196,13 @@ export function Sidebar({
 
       <section className="space-y-2 mt-3">
         <SectionHeader
-          title="Subscriptions"
-          addLabel="Subscribe to a channel"
+          title="Watching"
+          addLabel="Watch a channel"
           onAdd={onSubscribe}
           onTitleClick={onSeeAll}
         />
         {subsToShow.length > 0 && (
-          <ul aria-label="Subscribed channels">
+          <ul aria-label="Watched channels">
             {subsToShow.map((s) => {
               const active = s.channelID === activeChannelID
               return (

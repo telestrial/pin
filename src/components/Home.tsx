@@ -324,7 +324,7 @@ export function Home({
           <div className="flex flex-col sm:flex-row gap-2 sm:justify-center">
             <button
               type="button"
-              onClick={() => copyURL(view.subscribeURL, 'Subscribe URL copied')}
+              onClick={() => copyURL(view.subscribeURL, 'Watch URL copied')}
               className="px-4 py-2.5 bg-green-600 hover:bg-green-700 text-white text-sm font-medium rounded-lg transition-colors"
             >
               Copy subscribe URL
@@ -405,7 +405,7 @@ export function Home({
           useAuthStore.getState().removeSubscription(channelID)
           useFeedStore.getState().removeChannel(channelID)
           await flushSettingsBestEffort()
-          addToast(`Unsubscribed from "${name}"`)
+          addToast(`Stopped watching "${name}"`)
         }}
         sidebar={renderSidebar()}
         rightSidebar={renderPinSidebar()}
@@ -423,7 +423,7 @@ export function Home({
       const client = useAuthStore.getState().client
       if (!client || !owned) return
       const confirmation = window.prompt(
-        'This drops every item in this channel from your storage and stops publishing it. Subscribers who pinned individual items keep their copies; their share URLs keep working.\n\nType DELETE to confirm.',
+        'This drops every item in this channel from your storage and stops publishing it. People who pinned individual items keep their copies; their share URLs keep working.\n\nType DELETE to confirm.',
       )
       if (confirmation !== 'DELETE') return
       try {
@@ -503,7 +503,7 @@ export function Home({
                 useAuthStore.getState().removeSubscription(view.channelID)
                 useFeedStore.getState().removeChannel(view.channelID)
                 await flushSettingsBestEffort()
-                addToast('Unsubscribed')
+                addToast('Stopped watching')
                 setView({ kind: 'idle' })
               }
             : undefined

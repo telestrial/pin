@@ -150,7 +150,7 @@ export function HomeFeed({
 
       {sortedEntries.length === 0 ? (
         <p className="text-neutral-500 text-sm">
-          No items yet from your subscriptions.
+          No items yet from what you watch.
         </p>
       ) : (
         <ul className="divide-y divide-neutral-200/80">

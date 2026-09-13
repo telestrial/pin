@@ -42,7 +42,7 @@ export function SubscribeToChannel({
       // channelID is K-derived, so it identifies the channel uniquely regardless
       // of author-identifier form (handle vs did:dht).
       if (subscriptions.some((s) => s.channelID === parsed.channelID)) {
-        setError("You're already subscribed to this channel.")
+        setError("You're already watching this channel.")
         setSubmitting(false)
         return
       }
@@ -130,7 +130,7 @@ export function SubscribeToChannel({
           disabled={submitting || !url.trim()}
           className="w-full px-4 py-2.5 bg-green-600 hover:bg-green-700 disabled:bg-neutral-200 disabled:text-neutral-400 text-white text-sm font-medium rounded-lg transition-colors"
         >
-          {submitting ? 'Subscribing…' : 'Subscribe'}
+          {submitting ? 'Watching…' : 'Watch'}
         </button>
       </form>
     </FormCard>

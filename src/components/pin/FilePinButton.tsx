@@ -56,7 +56,7 @@ export function FilePinButton({
   const retractFile = async () => {
     if (!client || !ownedChannel) return
     const ok = window.confirm(
-      'Remove this file from the post? Subscribers who pinned it keep their copies.',
+      'Remove this file from the post? People who pinned it keep their copies.',
     )
     if (!ok) return
     setRemoving(true)

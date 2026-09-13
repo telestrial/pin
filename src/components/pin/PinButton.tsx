@@ -39,7 +39,7 @@ export function PinButton({ input }: { input: PinInput }) {
 
     if (isOwned && ownedChannel) {
       const confirmation = window.prompt(
-        'This removes the item from your channel and your storage. Subscribers who pinned it will keep their copies.\n\nType DELETE to confirm.',
+        'This removes the item from your channel and your storage. People who pinned it will keep their copies.\n\nType DELETE to confirm.',
       )
       if (confirmation !== 'DELETE') return
       setDeleting(true)
