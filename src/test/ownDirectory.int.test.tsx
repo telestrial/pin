@@ -336,8 +336,10 @@ describe('integration: your own directory comes from local state', () => {
     render(directory(THEM))
 
     await waitFor(() => expect(screen.getByText('Them')).toBeInTheDocument())
-    // The page stands, and reports following nobody rather than failing to render.
-    expect(screen.getByText('0')).toBeInTheDocument()
+    // The page stands rather than failing to render. The stat's label is unambiguous
+    // here precisely BECAUSE they follow nobody: with no follows there is no Following
+    // section to share the word with.
+    expect(screen.getByText('Following')).toBeInTheDocument()
   })
 
   it('still resolves somebody else', async () => {

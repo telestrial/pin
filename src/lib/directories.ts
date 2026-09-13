@@ -15,6 +15,7 @@ import {
   request_collection,
 } from '../../crates/pin-core/pkg/pin_core.js'
 import type { SearchablePerson } from '../core/directorySearch'
+import type { FollowerEdges } from '../core/followers'
 import { ensureWasm } from '../core/wasm'
 import { getRecord, listRecords, openDocs, putRecord } from './docs'
 
@@ -154,6 +155,34 @@ export async function searchableDirectories(
       displayName: record.profile?.displayName,
       avatarURL: record.profile?.avatarURL,
       channels: record.channels,
+    }))
+}
+
+/** The follow edges every held record carries, for a reverse scan.
+ *
+ *  A wider corpus than {@link searchableDirectories}: search needs a NAME and a faded
+ *  record dropped its profile, but a REDUCED record still keeps its follows — only a
+ *  minimal one drops them. So a person who has faded out of the searchable set still
+ *  counts toward who they follow, which is the honest reading, since fading is this
+ *  device forgetting rather than them having stopped.
+ *
+ *  A minimal record contributes nothing, and that is an absence of information rather
+ *  than an absence of edges: we dropped them to make room. The count is graph-scoped
+ *  anyway, so it understates for this reason among several.
+ */
+export async function followerEdges(
+  appKeyHex: string,
+): Promise<FollowerEdges[]> {
+  const held = await listDirectories(appKeyHex)
+  return held
+    .filter(({ record }) => record.tier !== 'minimal')
+    .map(({ didDht, record }) => ({
+      didDht,
+      follows: (record.follows ?? []).map((f) => ({
+        didDht: f.didDht,
+        channelID: f.channelID,
+      })),
+      handleFollows: record.handleFollows ?? [],
     }))
 }
 

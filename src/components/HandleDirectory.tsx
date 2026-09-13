@@ -1,13 +1,14 @@
 import { Plus } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { advertisedChannels } from '../core/channels'
+import { followersOfPerson } from '../core/followers'
 import type { ChannelManifest, FollowEdge } from '../core/types'
 import {
   readCachedManifest,
   readOwnManifest,
   resolveChannelViaLocator,
 } from '../lib/channelLocator'
-import { readDirectory, request } from '../lib/directories'
+import { followerEdges, readDirectory, request } from '../lib/directories'
 import { formatBytes } from '../lib/format'
 import {
   useIdentityName,
@@ -168,6 +169,36 @@ async function readOwnDirectory(): Promise<{
   }
 }
 
+/** How many held identities follow this person.
+ *
+ *  Read once per landing rather than per render: the corpus is one doc read per held
+ *  identity, so this is the same shape the search box uses — build a snapshot, ask it.
+ *
+ *  Null while it is still being counted, so the stat can stay blank rather than claiming
+ *  zero followers for a moment on every profile. Zero and not-yet-counted are different
+ *  answers and only one of them is about the person. */
+function useFollowerCount(didDht: string): number | null {
+  const storedKeyHex = useAuthStore((s) => s.storedKeyHex)
+  const [count, setCount] = useState<number | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    setCount(null)
+    if (!storedKeyHex || !didDht) return
+    void followerEdges(storedKeyHex)
+      .then((held) => {
+        if (!cancelled) setCount(followersOfPerson(held, didDht).length)
+      })
+      // A crawl index that will not open is not an absence of followers.
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [storedKeyHex, didDht])
+
+  return count
+}
+
 export function HandleDirectory({
   handle: rawHandle,
   onBack,
@@ -198,6 +229,10 @@ export function HandleDirectory({
 }) {
   const myDidDht = useAuthStore((s) => s.myDidDht)
   const [state, setState] = useState<State>({ kind: 'loading' })
+  // Counted off the crawl's index, for your own profile as much as anybody's: a follow
+  // lives in the follower's directory, so even your own followers are only knowable by
+  // having read the people who follow you.
+  const followerCount = useFollowerCount(rawHandle.replace(/^@+/, ''))
 
   // Defensive normalize: callers should pass a bare handle, but a stray
   // leading `@` (from a paste, say) shouldn't break the lookup.
@@ -415,6 +450,7 @@ export function HandleDirectory({
               ownChannels={state.ownChannels}
               follows={state.follows}
               handleFollows={state.handleFollows}
+              followerCount={followerCount}
               onBack={onBack}
               onChannelClick={onChannelClick}
               onHandleClick={onHandleClick}
@@ -437,6 +473,7 @@ function LoadedDirectory({
   ownChannels,
   follows,
   handleFollows,
+  followerCount,
   onBack,
   onChannelClick,
   onHandleClick,
@@ -450,6 +487,8 @@ function LoadedDirectory({
   ownChannels: ChannelEntry[]
   follows: FollowEdge[]
   handleFollows: string[]
+  /** Null while the index is still being counted — blank rather than a claimed zero. */
+  followerCount: number | null
   onBack?: () => void
   onChannelClick: (authorHandle: string, channelID: string) => void
   onHandleClick: (handle: string) => void
@@ -470,6 +509,7 @@ function LoadedDirectory({
         isSelf={isSelf}
         profile={profile}
         followingCount={follows.length + handleFollows.length}
+        followerCount={followerCount}
         onBack={onBack}
         onEdit={onEditProfile}
       />
@@ -549,10 +589,15 @@ function LoadedDirectory({
   )
 }
 
-function Stat({ value, label }: { value: number; label: string }) {
+/** One number on the header.
+ *
+ *  `null` renders as a dash rather than a zero: a follower count is a scan of the crawl's
+ *  index and is briefly unknown on every landing, and "0 followers" is a claim about the
+ *  person where "not counted yet" is a fact about this device. */
+function Stat({ value, label }: { value: number | null; label: string }) {
   return (
     <div className="shrink-0 leading-tight">
-      <div className="text-2xl font-bold text-neutral-900">{value}</div>
+      <div className="text-2xl font-bold text-neutral-900">{value ?? '—'}</div>
       <div className="text-xs text-neutral-500 uppercase tracking-wide">
         {label}
       </div>
@@ -566,6 +611,7 @@ function ProfileHeader({
   isSelf,
   profile,
   followingCount,
+  followerCount,
   onBack,
   onEdit,
 }: {
@@ -574,6 +620,7 @@ function ProfileHeader({
   isSelf: boolean
   profile: DisplayProfile | null
   followingCount: number
+  followerCount: number | null
   onBack?: () => void
   onEdit?: () => void
 }) {
@@ -635,6 +682,7 @@ function ProfileHeader({
                 </div>
               </div>
               <Stat value={followingCount} label="Following" />
+              <Stat value={followerCount} label="Followers" />
             </div>
             {isSelf && onEdit && (
               <button
