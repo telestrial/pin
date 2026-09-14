@@ -545,6 +545,13 @@ pub(crate) struct OwnedChannelView {
     /// Absent means advertised — the default, claimed at creation.
     #[serde(default)]
     pub(crate) advertised: Option<bool>,
+    /// Whether its posts belong on the author's profile feed. Absent means yes.
+    ///
+    /// Separate from `advertised`, which decides whether the channel is in the directory
+    /// at all: a channel can be findable and followable while its posts stay off the page
+    /// that stands for its author.
+    #[serde(default, rename = "onProfile")]
+    pub(crate) on_profile: Option<bool>,
 }
 
 /// What this identity last published to Sia under some rkey, and the fingerprint of

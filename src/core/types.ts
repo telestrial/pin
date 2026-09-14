@@ -252,6 +252,20 @@ export type OwnedChannel = {
   // "Voices"). Undefined = advertised — the default, "claimed at birth". Set
   // false by Unclaim. Obscure channels are never advertised regardless.
   advertised?: boolean
+  // Whether this channel's posts appear in your profile's feed. Undefined = yes.
+  //
+  // Distinct from `advertised`, which decides whether the channel is in your
+  // directory at all: a channel can be findable and followable while its posts
+  // stay off the page that stands for you. A link dump, or work you'd rather not
+  // interleave with everything else.
+  //
+  // Absent reads as YES, the opposite of `visibility` and for the opposite
+  // reason. There the safe direction is refusing to enumerate an obscure
+  // channel; here it is a channel you already advertise showing posts you
+  // already publish, so channels made before this existed keep behaving as
+  // their authors have seen them behave. Unlike `visibility` it is not sticky —
+  // nothing cryptographic depends on it, so it can be changed at any time.
+  onProfile?: boolean
 }
 
 export type Subscriptions = {

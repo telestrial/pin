@@ -30,6 +30,9 @@ export function CreateChannel({
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const [visibility, setVisibility] = useState<ChannelVisibility>('public')
+  // On by default: a channel you make is yours to stand behind unless you say
+  // otherwise, and every channel that predates this behaves the same way.
+  const [onProfile, setOnProfile] = useState(true)
   const [avatarFile, setAvatarFile] = useState<File | null>(null)
   const [avatarPreviewURL, setAvatarPreviewURL] = useState<string | null>(null)
   const [coverFile, setCoverFile] = useState<File | null>(null)
@@ -112,6 +115,9 @@ export function CreateChannel({
         name: result.manifest.name,
         createdAt: result.manifest.publishedAt,
         visibility,
+        // Recorded only when turned off, so the setting reads the same as a
+        // channel made before it existed.
+        ...(onProfile ? {} : { onProfile: false }),
       })
       addSubscription({
         // did:dht is the identity now; the legacy atproto handle/DID fields
@@ -253,6 +259,29 @@ export function CreateChannel({
               watchers.)
             </p>
           </fieldset>
+
+          {/* Separate from visibility, and deliberately below it: this decides
+              where the channel's posts SHOW, not who can read them. A channel
+              kept off the profile is still findable and followable. */}
+          <label className="flex items-start gap-2 pt-1 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={onProfile}
+              disabled={submitting}
+              onChange={(e) => setOnProfile(e.target.checked)}
+              className="mt-0.5 cursor-pointer"
+            />
+            <span className="min-w-0">
+              <span className="block text-sm text-neutral-900">
+                Include on your profile
+              </span>
+              <span className="block text-xs text-neutral-500">
+                Its posts appear in your profile's feed. Turn this off for a
+                channel you'd rather keep findable without it standing for you.
+                Changeable later.
+              </span>
+            </span>
+          </label>
         </div>
 
         {error && (

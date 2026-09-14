@@ -207,6 +207,12 @@ fn advertised_channels(settings: &SettingsView) -> Vec<DirectoryChannel> {
             channel_id: owned.channel_id.clone(),
             key: owned.channel_key.clone(),
             name: owned.name.clone(),
+            // Carried only when the author has turned it off, so the ordinary channel
+            // costs the blob nothing.
+            on_profile: match owned.on_profile {
+                Some(false) => Some(false),
+                _ => None,
+            },
         })
         .collect()
 }
@@ -837,11 +843,13 @@ mod tests {
                     channel_id: "chan-one".into(),
                     key: "AAAA".into(),
                     name: "First".into(),
+                    on_profile: None,
                 },
                 DirectoryChannel {
                     channel_id: "chan-two".into(),
                     key: "BBBB".into(),
                     name: "Second".into(),
+                    on_profile: None,
                 },
             ],
             follows: vec![
@@ -1163,6 +1171,7 @@ mod tests {
                 channel_id: "a".into(),
                 key: "k".into(),
                 name: "n".into(),
+                on_profile: None,
             }]
         )));
     }
@@ -1194,6 +1203,39 @@ mod tests {
         // UNKNOWN, and unknown is not published. Guessing 'public' for "old" would
         // enumerate a channel that may be obscure, which is the property obscurity is.
         assert!(!ids.contains(&"old"));
+    }
+
+    #[test]
+    fn keeping_a_channel_off_the_profile_is_published_and_does_not_unadvertise_it() {
+        // Parsed from JSON for the reason above: this pins the field name the frontend
+        // writes, which no compiler on either side can see.
+        let settings: SettingsView = serde_json::from_str(
+            r#"{"myChannels":[
+                {"channelID":"on","channelKey":"K1","name":"On","visibility":"public"},
+                {"channelID":"off","channelKey":"K2","name":"Off","visibility":"public","onProfile":false},
+                {"channelID":"yes","channelKey":"K3","name":"Explicit","visibility":"public","onProfile":true}
+            ]}"#,
+        )
+        .unwrap();
+
+        let got = advertised_channels(&settings);
+        let ids: Vec<&str> = got.iter().map(|c| c.channel_id.as_str()).collect();
+
+        // Off the profile is NOT off the directory. The two decide different things —
+        // whether a channel is findable at all, and whether its posts stand for its
+        // author — and collapsing them would make one switch do both.
+        assert_eq!(ids, vec!["on", "off", "yes"]);
+
+        // Carried only when false. An absent value reads as on, so an ordinary channel
+        // adds nothing to a blob the whole graph downloads to read a display name.
+        assert_eq!(got[0].on_profile, None);
+        assert_eq!(got[1].on_profile, Some(false));
+        assert_eq!(got[2].on_profile, None);
+
+        // And it survives to the wire under the name the frontend reads.
+        let json = serde_json::to_string(&got).unwrap();
+        assert!(json.contains(r#""onProfile":false"#));
+        assert_eq!(json.matches("onProfile").count(), 1);
     }
 
     /// A packet as large as a real one gets: a chunked Sia share URL, a namespace id, and

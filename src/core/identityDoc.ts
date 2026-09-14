@@ -19,6 +19,10 @@ export type DirectoryChannelRef = {
   channelID: string
   key: string // base64 K
   name: string
+  // Whether this channel's posts belong on its author's profile feed. Absent
+  // means yes, and it is only ever published when false — an ordinary channel
+  // adds nothing to a blob the whole graph downloads to read a display name.
+  onProfile?: boolean
 }
 
 export type DirectoryDoc = {

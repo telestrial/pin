@@ -70,6 +70,18 @@ pub struct DirectoryChannel {
     pub key: String,
     #[serde(default)]
     pub name: String,
+    /// Whether this channel's posts belong on its author's profile feed.
+    ///
+    /// Absent means YES, which is the opposite of how `visibility` reads an absent value
+    /// and is right for the opposite reason: the safe direction there is refusing to
+    /// enumerate an obscure channel, and here it is a channel the author already
+    /// advertises showing the posts it already publishes. So every channel written before
+    /// this existed keeps appearing, which is what those authors have been seeing.
+    ///
+    /// Carried only when FALSE, so an ordinary channel adds nothing to a blob the whole
+    /// graph downloads to read a display name.
+    #[serde(default, rename = "onProfile", skip_serializing_if = "Option::is_none")]
+    pub on_profile: Option<bool>,
 }
 
 /// How much of an identity is still kept.
@@ -1034,6 +1046,7 @@ mod tests {
                 channel_id: "chan-one".into(),
                 key: "AAAA".into(),
                 name: "First".into(),
+                on_profile: None,
             }],
             reach: vec![InstanceAddr {
                 node_id: "n1".into(),
@@ -1113,11 +1126,13 @@ mod tests {
                     channel_id: "chan-one".into(),
                     key: "AAAA".into(),
                     name: "First".into(),
+                    on_profile: None,
                 },
                 DirectoryChannel {
                     channel_id: "chan-two".into(),
                     key: "BBBB".into(),
                     name: "Second".into(),
+                    on_profile: None,
                 },
             ]
         );
@@ -1795,6 +1810,7 @@ mod tests {
                         channel_id: "chan-two".into(),
                         key: "CCCC".into(),
                         name: "Second".into(),
+                        on_profile: None,
                     })
                 }),
             ),

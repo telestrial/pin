@@ -30,6 +30,12 @@ export function EditChannel({
   const updateMyChannelName = useAuthStore((s) => s.updateMyChannelName)
   const updateSubscriptionName = useAuthStore((s) => s.updateSubscriptionName)
   const setChannelVisibility = useAuthStore((s) => s.setChannelVisibility)
+  const setChannelOnProfile = useAuthStore((s) => s.setChannelOnProfile)
+  // Absent means on, so the box starts checked for every channel that predates it.
+  const onProfile = useAuthStore(
+    (s) =>
+      s.myChannels.find((c) => c.channelID === channelID)?.onProfile !== false,
+  )
 
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -242,6 +248,27 @@ export function EditChannel({
             <span className="block text-xs text-neutral-500">
               Readers can reply to posts here. You publish what you keep, so a
               comment appears only once you have it.
+            </span>
+          </span>
+        </label>
+
+        {/* Applied immediately rather than on submit: it is local settings, not
+            part of the manifest this form publishes, so it has nothing to wait for. */}
+        <label className="flex items-start gap-2.5">
+          <input
+            type="checkbox"
+            checked={onProfile}
+            onChange={(e) => setChannelOnProfile(channelID, e.target.checked)}
+            disabled={submitting}
+            className="mt-0.5 h-4 w-4 accent-green-600 disabled:opacity-50"
+          />
+          <span className="space-y-0.5">
+            <span className="block text-sm text-neutral-900">
+              Include on your profile
+            </span>
+            <span className="block text-xs text-neutral-500">
+              Its posts appear in your profile's feed. Off keeps the channel
+              findable and followable without it standing for you.
             </span>
           </span>
         </label>

@@ -28,6 +28,8 @@ export type DirectoryChannel = {
   channelID: string
   key: string
   name: string
+  /** Whether its posts belong on the author's profile feed. Absent means yes. */
+  onProfile?: boolean
 }
 
 /** Where an identity can be dialed: an endpoint, and the relay it is reachable through.
