@@ -545,25 +545,19 @@ function LoadedDirectory({
         </div>
       )}
 
-      {/* Big create affordance, self-only, above the listed channels. No
-          noun on it — the naming question is parked. */}
-      {onCreate && (
-        <button
-          type="button"
-          onClick={onCreate}
-          className="w-full flex items-center justify-center gap-2 rounded-lg border-2 border-dashed border-neutral-200 bg-white py-8 text-base font-medium text-neutral-500 hover:border-green-400 hover:text-green-700 hover:bg-green-50/40 transition-colors cursor-pointer"
-        >
-          <Plus className="size-6" />
-          Create
-        </button>
-      )}
+      {/* The channels this person owns, as a strip above their posts — cover art (or an
+          identity gradient) forward, unlabeled (naming parked). On your own profile the
+          badge also carries storage bytes (you own these); on someone else's it's item
+          count only.
 
-      {/* Public channels this person owns — one full-bodied hero card each,
-          cover art (or identity gradient) forward, unlabeled (naming parked).
-          On your own profile the badge also carries storage bytes (you own
-          these); on someone else's it's item count only. */}
-      {ownChannels.length > 0 && (
-        <div className="space-y-3">
+          Two across and half-height, where this used to be a column of full-bodied cards.
+          The page is a feed now, so its channels are the masthead rather than the content,
+          and somebody with four of them should not need a scroll to reach their first post.
+          Create sits IN the grid rather than above it for the same reason — as one more
+          cell, it is the same affordance at a fraction of the height. No noun on it: the
+          naming question is parked. */}
+      {(ownChannels.length > 0 || onCreate) && (
+        <div className="grid gap-3 sm:grid-cols-2">
           {ownChannels.map((c) => {
             const count = c.manifest.items.length
             const items = `${count} ${count === 1 ? 'item' : 'items'}`
@@ -580,10 +574,21 @@ function LoadedDirectory({
                 cover={c.manifest.cover}
                 description={c.manifest.description}
                 badge={badge}
+                compact
                 onClick={() => onChannelClick(c.authorHandle, c.channelID)}
               />
             )
           })}
+          {onCreate && (
+            <button
+              type="button"
+              onClick={onCreate}
+              className="h-28 flex items-center justify-center gap-2 rounded-lg border-2 border-dashed border-neutral-200 bg-white text-sm font-medium text-neutral-500 hover:border-green-400 hover:text-green-700 hover:bg-green-50/40 transition-colors cursor-pointer"
+            >
+              <Plus className="size-5" />
+              Create
+            </button>
+          )}
         </div>
       )}
 

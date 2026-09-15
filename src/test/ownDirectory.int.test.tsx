@@ -177,13 +177,14 @@ function published(displayName: string) {
   }
 }
 
-function directory(handle: string) {
+function directory(handle: string, onCreate?: () => void) {
   return (
     <HandleDirectory
       handle={handle}
       onItemClick={() => {}}
       onChannelClick={() => {}}
       onHandleClick={() => {}}
+      onCreate={onCreate}
       sidebar={<aside />}
       rightSidebar={<aside />}
     />
@@ -373,6 +374,33 @@ describe('integration: your own directory comes from local state', () => {
     // here precisely BECAUSE they follow nobody: with no follows there is no Following
     // section to share the word with.
     expect(screen.getByText('Following')).toBeInTheDocument()
+  })
+
+  it('offers Create on your own profile with no channels to put beside it', async () => {
+    // Create moved INTO the channel strip when the strip shrank, so it now renders on a
+    // condition it did not used to share with anything. An author with no channels yet is
+    // exactly who that affordance is for, and it is the case the move could drop.
+    signedInWith([])
+
+    render(directory(ME, () => {}))
+
+    await waitFor(() => expect(screen.getByText('Create')).toBeInTheDocument())
+  })
+
+  it('offers nobody else a Create', async () => {
+    // The other half. The strip renders for a stranger only when they have channels, so a
+    // profile with neither is a header and nothing under it.
+    signedInWith([owned()])
+    resolveIdentityDoc.mockResolvedValue({
+      profile: { username: 'them', displayName: 'Them' },
+      channels: [],
+      follows: [],
+    })
+
+    render(directory(THEM))
+
+    await waitFor(() => expect(screen.getByText('Them')).toBeInTheDocument())
+    expect(screen.queryByText('Create')).toBeNull()
   })
 
   it('still resolves somebody else', async () => {
