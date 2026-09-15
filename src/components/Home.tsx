@@ -254,6 +254,7 @@ export function Home({
       <HandleDirectory
         handle={view.handle}
         onBack={returnTo ? () => setView(returnTo) : undefined}
+        onItemClick={(entry) => setView(opened(entry, directoryView))}
         onChannelClick={(authorHandle, channelID) =>
           setView({
             kind: 'viewing-channel',

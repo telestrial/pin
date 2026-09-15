@@ -138,14 +138,31 @@ export function entriesForManifest(
   manifest: ChannelManifest,
   portals: Readonly<Record<string, ResolvedPortalEntry | undefined>> = {},
 ): FeedEntry[] {
-  const channel: FeedChannel = {
-    authorHandle: sub.authorHandle,
-    authorDidDht: sub.didDht,
-    channelID: sub.channelID,
-    name: manifest.name,
-    avatar: manifest.avatar,
-  }
+  return entriesForChannel(
+    {
+      authorHandle: sub.authorHandle,
+      authorDidDht: sub.didDht,
+      channelID: sub.channelID,
+      name: manifest.name,
+      avatar: manifest.avatar,
+    },
+    manifest,
+    portals,
+  )
+}
 
+/** The same rule over the identity a ROW shows, rather than the one you subscribed under.
+ *
+ *  A profile page reads channels it has no subscription to, so the identity it presents
+ *  them under is assembled from the author's directory rather than from a `SubscriptionRef`
+ *  that does not exist. Splitting the rule out is what stops that page growing its own idea
+ *  of what a channel contributes — which is where a portal appearing in one place and not
+ *  the other would come from. */
+export function entriesForChannel(
+  channel: FeedChannel,
+  manifest: ChannelManifest,
+  portals: Readonly<Record<string, ResolvedPortalEntry | undefined>> = {},
+): FeedEntry[] {
   const own: FeedEntry[] = manifest.items.map((item) => ({ item, channel }))
 
   const circulated: FeedEntry[] = []

@@ -36,7 +36,7 @@ import {
 } from '../../crates/pin-core/pkg/pin_core.js'
 import { HandleDirectory } from '../components/HandleDirectory'
 import { channelKeyFromBase64, encryptForChannel } from '../core/crypto'
-import type { ChannelManifest, OwnedChannel } from '../core/types'
+import type { ChannelManifest, ItemRef, OwnedChannel } from '../core/types'
 import { useAuthStore } from '../stores/auth'
 import { fakeDocStore as docStore } from './fakeModules'
 import { createFakeApp, mountAs, resetAllStores } from './setupFakeApp'
@@ -45,8 +45,11 @@ const ME = 'did:dht:me'
 const THEM = 'did:dht:them'
 // 32 bytes of base64, the shape a channel key travels in.
 const KEY = 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8='
+// A second channel key, so two channels on one profile resolve to two different
+// manifests rather than sharing one locator.
+const KEY2 = 'ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8='
 
-function manifest(name: string): ChannelManifest {
+function manifest(name: string, items: ItemRef[] = []): ChannelManifest {
   return {
     version: 1,
     name,
@@ -55,25 +58,49 @@ function manifest(name: string): ChannelManifest {
     authorDidDht: ME,
     publishedAt: '2026-08-27T12:00:00.000Z',
     visibility: 'public',
-    items: [],
+    items,
   } as ChannelManifest
 }
 
+/** A post, identified the way the rest of the system identifies one. */
+function post(body: string, publishedAt: string): ItemRef {
+  return {
+    id: `id-${body}`,
+    itemURL: `sia://${body}`,
+    type: 'text',
+    title: '',
+    summary: body,
+    publishedAt,
+    mimeType: 'text/markdown',
+    byteSize: 32,
+  } as ItemRef
+}
+
 /** Put an owned channel's manifest where the commit that publishes one puts it. */
-async function inTheDoc(channelID: string, name: string) {
+async function inTheDoc(
+  channelID: string,
+  name: string,
+  items: ItemRef[] = [],
+  key = KEY,
+) {
   const sealed = await encryptForChannel(
-    channelKeyFromBase64(KEY),
-    JSON.stringify(manifest(name)),
+    channelKeyFromBase64(key),
+    JSON.stringify(manifest(name, items)),
   )
   docStore.set(`channel/${channelID}`, new TextEncoder().encode(sealed))
 }
 
 /** Put a channel's manifest where the pull loop caches a SUBSCRIBED one. Sealed under K
  *  for real, so the read under test decodes it exactly as it decodes a cached resolve. */
-async function inTheCache(channelID: string, name: string) {
+async function inTheCache(
+  channelID: string,
+  name: string,
+  items: ItemRef[] = [],
+  key = KEY,
+) {
   const sealed = await encryptForChannel(
-    channelKeyFromBase64(KEY),
-    JSON.stringify(manifest(name)),
+    channelKeyFromBase64(key),
+    JSON.stringify(manifest(name, items)),
   )
   docStore.set(`sub/${channelID}`, new TextEncoder().encode(sealed))
 }
@@ -111,7 +138,12 @@ function hold(
   didDht: string,
   displayName: string,
   tier = 'full',
-  channels: { channelID: string; key: string; name: string }[] = [],
+  channels: {
+    channelID: string
+    key: string
+    name: string
+    showOnProfile?: boolean
+  }[] = [],
 ) {
   docStore.set(
     `${directory_collection()}/${didDht}`,
@@ -149,6 +181,7 @@ function directory(handle: string) {
   return (
     <HandleDirectory
       handle={handle}
+      onItemClick={() => {}}
       onChannelClick={() => {}}
       onHandleClick={() => {}}
       sidebar={<aside />}
@@ -523,5 +556,142 @@ describe("integration: somebody else's hero cards walk the resolution ladder", (
       expect(screen.getByText('Resolved channel')).toBeInTheDocument(),
     )
     expect(docStore.has('sub/theirs')).toBe(false)
+  })
+})
+
+describe('integration: a profile is a feed of what its channels published', () => {
+  beforeEach(() => {
+    resetAllStores()
+    docStore.clear()
+    resolveIdentityDoc.mockReset()
+    resolveIdentityDoc.mockResolvedValue(null)
+  })
+
+  it('merges your own included channels into one list', async () => {
+    // One person, one feed. Which of their voices a post came from is a line on the row,
+    // not a heading it sits under — a page that stacked a list per channel would still be
+    // a directory rather than a profile.
+    signedInWith([
+      owned(),
+      owned({ channelID: 'chan2', channelKey: KEY2, name: 'Second' }),
+    ])
+    await inTheDoc('chan1', 'A channel', [
+      post('from the first', '2026-09-01T00:00:00.000Z'),
+    ])
+    await inTheDoc(
+      'chan2',
+      'Second',
+      [post('from the second', '2026-09-02T00:00:00.000Z')],
+      KEY2,
+    )
+
+    render(directory(ME))
+
+    await waitFor(() =>
+      expect(screen.getByText('from the first')).toBeInTheDocument(),
+    )
+    expect(screen.getByText('from the second')).toBeInTheDocument()
+  })
+
+  it('leaves out a channel you kept off your profile', async () => {
+    // The flag's whole point, on the source that owns it: settings. The channel stays
+    // advertised — findable and followable — and only its posts stop standing for you,
+    // which is what makes this separate from `advertised`.
+    signedInWith([
+      owned(),
+      owned({
+        channelID: 'chan2',
+        channelKey: KEY2,
+        name: 'Kept off',
+        showOnProfile: false,
+      }),
+    ])
+    await inTheDoc('chan1', 'A channel', [
+      post('on the profile', '2026-09-01T00:00:00.000Z'),
+    ])
+    await inTheDoc(
+      'chan2',
+      'Kept off',
+      [post('off the profile', '2026-09-02T00:00:00.000Z')],
+      KEY2,
+    )
+
+    render(directory(ME))
+
+    await waitFor(() =>
+      expect(screen.getByText('on the profile')).toBeInTheDocument(),
+    )
+    expect(screen.queryByText('off the profile')).toBeNull()
+    // The channel itself is still listed — this is a feed decision, not a reach one.
+    expect(screen.getByText('Kept off')).toBeInTheDocument()
+  })
+
+  it("honours somebody else's flag, which travels in their directory", async () => {
+    // The published half. The author decides what stands for them, and a reader's page
+    // has to read that decision off the blob rather than deciding for itself.
+    signedInWith([owned()])
+    const { publishLocator } = await import('../lib/channelLocatorNative')
+    await publishLocator(
+      channelKeyFromBase64(KEY),
+      JSON.stringify(
+        manifest('Shown', [post('theirs, shown', '2026-09-01T00:00:00.000Z')]),
+      ),
+    )
+    await publishLocator(
+      channelKeyFromBase64(KEY2),
+      JSON.stringify(
+        manifest('Hidden', [
+          post('theirs, hidden', '2026-09-02T00:00:00.000Z'),
+        ]),
+      ),
+    )
+    resolveIdentityDoc.mockResolvedValue({
+      profile: { username: 'them', displayName: 'Them' },
+      channels: [
+        { channelID: 'shown', key: KEY, name: 'Shown' },
+        {
+          channelID: 'hidden',
+          key: KEY2,
+          name: 'Hidden',
+          showOnProfile: false,
+        },
+      ],
+      follows: [],
+    })
+
+    render(directory(THEM))
+
+    await waitFor(() =>
+      expect(screen.getByText('theirs, shown')).toBeInTheDocument(),
+    )
+    expect(screen.queryByText('theirs, hidden')).toBeNull()
+  })
+
+  it('carries the flag on a card drawn from the crawl index', async () => {
+    // The third source. A record the crawl holds names each channel and carries the flag
+    // beside its K, so the page has to read it there too — rendering from the index and
+    // deciding inclusion only after the resolve would show a post the author kept off
+    // their profile for as long as the lookup takes.
+    signedInWith([owned()])
+    await inTheCache('hidden', 'Hidden', [
+      post('held but kept off', '2026-09-02T00:00:00.000Z'),
+    ])
+    hold(THEM, 'them', 'full', [
+      { channelID: 'hidden', key: KEY, name: 'Hidden', showOnProfile: false },
+    ])
+    let answer: (doc: unknown) => void = () => {}
+    resolveIdentityDoc.mockReturnValue(
+      new Promise((resolve) => {
+        answer = resolve
+      }),
+    )
+
+    render(directory(THEM))
+
+    await waitFor(() => expect(screen.getByText('them')).toBeInTheDocument())
+    // The card is there — the channel is advertised — and its posts are not.
+    expect(screen.getByText('Hidden')).toBeInTheDocument()
+    expect(screen.queryByText('held but kept off')).toBeNull()
+    answer(null)
   })
 })

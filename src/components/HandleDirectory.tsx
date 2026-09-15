@@ -1,7 +1,9 @@
 import { Plus } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { advertisedChannels } from '../core/channels'
+import type { FeedEntry } from '../core/feed'
 import { followersOfPerson } from '../core/followers'
+import { buildProfileFeed, includedOnProfile } from '../core/profileFeed'
 import type { ChannelManifest, FollowEdge } from '../core/types'
 import {
   readCachedManifest,
@@ -20,6 +22,7 @@ import { useAuthStore } from '../stores/auth'
 import { ChannelAvatar } from './channel/ChannelAvatar'
 import { ChannelHeroCard } from './channel/ChannelHeroCard'
 import { FollowHandleButton } from './FollowHandleButton'
+import { FeedRow } from './HomeFeed'
 import { IdentityAvatar } from './IdentityAvatar'
 
 type ChannelEntry = {
@@ -27,6 +30,11 @@ type ChannelEntry = {
   authorHandle: string
   channelID: string
   manifest: ChannelManifest
+  /** Whether its posts belong in the feed below. Absent means yes — see
+   *  `includedOnProfile`. Carried here because all three sources of a channel publish it
+   *  (settings for your own, the crawl's record and the author's directory for somebody
+   *  else's) and the feed is built from whichever one answered. */
+  showOnProfile?: boolean
 }
 
 /** The profile fields this page renders.
@@ -42,8 +50,12 @@ type DisplayProfile = {
   coverURL?: string
 }
 
-function entry(channelID: string, manifest: ChannelManifest): ChannelEntry {
-  return { authorDID: '', authorHandle: '', channelID, manifest }
+function entry(
+  channelID: string,
+  manifest: ChannelManifest,
+  showOnProfile?: boolean,
+): ChannelEntry {
+  return { authorDID: '', authorHandle: '', channelID, manifest, showOnProfile }
 }
 
 /** The advertised channels this device already holds, out of the shared doc (`sub/<id>`).
@@ -58,13 +70,13 @@ function entry(channelID: string, manifest: ChannelManifest): ChannelEntry {
  *  on the next one — two whole-doc Sia mirrors to cache nothing. */
 async function cachedChannels(
   appKeyHex: string | null,
-  channels: { channelID: string; key: string }[],
+  channels: { channelID: string; key: string; showOnProfile?: boolean }[],
 ): Promise<ChannelEntry[]> {
   if (!appKeyHex) return []
   const held = await Promise.all(
     channels.map(async (c): Promise<ChannelEntry | null> => {
       const manifest = await readCachedManifest(appKeyHex, c.channelID, c.key)
-      return manifest ? entry(c.channelID, manifest) : null
+      return manifest ? entry(c.channelID, manifest, c.showOnProfile) : null
     }),
   )
   return held.filter((c): c is ChannelEntry => c !== null)
@@ -83,7 +95,7 @@ async function cachedChannels(
  *  neither is dropped rather than failing the page — one missing hero card is a better
  *  answer than a profile that would not open. */
 async function resolveChannels(
-  channels: { channelID: string; key: string }[],
+  channels: { channelID: string; key: string; showOnProfile?: boolean }[],
   held: ChannelEntry[],
 ): Promise<ChannelEntry[]> {
   const onScreen = new Map(held.map((c) => [c.channelID, c]))
@@ -91,7 +103,7 @@ async function resolveChannels(
     channels.map(async (c): Promise<ChannelEntry | null> => {
       try {
         const manifest = await resolveChannelViaLocator(c.key)
-        if (manifest) return entry(c.channelID, manifest)
+        if (manifest) return entry(c.channelID, manifest, c.showOnProfile)
       } catch {
         // Fall through: an unreadable locator is a read failure, never an absence.
       }
@@ -150,14 +162,7 @@ async function readOwnDirectory(): Promise<{
             c.channelID,
             c.channelKey,
           )
-          return manifest
-            ? {
-                authorDID: '',
-                authorHandle: '',
-                channelID: c.channelID,
-                manifest,
-              }
-            : null
+          return manifest ? entry(c.channelID, manifest, c.showOnProfile) : null
         }),
       )
     : []
@@ -202,6 +207,7 @@ function useFollowerCount(didDht: string): number | null {
 export function HandleDirectory({
   handle: rawHandle,
   onBack,
+  onItemClick,
   onChannelClick,
   onHandleClick,
   onEditProfile,
@@ -215,6 +221,10 @@ export function HandleDirectory({
   // when reached as primary nav from the sidebar's My Profile — no
   // Back affordance renders in that case.
   onBack?: () => void
+  // Opening a post from the feed below. The same handler the home feed and a
+  // channel page take, so a post opened from a profile reads identically and
+  // comes back here.
+  onItemClick: (entry: FeedEntry) => void
   onChannelClick: (authorHandle: string, channelID: string) => void
   onHandleClick: (handle: string) => void
   // Only wired when the directory belongs to the signed-in user. Home
@@ -452,6 +462,7 @@ export function HandleDirectory({
               handleFollows={state.handleFollows}
               followerCount={followerCount}
               onBack={onBack}
+              onItemClick={onItemClick}
               onChannelClick={onChannelClick}
               onHandleClick={onHandleClick}
               onEditProfile={isSelf ? onEditProfile : undefined}
@@ -475,6 +486,7 @@ function LoadedDirectory({
   handleFollows,
   followerCount,
   onBack,
+  onItemClick,
   onChannelClick,
   onHandleClick,
   onEditProfile,
@@ -490,6 +502,7 @@ function LoadedDirectory({
   /** Null while the index is still being counted — blank rather than a claimed zero. */
   followerCount: number | null
   onBack?: () => void
+  onItemClick: (entry: FeedEntry) => void
   onChannelClick: (authorHandle: string, channelID: string) => void
   onHandleClick: (handle: string) => void
   onEditProfile?: () => void
@@ -500,6 +513,18 @@ function LoadedDirectory({
     ownChannels.length === 0 &&
     follows.length === 0 &&
     handleFollows.length === 0
+
+  // Built from the manifests the cards above already hold, so the feed costs no network of
+  // its own: a card needs a manifest and a manifest carries the items. Rebuilt whenever the
+  // channel set changes, which is what a landing does twice — cached cards, then the re-read
+  // that replaces them.
+  const entries = useMemo(
+    () => buildProfileFeed(did, ownChannels),
+    [did, ownChannels],
+  )
+  // Through the same predicate the feed builds on, rather than a second spelling of it —
+  // the two disagreeing would render a heading over a feed that excluded everything.
+  const included = ownChannels.filter(includedOnProfile)
 
   return (
     <div className="space-y-5">
@@ -559,6 +584,39 @@ function LoadedDirectory({
               />
             )
           })}
+        </div>
+      )}
+
+      {/* What this person publishes, across every channel they chose to stand for them.
+          One feed rather than a list per channel: a profile is one person, and which of
+          their voices a post came from is a line on the row.
+
+          Rendered whenever a channel is included, so an author with nothing published yet
+          is told so rather than shown a page that stops at their channels. */}
+      {included.length > 0 && (
+        <div className="space-y-2">
+          <h2 className="text-xs font-medium text-neutral-500 uppercase tracking-wide px-1">
+            Posts
+          </h2>
+          {entries.length === 0 ? (
+            <div className="bg-white border border-neutral-200 rounded-lg p-5 text-center text-sm text-neutral-500">
+              Nothing published yet.
+            </div>
+          ) : (
+            <ul className="bg-white border border-neutral-200 rounded-lg divide-y divide-neutral-200/80">
+              {entries.map((entry) => (
+                <FeedRow
+                  // The pair the rest of the system uses as logical-post identity, same as
+                  // every other list of rows.
+                  key={`${entry.channel.channelID}:${entry.item.publishedAt}`}
+                  entry={entry}
+                  onItemClick={onItemClick}
+                  onChannelClick={onChannelClick}
+                  onHandleClick={onHandleClick}
+                />
+              ))}
+            </ul>
+          )}
         </div>
       )}
 
