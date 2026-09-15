@@ -32,7 +32,7 @@ export function CreateChannel({
   const [visibility, setVisibility] = useState<ChannelVisibility>('public')
   // On by default: a channel you make is yours to stand behind unless you say
   // otherwise, and every channel that predates this behaves the same way.
-  const [onProfile, setOnProfile] = useState(true)
+  const [showOnProfile, setShowOnProfile] = useState(true)
   const [avatarFile, setAvatarFile] = useState<File | null>(null)
   const [avatarPreviewURL, setAvatarPreviewURL] = useState<string | null>(null)
   const [coverFile, setCoverFile] = useState<File | null>(null)
@@ -117,7 +117,7 @@ export function CreateChannel({
         visibility,
         // Recorded only when turned off, so the setting reads the same as a
         // channel made before it existed.
-        ...(onProfile ? {} : { onProfile: false }),
+        ...(showOnProfile ? {} : { showOnProfile: false }),
       })
       addSubscription({
         // did:dht is the identity now; the legacy atproto handle/DID fields
@@ -266,9 +266,9 @@ export function CreateChannel({
           <label className="flex items-start gap-2 pt-1 cursor-pointer">
             <input
               type="checkbox"
-              checked={onProfile}
+              checked={showOnProfile}
               disabled={submitting}
-              onChange={(e) => setOnProfile(e.target.checked)}
+              onChange={(e) => setShowOnProfile(e.target.checked)}
               className="mt-0.5 cursor-pointer"
             />
             <span className="min-w-0">

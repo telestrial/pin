@@ -30,11 +30,12 @@ export function EditChannel({
   const updateMyChannelName = useAuthStore((s) => s.updateMyChannelName)
   const updateSubscriptionName = useAuthStore((s) => s.updateSubscriptionName)
   const setChannelVisibility = useAuthStore((s) => s.setChannelVisibility)
-  const setChannelOnProfile = useAuthStore((s) => s.setChannelOnProfile)
+  const setChannelShowOnProfile = useAuthStore((s) => s.setChannelShowOnProfile)
   // Absent means on, so the box starts checked for every channel that predates it.
-  const onProfile = useAuthStore(
+  const showOnProfile = useAuthStore(
     (s) =>
-      s.myChannels.find((c) => c.channelID === channelID)?.onProfile !== false,
+      s.myChannels.find((c) => c.channelID === channelID)?.showOnProfile !==
+      false,
   )
 
   const [loading, setLoading] = useState(true)
@@ -257,8 +258,10 @@ export function EditChannel({
         <label className="flex items-start gap-2.5">
           <input
             type="checkbox"
-            checked={onProfile}
-            onChange={(e) => setChannelOnProfile(channelID, e.target.checked)}
+            checked={showOnProfile}
+            onChange={(e) =>
+              setChannelShowOnProfile(channelID, e.target.checked)
+            }
             disabled={submitting}
             className="mt-0.5 h-4 w-4 accent-green-600 disabled:opacity-50"
           />

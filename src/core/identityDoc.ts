@@ -22,7 +22,7 @@ export type DirectoryChannelRef = {
   // Whether this channel's posts belong on its author's profile feed. Absent
   // means yes, and it is only ever published when false — an ordinary channel
   // adds nothing to a blob the whole graph downloads to read a display name.
-  onProfile?: boolean
+  showOnProfile?: boolean
 }
 
 export type DirectoryDoc = {

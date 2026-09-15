@@ -265,7 +265,7 @@ export type OwnedChannel = {
   // already publish, so channels made before this existed keep behaving as
   // their authors have seen them behave. Unlike `visibility` it is not sticky —
   // nothing cryptographic depends on it, so it can be changed at any time.
-  onProfile?: boolean
+  showOnProfile?: boolean
 }
 
 export type Subscriptions = {

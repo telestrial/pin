@@ -209,7 +209,7 @@ fn advertised_channels(settings: &SettingsView) -> Vec<DirectoryChannel> {
             name: owned.name.clone(),
             // Carried only when the author has turned it off, so the ordinary channel
             // costs the blob nothing.
-            on_profile: match owned.on_profile {
+            show_on_profile: match owned.show_on_profile {
                 Some(false) => Some(false),
                 _ => None,
             },
@@ -843,13 +843,13 @@ mod tests {
                     channel_id: "chan-one".into(),
                     key: "AAAA".into(),
                     name: "First".into(),
-                    on_profile: None,
+                    show_on_profile: None,
                 },
                 DirectoryChannel {
                     channel_id: "chan-two".into(),
                     key: "BBBB".into(),
                     name: "Second".into(),
-                    on_profile: None,
+                    show_on_profile: None,
                 },
             ],
             follows: vec![
@@ -1171,7 +1171,7 @@ mod tests {
                 channel_id: "a".into(),
                 key: "k".into(),
                 name: "n".into(),
-                on_profile: None,
+                show_on_profile: None,
             }]
         )));
     }
@@ -1212,8 +1212,8 @@ mod tests {
         let settings: SettingsView = serde_json::from_str(
             r#"{"myChannels":[
                 {"channelID":"on","channelKey":"K1","name":"On","visibility":"public"},
-                {"channelID":"off","channelKey":"K2","name":"Off","visibility":"public","onProfile":false},
-                {"channelID":"yes","channelKey":"K3","name":"Explicit","visibility":"public","onProfile":true}
+                {"channelID":"off","channelKey":"K2","name":"Off","visibility":"public","showOnProfile":false},
+                {"channelID":"yes","channelKey":"K3","name":"Explicit","visibility":"public","showOnProfile":true}
             ]}"#,
         )
         .unwrap();
@@ -1228,14 +1228,14 @@ mod tests {
 
         // Carried only when false. An absent value reads as on, so an ordinary channel
         // adds nothing to a blob the whole graph downloads to read a display name.
-        assert_eq!(got[0].on_profile, None);
-        assert_eq!(got[1].on_profile, Some(false));
-        assert_eq!(got[2].on_profile, None);
+        assert_eq!(got[0].show_on_profile, None);
+        assert_eq!(got[1].show_on_profile, Some(false));
+        assert_eq!(got[2].show_on_profile, None);
 
         // And it survives to the wire under the name the frontend reads.
         let json = serde_json::to_string(&got).unwrap();
-        assert!(json.contains(r#""onProfile":false"#));
-        assert_eq!(json.matches("onProfile").count(), 1);
+        assert!(json.contains(r#""showOnProfile":false"#));
+        assert_eq!(json.matches("showOnProfile").count(), 1);
     }
 
     /// A packet as large as a real one gets: a chunked Sia share URL, a namespace id, and

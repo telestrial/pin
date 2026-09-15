@@ -550,8 +550,8 @@ pub(crate) struct OwnedChannelView {
     /// Separate from `advertised`, which decides whether the channel is in the directory
     /// at all: a channel can be findable and followable while its posts stay off the page
     /// that stands for its author.
-    #[serde(default, rename = "onProfile")]
-    pub(crate) on_profile: Option<bool>,
+    #[serde(default, rename = "showOnProfile")]
+    pub(crate) show_on_profile: Option<bool>,
 }
 
 /// What this identity last published to Sia under some rkey, and the fingerprint of

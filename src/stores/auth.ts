@@ -107,7 +107,7 @@ type AuthState = {
     visibility: ChannelVisibility,
   ) => void
   setChannelAdvertised: (channelID: string, advertised: boolean) => void
-  setChannelOnProfile: (channelID: string, onProfile: boolean) => void
+  setChannelShowOnProfile: (channelID: string, showOnProfile: boolean) => void
   removeMyChannel: (channelID: string) => void
   addSubscription: (sub: SubscriptionRef) => void
   updateSubscriptionName: (channelID: string, name: string) => void
@@ -181,13 +181,13 @@ export const useAuthStore = create<AuthState>()(
         })),
       // Recorded only when turned off, so a channel left alone reads identically
       // to one made before the field existed — absent means on.
-      setChannelOnProfile: (channelID, onProfile) =>
+      setChannelShowOnProfile: (channelID, showOnProfile) =>
         set((s) => ({
           myChannels: s.myChannels.map((c) =>
             c.channelID === channelID
-              ? onProfile
-                ? (({ onProfile: _drop, ...rest }) => rest)(c)
-                : { ...c, onProfile: false }
+              ? showOnProfile
+                ? (({ showOnProfile: _drop, ...rest }) => rest)(c)
+                : { ...c, showOnProfile: false }
               : c,
           ),
           settingsDirty: true,
