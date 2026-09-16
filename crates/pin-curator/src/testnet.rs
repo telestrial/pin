@@ -303,6 +303,46 @@ impl Identity {
         .expect("write manifest");
     }
 
+    /// A channel with no posts in it, which is not the same as no channel.
+    ///
+    /// Separated from `follows_and_publishes` because the threshold that matters is a
+    /// POST: `own_subjects` walks a manifest's items, so an author who made a channel and
+    /// has not written in it yet has no subjects and is indistinguishable from one who
+    /// made nothing.
+    pub async fn follows_with_an_empty_channel(&self, dids: &[&str]) {
+        let k = self.channel_key();
+        let channel_id = pin_crypto::channel_id(&k);
+        self.set_settings(serde_json::json!({
+            "handleFollows": dids,
+            "myChannels": [{
+                "channelID": channel_id,
+                "channelKey": pin_crypto::channel_key_to_base64(&k),
+                "name": "A channel",
+                "visibility": "public",
+            }],
+        }))
+        .await;
+        let manifest = serde_json::json!({
+            "version": 1,
+            "name": "A channel",
+            "description": "",
+            "authorPubkey": "ed25519:testnet",
+            "publishedAt": "2026-09-12T00:00:00.000Z",
+            "items": [],
+        });
+        let sealed = pin_crypto::encrypt(&k, &serde_json::to_vec(&manifest).expect("serialize"))
+            .expect("seal manifest");
+        crate::write_record(
+            &self.doc,
+            self.author_id,
+            "channel",
+            &channel_id,
+            sealed.into_bytes(),
+        )
+        .await
+        .expect("write manifest");
+    }
+
     /// This identity's engagement context, as the loop builds one.
     ///
     /// `sia` is a DISCONNECTED session, which is what makes an engagement pass runnable
@@ -607,6 +647,67 @@ mod visibility {
             Some("carol"),
             "and john knows who she is, having been told by nobody",
         );
+    }
+
+    /// PUBLISHING NOTHING MEANS DISCOVERING NOBODY — a fact about the shipped loops,
+    /// recorded rather than endorsed.
+    ///
+    /// `engagement_once` returns before its crawl when this identity has no subjects:
+    /// nothing published means nothing that can be endorsed, so there is nothing to fold
+    /// and no reason to read anybody. That is right for ENGAGEMENT and it is not obviously
+    /// right for DISCOVERY, which inherits it — hop one is a byproduct of that crawl, and
+    /// the discovery frontier is derived from held records, so a reader who follows people
+    /// and has never posted holds nobody and reaches nobody, permanently. Not "slowly":
+    /// there is no other path to a first held record.
+    ///
+    /// Two things follow. Any live verification of the chain has to have each account
+    /// publish something first, or it is testing this instead. And whether a lurker ought
+    /// to discover is a question about the loop boundary — today `covered_elsewhere` gives
+    /// the whole of your own graph to engagement, so when engagement declines to read it,
+    /// nothing else will.
+    #[tokio::test]
+    async fn publishing_nothing_means_discovering_nobody() {
+        let world = World::new();
+        let john = Identity::new(&world, 1).await;
+        let alice = Identity::new(&world, 2).await;
+        let carol = Identity::new(&world, 3).await;
+
+        world.publish(
+            &alice.did,
+            "sia://alice-dir",
+            directory("alice", &[&carol.did]),
+        );
+        world.publish(&carol.did, "sia://carol-dir", directory("carol", &[]));
+        // Exactly the scenario that works above, minus the publishing.
+        john.follows(&[&alice.did]).await;
+
+        let folded = engagement(&john).await;
+        assert_eq!(
+            folded.reached, 0,
+            "the pass returns before its crawl, so not even himself",
+        );
+        assert!(
+            john.held(&alice.did).await.is_none(),
+            "so hop one never lands for the person he follows",
+        );
+
+        // And discovery cannot make up the difference: its frontier is derived from held
+        // records, and there are none.
+        let out = pass(&john).await;
+        assert_eq!(out.resolved, 0);
+        assert!(john.held(&carol.did).await.is_none(), "carol stays unseen");
+
+        // The threshold is a POST, not a channel — which is the part that would be got
+        // wrong setting this up by hand, because having made a channel feels like having
+        // published. `own_subjects` walks a manifest's items, so an empty one contributes
+        // nothing and this identity is still exactly the lurker above.
+        john.follows_with_an_empty_channel(&[&alice.did]).await;
+        assert_eq!(
+            engagement(&john).await.reached,
+            0,
+            "an empty channel is not a post"
+        );
+        assert!(john.held(&alice.did).await.is_none());
     }
 
     /// The same scenario with alice's edge removed: carol stays invisible.
