@@ -160,6 +160,8 @@ pub struct Identity {
     pub author_id: iroh_docs::AuthorId,
     pub app_key: [u8; 32],
     pub net: FakeNetwork,
+    /// Channel docs are opened through this to publish a tally, the same as in production.
+    pub docs: iroh_docs::api::DocsApi,
     // Held so the router and endpoint outlive the doc.
     _endpoint: iroh::Endpoint,
 }
@@ -208,8 +210,14 @@ impl Identity {
             author_id,
             app_key,
             net: FakeNetwork::new(world),
+            docs: docs.api().clone(),
             _endpoint: endpoint,
         }
+    }
+
+    /// This channel's K, derived from the seed so the same identity is the same channel.
+    fn channel_key(&self) -> [u8; 32] {
+        pin_derive::hkdf32(&self.app_key, b"pin:testnet-channel:v1")
     }
 
     /// Seed this identity's settings — the record the frontend writes and every loop
@@ -242,6 +250,78 @@ impl Identity {
     pub async fn follows(&self, dids: &[&str]) {
         self.set_settings(serde_json::json!({ "handleFollows": dids }))
             .await;
+    }
+
+    /// Follow these identities wholesale AND publish one post.
+    ///
+    /// Both, because the engagement pass returns early when nothing is published: nothing
+    /// can be endorsed, so there is nothing to crawl FOR. Hop one is a byproduct of that
+    /// crawl, so an identity that has published nothing reads nobody — correct, and the
+    /// reason a scenario about hop one cannot be built out of follows alone.
+    pub async fn follows_and_publishes(&self, dids: &[&str]) {
+        let k = self.channel_key();
+        let channel_id = pin_crypto::channel_id(&k);
+        self.set_settings(serde_json::json!({
+            "handleFollows": dids,
+            "myChannels": [{
+                "channelID": channel_id,
+                "channelKey": pin_crypto::channel_key_to_base64(&k),
+                "name": "A channel",
+                "visibility": "public",
+            }],
+        }))
+        .await;
+
+        // Where the commit that publishes a channel puts its manifest, sealed under K, so
+        // `own_subjects` opens it exactly as it opens the app's own.
+        let manifest = serde_json::json!({
+            "version": 1,
+            "name": "A channel",
+            "description": "",
+            "authorPubkey": "ed25519:testnet",
+            "publishedAt": "2026-09-12T00:00:00.000Z",
+            "items": [{
+                "id": "item-1",
+                "itemURL": "sia://item-1",
+                "type": "text",
+                "title": "",
+                "publishedAt": "2026-09-12T00:00:00.000Z",
+                "mimeType": "text/markdown",
+                "byteSize": 32,
+            }],
+        });
+        let sealed = pin_crypto::encrypt(&k, &serde_json::to_vec(&manifest).expect("serialize"))
+            .expect("seal manifest");
+        crate::write_record(
+            &self.doc,
+            self.author_id,
+            "channel",
+            &channel_id,
+            sealed.into_bytes(),
+        )
+        .await
+        .expect("write manifest");
+    }
+
+    /// This identity's engagement context, as the loop builds one.
+    ///
+    /// `sia` is a DISCONNECTED session, which is what makes an engagement pass runnable
+    /// here at all. Every op on one returns "Sia is not connected" rather than panicking,
+    /// and the pass's two READS already go through `net` — so the crawl half runs for real
+    /// and only the publishing half declines, which is the half a fake network has nothing
+    /// to say about anyway.
+    pub fn engagement_ctx(&self) -> crate::EngagementContext<FakeNetwork> {
+        crate::EngagementContext {
+            comment_policy: Default::default(),
+            doc: self.doc.clone(),
+            blobs: self.blobs.clone(),
+            author_id: self.author_id,
+            docs: self.docs.clone(),
+            sia: std::sync::Arc::new(pin_sia::Session::new()),
+            net: self.net.clone(),
+            app_key: self.app_key,
+            inbox: pin_rpc::new_inbox(),
+        }
     }
 
     /// What this identity's crawl currently holds about `did`, if anything.
@@ -423,6 +503,109 @@ mod visibility {
                 .and_then(|u| u.as_str()),
             Some("carol"),
             "and john knows who she is",
+        );
+    }
+
+    /// Run one ENGAGEMENT pass, crawling, and return what it did.
+    ///
+    /// The pass that reads the graph — and, as a byproduct, records who it read.
+    async fn engagement(who: &Identity) -> crate::EngagementOutcome {
+        crate::engagement_once(
+            &who.engagement_ctx(),
+            &who.did,
+            "2026-09-12T00:00:00.000Z".to_string(),
+            true,
+        )
+        .await
+        .expect("engagement pass")
+    }
+
+    /// HOP ONE IS FREE, which until now was asserted and never run.
+    ///
+    /// The engagement crawl already resolves each graph actor's packet and downloads their
+    /// directory to read their endorsements. Recording who they are out of those same bytes
+    /// is a parse, not a fetch — that is the claim the whole discovery arc is costed on, and
+    /// the scenarios below it had to call `hop_one` by hand to get started.
+    ///
+    /// Sia is not connected here, so the pass CANNOT publish. That is the point: hop one has
+    /// to land on the reading half, where a fake network can speak for the real one.
+    #[tokio::test]
+    async fn the_engagement_crawl_records_who_it_read() {
+        let world = World::new();
+        let john = Identity::new(&world, 1).await;
+        let alice = Identity::new(&world, 2).await;
+
+        world.publish(&alice.did, "sia://alice-dir", directory("alice", &[]));
+        john.follows_and_publishes(&[&alice.did]).await;
+
+        let out = engagement(&john).await;
+
+        // Two: john himself, whose endorsements are read locally and cost no network, and
+        // alice, who cost one resolve and one download.
+        assert_eq!(out.reached, 2, "alice's directory was read");
+        let held = john.held(&alice.did).await.expect("and recorded");
+        assert_eq!(
+            held.profile
+                .as_ref()
+                .and_then(|p| p.get("username"))
+                .and_then(|u| u.as_str()),
+            Some("alice"),
+            "out of the bytes the fold downloaded anyway",
+        );
+        // And not himself. Reading john would spend a resolve and a download to be told,
+        // staler, what local state already holds — the same exclusion discovery makes, and
+        // the reason this pass skips its own did before the crawl rather than after.
+        assert!(
+            john.held(&john.did).await.is_none(),
+            "the crawl never reads you",
+        );
+    }
+
+    /// THE WHOLE CHAIN, with nothing handed over: john follows alice, alice follows carol,
+    /// and john ends up holding carol.
+    ///
+    /// Every scenario above starts from a manual `hop_one`, so each proves its own link and
+    /// none proves they join. This one calls only the two shipped passes in the order the
+    /// Curator runs them, which is the claim a live run is actually trying to check: nobody
+    /// tells john about carol, and one round later he knows her.
+    #[tokio::test]
+    async fn john_reaches_carol_through_alice_with_nobody_telling_him() {
+        let world = World::new();
+        let john = Identity::new(&world, 1).await;
+        let alice = Identity::new(&world, 2).await;
+        let carol = Identity::new(&world, 3).await;
+
+        world.publish(
+            &alice.did,
+            "sia://alice-dir",
+            directory("alice", &[&carol.did]),
+        );
+        world.publish(&carol.did, "sia://carol-dir", directory("carol", &[]));
+        john.follows_and_publishes(&[&alice.did]).await;
+
+        // Before anything runs, john knows nobody — not even the person he follows.
+        assert!(john.held(&alice.did).await.is_none());
+
+        // The engagement pass reads alice, because she is in his graph, and records her.
+        engagement(&john).await;
+        assert!(
+            john.held(&alice.did).await.is_some(),
+            "hop one, from the fold's own read",
+        );
+
+        // Her record carries the edge to carol, so carol is on the frontier — and the
+        // discovery pass, whose whole job is everybody BEYOND the graph, goes and reads her.
+        let out = pass(&john).await;
+
+        assert_eq!(out.resolved, 1, "carol is read");
+        let held = john.held(&carol.did).await.expect("carol is held");
+        assert_eq!(
+            held.profile
+                .as_ref()
+                .and_then(|p| p.get("username"))
+                .and_then(|u| u.as_str()),
+            Some("carol"),
+            "and john knows who she is, having been told by nobody",
         );
     }
 
