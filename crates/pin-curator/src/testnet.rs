@@ -649,6 +649,56 @@ mod visibility {
         );
     }
 
+    /// BEING FOLLOWED TELLS YOU NOTHING. The graph is directed, and reading it is
+    /// something you do from your own end of the arrow.
+    ///
+    /// `graph_actors` is built entirely out of YOUR settings — who you follow, who you
+    /// watch. Nothing anywhere tells you who follows you, and that is not an omission: a
+    /// follow lives in the FOLLOWER's directory and nothing writes into the followed
+    /// identity's scope, so being followed is knowable only by having read the follower.
+    /// It is why a follower count can only ever be a reverse scan of what the crawl
+    /// already holds.
+    ///
+    /// So an identity every arrow points AT holds nothing and reaches nobody, however long
+    /// it waits — it has no first record, and the discovery frontier is derived from held
+    /// records. This is the shape a chain gets set up in by hand when the middle of it does
+    /// the following: b follows a, b follows c, and a is left looking at an empty network.
+    #[tokio::test]
+    async fn being_followed_is_not_following() {
+        let world = World::new();
+        let a = Identity::new(&world, 1).await;
+        let b = Identity::new(&world, 2).await;
+        let c = Identity::new(&world, 3).await;
+
+        // Everybody publishes. Nothing here is unreachable or unpublished — the only
+        // thing wrong is which way the arrows run.
+        world.publish(&a.did, "sia://a-dir", directory("a", &[]));
+        world.publish(&b.did, "sia://b-dir", directory("b", &[&a.did, &c.did]));
+        world.publish(&c.did, "sia://c-dir", directory("c", &[]));
+
+        // a published a post, so its engagement pass does run its crawl half — and
+        // follows nobody, so there is nobody in it.
+        a.follows_and_publishes(&[]).await;
+        b.follows_and_publishes(&[&a.did, &c.did]).await;
+
+        let folded = engagement(&a).await;
+        assert_eq!(
+            folded.reached, 1,
+            "itself and nobody else: being followed by b puts b in nobody's graph",
+        );
+        assert!(a.held(&b.did).await.is_none(), "not even the follower");
+
+        let out = pass(&a).await;
+        assert_eq!(out.resolved, 0, "and so the frontier is empty");
+        assert!(a.held(&c.did).await.is_none(), "c is unreachable from a");
+
+        // The same network from b's end, which is the end the arrows leave from: one pass
+        // and b holds both. Nothing about the network changed — only who is asking.
+        engagement(&b).await;
+        assert!(b.held(&a.did).await.is_some());
+        assert!(b.held(&c.did).await.is_some());
+    }
+
     /// PUBLISHING NOTHING MEANS DISCOVERING NOBODY — a fact about the shipped loops,
     /// recorded rather than endorsed.
     ///
