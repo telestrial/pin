@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildSubscribeURL,
+  parsePinAddress,
   parseSubscribeURL,
   removeRepostFromChannel,
   repostToChannel,
@@ -40,6 +41,44 @@ describe('subscribe URL (did:dht form)', () => {
 
   it('rejects a malformed URL', async () => {
     await expect(parseSubscribeURL('not-a-pin-url')).rejects.toThrow()
+  })
+})
+
+describe('a Pin address is a place to go', () => {
+  it('reads a channel link as a channel', async () => {
+    const kBytes = await generateChannelKey()
+    const k = channelKeyToBase64(kBytes)
+    const addr = await parsePinAddress(buildSubscribeURL(DID, k))
+    expect(addr.kind).toBe('channel')
+    if (addr.kind !== 'channel') throw new Error('unreachable')
+    expect(addr.didDht).toBe(DID)
+    expect(addr.channelKey).toBe(k)
+    expect(addr.channelID).toBe(await deriveChannelID(kBytes))
+  })
+
+  it('reads a bare identity as an identity', async () => {
+    // The same URL without a key names a person rather than one of their channels. It
+    // carries nothing to decrypt because there is nothing sealed: a directory is public.
+    const addr = await parsePinAddress(`pin://${DID}`)
+    expect(addr).toEqual({ kind: 'identity', didDht: DID })
+  })
+
+  it('tolerates a trailing slash on an identity', async () => {
+    expect(await parsePinAddress(`pin://${DID}/`)).toEqual({
+      kind: 'identity',
+      didDht: DID,
+    })
+  })
+
+  it('does not read a keyless HANDLE as an identity', async () => {
+    // Only a did:dht is an address. A bare handle names nobody resolvable — identity is
+    // the key, and a handle is a self-asserted, non-unique label — so this is a malformed
+    // link rather than a person to open.
+    await expect(parsePinAddress('pin://alice.bsky.social')).rejects.toThrow()
+  })
+
+  it('rejects something that is not a Pin link at all', async () => {
+    await expect(parsePinAddress('https://example.com')).rejects.toThrow()
   })
 })
 

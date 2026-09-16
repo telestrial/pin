@@ -8,7 +8,7 @@ const CAP = 10
 // Section header in the muted uppercase style shared with the right sidebar's
 // "Recent pins" etc. The title itself links to the full management view
 // (replacing the old per-section "See all"); the trailing + is the add action
-// (create a channel / subscribe to one) — always available even when empty.
+// (create a channel / open a link to one) — always available even when empty.
 function SectionHeader({
   title,
   addLabel,
@@ -50,7 +50,7 @@ export function Sidebar({
   onCurate,
   onSettings,
   onCreate,
-  onSubscribe,
+  onOpenLink,
   onSeeAll,
   onChannelClick,
   activeHome,
@@ -66,7 +66,9 @@ export function Sidebar({
   onCurate: () => void
   onSettings: () => void
   onCreate: () => void
-  onSubscribe: () => void
+  // Opens the address bar. Navigation, not a way to acquire a channel — what relation
+  // to have with what it opens is decided on the page it lands on.
+  onOpenLink: () => void
   onSeeAll: () => void
   onChannelClick: (authorHandle: string, channelID: string) => void
   activeHome?: boolean
@@ -197,8 +199,8 @@ export function Sidebar({
       <section className="space-y-2 mt-3">
         <SectionHeader
           title="Watching"
-          addLabel="Watch a channel"
-          onAdd={onSubscribe}
+          addLabel="Open a Pin link"
+          onAdd={onOpenLink}
           onTitleClick={onSeeAll}
         />
         {subsToShow.length > 0 && (

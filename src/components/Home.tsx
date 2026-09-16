@@ -20,6 +20,7 @@ import { EditProfile } from './EditProfile'
 import { HandleDirectory } from './HandleDirectory'
 import { HomeFeed } from './HomeFeed'
 import { MyStorage } from './MyStorage'
+import { OpenPinLink } from './OpenPinLink'
 import { PinSidebar } from './pin/PinSidebar'
 import { ReadApp } from './read/ReadApp'
 import { ReadAudio } from './read/ReadAudio'
@@ -29,7 +30,6 @@ import { ReadText } from './read/ReadText'
 import { ReadVideo } from './read/ReadVideo'
 import { SettingsView } from './SettingsView'
 import { Sidebar } from './Sidebar'
-import { SubscribeToChannel } from './SubscribeToChannel'
 import { FormCard } from './ui/FormCard'
 
 /** Where opening a feed row goes.
@@ -164,7 +164,7 @@ export function Home({
         onCurate={() => setView({ kind: 'curate' })}
         onSettings={() => setView({ kind: 'settings' })}
         onCreate={gotoCreating}
-        onSubscribe={() => setView({ kind: 'subscribing' })}
+        onOpenLink={() => setView({ kind: 'subscribing' })}
         onSeeAll={() => setView({ kind: 'channels' })}
         onChannelClick={(authorHandle, channelID) =>
           setView({
@@ -327,17 +327,18 @@ export function Home({
               Channel created
             </h1>
             <p className="text-neutral-500 text-sm">
-              Share this URL so others can subscribe to{' '}
-              <span className="text-neutral-900">{view.name}</span>.
+              Share this link so others can open{' '}
+              <span className="text-neutral-900">{view.name}</span> and decide
+              whether to follow or watch it.
             </p>
           </div>
           <div className="flex flex-col sm:flex-row gap-2 sm:justify-center">
             <button
               type="button"
-              onClick={() => copyURL(view.subscribeURL, 'Watch URL copied')}
+              onClick={() => copyURL(view.subscribeURL, 'Link copied')}
               className="px-4 py-2.5 bg-green-600 hover:bg-green-700 text-white text-sm font-medium rounded-lg transition-colors"
             >
-              Copy subscribe URL
+              Copy link
             </button>
             <button
               type="button"
@@ -378,9 +379,21 @@ export function Home({
 
   if (view.kind === 'subscribing') {
     return (
-      <SubscribeToChannel
+      <OpenPinLink
         onCancel={() => setView({ kind: 'idle' })}
-        onSubscribed={() => setView({ kind: 'idle' })}
+        onOpenChannel={(authorHandle, didDht, channelID, channelKey) =>
+          setView({
+            kind: 'viewing-channel',
+            // A did:dht link carries no handle, and the page resolves the author's name
+            // off the manifest it reads — so the handle is only ever the legacy form.
+            authorHandle: didDht ? '' : authorHandle,
+            channelID,
+            channelKey,
+          })
+        }
+        onOpenProfile={(didDht) =>
+          setView({ kind: 'handle-directory', handle: didDht })
+        }
         sidebar={renderSidebar()}
         rightSidebar={renderPinSidebar()}
       />

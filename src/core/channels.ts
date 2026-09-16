@@ -390,6 +390,32 @@ export function buildSubscribeURL(author: string, channelKey: string): string {
   return `pin://${author}#k=${channelKey}`
 }
 
+/** Any Pin address, as a thing to GO TO.
+ *
+ *  A `pin://` URL names either a channel (an identity plus the key that locates and
+ *  decrypts it) or an identity on its own. Both are places, and opening one is a read —
+ *  what relation to have with what you find there is a decision the page carries, not the
+ *  link. That is what makes pasting a link the same act as clicking an author in a post or
+ *  a channel on somebody's profile, rather than a second way to acquire things.
+ *
+ *  The channel form is `parseSubscribeURL`'s, unchanged, because links already shared have
+ *  to keep working. The identity form is the same URL with no fragment. */
+export async function parsePinAddress(url: string): Promise<
+  | {
+      kind: 'channel'
+      authorHandle: string
+      didDht?: string
+      channelID: string
+      channelKey: string
+    }
+  | { kind: 'identity'; didDht: string }
+> {
+  const trimmed = url.trim()
+  const identity = trimmed.match(/^pin:\/\/(did:dht:[^#/?]+)\/?$/)
+  if (identity) return { kind: 'identity', didDht: identity[1] }
+  return { kind: 'channel', ...(await parseSubscribeURL(trimmed)) }
+}
+
 export async function parseSubscribeURL(url: string): Promise<{
   // Exactly one of these is set. did:dht form is the Phase D shape; the handle
   // form is still accepted so already-shared links (and the running app's stored
@@ -402,7 +428,7 @@ export async function parseSubscribeURL(url: string): Promise<{
   const m = url.trim().match(/^pin:\/\/([^#/]+)#k=(.+)$/)
   if (!m) {
     throw new Error(
-      'Invalid subscribe URL (expected pin://<did:dht|handle>#k=<key>)',
+      'Invalid Pin link (expected pin://<did:dht|handle>#k=<key>, or pin://<did:dht>)',
     )
   }
   const [, author, channelKey] = m
