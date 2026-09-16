@@ -72,6 +72,14 @@ export type View =
       kind: 'viewing-channel'
       authorHandle: string
       channelID: string
+      // K, when this page was reached by BROWSING rather than from something already
+      // held — a search hit, or a card on somebody's profile. Absent for a channel you
+      // watch or own, whose key is in your own settings.
+      //
+      // Carried on the navigation because that is where it is known: the corpus row and
+      // the directory entry both hold it, and dropping it at the boundary is what left a
+      // browsed channel rendering an empty page.
+      channelKey?: string
     }
   | {
       kind: 'editing-channel'
@@ -255,11 +263,12 @@ export function Home({
         handle={view.handle}
         onBack={returnTo ? () => setView(returnTo) : undefined}
         onItemClick={(entry) => setView(opened(entry, directoryView))}
-        onChannelClick={(authorHandle, channelID) =>
+        onChannelClick={(authorHandle, channelID, channelKey) =>
           setView({
             kind: 'viewing-channel',
             authorHandle,
             channelID,
+            channelKey,
           })
         }
         onHandleClick={(handle) =>
@@ -465,6 +474,7 @@ export function Home({
       <ChannelView
         authorHandle={view.authorHandle}
         channelID={view.channelID}
+        channelKey={view.channelKey}
         onItemClick={(entry) => setView(opened(entry, channelView))}
         onChannelClick={(authorHandle, channelID) =>
           setView({

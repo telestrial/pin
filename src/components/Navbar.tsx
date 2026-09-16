@@ -38,8 +38,13 @@ export function Navbar({
             onPerson={(handle) =>
               onNavigate({ kind: 'handle-directory', handle })
             }
-            onChannel={(authorHandle, channelID) =>
-              onNavigate({ kind: 'viewing-channel', authorHandle, channelID })
+            onChannel={(authorHandle, channelID, channelKey) =>
+              onNavigate({
+                kind: 'viewing-channel',
+                authorHandle,
+                channelID,
+                channelKey,
+              })
             }
           />
         </div>

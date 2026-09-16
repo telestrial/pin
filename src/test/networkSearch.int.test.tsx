@@ -79,9 +79,13 @@ describe('searching your network', () => {
     )
   })
 
-  it('opens the channel that was picked', async () => {
+  it('opens the channel that was picked, with the key that makes it readable', async () => {
     // The whole point of a channel hit: an advertised channel publishes its K, so what is
     // found can be opened rather than only named.
+    //
+    // The KEY is the load-bearing half, and it used to be dropped here. A hit names a
+    // channel this device does not watch, so the page it opens has no other way to read
+    // one — naming it without handing the key on opens an empty page.
     hold(THEM, 'bob', [RUST])
     box()
 
@@ -89,7 +93,7 @@ describe('searching your network', () => {
     await waitFor(() => screen.getByText('Rust Weekly'))
     await userEvent.click(screen.getByText('Rust Weekly'))
 
-    expect(onChannel).toHaveBeenCalledWith(THEM, 'chan-rust')
+    expect(onChannel).toHaveBeenCalledWith(THEM, 'chan-rust', 'K-rust')
   })
 
   it('opens the person that was picked', async () => {

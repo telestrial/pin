@@ -28,7 +28,9 @@ export function NetworkSearch({
   onChannel,
 }: {
   onPerson: (didDht: string) => void
-  onChannel: (didDht: string, channelID: string) => void
+  // The hit's K travels with the navigation: a corpus row holds it, and the page it
+  // opens has no other way to read a channel this device does not watch.
+  onChannel: (didDht: string, channelID: string, channelKey: string) => void
 }) {
   const storedKeyHex = useAuthStore((s) => s.storedKeyHex)
   const [query, setQuery] = useState('')
@@ -114,7 +116,7 @@ export function NetworkSearch({
                       hit={c}
                       onPick={() => {
                         close()
-                        onChannel(c.didDht, c.channelID)
+                        onChannel(c.didDht, c.channelID, c.key)
                       }}
                     />
                   ))}

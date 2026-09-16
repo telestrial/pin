@@ -30,6 +30,9 @@ type ChannelEntry = {
   authorHandle: string
   channelID: string
   manifest: ChannelManifest
+  /** This channel's K, as its author publishes it. Handed to the page a card opens, which
+   *  for somebody else's channel is the only way it can be read. */
+  channelKey: string
   /** Whether its posts belong in the feed below. Absent means yes — see
    *  `includedOnProfile`. Carried here because all three sources of a channel publish it
    *  (settings for your own, the crawl's record and the author's directory for somebody
@@ -52,10 +55,18 @@ type DisplayProfile = {
 
 function entry(
   channelID: string,
+  channelKey: string,
   manifest: ChannelManifest,
   showOnProfile?: boolean,
 ): ChannelEntry {
-  return { authorDID: '', authorHandle: '', channelID, manifest, showOnProfile }
+  return {
+    authorDID: '',
+    authorHandle: '',
+    channelID,
+    channelKey,
+    manifest,
+    showOnProfile,
+  }
 }
 
 /** The advertised channels this device already holds, out of the shared doc (`sub/<id>`).
@@ -76,7 +87,9 @@ async function cachedChannels(
   const held = await Promise.all(
     channels.map(async (c): Promise<ChannelEntry | null> => {
       const manifest = await readCachedManifest(appKeyHex, c.channelID, c.key)
-      return manifest ? entry(c.channelID, manifest, c.showOnProfile) : null
+      return manifest
+        ? entry(c.channelID, c.key, manifest, c.showOnProfile)
+        : null
     }),
   )
   return held.filter((c): c is ChannelEntry => c !== null)
@@ -103,7 +116,8 @@ async function resolveChannels(
     channels.map(async (c): Promise<ChannelEntry | null> => {
       try {
         const manifest = await resolveChannelViaLocator(c.key)
-        if (manifest) return entry(c.channelID, manifest, c.showOnProfile)
+        if (manifest)
+          return entry(c.channelID, c.key, manifest, c.showOnProfile)
       } catch {
         // Fall through: an unreadable locator is a read failure, never an absence.
       }
@@ -162,7 +176,9 @@ async function readOwnDirectory(): Promise<{
             c.channelID,
             c.channelKey,
           )
-          return manifest ? entry(c.channelID, manifest, c.showOnProfile) : null
+          return manifest
+            ? entry(c.channelID, c.channelKey, manifest, c.showOnProfile)
+            : null
         }),
       )
     : []
@@ -225,7 +241,11 @@ export function HandleDirectory({
   // channel page take, so a post opened from a profile reads identically and
   // comes back here.
   onItemClick: (entry: FeedEntry) => void
-  onChannelClick: (authorHandle: string, channelID: string) => void
+  onChannelClick: (
+    authorHandle: string,
+    channelID: string,
+    channelKey: string,
+  ) => void
   onHandleClick: (handle: string) => void
   // Only wired when the directory belongs to the signed-in user. Home
   // skips passing this when isSelf would be false, so an undefined here
@@ -503,7 +523,11 @@ function LoadedDirectory({
   followerCount: number | null
   onBack?: () => void
   onItemClick: (entry: FeedEntry) => void
-  onChannelClick: (authorHandle: string, channelID: string) => void
+  onChannelClick: (
+    authorHandle: string,
+    channelID: string,
+    channelKey: string,
+  ) => void
   onHandleClick: (handle: string) => void
   onEditProfile?: () => void
   onCreate?: () => void
@@ -575,7 +599,9 @@ function LoadedDirectory({
                 description={c.manifest.description}
                 badge={badge}
                 compact
-                onClick={() => onChannelClick(c.authorHandle, c.channelID)}
+                onClick={() =>
+                  onChannelClick(c.authorHandle, c.channelID, c.channelKey)
+                }
               />
             )
           })}
@@ -616,7 +642,18 @@ function LoadedDirectory({
                   key={`${entry.channel.channelID}:${entry.item.publishedAt}`}
                   entry={entry}
                   onItemClick={onItemClick}
-                  onChannelClick={onChannelClick}
+                  // A row names the channel that wrote it, and this page holds that
+                  // channel's K — so opening it from here carries the key the same way
+                  // opening its card does. A row whose channel is not in this list is
+                  // one this page did not produce, and there is no key to hand on.
+                  onChannelClick={(handle, id) =>
+                    onChannelClick(
+                      handle,
+                      id,
+                      ownChannels.find((c) => c.channelID === id)?.channelKey ??
+                        '',
+                    )
+                  }
                   onHandleClick={onHandleClick}
                 />
               ))}

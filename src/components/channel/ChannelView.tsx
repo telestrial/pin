@@ -1,17 +1,19 @@
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   contributingChannelOf,
+  entriesForChannel,
   type FeedEntry,
   feedTimeOf,
   portalKey,
 } from '../../core/feed'
-import type { ChannelImage } from '../../core/types'
+import type { ChannelImage, ChannelManifest } from '../../core/types'
+import { resolveChannelViaLocator } from '../../lib/channelLocator'
 import { useChannelClaim } from '../../lib/hooks/useChannelClaim'
 import { useIdentityName } from '../../lib/hooks/useIdentityName'
 import { useItemBlobURL } from '../../lib/hooks/useItemBytes'
 import { renderMarkdown } from '../../lib/markdown'
 import { useAuthStore } from '../../stores/auth'
-import { useFeedStore } from '../../stores/feed'
+import { renderable, useFeedStore } from '../../stores/feed'
 import { FollowButton } from '../FollowButton'
 import { FeedRow } from '../HomeFeed'
 import { ChannelPinButton } from '../pin/ChannelPinButton'
@@ -20,9 +22,47 @@ import { ChannelAvatar } from './ChannelAvatar'
 import { ChannelOwnerMenu } from './ChannelOwnerMenu'
 import { DeadRepost } from './DeadRepost'
 
+/** A channel this device holds nothing for, read with the key the navigation carried.
+ *
+ *  The bottom rung of the resolution ladder, reached when the ones above have nothing: a
+ *  channel you watch or own is in the feed store because the pull loop put it there, and a
+ *  channel you are merely LOOKING at is in no store at all. Before this, arriving at one
+ *  meant arriving at an empty page, which is why the page only ever offered to un-watch —
+ *  there was no way to be on it without already holding it.
+ *
+ *  Nothing is written back. Browsing is a read, and what to do about the channel is a
+ *  decision the buttons on the page carry. */
+function useBrowsedChannel(channelKey: string | undefined, enabled: boolean) {
+  const [manifest, setManifest] = useState<ChannelManifest | null>(null)
+  const [loading, setLoading] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    setManifest(null)
+    if (!enabled || !channelKey) return
+    setLoading(true)
+    resolveChannelViaLocator(channelKey)
+      .then((m) => {
+        if (!cancelled) setManifest(m)
+      })
+      // A locator that will not resolve is a read failure, never an empty channel. The
+      // page says it could not be read rather than that it holds nothing.
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [channelKey, enabled])
+
+  return { manifest, loading }
+}
+
 export function ChannelView({
   authorHandle,
   channelID,
+  channelKey,
   onItemClick,
   onChannelClick,
   onHandleClick,
@@ -36,6 +76,8 @@ export function ChannelView({
 }: {
   authorHandle: string
   channelID: string
+  /** Present only when browsing — see `useBrowsedChannel`. */
+  channelKey?: string
   onItemClick: (entry: FeedEntry) => void
   onChannelClick: (authorHandle: string, channelID: string) => void
   onHandleClick: (handle: string) => void
@@ -64,9 +106,16 @@ export function ChannelView({
   const isOwned = owned !== undefined
   const entries = useFeedStore((s) => s.entries)
   const portals = useFeedStore((s) => s.portals)
-  const loading = useFeedStore((s) => s.loading)
+  const feedLoading = useFeedStore((s) => s.loading)
   const refreshChannel = useFeedStore((s) => s.refreshChannel)
-  const manifest = useFeedStore((s) => s.manifests[channelID])
+  const held = useFeedStore((s) => s.manifests[channelID])
+
+  // Held or browsed: one page, two rungs. `held` is what the pull loop keeps current for
+  // a channel you watch or own; the resolve below is for one you are only looking at.
+  const browsing = !sub && !isOwned
+  const browsed = useBrowsedChannel(channelKey, browsing && !held)
+  const manifest = held ?? browsed.manifest
+  const loading = feedLoading || browsed.loading
   // did:dht author → identity-doc name; legacy handle author → the raw handle.
   const identityName = useIdentityName(manifest?.authorDidDht ?? '')
   const authorName = manifest?.authorDidDht ? identityName : authorHandle
@@ -87,6 +136,31 @@ export function ChannelView({
   }, [sub, manifest, refreshChannel])
 
   const channelEntries = useMemo(() => {
+    // A browsed channel contributes nothing to the feed store, so its rows come from the
+    // manifest this page resolved — through the same collation a watched channel's rows
+    // go through, so the two cannot drift into two ideas of what a channel published.
+    if (browsing && manifest) {
+      const sorted = entriesForChannel(
+        {
+          authorHandle,
+          authorDidDht: manifest.authorDidDht,
+          channelID,
+          name: manifest.name,
+          avatar: manifest.avatar,
+        },
+        manifest,
+        // Through the store's own converter rather than a second reading of what a
+        // resolved portal is. A browsed channel's portals are unresolved in practice —
+        // the resolution pass walks watched channels — so this is usually empty, and it
+        // is the same empty an unresolved portal produces anywhere else.
+        renderable(portals),
+      )
+      sorted.sort((a, b) => {
+        const cmp = feedTimeOf(a).localeCompare(feedTimeOf(b))
+        return sortOrder === 'oldest' ? cmp : -cmp
+      })
+      return sorted
+    }
     // What this channel PUBLISHED, which includes the posts it circulates. A portal
     // carries the original author's identity on `channel`, so matching on that would
     // leave a channel's own reposts off its own page.
@@ -99,7 +173,7 @@ export function ChannelView({
       return sortOrder === 'oldest' ? cmp : -cmp
     })
     return filtered
-  }, [entries, authorHandle, channelID, sortOrder])
+  }, [entries, authorHandle, channelID, sortOrder, browsing, manifest, portals])
 
   // Portals in THIS channel with nothing at the other end, for its owner only. They
   // produce no feed entry — a resolution that failed contributes nothing — so they are
