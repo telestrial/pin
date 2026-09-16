@@ -259,18 +259,39 @@ impl Identity {
     /// crawl, so an identity that has published nothing reads nobody — correct, and the
     /// reason a scenario about hop one cannot be built out of follows alone.
     pub async fn follows_and_publishes(&self, dids: &[&str]) {
-        let k = self.channel_key();
-        let channel_id = pin_crypto::channel_id(&k);
-        self.set_settings(serde_json::json!({
-            "handleFollows": dids,
-            "myChannels": [{
+        self.publishing(serde_json::json!({ "handleFollows": dids }))
+            .await;
+    }
+
+    /// Follow one CHANNEL of somebody, AND publish one post.
+    ///
+    /// A different edge from the one above: a `FollowEdge` names a channel and carries its
+    /// author's did, where a handle-follow names the person. Both are public, both are what
+    /// `graph_actors` reads — which is the claim worth having a scenario for, since
+    /// following a channel is the ordinary way to end up with somebody in your graph and it
+    /// is not obvious that the PERSON is what gets crawled.
+    pub async fn follows_channel_and_publishes(&self, did: &str, channel_id: &str) {
+        self.publishing(serde_json::json!({
+            "follows": [{
+                "didDht": did,
                 "channelID": channel_id,
-                "channelKey": pin_crypto::channel_key_to_base64(&k),
-                "name": "A channel",
-                "visibility": "public",
+                "name": "Their channel",
             }],
         }))
         .await;
+    }
+
+    /// Whatever graph these settings describe, plus a channel with one post in it.
+    async fn publishing(&self, mut settings: serde_json::Value) {
+        let k = self.channel_key();
+        let channel_id = pin_crypto::channel_id(&k);
+        settings["myChannels"] = serde_json::json!([{
+            "channelID": channel_id,
+            "channelKey": pin_crypto::channel_key_to_base64(&k),
+            "name": "A channel",
+            "visibility": "public",
+        }]);
+        self.set_settings(settings).await;
 
         // Where the commit that publishes a channel puts its manifest, sealed under K, so
         // `own_subjects` opens it exactly as it opens the app's own.
@@ -647,6 +668,47 @@ mod visibility {
             Some("carol"),
             "and john knows who she is, having been told by nobody",
         );
+    }
+
+    /// FOLLOWING A CHANNEL CRAWLS ITS AUTHOR, which is the whole of what makes a channel
+    /// a way into the network rather than a dead end.
+    ///
+    /// A `FollowEdge` names a channel and carries the author's did, and `graph_actors`
+    /// reads that did — so following one of somebody's voices puts the PERSON in your
+    /// graph, their whole directory gets read, and every edge in it lands on your frontier.
+    /// Not obvious from the gesture: you followed a channel and what you get is its author.
+    ///
+    /// No priority is involved, and none is needed: a crawling pass reads every actor in
+    /// the graph, uncapped and unordered, so a channel's author is read as promptly as
+    /// anybody. What competes for a budget is DISCOVERY, and your own graph is excluded
+    /// from it by construction.
+    #[tokio::test]
+    async fn following_a_channel_crawls_its_author() {
+        let world = World::new();
+        let a = Identity::new(&world, 1).await;
+        let b = Identity::new(&world, 2).await;
+        let c = Identity::new(&world, 3).await;
+
+        world.publish(&b.did, "sia://b-dir", directory("b", &[&c.did]));
+        world.publish(&c.did, "sia://c-dir", directory("c", &[]));
+
+        // One channel of b's — never b themselves.
+        a.follows_channel_and_publishes(&b.did, "bchannel00000001")
+            .await;
+
+        let folded = engagement(&a).await;
+        assert_eq!(folded.reached, 2, "itself and the channel's author");
+        assert!(
+            a.held(&b.did).await.is_some(),
+            "the person behind the channel is what gets a directory record",
+        );
+
+        // And because it is the whole directory that was read, the edges in it are on the
+        // frontier — so following a channel reaches past its author the same way following
+        // a person does.
+        let out = pass(&a).await;
+        assert_eq!(out.resolved, 1);
+        assert!(a.held(&c.did).await.is_some());
     }
 
     /// BEING FOLLOWED TELLS YOU NOTHING. The graph is directed, and reading it is
