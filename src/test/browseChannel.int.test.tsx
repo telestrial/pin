@@ -23,9 +23,11 @@ vi.mock('../lib/channelLocatorNative', async () =>
   (await import('./fakeModules')).fakeChannelLocatorNativeModule(),
 )
 
+import userEvent from '@testing-library/user-event'
 import { ChannelView } from '../components/channel/ChannelView'
 import { channelKeyFromBase64 } from '../core/crypto'
 import type { ChannelManifest, ItemRef } from '../core/types'
+import { startWatching } from '../lib/watch'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
 import { fakeDocStore as docStore } from './fakeModules'
@@ -48,7 +50,11 @@ function post(body: string, publishedAt: string): ItemRef {
   } as ItemRef
 }
 
-function manifest(name: string, items: ItemRef[]): ChannelManifest {
+function manifest(
+  name: string,
+  items: ItemRef[],
+  visibility = 'public',
+): ChannelManifest {
   return {
     version: 1,
     name,
@@ -56,17 +62,17 @@ function manifest(name: string, items: ItemRef[]): ChannelManifest {
     authorPubkey: 'ed25519:aa',
     authorDidDht: THEM,
     publishedAt: '2026-09-01T00:00:00.000Z',
-    visibility: 'public',
+    visibility,
     items,
   } as ChannelManifest
 }
 
 /** What their channel currently publishes, behind the locator K derives. */
-async function published(items: ItemRef[]) {
+async function published(items: ItemRef[], visibility = 'public') {
   const { publishLocator } = await import('../lib/channelLocatorNative')
   await publishLocator(
     channelKeyFromBase64(KEY),
-    JSON.stringify(manifest('Their channel', items)),
+    JSON.stringify(manifest('Their channel', items, visibility)),
   )
 }
 
@@ -154,5 +160,119 @@ describe('integration: browsing a channel you do not hold', () => {
     await waitFor(() =>
       expect(screen.getByText('From the store')).toBeInTheDocument(),
     )
+  })
+})
+
+describe('integration: the relation you have with a channel', () => {
+  beforeEach(() => {
+    resetAllStores()
+    docStore.clear()
+    mountAs(
+      createFakeApp().createAccount({ did: 'did:plc:me', handle: 'me.test' }),
+    )
+  })
+  afterEach(cleanup)
+
+  it('offers both relations on a public channel you have neither with', async () => {
+    // The state that could not exist before: on a channel page, holding nothing. Both are
+    // offered because both are available — public and private are a choice here, and the
+    // page is where it gets made.
+    await published([post('a post of theirs', '2026-09-02T00:00:00.000Z')])
+
+    view(KEY)
+
+    await waitFor(() => expect(screen.getByText('Watch')).toBeInTheDocument())
+    expect(screen.getByText('Follow')).toBeInTheDocument()
+  })
+
+  it('offers only Watch on an unlisted one', async () => {
+    // Absent rather than disabled. A FollowEdge carries no K and resolves through the
+    // author's directory, where an unlisted channel is absent by construction — so there
+    // is nothing to follow THROUGH, and a disabled button would imply a permission
+    // somebody could be granted.
+    await published(
+      [post('a post of theirs', '2026-09-02T00:00:00.000Z')],
+      'obscure',
+    )
+
+    view(KEY)
+
+    await waitFor(() => expect(screen.getByText('Watch')).toBeInTheDocument())
+    expect(screen.queryByText('Follow')).toBeNull()
+  })
+
+  it('starts watching from the key in hand, with no second fetch', async () => {
+    await published([post('a post of theirs', '2026-09-02T00:00:00.000Z')])
+    view(KEY)
+    await waitFor(() => screen.getByText('Watch'))
+
+    await userEvent.click(screen.getByText('Watch'))
+
+    await waitFor(() =>
+      expect(
+        useAuthStore.getState().subscriptions.map((s) => s.channelID),
+      ).toEqual([CHANNEL]),
+    )
+    // The page still shows the channel after the toggle. Deliberately NOT a claim about
+    // WHERE those bytes came from: the page's own cold-mount refresh would put them there
+    // too, a round trip later, so this cannot tell seeding apart from it. What seeding
+    // guarantees is covered directly below.
+  })
+
+  it('hides Watch once you follow, because following already watches', async () => {
+    // Three states, not two toggles. Watching beside Following would name a fourth that
+    // does not exist — and a user who unticked it would be asking to follow publicly
+    // while not reading, which the mechanism cannot do.
+    await published([post('a post of theirs', '2026-09-02T00:00:00.000Z')])
+    useAuthStore.setState({
+      follows: [{ didDht: THEM, channelID: CHANNEL, name: 'Their channel' }],
+    })
+
+    view(KEY)
+
+    await waitFor(() =>
+      expect(screen.getByText('Following')).toBeInTheDocument(),
+    )
+    expect(screen.queryByText('Watch')).toBeNull()
+    expect(screen.queryByText('Watching')).toBeNull()
+  })
+})
+
+describe('starting a watch seeds what the page falls back to', () => {
+  beforeEach(() => {
+    resetAllStores()
+    docStore.clear()
+    mountAs(
+      createFakeApp().createAccount({ did: 'did:plc:me', handle: 'me.test' }),
+    )
+  })
+
+  it('records the channel and its posts from the manifest in hand', async () => {
+    // The moment a watch starts, the page reading that channel stops being the browsed
+    // one and becomes the store-backed one. If the store has nothing, that page is blank
+    // until a refresh lands — for bytes that were already on screen.
+    //
+    // Tested here rather than through the UI because a rendered page cannot tell this
+    // apart from the refresh that follows it: both end with the posts showing, and only
+    // one of them does it without a round trip.
+    const m = manifest('Their channel', [
+      post('already in hand', '2026-09-02T00:00:00.000Z'),
+    ])
+
+    await startWatching({
+      authorHandle: '',
+      didDht: THEM,
+      channelID: CHANNEL,
+      channelKey: KEY,
+      manifest: m,
+    })
+
+    expect(
+      useAuthStore.getState().subscriptions.map((x) => x.channelID),
+    ).toEqual([CHANNEL])
+    expect(useFeedStore.getState().manifests[CHANNEL]).toEqual(m)
+    expect(useFeedStore.getState().entries.map((e) => e.item.summary)).toEqual([
+      'already in hand',
+    ])
   })
 })

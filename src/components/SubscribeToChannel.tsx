@@ -1,10 +1,8 @@
 import { useState } from 'react'
 import { parseSubscribeURL } from '../core/channels'
-import type { FeedEntry } from '../core/feed'
 import { makeLocatorReader } from '../lib/channelLocator'
-import { flushSettingsBestEffort } from '../lib/hooks/useSettingsSync'
+import { startWatching } from '../lib/watch'
 import { useAuthStore } from '../stores/auth'
-import { useFeedStore } from '../stores/feed'
 import { FormCard } from './ui/FormCard'
 
 export function SubscribeToChannel({
@@ -19,7 +17,6 @@ export function SubscribeToChannel({
   rightSidebar?: React.ReactNode
 }) {
   const subscriptions = useAuthStore((s) => s.subscriptions)
-  const addSubscription = useAuthStore((s) => s.addSubscription)
   const client = useAuthStore((s) => s.client)
 
   const [url, setUrl] = useState('')
@@ -54,38 +51,15 @@ export function SubscribeToChannel({
         parsed.channelID,
         parsed.channelKey,
       )
-      addSubscription({
+      // The same act the channel page's Watch button performs, through the same
+      // implementation — the two differ only in where the manifest came from.
+      await startWatching({
         authorHandle: parsed.authorHandle,
-        authorDID: manifest.authorATProtoDID ?? '',
         didDht: parsed.didDht,
         channelID: parsed.channelID,
         channelKey: parsed.channelKey,
-        cachedName: manifest.name,
-        label: manifest.name,
-        addedAt: new Date().toISOString(),
+        manifest,
       })
-
-      // Populate feed entries from the manifest we already fetched. Without
-      // this, existing items don't show until JetStream pushes a new commit
-      // or the user hits Refresh.
-      const fresh: FeedEntry[] = manifest.items.map((item) => ({
-        item,
-        channel: {
-          authorHandle: parsed.authorHandle,
-          authorDidDht: parsed.didDht,
-          channelID: parsed.channelID,
-          name: manifest.name,
-          avatar: manifest.avatar,
-        },
-      }))
-      useFeedStore.setState((s) => ({
-        entries: [...s.entries, ...fresh],
-        manifests: { ...s.manifests, [parsed.channelID]: manifest },
-      }))
-
-      // Persist the new subscription to Sia settings before reporting done,
-      // so a quick reload before the background debounce doesn't drop it.
-      await flushSettingsBestEffort()
       onSubscribed(manifest.name)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to fetch channel')

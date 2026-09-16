@@ -5,6 +5,7 @@ import {
 } from '../lib/hooks/useHandleFollowReconciliation'
 import { useAuthStore } from '../stores/auth'
 import { useToastStore } from '../stores/toast'
+import { RelationButton } from './RelationButton'
 
 // Follow a single channel — the iroh-native public edge. Writes a FollowEdge
 // {didDht, channelID, name} to local settings (mirrored into the identity-doc
@@ -69,28 +70,15 @@ export function FollowButton({
     }
   }
 
-  // Following = filled green (matches the brand-green PinButton-pinned
-  // state). Not-following = neutral pill that turns green on hover.
-  const label = busy
-    ? following
-      ? 'Unfollowing…'
-      : 'Following…'
-    : following
-      ? 'Following'
-      : 'Follow'
-
-  const className = following
-    ? 'inline-flex items-center px-2.5 py-1 text-xs font-medium text-white bg-green-600 hover:bg-green-700 rounded-full transition-colors cursor-pointer disabled:opacity-60'
-    : 'inline-flex items-center px-2.5 py-1 text-xs font-medium text-neutral-700 hover:text-white bg-neutral-100 hover:bg-green-600 rounded-full transition-colors cursor-pointer disabled:opacity-60'
-
   return (
-    <button
-      type="button"
+    <RelationButton
+      label={following ? 'Following' : 'Follow'}
+      busyLabel={following ? 'Unfollowing…' : 'Following…'}
+      active={following}
+      busy={busy}
+      // Public: a follow is a claim in your directory that anybody's crawl can read.
+      tone="public"
       onClick={handleClick}
-      disabled={busy}
-      className={className}
-    >
-      {label}
-    </button>
+    />
   )
 }

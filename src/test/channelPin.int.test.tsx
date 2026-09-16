@@ -96,7 +96,6 @@ function renderChannel(authorHandle: string, channelID: string) {
       onItemClick={() => {}}
       onChannelClick={() => {}}
       onHandleClick={() => {}}
-      onUnsubscribe={() => {}}
       onBack={() => {}}
       sidebar={null}
       rightSidebar={null}

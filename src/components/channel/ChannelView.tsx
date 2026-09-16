@@ -18,6 +18,7 @@ import { FollowButton } from '../FollowButton'
 import { FeedRow } from '../HomeFeed'
 import { ChannelPinButton } from '../pin/ChannelPinButton'
 import { PinIcon } from '../pin/PinIcon'
+import { WatchButton } from '../WatchButton'
 import { ChannelAvatar } from './ChannelAvatar'
 import { ChannelOwnerMenu } from './ChannelOwnerMenu'
 import { DeadRepost } from './DeadRepost'
@@ -68,7 +69,6 @@ export function ChannelView({
   onHandleClick,
   onEdit,
   onUnpin,
-  onUnsubscribe,
   onBack,
   sidebar,
   rightSidebar,
@@ -83,7 +83,6 @@ export function ChannelView({
   onHandleClick: (handle: string) => void
   onEdit?: () => void
   onUnpin?: () => void
-  onUnsubscribe?: () => void
   onBack: () => void
   sidebar: React.ReactNode
   rightSidebar: React.ReactNode
@@ -114,6 +113,14 @@ export function ChannelView({
   // a channel you watch or own; the resolve below is for one you are only looking at.
   const browsing = !sub && !isOwned
   const browsed = useBrowsedChannel(channelKey, browsing && !held)
+  // Whether this channel is one of your public follows. Watching is hidden behind it
+  // because following already watches.
+  const following = useAuthStore((s) =>
+    s.follows.some((f) => f.channelID === channelID),
+  )
+  // K, from whichever side has it: the subscription when you watch it, the navigation
+  // when you are only looking. Without one there is nothing to start a watch from.
+  const watchKey = sub?.channelKey ?? channelKey
   const manifest = held ?? browsed.manifest
   const loading = feedLoading || browsed.loading
   // did:dht author → identity-doc name; legacy handle author → the raw handle.
@@ -271,7 +278,7 @@ export function ChannelView({
                   </div>
                   {/* Actions: below the cover, upper-right, even with the
                       name/Unclaimed row. */}
-                  {(onEdit || onUnpin || onUnsubscribe || manifest) && (
+                  {(onEdit || onUnpin || manifest) && (
                     <div className="shrink-0 flex items-center gap-1.5">
                       {onEdit || onUnpin ? (
                         // Owned channel: Edit channel · ⋯ context menu · pin.
@@ -314,8 +321,27 @@ export function ChannelView({
                           )}
                         </>
                       ) : (
-                        // Non-owned channel: Follow (public only) + Unsubscribe.
+                        // Somebody else's channel: the relation you have with it,
+                        // as one control in three states — none, Watching, Following.
+                        //
+                        // Following supersedes Watching rather than sitting beside it,
+                        // because a follow already watches: the two shown together would
+                        // name a state that does not exist. And Follow renders only for a
+                        // public channel, because a FollowEdge carries no K and resolves
+                        // through the author's directory, where an unlisted channel is
+                        // absent by construction. Absent rather than disabled — there is
+                        // nothing to enable.
                         <>
+                          {!following && manifest && watchKey && (
+                            <WatchButton
+                              authorHandle={authorHandle}
+                              didDht={manifest.authorDidDht}
+                              channelID={channelID}
+                              channelKey={watchKey}
+                              channelName={channelName}
+                              manifest={manifest}
+                            />
+                          )}
                           {manifest?.visibility === 'public' &&
                             manifest.authorDidDht && (
                               <FollowButton
@@ -324,15 +350,6 @@ export function ChannelView({
                                 channelName={channelName}
                               />
                             )}
-                          {onUnsubscribe && (
-                            <button
-                              type="button"
-                              onClick={onUnsubscribe}
-                              className="px-3 py-1.5 text-xs font-medium text-neutral-500 hover:text-red-700 bg-neutral-50 hover:bg-red-50 rounded-md transition-colors cursor-pointer"
-                            >
-                              Unsubscribe
-                            </button>
-                          )}
                           {/* Whole-channel pin (snapshot/catch-up/unpin) —
                               visibility-agnostic, so it shows for obscure
                               channels too. Rightmost, mirroring the owned row. */}
