@@ -1,4 +1,3 @@
-import { useState } from 'react'
 import type { ChannelManifest } from '../core/types'
 import { unwatchOneChannel } from '../lib/hooks/useHandleFollowReconciliation'
 import { startWatching } from '../lib/watch'
@@ -39,38 +38,34 @@ export function WatchButton({
     s.subscriptions.some((x) => x.channelID === channelID),
   )
   const addToast = useToastStore((s) => s.addToast)
-  const [busy, setBusy] = useState(false)
 
+  // No busy state here: RelationButton holds it, along with which way the click was
+  // going — `watching` has already flipped by the time this awaits its settings write.
   async function handleClick() {
-    if (busy) return
-    setBusy(true)
-    try {
-      if (watching) {
-        await unwatchOneChannel(channelID)
-        addToast(`Stopped watching “${channelName}”`)
-      } else {
-        // No fetch: the manifest is the one this page is already rendering, so starting to
-        // watch costs a settings write and nothing else.
-        await startWatching({
-          authorHandle,
-          didDht,
-          channelID,
-          channelKey,
-          manifest,
-        })
-        addToast(`Watching “${channelName}”`)
-      }
-    } finally {
-      setBusy(false)
+    if (watching) {
+      await unwatchOneChannel(channelID)
+      addToast(`Stopped watching “${channelName}”`)
+    } else {
+      // No fetch: the manifest is the one this page is already rendering, so starting to
+      // watch costs a settings write and nothing else.
+      await startWatching({
+        authorHandle,
+        didDht,
+        channelID,
+        channelKey,
+        manifest,
+      })
+      addToast(`Watching “${channelName}”`)
     }
   }
 
   return (
     <RelationButton
-      label={watching ? 'Watching' : 'Watch'}
-      busyLabel={watching ? 'Stopping…' : 'Watching…'}
+      onLabel="Watching"
+      offLabel="Watch"
+      turningOnLabel="Watching…"
+      turningOffLabel="Stopping…"
       active={watching}
-      busy={busy}
       tone="private"
       onClick={handleClick}
     />

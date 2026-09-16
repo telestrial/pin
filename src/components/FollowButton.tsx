@@ -1,4 +1,3 @@
-import { useState } from 'react'
 import {
   unwatchOneChannel,
   watchOneChannel,
@@ -39,43 +38,38 @@ export function FollowButton({
   const removeFollow = useAuthStore((s) => s.removeFollow)
   const addToast = useToastStore((s) => s.addToast)
 
-  // The edge toggles synchronously against the local store; busy covers the
-  // watch side-effect, which resolves the author's directory for K.
-  const [busy, setBusy] = useState(false)
-
+  // The edge toggles synchronously against the local store and the watch side-effect —
+  // which resolves the author's directory for K — is what takes time. RelationButton owns
+  // the busy state, because by the time this awaits, `following` already describes where
+  // the click is going rather than where it came from.
   async function handleClick() {
-    if (busy) return
-    setBusy(true)
-    try {
-      if (following) {
-        removeFollow(channelID)
-        await unwatchOneChannel(channelID).catch(() => false)
-        addToast(`Unfollowed “${channelName}”`)
-      } else {
-        addFollow({ didDht: authorDidDht, channelID, name: channelName })
-        // A follow stands whether or not the watch lands: the edge is the public
-        // statement, and a directory that would not resolve is a reason the
-        // channel is not readable yet rather than a reason not to have followed.
-        const watched = await watchOneChannel(authorDidDht, channelID).catch(
-          () => false,
-        )
-        addToast(
-          watched
-            ? `Following “${channelName}” · added to your feed`
-            : `Following “${channelName}”`,
-        )
-      }
-    } finally {
-      setBusy(false)
+    if (following) {
+      removeFollow(channelID)
+      await unwatchOneChannel(channelID).catch(() => false)
+      addToast(`Unfollowed “${channelName}”`)
+    } else {
+      addFollow({ didDht: authorDidDht, channelID, name: channelName })
+      // A follow stands whether or not the watch lands: the edge is the public
+      // statement, and a directory that would not resolve is a reason the
+      // channel is not readable yet rather than a reason not to have followed.
+      const watched = await watchOneChannel(authorDidDht, channelID).catch(
+        () => false,
+      )
+      addToast(
+        watched
+          ? `Following “${channelName}” · added to your feed`
+          : `Following “${channelName}”`,
+      )
     }
   }
 
   return (
     <RelationButton
-      label={following ? 'Following' : 'Follow'}
-      busyLabel={following ? 'Unfollowing…' : 'Following…'}
+      onLabel="Following"
+      offLabel="Follow"
+      turningOnLabel="Following…"
+      turningOffLabel="Unfollowing…"
       active={following}
-      busy={busy}
       // Public: a follow is a claim in your directory that anybody's crawl can read.
       tone="public"
       onClick={handleClick}
