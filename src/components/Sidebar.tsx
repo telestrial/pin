@@ -79,6 +79,7 @@ export function Sidebar({
 }) {
   const myChannels = useAuthStore((s) => s.myChannels)
   const subscriptions = useAuthStore((s) => s.subscriptions)
+  const follows = useAuthStore((s) => s.follows)
   const manifests = useFeedStore((s) => s.manifests)
 
   const ownedChannelIDs = new Set(myChannels.map((c) => c.channelID))
@@ -86,8 +87,8 @@ export function Sidebar({
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
     .slice(0, CAP)
   // A channel you own auto-subscribes you to itself (public ones also write a
-  // self-follow claim), so it'd otherwise show under both Channels and
-  // Subscriptions. It already lives under Channels — keep it out of subs.
+  // self-follow claim), so it'd otherwise show under both Channels and this
+  // list. It already lives under Channels — keep it out.
   const visibleSubs = subscriptions.filter(
     (s) => !ownedChannelIDs.has(s.channelID),
   )
@@ -197,16 +198,27 @@ export function Sidebar({
       </section>
 
       <section className="space-y-2 mt-3">
+        {/* Everything that reaches you, which is follows AND watches: a subscription is
+            the mechanism under both, so a list of them is a list of what you follow at
+            either visibility. Titled for the superset, and the private ones say so on the
+            row — the profile's Following is the PUBLIC subset of this, which is a
+            different claim for a different audience. */}
         <SectionHeader
-          title="Watching"
+          title="Following"
           addLabel="Open a Pin link"
           onAdd={onOpenLink}
           onTitleClick={onSeeAll}
         />
         {subsToShow.length > 0 && (
-          <ul aria-label="Watched channels">
+          <ul aria-label="Channels you follow or watch">
             {subsToShow.map((s) => {
               const active = s.channelID === activeChannelID
+              // Public unless nothing in the directory claims it. Marking the PRIVATE
+              // ones because public is what the heading already says, so the exception
+              // is the thing worth showing.
+              const watchingOnly = !follows.some(
+                (f) => f.channelID === s.channelID,
+              )
               return (
                 <li key={`${s.authorHandle}/${s.channelID}`}>
                   <button
@@ -224,6 +236,14 @@ export function Sidebar({
                     <span className="truncate flex-1">
                       {s.cachedName ?? s.channelID}
                     </span>
+                    {watchingOnly && (
+                      <span
+                        title="Watching — private, and nobody can read it off you"
+                        className="shrink-0 text-[10px] uppercase tracking-wide text-neutral-400"
+                      >
+                        Watching
+                      </span>
+                    )}
                     {active && (
                       <span
                         aria-hidden="true"
