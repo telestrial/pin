@@ -1315,9 +1315,10 @@ pub async fn curator_start_discover(
                         || o.unread > 0
                     {
                         log::info!(
-                            "curator discover: held {} frontier {} requested {} resolved {} refreshed {} unchanged {} faded {} unreachable {} unread {}",
+                            "curator discover: held {} frontier {} revealed {} requested {} resolved {} refreshed {} unchanged {} faded {} unreachable {} unread {}",
                             o.held,
                             o.frontier,
+                            o.revealed,
                             o.requested,
                             o.resolved,
                             o.refreshed,

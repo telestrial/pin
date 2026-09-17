@@ -528,6 +528,11 @@ pub struct DiscoverOutcome {
     /// Records listed and not readable this pass. Nonzero switches decay off entirely,
     /// because an edge we could not read is not an edge that is gone.
     pub unread: usize,
+    /// Identities a re-read turned up that the frontier at the top of this pass could not
+    /// have offered. Reported because the ordering it stands for is otherwise legible only
+    /// by comparing two consecutive passes: before this was read within the pass, every one
+    /// of these waited out another full cadence.
+    pub revealed: usize,
 }
 
 /// The identities the engagement crawl already covers, and which discovery therefore
@@ -866,6 +871,44 @@ async fn answer_request<N: crate::net::Network>(
     }
 }
 
+/// Read one identity nobody here has looked at yet, and record what came back.
+///
+/// `None` when it could not be read — asleep, or a relay that didn't answer. They stay on
+/// the frontier and come round again, and an inability to read is never turned into a
+/// record saying they have nothing.
+///
+/// Returns what it recorded so the caller can see the edges it revealed, which is what
+/// keeps somebody read this pass off the frontier it recomputes later in the same pass.
+///
+/// Shared by both read phases rather than written twice: the phase that reads what a
+/// re-read revealed does the same job, and the order below — record first, clear the
+/// request after — is exactly the kind of detail two copies drift on.
+async fn read_new<N: crate::net::Network>(
+    ctx: &DiscoverContext<N>,
+    candidate: &Candidate,
+    now_iso: &str,
+) -> Option<DirectoryRecord> {
+    let resolved = resolve_directory(&ctx.net, &candidate.did).await.ok()?;
+    let blob = download_directory_blob(&ctx.net, &candidate.did, &resolved.url)
+        .await
+        .ok()?;
+    let fresh = parse_directory(&blob, &resolved.txt, &resolved.url, now_iso);
+    record_directory(
+        &ctx.doc,
+        &ctx.blobs,
+        ctx.author_id,
+        &candidate.did,
+        fresh.clone(),
+    )
+    .await;
+    // After the record, never before: a request cleared on a pass that then failed to
+    // write is a person left unresolved with nothing left saying they were asked for.
+    if candidate.requested {
+        clear_request(ctx, &candidate.did).await;
+    }
+    Some(fresh)
+}
+
 /// Go and read some of the identities this one knows about and has never looked at.
 ///
 /// The only part of discovery that spends anything. Everything else — hop one, and every
@@ -883,7 +926,15 @@ pub async fn discover_once<N: crate::net::Network>(
     let settings = crate::read_settings(&ctx.doc, &ctx.blobs, ctx.author_id, &ctx.app_key).await?;
 
     let covered = covered_elsewhere(&settings, own_did);
-    let held = held_edges(ctx).await;
+    // `held.edges` is updated as this pass reads, because it stops describing the edge set
+    // the moment anything is read and the recompute at the end needs the current one.
+    //
+    // ONLY that field, and the other two consumers of `held` are why: `wanted_tiers` is taken
+    // below before any read, so the tier a record fades by is the one it was ranked at
+    // rather than one a mid-pass edge shifted, and `decay_plan` reads tiers and timestamps
+    // and never edges at all. Moving either to after the reads would quietly put this
+    // pass's own discoveries into what it decides to throw away.
+    let mut held = held_edges(ctx).await;
     outcome.held = held.edges.len();
     outcome.unread = held.unread;
 
@@ -911,32 +962,20 @@ pub async fn discover_once<N: crate::net::Network>(
         MAX_RESOLVES_PER_PASS - read_now.len(),
     );
 
+    // What the budget has actually gone on, counted rather than assumed: a resolve is spent
+    // whether or not it answered, and both phases below draw from the same allowance.
+    let mut spent = 0usize;
     for candidate in read_now {
-        let Ok(resolved) = resolve_directory(&ctx.net, &candidate.did).await else {
-            // Asleep, or a relay that didn't answer. They stay on the frontier, and an
-            // inability to read is never turned into a record saying they have nothing.
-            outcome.unreachable += 1;
-            continue;
-        };
-        let Ok(blob) = download_directory_blob(&ctx.net, &candidate.did, &resolved.url).await
-        else {
-            outcome.unreachable += 1;
-            continue;
-        };
-        record_directory(
-            &ctx.doc,
-            &ctx.blobs,
-            ctx.author_id,
-            &candidate.did,
-            parse_directory(&blob, &resolved.txt, &resolved.url, &now_iso),
-        )
-        .await;
-        // After the record, never before: a request cleared on a pass that then failed to
-        // write is a person left unresolved with nothing left saying they were asked for.
-        if candidate.requested {
-            clear_request(ctx, &candidate.did).await;
+        spent += 1;
+        match read_new(ctx, candidate, &now_iso).await {
+            // Held now, so the recompute at the end of this pass does not offer them
+            // again — and their own edges widen it, exactly as a re-read's do.
+            Some(fresh) => {
+                held.edges.insert(candidate.did.clone(), edges_of(&fresh));
+                outcome.resolved += 1;
+            }
+            None => outcome.unreachable += 1,
         }
-        outcome.resolved += 1;
     }
 
     // Re-read what is already held, stopping at the pointer wherever nothing has moved.
@@ -947,10 +986,14 @@ pub async fn discover_once<N: crate::net::Network>(
     // ones read: an identity that could not be reached left its record exactly as the
     // reading above found it.
     let mut reread: BTreeSet<String> = BTreeSet::new();
+    // Whether a re-read turned up somebody the frontier above could not have offered. See
+    // the recompute below for why that is worth tracking rather than assuming.
+    let mut widened = false;
     for did in &refresh_now {
         let Some(record) = read_directory(&ctx.doc, &ctx.blobs, ctx.author_id, did).await else {
             continue;
         };
+        spent += 1;
         let Ok(resolved) = resolve_directory(&ctx.net, did).await else {
             outcome.unreachable += 1;
             continue;
@@ -976,17 +1019,58 @@ pub async fn discover_once<N: crate::net::Network>(
             outcome.unreachable += 1;
             continue;
         };
-        record_directory(
-            &ctx.doc,
-            &ctx.blobs,
-            ctx.author_id,
-            did,
-            parse_directory(&blob, &resolved.txt, &resolved.url, &now_iso),
-        )
-        .await;
+        let fresh = parse_directory(&blob, &resolved.txt, &resolved.url, &now_iso);
+        // A new edge only WIDENS anything if it points at somebody neither held nor covered
+        // elsewhere, which is the same pair `frontier` itself skips. Asking here is what
+        // keeps an unfollow — or a follow of somebody already known — from paying for a
+        // re-rank that could only ever find nothing.
+        let edges = edges_of(&fresh);
+        widened |= edges
+            .iter()
+            .any(|t| !held.edges.contains_key(t) && !covered.contains(t));
+        held.edges.insert(did.clone(), edges);
+        record_directory(&ctx.doc, &ctx.blobs, ctx.author_id, did, fresh).await;
         reread.insert(did.clone());
         answer_request(ctx, &requests, did).await;
         outcome.refreshed += 1;
+    }
+
+    // Read what the re-reads just revealed, instead of leaving it to the next pass.
+    //
+    // The frontier above is computed from `held` as it stood at the TOP of this pass, and
+    // the re-reads run after it — so an edge learned from one of them cannot appear in it.
+    // That made revealing somebody by re-read cost a guaranteed extra full cadence before
+    // anything went and read them, every time rather than occasionally, and it is only
+    // visible in a log by reading two consecutive passes.
+    //
+    // Recomputed ONLY when a re-read actually turned somebody up, because ranking the
+    // frontier is the expensive part of a pass at scale — ~600ms at 10,000 held — and
+    // paying it twice on every pass to catch a widening that usually did not happen is the
+    // wrong trade.
+    //
+    // Ordered, not prepended: the recomputed frontier is read from the top under the same
+    // rule as the first phase, so somebody just revealed does not outrank a nearer
+    // candidate that was already waiting. Resolve order is scheduling, and recency is not
+    // one of its terms.
+    if widened {
+        let already: BTreeSet<&str> = candidates.iter().map(|c| c.did.as_str()).collect();
+        let widened_frontier = frontier(&covered, &held.edges, &requests);
+        outcome.revealed = widened_frontier
+            .iter()
+            .filter(|c| !already.contains(c.did.as_str()))
+            .count();
+        for candidate in widened_frontier
+            .iter()
+            .take(MAX_RESOLVES_PER_PASS.saturating_sub(spent))
+        {
+            match read_new(ctx, candidate, &now_iso).await {
+                Some(fresh) => {
+                    held.edges.insert(candidate.did.clone(), edges_of(&fresh));
+                    outcome.resolved += 1;
+                }
+                None => outcome.unreachable += 1,
+            }
+        }
     }
 
     for (did, tier) in decay_plan(&held, &wanted, &reread, now_secs) {

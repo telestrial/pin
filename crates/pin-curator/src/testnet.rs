@@ -1058,9 +1058,137 @@ mod visibility {
             "her new edge is held",
         );
 
-        // And the ring beyond opens up on the next pass.
-        let onward = pass(&john).await;
-        assert_eq!(onward.resolved, 1);
+        // And the ring beyond opens up in the SAME pass. The frontier this pass started
+        // from could not contain dave — carol's edge to him did not exist in anything john
+        // held when it was computed — so the re-read that revealed him recomputes it. Every
+        // widening of the graph arrives by this route, and before the recompute each one
+        // waited out another full cadence.
+        assert_eq!(caught_up.revealed, 1, "dave is who the re-read turned up");
+        assert_eq!(caught_up.resolved, 1);
         assert!(john.held(&dave.did).await.is_some(), "dave becomes visible");
+
+        // And the pass after it has nothing left to do, rather than the read arriving there.
+        let onward = pass(&john).await;
+        assert_eq!(onward.resolved, 0);
+        assert_eq!(onward.revealed, 0);
+    }
+
+    /// An edge that points somewhere already held reveals nobody.
+    ///
+    /// The other half of the recompute, and the one that says it is a widening check rather
+    /// than a change check: carol follows dave, who john already holds. Her record moves,
+    /// so the re-read downloads — and there is nobody new behind it. The graph got denser
+    /// without getting bigger.
+    ///
+    /// What this does NOT prove is that the re-rank was SKIPPED. That guard is a cost guard
+    /// and costs nothing observable from out here; the assertion is that the pass reads
+    /// nobody it had no reason to.
+    #[tokio::test]
+    async fn an_edge_onto_somebody_held_reveals_nobody() {
+        let world = World::new();
+        let john = Identity::new(&world, 1).await;
+        let alice = Identity::new(&world, 2).await;
+        let carol = Identity::new(&world, 3).await;
+        let dave = Identity::new(&world, 4).await;
+
+        world.publish(
+            &alice.did,
+            "sia://alice-dir",
+            directory("alice", &[&carol.did, &dave.did]),
+        );
+        world.publish(&carol.did, "sia://carol-v1", directory("carol", &[]));
+        world.publish(&dave.did, "sia://dave-dir", directory("dave", &[]));
+        john.follows(&[&alice.did]).await;
+        john.hop_one(&alice.did).await;
+
+        // Both of alice's follows are read, so the whole graph is held.
+        let first = pass(&john).await;
+        assert_eq!(first.resolved, 2);
+        assert!(john.held(&dave.did).await.is_some(), "dave is held already");
+
+        // Carol now follows dave too. Her pointer moves, so the rotation downloads her.
+        world.publish(
+            &carol.did,
+            "sia://carol-v2",
+            directory("carol", &[&dave.did]),
+        );
+        let denser = pass(&john).await;
+        assert!(denser.refreshed >= 1, "her record moved, so it was re-read");
+        assert_eq!(
+            john.held(&carol.did).await.expect("carol").handle_follows,
+            vec![dave.did.clone()],
+            "the new edge is held",
+        );
+        assert_eq!(denser.revealed, 0, "dave was never news");
+        assert_eq!(denser.resolved, 0, "so nothing was read for him again");
+    }
+
+    /// The recompute does not offer back somebody this pass has already read.
+    ///
+    /// The frontier is computed from the edge set as it stood at the top of the pass, so a
+    /// recompute working from that same set would hand back everybody phase one just read —
+    /// and being the nearest candidates, they would sort to the top and take the remaining
+    /// budget re-reading themselves. What the pass actually found would go unread, which is
+    /// the widening this whole recompute exists to pick up.
+    ///
+    /// Needs a frontier LARGER than one pass can read (six behind a budget of five) so that
+    /// some of it is still outstanding when the recompute runs, plus a re-read that widens
+    /// in the same pass. That combination is the only place the bug can surface, and it is
+    /// why the other two scenarios cannot reach it.
+    #[tokio::test]
+    async fn the_recompute_does_not_re_offer_what_this_pass_read() {
+        let world = World::new();
+        let john = Identity::new(&world, 1).await;
+        let alice = Identity::new(&world, 2).await;
+
+        // Six people alice already points at — one more than a pass reads — and three more
+        // she has not published yet, so the recompute is left with more than it can read.
+        let ring: Vec<String> = (1..=6).map(|i| format!("did:dht:p{i}")).collect();
+        let later: Vec<String> = (7..=9).map(|i| format!("did:dht:p{i}")).collect();
+        for did in ring.iter().chain(later.iter()) {
+            world.publish(did, &format!("sia://{did}"), directory(did, &[]));
+        }
+
+        let refs: Vec<&str> = ring.iter().map(String::as_str).collect();
+        world.publish(&alice.did, "sia://alice-v1", directory("alice", &refs));
+        john.follows(&[&alice.did]).await;
+        john.hop_one(&alice.did).await;
+
+        // Alice follows the three and republishes, so the re-read below downloads her.
+        let mut widened: Vec<&str> = refs.clone();
+        widened.extend(later.iter().map(String::as_str));
+        world.publish(&alice.did, "sia://alice-v2", directory("alice", &widened));
+
+        let out = pass(&john).await;
+
+        // Five of the ring read up front, alice re-read, and the budget that is left spent
+        // on what is genuinely outstanding.
+        assert!(
+            out.refreshed >= 1,
+            "alice's pointer moved, so she was re-read"
+        );
+        assert_eq!(out.revealed, 3, "the three are what the re-read turned up");
+        let unread_up_front = &ring[5];
+        assert!(
+            john.held(unread_up_front).await.is_some(),
+            "the one the first phase had no budget for is read — the recomputed frontier is              read from the top, so a nearer candidate already waiting is not jumped by              somebody just revealed",
+        );
+        assert!(
+            john.held(&later[0]).await.is_some(),
+            "and the first of the revealed, in this pass rather than the next",
+        );
+        assert!(
+            john.held(&later[2]).await.is_none(),
+            "while the budget still cuts the pass off — the rest come round next time",
+        );
+        // And the second phase draws from the SAME allowance as the first two, counted by
+        // what was actually spent rather than by the reservation. Every resolve this pass
+        // made is one of these four: a new read, a re-read that downloaded, a re-read the
+        // pointer settled, or an attempt that got no answer.
+        assert_eq!(
+            out.resolved + out.refreshed + out.unchanged + out.unreachable,
+            crate::MAX_RESOLVES_PER_PASS,
+            "the pass spends its budget and does not exceed it",
+        );
     }
 }

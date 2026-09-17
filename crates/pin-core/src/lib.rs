@@ -811,6 +811,7 @@ pub async fn start_discover_loop(
                     Ok(o) => serde_json::json!({
                         "held": o.held,
                         "frontier": o.frontier,
+                        "revealed": o.revealed,
                         "requested": o.requested,
                         "resolved": o.resolved,
                         "refreshed": o.refreshed,
