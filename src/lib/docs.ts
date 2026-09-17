@@ -560,6 +560,9 @@ export async function startRendezvousLoop(
 const IDENTITY_CADENCE_SECS = 30 * 60
 /** How soon to republish while the packet carries nothing anyone could dial. */
 const IDENTITY_RETRY_SECS = 20
+/** How long to let writes settle before republishing. Creating a channel writes settings
+ *  and a manifest, so acting on the first would publish the packet twice. */
+const IDENTITY_SETTLE_SECS = 3
 
 /** Start the identity-publishing loop — ONE packet under the did:dht key carrying the
  *  directory pointer, the doc namespace, and every live endpoint of this identity.
@@ -582,6 +585,7 @@ export async function startIdentityLoop(
     namespaceId,
     IDENTITY_CADENCE_SECS,
     IDENTITY_RETRY_SECS,
+    IDENTITY_SETTLE_SECS,
     (report: string) => onPass?.(report),
   )
 }

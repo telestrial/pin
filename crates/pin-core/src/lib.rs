@@ -906,6 +906,7 @@ pub async fn start_identity_loop(
     namespace_id: String,
     cadence_secs: u32,
     retry_secs: u32,
+    settle_secs: u32,
     on_pass: js_sys::Function,
 ) -> Result<(), JsValue> {
     let eng = engine()?;
@@ -927,6 +928,7 @@ pub async fn start_identity_loop(
             ctx,
             std::time::Duration::from_secs(cadence_secs as u64),
             std::time::Duration::from_secs(retry_secs as u64),
+            std::time::Duration::from_secs(settle_secs as u64),
             // Both clocks come from JS: neither SystemTime nor a date formatter is
             // available on this target.
             || js_sys::Date::new_0().to_iso_string().into(),

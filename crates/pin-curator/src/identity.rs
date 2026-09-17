@@ -31,7 +31,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use iroh_blobs::api::Store;
-use iroh_docs::{api::Doc, AuthorId};
+use iroh_docs::{api::Doc, engine::LiveEvent, AuthorId};
+use n0_future::StreamExt as _;
 use pin_derive::PUBLISHED_COLLECTION;
 
 use crate::{live_instances, read_record, read_settings, PublishedState, SettingsView};
@@ -755,6 +756,62 @@ async fn read_published(
     serde_json::from_slice(&json).ok()
 }
 
+/// Whether an event says something the published packet is DERIVED FROM has moved.
+///
+/// An ALLOWLIST, and the direction it fails in is the point: a collection nobody has
+/// listed here does not wake the publisher. Being wrong that way costs one cadence of
+/// staleness; being wrong the other way publishes to the DHT in a loop, because this pass
+/// writes to the same doc it is watching.
+///
+/// Both directions of write count. A local one is this instance's own edit; a remote one is
+/// another instance of the same identity syncing in a change it made while it was the one
+/// that happened to be up. The packet is assembled from the doc rather than from whatever
+/// this instance did, so either is news, and whichever instance publishes publishes the
+/// whole truth.
+///
+/// TWO COLLECTIONS THE PASS READS ARE DELIBERATELY ABSENT, for the two distinct reasons
+/// `snapshot`'s fingerprint cuts the same pair:
+///
+/// - `published` is written by this loop on EVERY pass, changed or not, because the
+///   publish itself is the keep-alive. Waking on it is the loop feeding itself — the 08-29
+///   snapshot churn in a shape that spends a signed DHT packet per turn rather than a Sia
+///   upload.
+/// - `instance` carries a liveness `at` rewritten every 15 minutes whether or not anything
+///   about this identity moved, so waking on it would republish on a timer rather than on
+///   news. A newly-advertised endpoint therefore waits out a cadence, which is exactly
+///   what it does today; having nothing dialable AT ALL is the case the prompt retry
+///   already covers.
+///
+/// `comment` IS here despite `mint_bodies` writing to it, because that write converges: a
+/// body is minted once and the next pass writes nothing, so a new comment costs one extra
+/// pass rather than a run of them.
+fn directory_moved(event: &LiveEvent) -> bool {
+    let key = match event {
+        LiveEvent::InsertLocal { entry } => entry.key(),
+        LiveEvent::InsertRemote { entry, .. } => entry.key(),
+        _ => return false,
+    };
+    let key = String::from_utf8_lossy(key);
+    [
+        crate::SETTINGS_COLLECTION,
+        pin_derive::ENDORSE_COLLECTION,
+        pin_derive::COMMENT_COLLECTION,
+        pin_derive::COMMENT_SEAL_COLLECTION,
+    ]
+    .iter()
+    .any(|c| key.starts_with(&pin_derive::collection_prefix(c)))
+}
+
+/// What ended a wait.
+enum Woke {
+    /// A record the packet is assembled from was written.
+    Written,
+    /// The cadence came round.
+    Timeout,
+    /// The doc's stream closed and will not wake us again.
+    Ended,
+}
+
 /// Publish, wait, repeat — forever. Clocks come from the caller, since neither
 /// `SystemTime::now()` nor a date formatter is available on the wasm target.
 /// Two cadences, and the loop settles onto the slow one ONLY once it has published
@@ -776,25 +833,139 @@ async fn read_published(
 ///
 /// The retry costs a local doc read, so an identity that stays in one of those states is
 /// polling its own doc rather than the network.
+///
+/// A WRITE TO WHAT THE PACKET IS MADE OF WAKES IT, which is what the cadence alone cannot
+/// be short enough for: following somebody writes settings, and everyone waiting to read
+/// that edge — a crawler's frontier, a profile page, a follower count — sits behind this
+/// loop republishing. Held for `settle` afterwards, so a burst costs one publish rather
+/// than one each: creating a channel writes settings and a manifest. See `directory_moved`
+/// for what counts as such a write, and for the two collections that must not.
 pub async fn run_identity_loop(
     ctx: IdentityContext,
     cadence: Duration,
     retry: Duration,
+    settle: Duration,
     now_iso: impl Fn() -> String,
     now_secs: impl Fn() -> u64,
     on_pass: impl Fn(Result<IdentityOutcome, String>),
 ) -> ! {
+    // A doc whose stream is unavailable falls back to the cadence alone, which is slower
+    // but never wrong.
+    let mut events = ctx.doc.subscribe().await.ok().map(Box::pin);
     loop {
         let outcome = publish_identity_once(&ctx, now_iso(), now_secs()).await;
         let reachable = settled(&outcome);
         on_pass(outcome);
-        n0_future::time::sleep(if reachable { cadence } else { retry }).await;
+        let wait = if reachable { cadence } else { retry };
+
+        let woke = match events.as_mut() {
+            Some(stream) => {
+                let woken = async {
+                    loop {
+                        match stream.next().await {
+                            Some(Ok(ev)) if directory_moved(&ev) => return Woke::Written,
+                            Some(_) => continue,
+                            None => return Woke::Ended,
+                        }
+                    }
+                };
+                let timeout = async {
+                    n0_future::time::sleep(wait).await;
+                    Woke::Timeout
+                };
+                n0_future::future::race(woken, timeout).await
+            }
+            None => {
+                n0_future::time::sleep(wait).await;
+                Woke::Timeout
+            }
+        };
+        match woke {
+            Woke::Written => n0_future::time::sleep(settle).await,
+            Woke::Timeout => {}
+            // Dropped rather than re-polled: a closed stream yields `None` forever, so
+            // racing it again would return instantly and turn the cadence into a spin.
+            Woke::Ended => events = None,
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A local write of `key`, as the engine reports one.
+    fn wrote(key: &str) -> LiveEvent {
+        let id = iroh_docs::sync::RecordIdentifier::new(
+            iroh_docs::NamespaceId::from(&[1u8; 32]),
+            iroh_docs::AuthorId::from(&[2u8; 32]),
+            key,
+        );
+        // A non-empty length: `Record::new` insists a zero-length record carry the hash of
+        // the empty range, and the length is nothing to do with what's under test.
+        let record = iroh_docs::sync::Record::new(iroh_blobs::Hash::from([3u8; 32]), 1, 0);
+        LiveEvent::InsertLocal {
+            entry: iroh_docs::sync::Entry::new(id, record),
+        }
+    }
+
+    /// A write arriving from another instance of this same identity.
+    fn synced(key: &str) -> LiveEvent {
+        let LiveEvent::InsertLocal { entry } = wrote(key) else {
+            unreachable!()
+        };
+        LiveEvent::InsertRemote {
+            entry,
+            from: iroh::PublicKey::from_bytes(&[0u8; 32]).unwrap(),
+            content_status: iroh_docs::ContentStatus::Complete,
+        }
+    }
+
+    #[test]
+    fn a_write_to_what_the_packet_is_made_of_wakes_the_publisher() {
+        // The case the whole wake exists for: following somebody writes settings, and
+        // every reader of that edge waits on this loop republishing.
+        assert!(directory_moved(&wrote("settings/self")));
+        assert!(directory_moved(&wrote("endorse/like:abc")));
+        assert!(directory_moved(&wrote("comment/abc:def")));
+        assert!(directory_moved(&wrote("comment-seal/abc:def")));
+
+        // A neighbouring collection is not the same collection. `comment-object` is a
+        // reclaim mark, written while minting a body, and prefix-matching it would wake a
+        // pass for the write its own pass just made.
+        assert!(!directory_moved(&wrote("comment-object/abc:def")));
+        assert!(!directory_moved(&wrote("comment-log/abc:def:did:dht:x")));
+    }
+
+    #[test]
+    fn a_synced_write_wakes_it_too() {
+        // The packet is assembled from the doc rather than from what this instance did,
+        // so another instance's edit is news here as much as a local one — and whichever
+        // instance is up should be the one that publishes it.
+        assert!(directory_moved(&synced("settings/self")));
+    }
+
+    #[test]
+    fn publishing_is_not_its_own_trigger() {
+        // The spin this allowlist exists to prevent. A pass writes publish state EVERY
+        // time, changed or not, because the publish is the keep-alive — so waking on it
+        // would republish to the DHT as fast as the doc could report it.
+        assert!(!directory_moved(&wrote("published/directory")));
+        assert!(!directory_moved(&wrote("published/comments")));
+
+        // A liveness heartbeat, rewritten every 15 minutes whether or not this identity
+        // moved. Waking on it republishes on a timer rather than on news.
+        assert!(!directory_moved(&wrote("instance/abc")));
+
+        // And the doc carries every other loop's writes.
+        assert!(!directory_moved(&wrote("tally/chan:abc")));
+        assert!(!directory_moved(&wrote("directory/did:dht:x")));
+        assert!(!directory_moved(&wrote("sub/chan")));
+
+        // Swarm churn says who we're talking to, not that anything was written.
+        let peer = iroh::PublicKey::from_bytes(&[0u8; 32]).unwrap();
+        assert!(!directory_moved(&LiveEvent::NeighborUp(peer)));
+    }
 
     fn doc(profile: Option<serde_json::Value>, channels: Vec<DirectoryChannel>) -> DirectoryDoc {
         DirectoryDoc {

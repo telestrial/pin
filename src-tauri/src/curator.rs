@@ -1479,6 +1479,9 @@ pub async fn curator_deliver_probe(
 const IDENTITY_CADENCE: std::time::Duration = std::time::Duration::from_secs(30 * 60);
 /// How soon to republish while the packet carries nothing anyone could dial.
 const IDENTITY_RETRY: std::time::Duration = std::time::Duration::from_secs(20);
+/// How long to let writes settle before republishing. Creating a channel writes settings
+/// and a manifest, so acting on the first would publish the packet twice.
+const IDENTITY_SETTLE: std::time::Duration = std::time::Duration::from_secs(3);
 
 /// Start the identity-publishing loop — one packet under the did:dht key carrying the
 /// directory pointer, the doc namespace, and every live endpoint.
@@ -1512,6 +1515,7 @@ pub async fn curator_start_identity(
             ctx,
             IDENTITY_CADENCE,
             IDENTITY_RETRY,
+            IDENTITY_SETTLE,
             now_iso,
             now_secs,
             move |result| {

@@ -766,7 +766,7 @@ export function start_engagement_loop(app_key_hex: string, cadence_secs: number,
  * assemble it from the doc rather than from what they happen to know locally. That's
  * what stopped them overwriting each other.
  */
-export function start_identity_loop(app_key_hex: string, namespace_id: string, cadence_secs: number, retry_secs: number, on_pass: Function): Promise<void>;
+export function start_identity_loop(app_key_hex: string, namespace_id: string, cadence_secs: number, retry_secs: number, settle_secs: number, on_pass: Function): Promise<void>;
 
 /**
  * Start this instance's registration loop in this tab.
@@ -1035,7 +1035,7 @@ export interface InitOutput {
     readonly start_deliver_loop: (a: number, b: number, c: number, d: number, e: number, f: any) => any;
     readonly start_discover_loop: (a: number, b: number, c: number, d: any) => any;
     readonly start_engagement_loop: (a: number, b: number, c: number, d: number, e: any) => any;
-    readonly start_identity_loop: (a: number, b: number, c: number, d: number, e: number, f: number, g: any) => any;
+    readonly start_identity_loop: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: any) => any;
     readonly start_instance_loop: (a: number, b: number, c: any) => any;
     readonly start_keep_alive_loop: (a: number, b: number, c: number, d: any) => any;
     readonly start_pull_loop: (a: number, b: number, c: number, d: any) => any;
