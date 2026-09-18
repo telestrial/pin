@@ -140,26 +140,27 @@ describe('countReachablePeople against the socialGraph harness', () => {
       },
     ]
 
-  it.each(
-    REACH_CASES,
-  )('$name matches the oracle within 2 seconds', async (c) => {
-    const start = performance.now()
-    const reach = await countReachablePeople(
-      c.viewer,
-      r0Of(c.graph, c.viewer),
-      { fetch: graphReach(c.graph) },
-    )
-    const elapsedMs = performance.now() - start
+  it.each(REACH_CASES)(
+    '$name matches the oracle within 2 seconds',
+    async (c) => {
+      const start = performance.now()
+      const reach = await countReachablePeople(
+        c.viewer,
+        r0Of(c.graph, c.viewer),
+        { fetch: graphReach(c.graph) },
+      )
+      const elapsedMs = performance.now() - start
 
-    // Correctness gate — a perf check that doesn't assert the right answer is
-    // a perf check silently passing on broken code.
-    expect(reach.total).toBeGreaterThan(0)
-    expect(reach.direct).toBe(reachablePeople(c.viewer, c.graph, 1).length)
-    expect(reach.total).toBe(reachablePeople(c.viewer, c.graph, 2).length)
-    expect(reach.extended).toBe(reach.total - reach.direct)
+      // Correctness gate — a perf check that doesn't assert the right answer is
+      // a perf check silently passing on broken code.
+      expect(reach.total).toBeGreaterThan(0)
+      expect(reach.direct).toBe(reachablePeople(c.viewer, c.graph, 1).length)
+      expect(reach.total).toBe(reachablePeople(c.viewer, c.graph, 2).length)
+      expect(reach.extended).toBe(reach.total - reach.direct)
 
-    expect(elapsedMs).toBeLessThan(2000)
-  })
+      expect(elapsedMs).toBeLessThan(2000)
+    },
+  )
 })
 
 describe('walkReachable', () => {

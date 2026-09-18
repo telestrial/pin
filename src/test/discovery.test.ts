@@ -300,25 +300,26 @@ describe('the discovery crawl over synthetic graphs', () => {
   // grows. Measuring a whole convergence instead would measure the wrong thing: covering
   // ten thousand identities at eight per pass is over a thousand passes, and in production
   // those are minutes apart, so what has to stay cheap is the pass, not the total.
-  it.each(
-    SCALES,
-  )('$name computes a pass within 2 seconds when fully crawled', (c) => {
-    const r0 = [...r0Of(c.graph, c.viewer), c.viewer]
-    const held = new Map<string, string[]>()
-    for (const did of everyoneReachable(c.graph, c.viewer)) {
-      held.set(did, edgesOf(c.graph, did))
-    }
+  it.each(SCALES)(
+    '$name computes a pass within 2 seconds when fully crawled',
+    (c) => {
+      const r0 = [...r0Of(c.graph, c.viewer), c.viewer]
+      const held = new Map<string, string[]>()
+      for (const did of everyoneReachable(c.graph, c.viewer)) {
+        held.set(did, edgesOf(c.graph, did))
+      }
 
-    const start = performance.now()
-    const candidates = nextToRead(r0, held)
-    const elapsedMs = performance.now() - start
+      const start = performance.now()
+      const candidates = nextToRead(r0, held)
+      const elapsedMs = performance.now() - start
 
-    // Correctness gate first — a perf check that doesn't assert the right answer is a
-    // perf check silently passing on broken code. Everything reachable is held, so there
-    // is nothing left to read.
-    expect(held.size).toBeGreaterThan(0)
-    expect(candidates).toEqual([])
+      // Correctness gate first — a perf check that doesn't assert the right answer is a
+      // perf check silently passing on broken code. Everything reachable is held, so there
+      // is nothing left to read.
+      expect(held.size).toBeGreaterThan(0)
+      expect(candidates).toEqual([])
 
-    expect(elapsedMs).toBeLessThan(2000)
-  })
+      expect(elapsedMs).toBeLessThan(2000)
+    },
+  )
 })
