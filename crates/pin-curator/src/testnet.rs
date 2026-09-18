@@ -385,6 +385,29 @@ impl Identity {
         }
     }
 
+    /// This identity's context for the publishing loop, as the shells build one.
+    ///
+    /// `sia` is DISCONNECTED, same as `engagement_ctx`, and here that is more than a
+    /// convenience: it means a pass can never reach the network, so what a scenario using
+    /// this observes is purely the loop's own scheduling. Every reachable pass fails or
+    /// reports nothing to advertise, which is exactly the cheap, repeatable pass a test of
+    /// the WAIT wants either side of it.
+    ///
+    /// The namespace id is re-derived rather than plumbed, so it matches what the engine
+    /// would have handed over for this app key.
+    pub fn identity_ctx(&self) -> crate::IdentityContext {
+        let ns_seed = pin_derive::hkdf32(&self.app_key, pin_derive::NS_INFO);
+        let ns = iroh_docs::NamespaceSecret::from_bytes(&ns_seed);
+        crate::IdentityContext {
+            doc: self.doc.clone(),
+            blobs: self.blobs.clone(),
+            author_id: self.author_id,
+            sia: std::sync::Arc::new(pin_sia::Session::new()),
+            app_key: self.app_key,
+            namespace_id: ns.id().to_string(),
+        }
+    }
+
     /// What this identity's crawl currently holds about `did`, if anything.
     pub async fn held(&self, did: &str) -> Option<crate::DirectoryRecord> {
         let raw = crate::read_record(
@@ -488,6 +511,225 @@ mod probe {
                 .await
                 .expect("read"),
             None,
+        );
+    }
+}
+
+/// What a loop does BETWEEN passes.
+///
+/// Every other test in this crate calls a `*_once` and asserts on what came back, which
+/// leaves the `run_*_loop` wrappers — the race between a doc wake and the cadence, the
+/// settle, the dropped stream — with no coverage at all. That is the whole of what a wake
+/// IS, and the identity loop's is the one that can spin: its pass writes publish state on
+/// every turn, changed or not, so a wake condition that is too broad republishes to the
+/// DHT as fast as the doc can report it.
+///
+/// A loop returns `!`, so it is driven rather than awaited: `select!` puts it and a driver
+/// on one task, the driver watches the reported passes and writes to the doc, and whichever
+/// finishes first ends the test. No spawn, so nothing here needs `Send` — a browser's
+/// futures are not `Send` either, and this is the same code.
+///
+/// The cadences are set far longer than any test window, so a SECOND pass can only ever
+/// have come from a wake. `settled()` is false for every pass reachable offline (nothing
+/// is published, so nothing is dialable), which means these exercise the retry branch of
+/// the wait; the race, the settle and the filter are the same on both branches, and only
+/// the duration differs.
+#[cfg(test)]
+mod loops {
+    use super::*;
+    use std::time::Duration;
+
+    /// Long enough that no timer in these tests can fire.
+    const NEVER: Duration = Duration::from_secs(600);
+    /// Short enough not to pad the suite; it only has to be non-zero to be exercised.
+    const SETTLE: Duration = Duration::from_millis(10);
+
+    /// Run the identity loop until `drive` says it is done, and give back what it reported.
+    ///
+    /// `drive` gets the count of passes so far, so it can wait for one without the test
+    /// reaching into how reporting works.
+    async fn driving<F, Fut>(me: &Identity, drive: F) -> Vec<Result<crate::IdentityOutcome, String>>
+    where
+        F: FnOnce(Arc<Mutex<Vec<Result<crate::IdentityOutcome, String>>>>) -> Fut,
+        Fut: std::future::Future<Output = ()>,
+    {
+        let passes = Arc::new(Mutex::new(Vec::new()));
+        let recorder = passes.clone();
+        let spinning = crate::run_identity_loop(
+            me.identity_ctx(),
+            NEVER,
+            NEVER,
+            SETTLE,
+            || "2026-09-17T00:00:00.000Z".to_string(),
+            || 1_789_000_000,
+            move |outcome| recorder.lock().unwrap().push(outcome),
+        );
+        tokio::select! {
+            _ = spinning => unreachable!("the loop never returns"),
+            () = drive(passes.clone()) => {}
+        }
+        let held = passes.lock().unwrap();
+        held.clone()
+    }
+
+    /// Wait for at least `n` passes, or give up after `within`.
+    async fn passes_reach(
+        passes: &Arc<Mutex<Vec<Result<crate::IdentityOutcome, String>>>>,
+        n: usize,
+        within: Duration,
+    ) -> bool {
+        let deadline = tokio::time::Instant::now() + within;
+        while tokio::time::Instant::now() < deadline {
+            if passes.lock().unwrap().len() >= n {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        passes.lock().unwrap().len() >= n
+    }
+
+    #[tokio::test]
+    async fn a_write_to_the_directory_sources_wakes_a_second_pass() {
+        let world = World::new();
+        let me = Identity::new(&world, 1).await;
+        let doc = me.doc.clone();
+        let author = me.author_id;
+
+        let reported = driving(&me, |passes| async move {
+            assert!(
+                passes_reach(&passes, 1, Duration::from_secs(5)).await,
+                "the loop publishes once before it ever waits",
+            );
+
+            // Following somebody is a settings write. The cadence is ten minutes away, so
+            // a second pass can only have come from the doc.
+            crate::write_record(
+                &doc,
+                author,
+                crate::SETTINGS_COLLECTION,
+                "self",
+                b"x".to_vec(),
+            )
+            .await
+            .expect("write settings");
+
+            assert!(
+                passes_reach(&passes, 2, Duration::from_secs(5)).await,
+                "a settings write wakes the publisher rather than waiting out the cadence",
+            );
+        })
+        .await;
+
+        assert!(reported.len() >= 2, "two passes were reported");
+    }
+
+    /// The spin guard, and the half that makes it mean anything is the END.
+    ///
+    /// "No second pass" is satisfied just as well by a loop that died, so this writes
+    /// publish state, insists nothing happened, and THEN writes settings to prove the loop
+    /// was listening the whole time. Without that, the test passes for the one reason it
+    /// is meant to rule out.
+    #[tokio::test]
+    async fn publish_state_does_not_wake_it_and_the_loop_is_still_listening() {
+        let world = World::new();
+        let me = Identity::new(&world, 1).await;
+        let doc = me.doc.clone();
+        let author = me.author_id;
+
+        driving(&me, |passes| async move {
+            assert!(
+                passes_reach(&passes, 1, Duration::from_secs(5)).await,
+                "the loop publishes once before it ever waits",
+            );
+
+            // What the pass itself writes, every turn, because the publish is the
+            // keep-alive. A loop woken by this is a loop woken by its own output.
+            crate::write_record(
+                &doc,
+                author,
+                pin_derive::PUBLISHED_COLLECTION,
+                "directory",
+                b"x".to_vec(),
+            )
+            .await
+            .expect("write publish state");
+
+            assert!(
+                !passes_reach(&passes, 2, Duration::from_millis(300)).await,
+                "publishing is not its own trigger",
+            );
+
+            // And the loop is alive and still watching, so the silence above was a filter
+            // rather than a corpse.
+            crate::write_record(
+                &doc,
+                author,
+                crate::SETTINGS_COLLECTION,
+                "self",
+                b"x".to_vec(),
+            )
+            .await
+            .expect("write settings");
+
+            assert!(
+                passes_reach(&passes, 2, Duration::from_secs(5)).await,
+                "the stream was still being read",
+            );
+        })
+        .await;
+    }
+
+    /// What a BURST costs, measured rather than assumed — and it is not what `settle`'s
+    /// name suggests.
+    ///
+    /// The wait consumes ONE event and then settles, so the writes that landed behind it
+    /// are still queued and the next wait returns on them immediately. Four writes are
+    /// four wakes, and the settle only decides how long after the first one the pass runs.
+    /// It buys the pass a fuller view of the burst; it does not coalesce anything.
+    ///
+    /// So what bounds the cost of a burst is NOT this: it is the fingerprint inside
+    /// `publish_identity_once`, which re-uploads the directory blob only when its content
+    /// moved. A redundant pass still republishes the pkarr packet, because that publish IS
+    /// the keep-alive and is unconditional — so N writes are N signed DHT packets. Bounded
+    /// by what a person actually did, so it is not a spin, and that is the whole of why it
+    /// is acceptable rather than fixed.
+    ///
+    /// Pinned because it was ASSERTED the other way in this loop's own doc comment before
+    /// anything ran it. If a drain ever lands ahead of the settle this test is what says
+    /// the behaviour changed on purpose.
+    #[tokio::test]
+    async fn a_burst_costs_a_pass_per_write_and_the_settle_does_not_coalesce() {
+        let world = World::new();
+        let me = Identity::new(&world, 1).await;
+        let doc = me.doc.clone();
+        let author = me.author_id;
+
+        let reported = driving(&me, |passes| async move {
+            assert!(
+                passes_reach(&passes, 1, Duration::from_secs(5)).await,
+                "the loop publishes once before it ever waits",
+            );
+
+            for i in 0..4u8 {
+                crate::write_record(&doc, author, crate::SETTINGS_COLLECTION, "self", vec![i])
+                    .await
+                    .expect("write settings");
+            }
+
+            // Five: the first pass plus one per write. Waiting well past the settle, so
+            // this is where the count lands rather than where it happens to be caught.
+            assert!(
+                passes_reach(&passes, 5, Duration::from_secs(5)).await,
+                "each queued write is its own wake",
+            );
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        })
+        .await;
+
+        assert_eq!(
+            reported.len(),
+            5,
+            "four writes cost four passes beyond the first, and no more",
         );
     }
 }

@@ -837,9 +837,15 @@ enum Woke {
 /// A WRITE TO WHAT THE PACKET IS MADE OF WAKES IT, which is what the cadence alone cannot
 /// be short enough for: following somebody writes settings, and everyone waiting to read
 /// that edge — a crawler's frontier, a profile page, a follower count — sits behind this
-/// loop republishing. Held for `settle` afterwards, so a burst costs one publish rather
-/// than one each: creating a channel writes settings and a manifest. See `directory_moved`
-/// for what counts as such a write, and for the two collections that must not.
+/// loop republishing. See `directory_moved` for what counts as such a write, and for the
+/// two collections that must not.
+///
+/// `settle` delays the woken pass so it sees more of a burst that is still landing. It does
+/// NOT coalesce one: the wait takes a single event and the rest stay queued, so N writes
+/// are N wakes — measured, after this comment claimed otherwise. What bounds a burst is
+/// the fingerprint below, which re-uploads the blob only when its content moved; the pkarr
+/// publish is unconditional because it IS the keep-alive, so a redundant pass costs one
+/// signed packet. Bounded by what a person did, which is why it is acceptable.
 pub async fn run_identity_loop(
     ctx: IdentityContext,
     cadence: Duration,
