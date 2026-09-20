@@ -13,7 +13,7 @@ edition = "2021"
 # 1.82 floor: iroh's netwatch pins windows 0.62 (MSRV 1.82); below this, the
 # MSRV-aware resolver splits wmi across windows 0.61/windows-core 0.62 and fails
 # to compile. Our toolchain is 1.92.
-rust-version = "1.82"
+rust-version = "1.95"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

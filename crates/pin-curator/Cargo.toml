@@ -14,7 +14,7 @@
 name = "pin-curator"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.82"
+rust-version = "1.95"
 
 [dependencies]
 # The doc: where the subscription list is read from and the cache is written to.

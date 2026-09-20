@@ -10,7 +10,7 @@
 name = "pin-rpc"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.82"
+rust-version = "1.95"
 
 [dependencies]
 # Already in the tree via iroh; a bounded(1) channel is the signal that lets the drain

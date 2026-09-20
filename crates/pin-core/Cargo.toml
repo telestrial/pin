@@ -2,7 +2,7 @@
 name = "pin-core"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.82"
+rust-version = "1.95"
 
 # The shared doc engine. Built native (rlib, linked by the src-tauri keeper) and
 # wasm32 (cdylib, via wasm-pack --target web for the browser). The record CRUD

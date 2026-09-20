@@ -13,7 +13,7 @@
 name = "pin-crypto"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.82"
+rust-version = "1.95"
 
 [dependencies]
 # Already in the tree via pin-derive's HKDF.

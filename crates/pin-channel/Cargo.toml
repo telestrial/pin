@@ -15,7 +15,7 @@
 name = "pin-channel"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.82"
+rust-version = "1.95"
 
 [dependencies]
 # The bytes. Takes a `&Session` rather than owning one, so the browser and the desktop
