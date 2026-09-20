@@ -16,7 +16,8 @@ use std::sync::Arc;
 
 use sia_storage::{
     app_id, AppKey, AppMetadata, ApprovedState, Builder, DateTime, DownloadOptions, Hash256,
-    Object, ObjectEvent, ObjectsCursor, RequestingApprovalState, Sdk, Slab, UploadOptions, Utc,
+    Object, ObjectEvent, ObjectsCursor, PackedUploadOptions, RequestingApprovalState, Sdk, Slab,
+    UploadOptions, Utc,
 };
 use tokio::sync::Mutex;
 
@@ -71,6 +72,17 @@ fn upload_options(on_shard: Option<ShardCallback>) -> UploadOptions {
         Some(cb) => UploadOptions::default().on_shard_uploaded(move |_| cb()),
         None => UploadOptions::default(),
     }
+}
+
+/// The packed upload's own options type, which carries the callback as a field rather
+/// than through a builder — so the two cannot share one constructor even though they
+/// mean the same thing to a caller.
+fn packed_upload_options(on_shard: Option<ShardCallback>) -> PackedUploadOptions {
+    let mut options = PackedUploadOptions::default();
+    if let Some(cb) = on_shard {
+        options.shard_uploaded = Some(Arc::new(move |_| cb()));
+    }
+    options
 }
 
 /// Run an SDK future somewhere it is allowed to spawn.
@@ -232,7 +244,7 @@ async fn walk_current(sdk: &Sdk) -> Result<Vec<CurrentObject>, String> {
         if let Some(obj) = ev.object {
             out.push(CurrentObject {
                 id: ev.id.to_string(),
-                created_at: *obj.created_at(),
+                created_at: obj.created_at,
                 slabs: obj.slabs().to_vec(),
             });
         }
@@ -419,7 +431,7 @@ impl Session {
             Ok(Uploaded {
                 id: obj.id().to_string(),
                 item_url: sdk
-                    .share_object(&obj, far_future())
+                    .object_share_url(&obj, far_future())
                     .map_err(|e| format!("share: {e}"))?
                     .to_string(),
                 byte_size,
@@ -448,7 +460,7 @@ impl Session {
             let hashes: Vec<String> = items.iter().map(|b| pin_crypto::content_hash(b)).collect();
 
             let mut packed = sdk
-                .upload_packed(upload_options(on_shard))
+                .upload_packed(packed_upload_options(on_shard))
                 .map_err(|e| format!("packed upload: {e}"))?;
             for bytes in items {
                 packed
@@ -467,7 +479,7 @@ impl Session {
                 out.push(Uploaded {
                     id: obj.id().to_string(),
                     item_url: sdk
-                        .share_object(obj, far_future())
+                        .object_share_url(obj, far_future())
                         .map_err(|e| format!("share: {e}"))?
                         .to_string(),
                     byte_size: sizes.get(i).copied().unwrap_or(0),
@@ -489,9 +501,9 @@ impl Session {
         let sdk = self.sdk().await?;
         drive(async move {
             let obj = sdk
-                .shared_object(url)
+                .object_from_share_url(url)
                 .await
-                .map_err(|e| format!("shared_object: {e}"))?;
+                .map_err(|e| format!("object_from_share_url: {e}"))?;
             let mut download = sdk
                 .download(&obj, DownloadOptions::default())
                 .map_err(|e| format!("download start: {e}"))?;
@@ -518,9 +530,9 @@ impl Session {
         let sdk = self.sdk().await?;
         drive(async move {
             let obj = sdk
-                .shared_object(url)
+                .object_from_share_url(url)
                 .await
-                .map_err(|e| format!("shared_object: {e}"))?;
+                .map_err(|e| format!("object_from_share_url: {e}"))?;
             sdk.pin_object(&obj)
                 .await
                 .map_err(|e| format!("pin: {e}"))?;
@@ -534,9 +546,9 @@ impl Session {
         let sdk = self.sdk().await?;
         drive(async move {
             let obj = sdk
-                .shared_object(url)
+                .object_from_share_url(url)
                 .await
-                .map_err(|e| format!("shared_object: {e}"))?;
+                .map_err(|e| format!("object_from_share_url: {e}"))?;
             Ok(obj.id().to_string())
         })
         .await
@@ -608,7 +620,7 @@ impl Session {
         drive(async move {
             Ok(sdk.object(&hash).await.ok().map(|obj| PinnedObjectInfo {
                 id: hash.to_string(),
-                created_at: obj.created_at().to_rfc3339(),
+                created_at: obj.created_at.to_rfc3339(),
                 slabs: obj.slabs().to_vec(),
             }))
         })
