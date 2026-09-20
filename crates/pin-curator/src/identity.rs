@@ -559,6 +559,30 @@ fn fingerprint(doc: &DirectoryDoc) -> String {
     copy.to_string()
 }
 
+/// Assemble what this identity publishes about itself, from settings and the doc.
+///
+/// Pulled out of the pass so it can be read over a doc without a Sia session behind it —
+/// the same reason `has_anything` and `reclaim_plan` sit on their own. What goes in is the
+/// interesting half: every field is CURRENT STATE, so a field this doc cannot answer for
+/// is published as an absence, and an absence is what a reader treats as withdrawal.
+async fn assemble_directory(
+    ctx: &IdentityContext,
+    settings: &SettingsView,
+    comments_url: Option<String>,
+    now_iso: String,
+) -> DirectoryDoc {
+    DirectoryDoc {
+        version: DIRECTORY_DOC_VERSION,
+        profile: settings.profile.clone(),
+        channels: advertised_channels(settings),
+        follows: settings.follows.clone(),
+        handle_follows: settings.handle_follows.clone(),
+        endorsements: own_endorsements(ctx).await,
+        comments_url,
+        updated_at: now_iso,
+    }
+}
+
 /// Whether this directory is worth publishing at all. An identity with no profile, no
 /// advertised channels and no follows has nothing to say, and publishing an empty
 /// document would only announce that it exists.
@@ -622,16 +646,7 @@ pub async fn publish_identity_once(
     let comments = publish_comments(ctx, &published_key, entries).await?;
     outcome.comments_uploaded = comments.uploaded;
 
-    let doc = DirectoryDoc {
-        version: DIRECTORY_DOC_VERSION,
-        profile: settings.profile.clone(),
-        channels: advertised_channels(&settings),
-        follows: settings.follows.clone(),
-        handle_follows: settings.handle_follows.clone(),
-        endorsements: own_endorsements(ctx).await,
-        comments_url: comments.url.clone(),
-        updated_at: now_iso,
-    };
+    let doc = assemble_directory(ctx, &settings, comments.url.clone(), now_iso).await;
 
     if !has_anything(&doc) {
         outcome.empty = true;
@@ -971,6 +986,103 @@ mod tests {
         // Swarm churn says who we're talking to, not that anything was written.
         let peer = iroh::PublicKey::from_bytes(&[0u8; 32]).unwrap();
         assert!(!directory_moved(&LiveEvent::NeighborUp(peer)));
+    }
+
+    /// A context over one testnet identity. The Sia session is never reached —
+    /// `assemble_directory` only reads the doc — but the type asks for one.
+    fn ctx_over(id: &crate::testnet::Identity) -> IdentityContext {
+        IdentityContext {
+            doc: id.doc.clone(),
+            blobs: id.blobs.clone(),
+            author_id: id.author_id,
+            sia: std::sync::Arc::new(pin_sia::Session::new()),
+            app_key: id.app_key,
+            namespace_id: "ns".into(),
+        }
+    }
+
+    /// Record one gesture the way the frontend does: a real signed record, at the address
+    /// `endorse_rkey` computes, in the collection the loop reads.
+    async fn record_gesture(id: &crate::testnet::Identity, kind: &str, subject: &str) {
+        let record = pin_engagement::Endorsement::sign(
+            &pin_derive::did_dht_seed(&id.app_key),
+            kind,
+            subject,
+            "",
+            "2026-09-20T12:00:00.000Z",
+            None,
+        )
+        .expect("sign");
+        crate::write_record(
+            &id.doc,
+            id.author_id,
+            pin_derive::ENDORSE_COLLECTION,
+            &pin_derive::endorse_rkey(kind, subject),
+            serde_json::to_vec(&record).expect("encode"),
+        )
+        .await
+        .expect("write endorsement");
+    }
+
+    async fn published_kinds(id: &crate::testnet::Identity) -> Vec<String> {
+        let ctx = ctx_over(id);
+        let settings = read_settings(&ctx.doc, &ctx.blobs, ctx.author_id, &ctx.app_key)
+            .await
+            .expect("settings");
+        let doc =
+            assemble_directory(&ctx, &settings, None, "2026-09-20T12:00:00.000Z".into()).await;
+        let mut kinds: Vec<String> = doc
+            .endorsements
+            .iter()
+            .map(|e| e["kind"].as_str().unwrap_or_default().to_string())
+            .collect();
+        kinds.sort();
+        kinds
+    }
+
+    #[tokio::test]
+    async fn a_reload_withdraws_every_gesture_nothing_puts_back() {
+        // On web the doc is a fresh MemStore each session and NOTHING restores it from Sia
+        // — `hydrateFromSia` exists and only the diagnostics call it. What refills it is two
+        // mirrors reading localStorage: settings, and pin endorsements via
+        // `catchUpEndorsements`, which builds its wanted-set from `pinStore.pinned`. A like
+        // has no such trace, so nothing writes it back.
+        //
+        // This loop then publishes `endorsements` as CURRENT STATE, and a reader takes an
+        // absence for a withdrawal. So the gesture is not merely lost locally: reloading a
+        // tab republishes a directory that says it was taken back. The same shape as the
+        // orphan sweep and the settings wipe — state this instance cannot answer for,
+        // converted into an authoritative write.
+        let world = crate::testnet::World::new();
+        let settings = serde_json::json!({ "profile": { "username": "alice" } });
+
+        let session = crate::testnet::Identity::new(&world, 9).await;
+        session.set_settings(settings.clone()).await;
+        record_gesture(&session, "pin", "subject-one").await;
+        record_gesture(&session, "like", "subject-two").await;
+        assert_eq!(
+            published_kinds(&session).await,
+            vec!["like".to_string(), "pin".to_string()],
+            "both gestures should be in the directory this session publishes"
+        );
+
+        // The reload. Same seed is the same app key, the same did and the same namespace —
+        // and a brand-new empty doc, which is what `open` builds in a browser every time.
+        let reloaded = crate::testnet::Identity::new(&world, 9).await;
+        assert_eq!(
+            reloaded.did, session.did,
+            "a reload is the same identity, or this tests two people"
+        );
+
+        // Exactly what the two mirrors put back.
+        reloaded.set_settings(settings).await;
+        record_gesture(&reloaded, "pin", "subject-one").await;
+
+        assert_eq!(
+            published_kinds(&reloaded).await,
+            vec!["pin".to_string()],
+            "the like is published as withdrawn, and nobody asked for that"
+        );
     }
 
     fn doc(profile: Option<serde_json::Value>, channels: Vec<DirectoryChannel>) -> DirectoryDoc {
