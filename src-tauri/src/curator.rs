@@ -1215,6 +1215,46 @@ pub async fn curator_start_engagement(
                         + o.retractions_rejected
                         + o.retractions_not_ours
                         + o.retractions_ignored;
+                    // The comment lane reports in its own sections, and only when it moved.
+                    // Its counts were computed and never printed, which left a run unable to
+                    // say whether this identity holds a conversation at all — the gesture
+                    // numbers never answer that, so a comment arriving and a comment never
+                    // having been written read the same in the log.
+                    let c = &o.comments;
+                    let comments = c.taken
+                        + c.rejected
+                        + c.not_ours
+                        + c.stale
+                        + c.unreachable
+                        + c.published
+                        + c.published_floor
+                        + c.floor_failed
+                        + c.dropped
+                        + c.withheld;
+                    let comment_withdrawals = c.retracted
+                        + c.withdrawn
+                        + c.retractions_rejected
+                        + c.retractions_not_ours
+                        + c.retractions_ignored;
+                    let comment_section = if comments > 0 {
+                        format!(
+                            " | comments: taken {} rejected {} not-ours {} stale {} unreachable {} published {} floor {} floor-failed {} dropped {} withheld {}",
+                            c.taken, c.rejected, c.not_ours, c.stale, c.unreachable,
+                            c.published, c.published_floor, c.floor_failed, c.dropped,
+                            c.withheld
+                        )
+                    } else {
+                        String::new()
+                    };
+                    let comment_withdrawal_section = if comment_withdrawals > 0 {
+                        format!(
+                            " | comment withdrawals: retracted {} withdrawn {} rejected {} not-ours {} ignored {}",
+                            c.retracted, c.withdrawn, c.retractions_rejected,
+                            c.retractions_not_ours, c.retractions_ignored
+                        )
+                    } else {
+                        String::new()
+                    };
                     if o.added > 0
                         || o.withdrawn > 0
                         || o.unreachable > 0
@@ -1223,15 +1263,18 @@ pub async fn curator_start_engagement(
                         || withdrawals > 0
                         || o.published > 0
                         || o.publish_failed > 0
+                        || comments > 0
+                        || comment_withdrawals > 0
                     {
                         log::info!(
-                            "curator engagement: reached {} unreachable {} added {} withdrawn {} tallies {} cleared {} rejected {} not-ours {} published {} publish-failed {} | knocks: accepted {} rejected {} not-ours {} stale {} | withdrawals: applied {} rejected {} not-ours {} ignored {}",
+                            "curator engagement: reached {} unreachable {} added {} withdrawn {} tallies {} cleared {} rejected {} not-ours {} published {} publish-failed {} | knocks: accepted {} rejected {} not-ours {} stale {} | withdrawals: applied {} rejected {} not-ours {} ignored {}{}{}",
                             o.reached, o.unreachable, o.added, o.withdrawn, o.tallies,
                             o.cleared, o.rejected, o.not_ours, o.published,
                             o.publish_failed, o.knocked, o.knocks_rejected,
                             o.knocks_not_ours, o.stale_knocks, o.retractions_applied,
                             o.retractions_rejected, o.retractions_not_ours,
-                            o.retractions_ignored
+                            o.retractions_ignored, comment_section,
+                            comment_withdrawal_section
                         );
                     }
                 }
