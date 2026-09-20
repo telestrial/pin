@@ -35,6 +35,7 @@ import {
   openDocs,
   putRecord,
 } from './docs'
+import { rememberWithdrawn } from './withdrawn'
 
 /** The gestures that produce an endorsement.
  *
@@ -247,9 +248,14 @@ export async function deleteEndorsement(
   item: EndorsedItem,
 ): Promise<void> {
   const rkey = await endorsementRkey(kind, item)
+  const coll = await collection()
+  // Before the delete, and it stays through a delete that lands: on web the record is
+  // durable only once the snapshot catches up, and a restore in between would put it
+  // back. `lib/withdrawn` forgets it when a snapshot no longer carries it.
+  rememberWithdrawn(coll, rkey)
   try {
     await openDocs(appKeyHex)
-    await deleteRecord(await collection(), rkey)
+    await deleteRecord(coll, rkey)
     pendingReleases.delete(rkey)
   } catch (e) {
     pendingReleases.add(rkey)

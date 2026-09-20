@@ -28,6 +28,7 @@ import type { PublishedComment } from './channelConversations'
 import { deleteRecord, getRecord, openDocs, putRecord } from './docs'
 import type { EndorsedItem, ReferenceAuthor } from './engagement'
 import { LIBRARY_CHANNEL } from './pinUpload'
+import { rememberWithdrawn } from './withdrawn'
 
 /** The longest body a comment may carry, in bytes.
  *
@@ -314,7 +315,12 @@ export async function withdrawComment(
   // The FILES mark is deliberately left alone: it has to outlive the record, because once
   // the record is gone it is the only thing that still knows which objects to give back.
   // The Curator's sweep deletes it after the bytes.
-  await deleteRecord(await collection(), rkey)
+  const coll = await collection()
+  // Remembered before the delete, for the reason a withdrawn gesture is: on web the
+  // deletion is durable only once the snapshot catches up, and the boot restore would
+  // otherwise put the comment back. See `lib/withdrawn`.
+  rememberWithdrawn(coll, rkey)
+  await deleteRecord(coll, rkey)
   await deleteRecord(await sealCollection(), rkey)
 }
 

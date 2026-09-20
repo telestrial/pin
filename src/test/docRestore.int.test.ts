@@ -38,6 +38,11 @@ import type { SiaClient } from '../core/siaClient'
 import { hydrateFromSia } from '../lib/docsMirror'
 import { chunkForTxt } from '../lib/pkarr'
 import { pkarrTransport } from '../lib/pkarrTransport'
+import {
+  addressOf,
+  rememberWithdrawn,
+  withdrawnAddresses,
+} from '../lib/withdrawn'
 import { createFakeApp, resetAllStores } from './setupFakeApp'
 
 const POINTER_KEY = 'pin:docsnapshot:pointer'
@@ -115,6 +120,40 @@ describe('integration: restoring the doc from the snapshot', () => {
 
     expect(outcome).toEqual({ kind: 'restored', records: 1 })
     expect(written).toEqual([{ c: 'endorse', k: 'like:subject-one' }])
+  })
+
+  it('leaves a withdrawn record out, and keeps remembering it', async () => {
+    // The restore reads a snapshot taken BEFORE the withdrawal, so the record is still in
+    // it. Putting it back would republish an endorsement its actor took back — and the
+    // endorsement catch-up cannot undo that, being additive by design.
+    await publishSnapshot([
+      { c: 'endorse', k: 'like:subject-one' },
+      { c: 'endorse', k: 'pin:subject-two' },
+    ])
+    rememberWithdrawn('endorse', 'like:subject-one')
+
+    const outcome = await hydrateFromSia(client, appKey)
+
+    expect(outcome).toEqual({ kind: 'restored', records: 1 })
+    expect(written).toEqual([{ c: 'endorse', k: 'pin:subject-two' }])
+    // Still remembered: this snapshot carries the record, and so would the next restore
+    // to read it.
+    expect(withdrawnAddresses()).toContain(
+      addressOf('endorse', 'like:subject-one'),
+    )
+  })
+
+  it('forgets a withdrawal the snapshot no longer carries', async () => {
+    // A snapshot taken after the deletion landed. Nothing can put the record back now,
+    // so the ledger has nothing left to protect and this read is what settles it.
+    await publishSnapshot([{ c: 'endorse', k: 'pin:subject-two' }])
+    rememberWithdrawn('endorse', 'like:subject-one')
+
+    await hydrateFromSia(client, appKey)
+
+    expect(withdrawnAddresses()).not.toContain(
+      addressOf('endorse', 'like:subject-one'),
+    )
   })
 
   it('answers none when the locator says this identity has published no snapshot', async () => {

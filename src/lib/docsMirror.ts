@@ -29,6 +29,7 @@ import { ensureWasm } from '../core/wasm'
 import { listAll, putRecord } from './docs'
 import { identityFromSeed, reassembleTxt } from './pkarr'
 import { pkarrTransport } from './pkarrTransport'
+import { addressOf, forgetWithdrawn, withdrawnAddresses } from './withdrawn'
 
 const POINTER_KEY = 'pin:docsnapshot:pointer'
 
@@ -206,12 +207,22 @@ export async function hydrateFromSia(
   const held = new Set(
     (await listAll()).map((k) => `${k.collection}/${k.rkey}`),
   )
+  const withdrawn = withdrawnAddresses()
+  const inSnapshot = new Set<string>()
   let records = 0
   for (const e of read.entries) {
-    if (held.has(`${e.c}/${e.k}`)) continue
+    const address = addressOf(e.c, e.k)
+    inSnapshot.add(address)
+    // A record this identity took back. The snapshot predates the withdrawal, so putting
+    // it back would be the restore undoing a retraction — see `lib/withdrawn`.
+    if (withdrawn.has(address)) continue
+    if (held.has(address)) continue
     await putRecord(e.c, e.k, b64decode(e.v))
     records += 1
   }
+  // A withdrawal the snapshot has caught up with has nothing left to protect against,
+  // and this read is the one place that can say so.
+  forgetWithdrawn([...withdrawn].filter((a) => !inSnapshot.has(a)))
   return { kind: 'restored', records }
 }
 
