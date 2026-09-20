@@ -277,6 +277,19 @@ if (import.meta.env.DEV || inTauri()) {
   // Write a probe record and wait for the Curator to mirror it. Taking the snapshot
   // here would make this a second writer of the one artifact the whole account rests
   // on, which is precisely what moving it into the Curator removed.
+  // A hydration says which of three things it found, so a diagnostic that used to print
+  // a count stops reading "0 records" for a snapshot nobody could reach.
+  const describeHydration = (o: {
+    kind: string
+    records?: number
+    error?: string
+  }): string =>
+    o.kind === 'restored'
+      ? `${o.records} record(s)`
+      : o.kind === 'none'
+        ? 'no snapshot published'
+        : `UNREADABLE (${o.error})`
+
   g.__pinMirrorWrite = async (text: string) => {
     const { hex } = await session()
     if (!hex) return 'not signed in'
@@ -291,9 +304,9 @@ if (import.meta.env.DEV || inTauri()) {
     const { openDocs, getRecord } = await import('./lib/docs')
     const { hydrateFromSia } = await import('./lib/docsMirror')
     await openDocs(hex)
-    const n = await hydrateFromSia(client, hexToBytes(hex))
+    const n = describeHydration(await hydrateFromSia(client, hexToBytes(hex)))
     const v = await getRecord('probe', 'persist')
-    return `hydrated ${n} record(s); probe/persist = ${v ? new TextDecoder().decode(v) : 'MISSING'}`
+    return `hydrated ${n}; probe/persist = ${v ? new TextDecoder().decode(v) : 'MISSING'}`
   }
   // Phase C inc.1 proof: are settings dual-written into iroh-docs + durable via
   // Sia? Change a setting (subscribe / theme), wait ~2s, RELOAD, run this — it
@@ -305,9 +318,9 @@ if (import.meta.env.DEV || inTauri()) {
     const { hydrateFromSia } = await import('./lib/docsMirror')
     const { deriveSettingsKey, decryptSettings } = await import('./core/crypto')
     await openDocs(hex)
-    const n = await hydrateFromSia(client, hexToBytes(hex))
+    const n = describeHydration(await hydrateFromSia(client, hexToBytes(hex)))
     const raw = await getRecord('settings', 'self')
-    if (!raw) return `hydrated ${n} record(s); no settings/self in the doc yet`
+    if (!raw) return `hydrated ${n}; no settings/self in the doc yet`
     const key = await deriveSettingsKey(hexToBytes(hex))
     const s = JSON.parse(
       await decryptSettings(key, new TextDecoder().decode(raw)),
@@ -323,9 +336,9 @@ if (import.meta.env.DEV || inTauri()) {
     const { openDocs, listAll } = await import('./lib/docs')
     const { hydrateFromSia } = await import('./lib/docsMirror')
     await openDocs(hex)
-    const n = await hydrateFromSia(client, hexToBytes(hex))
+    const n = describeHydration(await hydrateFromSia(client, hexToBytes(hex)))
     const keys = await listAll()
-    return `hydrated ${n} record(s):\n${keys.map((k) => `  ${k.collection}/${k.rkey}`).join('\n')}`
+    return `hydrated ${n}:\n${keys.map((k) => `  ${k.collection}/${k.rkey}`).join('\n')}`
   }
   // Phase C inc.3 proof: exercises the EXACT snapshot-read path the settings load
   // uses (readRecordFromSnapshot + decryptSettings, no pin-core). freshest-wins

@@ -91,37 +91,83 @@ export function cacheSnapshotPointer(p: Pointer): void {
   writePointer(p)
 }
 
-// no pointer and recovery is off or finds nothing.
-async function fetchSnapshotEntries(
+/** What a read of the durable snapshot established.
+ *
+ *  Three answers, because two of them read alike and the likeness is what nearly wiped
+ *  an account: `none` is having established that this identity has published no
+ *  snapshot, and `unknown` is nobody having answered. Only `unknown` can be retried
+ *  into an answer, and anything that writes state derived from a snapshot has to refuse
+ *  it — an inability to read must never become a write. */
+export type SnapshotRead =
+  | { kind: 'read'; entries: SnapshotEntry[] }
+  | { kind: 'none' }
+  | { kind: 'unknown'; error: string }
+
+/** Read the current snapshot, saying which of the three it got.
+ *
+ *  Never throws: each of the three ways to come back empty is a value here, since the
+ *  caller is the one that knows whether it may act on an absence.
+ *
+ *  `recoverViaLocator` is what makes `none` mean anything. A caller passing false and
+ *  holding no pointer has declined to look — which is the brand-new-account gate, where
+ *  the point is to skip the DHT round trip — so it gets `none` without having asked
+ *  anybody. A caller that needs the distinction passes true. */
+async function readSnapshot(
   client: SiaClient,
   appKeyBytes: Uint8Array,
-  recoverViaLocator = false,
-): Promise<SnapshotEntry[]> {
+  recoverViaLocator: boolean,
+): Promise<SnapshotRead> {
   let url = readPointer()?.url ?? null
   if (!url && recoverViaLocator) {
-    url = await resolveSettingsPointer(appKeyBytes)
+    try {
+      url = await resolveSettingsPointer(appKeyBytes)
+    } catch (e) {
+      return { kind: 'unknown', error: `settings locator: ${String(e)}` }
+    }
     // Cache the recovered URL (id unknown — only the URL lives on the DHT; the
     // next full snapshot supersedes it with a prunable pointer).
     if (url) writePointer({ id: '', url })
   }
-  if (!url) return []
-  const key = await deriveSnapshotKey(appKeyBytes)
-  const bytes = await client.downloadItem(url)
-  const ciphertext = new TextDecoder().decode(bytes)
-  return JSON.parse(await decryptForChannel(key, ciphertext)) as SnapshotEntry[]
+  if (!url) return { kind: 'none' }
+  try {
+    const key = await deriveSnapshotKey(appKeyBytes)
+    const bytes = await client.downloadItem(url)
+    const ciphertext = new TextDecoder().decode(bytes)
+    return {
+      kind: 'read',
+      entries: JSON.parse(
+        await decryptForChannel(key, ciphertext),
+      ) as SnapshotEntry[],
+    }
+  } catch (e) {
+    return { kind: 'unknown', error: `snapshot ${url}: ${String(e)}` }
+  }
 }
 
+/** What a hydration attempt did, carrying the same three answers `readSnapshot` gives.
+ *
+ *  `none` and `unknown` both leave the doc as they found it, and they are the reason
+ *  this reports a shape rather than a count: a count of zero is both of them at once. */
+export type HydrateOutcome =
+  | { kind: 'restored'; records: number }
+  | { kind: 'none' }
+  | { kind: 'unknown'; error: string }
+
 /** Re-hydrate the fresh doc from the latest Sia snapshot (into pin-core). Call
- *  after openDocs, before any reads. Returns how many records were restored. */
+ *  after openDocs, before any reads.
+ *
+ *  Always resolves the locator, since a device holding no pointer is the case this
+ *  exists for. */
 export async function hydrateFromSia(
   client: SiaClient,
   appKeyBytes: Uint8Array,
-): Promise<number> {
-  const entries = await fetchSnapshotEntries(client, appKeyBytes)
-  for (const e of entries) {
+): Promise<HydrateOutcome> {
+  const read = await readSnapshot(client, appKeyBytes, true)
+  if (read.kind !== 'read') return read
+  for (const e of read.entries) {
     await putRecord(e.c, e.k, b64decode(e.v))
   }
-  return entries.length
+  return { kind: 'restored', records: read.entries.length }
 }
 
 /** Read one record's bytes straight from the latest Sia snapshot, WITHOUT the
@@ -137,11 +183,11 @@ export async function readRecordFromSnapshot(
   rkey: string,
   recoverViaLocator = false,
 ): Promise<Uint8Array | undefined> {
-  const entries = await fetchSnapshotEntries(
-    client,
-    appKeyBytes,
-    recoverViaLocator,
-  )
-  const hit = entries.find((e) => e.c === collection && e.k === rkey)
+  const read = await readSnapshot(client, appKeyBytes, recoverViaLocator)
+  // Throws where the old read threw, so the settings boot path keeps treating an
+  // unreadable snapshot as a failure it can retry.
+  if (read.kind === 'unknown') throw new Error(read.error)
+  if (read.kind === 'none') return undefined
+  const hit = read.entries.find((e) => e.c === collection && e.k === rkey)
   return hit ? b64decode(hit.v) : undefined
 }

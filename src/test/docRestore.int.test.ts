@@ -1,0 +1,134 @@
+// Restoring the doc from the durable snapshot, and the three answers that read has.
+//
+// On web the doc is a fresh MemStore every session, so what a boot can establish about
+// the snapshot decides what the loops may then publish. Two of the three answers look
+// identical from a record count — an identity that has published nothing, and a snapshot
+// nobody could reach — and every loop that publishes current state treats the first as
+// "endorses nothing" and would treat the second the same way. That conflation is the
+// shape behind the orphan sweep and the cross-device settings wipe.
+
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+vi.mock('../lib/pkarr', async () =>
+  (await import('./fakeModules')).fakePkarrModule(),
+)
+
+// Records what hydration writes, so a test can say the doc was left alone. The wasm doc
+// engine never loads in jsdom; the restore path is a Sia download, a decrypt, and these
+// writes.
+const written: { c: string; k: string }[] = []
+vi.mock('../lib/docs', () => ({
+  getRecord: async () => undefined,
+  listAll: async () => [],
+  putRecord: async (c: string, k: string) => {
+    written.push({ c, k })
+  },
+  openDocs: async () => '',
+}))
+
+import {
+  deriveSettingsLocatorSeed,
+  deriveSnapshotKey,
+  encryptForChannel,
+} from '../core/crypto'
+import type { SiaClient } from '../core/siaClient'
+import { hydrateFromSia } from '../lib/docsMirror'
+import { chunkForTxt } from '../lib/pkarr'
+import { pkarrTransport } from '../lib/pkarrTransport'
+import { createFakeApp, resetAllStores } from './setupFakeApp'
+
+const POINTER_KEY = 'pin:docsnapshot:pointer'
+// Mirrors docsMirror's private SETTINGS_POINTER_PREFIX.
+const SETTINGS_POINTER_PREFIX = '_s'
+
+function b64(bytes: Uint8Array): string {
+  let s = ''
+  for (const byte of bytes) s += String.fromCharCode(byte)
+  return btoa(s)
+}
+
+describe('integration: restoring the doc from the snapshot', () => {
+  const appKey = new Uint8Array(32).fill(1)
+  let client: SiaClient
+
+  beforeEach(() => {
+    resetAllStores()
+    localStorage.clear()
+    written.length = 0
+    client = createFakeApp().createAccount({
+      did: 'did:plc:alice',
+      handle: 'alice.test',
+    }).client
+  })
+
+  /** Publish a snapshot holding these records, exactly as the snapshot loop does: a
+   *  [{c,k,v}] array encrypted under the snapshot key, behind the durable locator. */
+  async function publishSnapshot(records: { c: string; k: string }[]) {
+    const entries = records.map((r) => ({
+      ...r,
+      v: b64(new TextEncoder().encode(`${r.c}/${r.k}`)),
+    }))
+    const ciphertext = await encryptForChannel(
+      await deriveSnapshotKey(appKey),
+      JSON.stringify(entries),
+    )
+    const uploaded = await client.uploadItem(
+      new TextEncoder().encode(ciphertext),
+    )
+    await (await pkarrTransport()).publish(
+      await deriveSettingsLocatorSeed(appKey),
+      await chunkForTxt(SETTINGS_POINTER_PREFIX, uploaded.itemURL),
+    )
+    return uploaded.itemURL
+  }
+
+  it('restores every record a published snapshot holds', async () => {
+    await publishSnapshot([
+      { c: 'settings', k: 'self' },
+      { c: 'endorse', k: 'like:subject-one' },
+    ])
+
+    const outcome = await hydrateFromSia(client, appKey)
+
+    expect(outcome).toEqual({ kind: 'restored', records: 2 })
+    expect(written).toEqual([
+      { c: 'settings', k: 'self' },
+      { c: 'endorse', k: 'like:subject-one' },
+    ])
+  })
+
+  it('answers none when the locator says this identity has published no snapshot', async () => {
+    // Nothing published and no pointer held: a brand-new account. The locator answering
+    // with nothing IS an answer, and the only one a loop may act on.
+    const outcome = await hydrateFromSia(client, appKey)
+
+    expect(outcome).toEqual({ kind: 'none' })
+    expect(written).toEqual([])
+  })
+
+  it('answers unknown when the snapshot a pointer names will not download', async () => {
+    // The dangerous case, and the one a record count cannot tell from the case above:
+    // a snapshot exists and this boot could not read it.
+    localStorage.setItem(
+      POINTER_KEY,
+      JSON.stringify({ id: 'obj', url: 'sia://gone#encryption_key=ff' }),
+    )
+
+    const outcome = await hydrateFromSia(client, appKey)
+
+    expect(outcome.kind).toBe('unknown')
+    expect(written).toEqual([])
+  })
+
+  it('answers unknown when the locator itself will not answer', async () => {
+    // No pointer and no reachable DHT. Distinct from the locator saying nothing, which
+    // is what makes this retryable where `none` is settled.
+    const transport = await pkarrTransport()
+    vi.spyOn(transport, 'resolve').mockRejectedValueOnce(new Error('no relay'))
+
+    const outcome = await hydrateFromSia(client, appKey)
+
+    expect(outcome.kind).toBe('unknown')
+    expect(written).toEqual([])
+  })
+})
