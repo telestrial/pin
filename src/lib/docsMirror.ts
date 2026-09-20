@@ -26,7 +26,7 @@ import {
 } from '../core/crypto'
 import type { SiaClient } from '../core/siaClient'
 import { ensureWasm } from '../core/wasm'
-import { putRecord } from './docs'
+import { listAll, putRecord } from './docs'
 import { identityFromSeed, reassembleTxt } from './pkarr'
 import { pkarrTransport } from './pkarrTransport'
 
@@ -187,17 +187,32 @@ export type HydrateOutcome =
  *  after openDocs, before any reads.
  *
  *  Always resolves the locator, since a device holding no pointer is the case this
- *  exists for. */
+ *  exists for.
+ *
+ *  ADDITIVE: a record the doc already holds is left alone. The doc reaches this with
+ *  content in it by two routes — a peer of the same identity syncing in over iroh-docs,
+ *  and the settings and pin mirrors writing from localStorage — and both carry CURRENT
+ *  state where a snapshot is as old as the last mirror. A write here would win either
+ *  one, because it carries a newer timestamp than whatever landed a moment ago, so a
+ *  restore would undo a change made on another device. Filling the gaps is the job, and
+ *  the count is what was actually put back. */
 export async function hydrateFromSia(
   client: SiaClient,
   appKeyBytes: Uint8Array,
 ): Promise<HydrateOutcome> {
   const read = await readSnapshot(client, appKeyBytes, true)
   if (read.kind !== 'read') return read
+  // The doc's own key format, which is what `listAll` splits and `record_key` composes.
+  const held = new Set(
+    (await listAll()).map((k) => `${k.collection}/${k.rkey}`),
+  )
+  let records = 0
   for (const e of read.entries) {
+    if (held.has(`${e.c}/${e.k}`)) continue
     await putRecord(e.c, e.k, b64decode(e.v))
+    records += 1
   }
-  return { kind: 'restored', records: read.entries.length }
+  return { kind: 'restored', records }
 }
 
 /** Read one record's bytes straight from the latest Sia snapshot, WITHOUT the

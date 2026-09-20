@@ -17,9 +17,12 @@ vi.mock('../lib/pkarr', async () =>
 // engine never loads in jsdom; the restore path is a Sia download, a decrypt, and these
 // writes.
 const written: { c: string; k: string }[] = []
+// What the doc already holds when the restore runs. A test fills this to stand for a
+// record a peer synced in, or one the settings mirror wrote from localStorage.
+const held: { collection: string; rkey: string }[] = []
 vi.mock('../lib/docs', () => ({
   getRecord: async () => undefined,
-  listAll: async () => [],
+  listAll: async () => held,
   putRecord: async (c: string, k: string) => {
     written.push({ c, k })
   },
@@ -55,6 +58,7 @@ describe('integration: restoring the doc from the snapshot', () => {
     resetAllStores()
     localStorage.clear()
     written.length = 0
+    held.length = 0
     client = createFakeApp().createAccount({
       did: 'did:plc:alice',
       handle: 'alice.test',
@@ -95,6 +99,22 @@ describe('integration: restoring the doc from the snapshot', () => {
       { c: 'settings', k: 'self' },
       { c: 'endorse', k: 'like:subject-one' },
     ])
+  })
+
+  it('leaves a record the doc already holds', async () => {
+    // A restore fills gaps. Both routes that put content in this doc before the restore
+    // runs — a peer syncing in, the settings mirror writing from localStorage — carry
+    // current state, and a write here would outrank them on timestamp alone.
+    await publishSnapshot([
+      { c: 'settings', k: 'self' },
+      { c: 'endorse', k: 'like:subject-one' },
+    ])
+    held.push({ collection: 'settings', rkey: 'self' })
+
+    const outcome = await hydrateFromSia(client, appKey)
+
+    expect(outcome).toEqual({ kind: 'restored', records: 1 })
+    expect(written).toEqual([{ c: 'endorse', k: 'like:subject-one' }])
   })
 
   it('answers none when the locator says this identity has published no snapshot', async () => {

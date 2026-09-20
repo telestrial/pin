@@ -15,6 +15,7 @@ import {
 import { useChannelReader } from './lib/hooks/useChannelReader'
 import { useCuratorAutostart } from './lib/hooks/useCuratorAutostart'
 import { useCuratorLoops } from './lib/hooks/useCuratorLoops'
+import { useDocRestore } from './lib/hooks/useDocRestore'
 import { useHandleFollowReconciliation } from './lib/hooks/useHandleFollowReconciliation'
 import { usePinDocsMirror } from './lib/hooks/usePinDocsMirror'
 import { usePortalResolution } from './lib/hooks/usePortalResolution'
@@ -74,6 +75,7 @@ export default function App() {
   useActionQueueHydration()
   useActionRunner()
   useCuratorAutostart()
+  useDocRestore()
   useSettingsSync()
   useSettingsDocsMirror()
   usePinDocsMirror()

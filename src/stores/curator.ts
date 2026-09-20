@@ -25,6 +25,15 @@ type CuratorState = {
   mirrorUrl: string | null
   mirrorError: string | null
   lastError: string | null
+  // Whether this instance's doc holds what this identity has published.
+  //
+  // 'pending' until a boot establishes it, and on web that takes a read: the doc is a
+  // fresh MemStore every session, so a doc nobody restored says this identity endorses
+  // nothing, comments nothing and follows nobody. Loops that publish current state read
+  // this before saying so on the network. 'unknown' is a snapshot that exists and could
+  // not be reached, which retries; 'ready' covers both a restored doc and an identity
+  // that has published no snapshot at all.
+  docRestore: 'pending' | 'ready' | 'unknown'
   set: (p: Partial<Omit<CuratorState, 'set' | 'reset'>>) => void
   reset: () => void
 }
@@ -37,6 +46,7 @@ const INITIAL = {
   mirrorUrl: null,
   mirrorError: null,
   lastError: null,
+  docRestore: 'pending' as const,
 }
 
 export const useCuratorStore = create<CuratorState>()((set) => ({
