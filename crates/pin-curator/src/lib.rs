@@ -296,10 +296,43 @@ pub(crate) async fn cache_tally(
         .is_ok()
 }
 
+/// What one subject's conversation ASSERTS, with the volatile part stripped out.
+///
+/// `updatedAt` records when the fold RAN, not when a comment arrived, and the engagement
+/// loop re-folds every subject it observed rather than only the ones that moved. So a
+/// comparison covering it reports a change on every crawling pass for a conversation
+/// nobody touched.
+///
+/// The comments are signed records, so comparing them IS the set comparison. A tally
+/// needs a `setRoot` to do this because it has folded its set down to a number; a
+/// conversation still carries the set.
+pub(crate) fn thread_is_current(
+    held: Option<&pin_engagement::Conversation>,
+    fresh: &pin_engagement::Conversation,
+) -> bool {
+    held.is_some_and(|h| h.comments == fresh.comments)
+}
+
+/// Whether a conversation would replace a held one with an OLDER reading of the same
+/// comments.
+///
+/// The same multi-feeder guard the cached tally takes, for the same reason: the
+/// accelerant rung and the floor rung both land here, and the floor can arrive holding
+/// an older fold.
+pub(crate) fn thread_is_older(
+    held: Option<&pin_engagement::Conversation>,
+    fresh: &pin_engagement::Conversation,
+) -> bool {
+    held.is_some_and(|h| fresh.updated_at < h.updated_at)
+}
+
 /// Cache one subject's published conversation where this identity's screens read it.
 ///
-/// Newer-wins on `updatedAt`, the same guard the cached tally takes: the accelerant rung and
-/// the floor rung both land here, and the floor can arrive holding an older fold.
+/// Written only when the comments have changed. This doc syncs to every instance of the
+/// identity and is snapshotted whole to Sia against a fingerprint of its contents, so a
+/// record rewritten each pass because a timestamp moved would mint a fresh snapshot
+/// object every cadence. The cost is that a cached `updatedAt` lags until the
+/// conversation itself moves — the same trade the cached tally makes.
 pub(crate) async fn cache_thread(
     doc: &Doc,
     blobs: &Store,
@@ -314,13 +347,10 @@ pub(crate) async fn cache_thread(
         .ok()
         .flatten()
         .and_then(|bytes| serde_json::from_slice::<pin_engagement::Conversation>(&bytes).ok());
-    if held.as_ref() == Some(conversation) {
+    if thread_is_current(held.as_ref(), conversation)
+        || thread_is_older(held.as_ref(), conversation)
+    {
         return false;
-    }
-    if let Some(h) = &held {
-        if h.updated_at > conversation.updated_at {
-            return false;
-        }
     }
     let Ok(bytes) = serde_json::to_vec(conversation) else {
         return false;
@@ -1333,5 +1363,124 @@ mod tests {
     fn an_unsubscribed_channels_counts_are_dropped() {
         let s = settings(r#"{"subscriptions": [], "myChannels": []}"#);
         assert!(!tally_channels_to_keep(&s, &wanted_channels(&s)).contains("gone"));
+    }
+
+    // --- the conversation cache -----------------------------------------------
+
+    const THREAD_SUBJECT: &str = "f4xlljzqxtqpv7ul6ngkyeafusdwqrirpmhochqyjz2hgz3djo6a";
+
+    fn a_comment(when: &str, body: &str) -> pin_engagement::Endorsement {
+        pin_engagement::Endorsement::sign_comment(
+            &[5u8; 32],
+            THREAD_SUBJECT,
+            "bafkreiabc",
+            when,
+            None,
+            body,
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap()
+    }
+
+    fn conversation(
+        comments: &[pin_engagement::Endorsement],
+        updated: &str,
+    ) -> pin_engagement::Conversation {
+        pin_engagement::Conversation {
+            comments: comments.to_vec(),
+            updated_at: updated.to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_cached_conversation_is_not_rewritten_when_only_the_clock_moved() {
+        // The same rule the tally beside it keeps, and for the same reason: this doc is
+        // snapshotted WHOLE to Sia against a fingerprint of its contents. `updatedAt` is
+        // stamped when the fold RAN, not when the conversation moved, and the engagement
+        // pass re-folds every subject it observed rather than only the ones that changed
+        // — so a comparison covering the stamp rewrites this record every crawling pass
+        // and mints a fresh snapshot object with it, for a conversation nobody touched.
+        let world = crate::testnet::World::new();
+        let me = crate::testnet::Identity::new(&world, 1).await;
+        let held = a_comment("2026-09-20T12:00:00.000Z", "hello");
+
+        let first = conversation(&[held.clone()], "2026-09-20T12:00:00.000Z");
+        assert!(
+            cache_thread(
+                &me.doc,
+                &me.blobs,
+                me.author_id,
+                "ch1",
+                THREAD_SUBJECT,
+                &first
+            )
+            .await,
+            "a subject's first conversation has to land"
+        );
+
+        // The next crawling pass, ten minutes on. Same comment, same set, new stamp.
+        let again = conversation(&[held], "2026-09-20T12:10:00.000Z");
+        assert!(
+            !cache_thread(
+                &me.doc,
+                &me.blobs,
+                me.author_id,
+                "ch1",
+                THREAD_SUBJECT,
+                &again
+            )
+            .await,
+            "an unchanged conversation must not be rewritten"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_cached_conversation_is_rewritten_when_a_comment_arrives() {
+        // The other half, or the guard above is satisfied by a cache that never writes.
+        let world = crate::testnet::World::new();
+        let me = crate::testnet::Identity::new(&world, 1).await;
+        let first_comment = a_comment("2026-09-20T12:00:00.000Z", "hello");
+        let second_comment = a_comment("2026-09-20T12:05:00.000Z", "and again");
+
+        let first = conversation(&[first_comment.clone()], "2026-09-20T12:00:00.000Z");
+        cache_thread(
+            &me.doc,
+            &me.blobs,
+            me.author_id,
+            "ch1",
+            THREAD_SUBJECT,
+            &first,
+        )
+        .await;
+
+        let grown = conversation(&[first_comment, second_comment], "2026-09-20T12:10:00.000Z");
+        assert!(
+            cache_thread(
+                &me.doc,
+                &me.blobs,
+                me.author_id,
+                "ch1",
+                THREAD_SUBJECT,
+                &grown
+            )
+            .await
+        );
+    }
+
+    #[test]
+    fn a_conversation_older_than_the_cached_one_is_refused() {
+        // Two feeders land here at different distances from the source: the author's own
+        // fold arrives over live sync in seconds, where a floor read comes off a pointer
+        // a browser resolves through relays minutes behind. Taking the floor's answer
+        // unconditionally would drop a comment already on screen.
+        let first = a_comment("2026-09-20T12:00:00.000Z", "hello");
+        let second = a_comment("2026-09-20T12:05:00.000Z", "and again");
+        let held = conversation(&[first.clone(), second], "2026-09-20T12:10:00.000Z");
+        let stale = conversation(&[first], "2026-09-20T12:00:00.000Z");
+        // Not the unchanged case — the sets genuinely differ, so it is the clock that
+        // has to refuse this one.
+        assert!(!thread_is_current(Some(&held), &stale));
+        assert!(thread_is_older(Some(&held), &stale));
     }
 }
