@@ -296,8 +296,6 @@ pub(crate) async fn cache_tally(
         .is_ok()
 }
 
-/// Drop one subject's cached tally, for a subject nothing endorses any more. Absent and
-/// zero read the same to a screen, so the record goes rather than sitting at zero.
 /// Cache one subject's published conversation where this identity's screens read it.
 ///
 /// Newer-wins on `updatedAt`, the same guard the cached tally takes: the accelerant rung and
@@ -348,6 +346,8 @@ pub(crate) async fn clear_cached_thread(
     .await;
 }
 
+/// Drop one subject's cached tally, for a subject nothing endorses any more. Absent and
+/// zero read the same to a screen, so the record goes rather than sitting at zero.
 pub(crate) async fn clear_cached_tally(
     doc: &Doc,
     author_id: AuthorId,
