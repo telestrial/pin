@@ -23,10 +23,10 @@ sha2 = "0.10"
 # not build for wasm32-unknown-unknown without a js feature nothing here enables. We
 # generate the nonce ourselves anyway, so the RNG that feature exists to provide is
 # unused. Version matches what iroh's rpc feature already pulls in natively.
-aes-gcm = { version = "0.10", default-features = false, features = ["aes", "alloc"] }
+aes-gcm = { version = "0.11", default-features = false, features = ["aes", "alloc"] }
 # The blob's outer encoding, matching the `btoa`/`atob` pair it replaces: standard
 # alphabet, with padding.
-base64 = "0.21"
+base64 = "0.23"
 # The nonce. 0.4 is the version whose `wasm_js` backend the wasm build already selects
 # (see scripts/build-wasm.sh) — deliberately NOT getrandom 0.2, which aes-gcm would
 # have brought along.

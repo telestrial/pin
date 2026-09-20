@@ -231,7 +231,7 @@ const TAG_BYTES: usize = 16;
 const ENVELOPE_VERSION: u8 = 1;
 
 fn cipher(key: &[u8; KEY_BYTES]) -> Aes256Gcm {
-    Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key))
+    Aes256Gcm::new(&Key::<Aes256Gcm>::from(*key))
 }
 
 /// Seal bytes under a 32-byte key, returning the base64 blob.
@@ -241,7 +241,7 @@ pub fn encrypt(key: &[u8; KEY_BYTES], plaintext: &[u8]) -> Result<String, String
 
     let sealed = cipher(key)
         .encrypt(
-            Nonce::from_slice(&nonce),
+            &Nonce::from(nonce),
             Payload {
                 msg: plaintext,
                 aad: &[],
@@ -271,9 +271,13 @@ pub fn decrypt(key: &[u8; KEY_BYTES], blob_b64: &str) -> Result<Vec<u8>, String>
             blob[0]
         ));
     }
+    // Infallible after the length check above, which is what lets this copy rather
+    // than carry a second error path for a case the guard already refused.
+    let mut nonce = [0u8; NONCE_BYTES];
+    nonce.copy_from_slice(&blob[1..1 + NONCE_BYTES]);
     cipher(key)
         .decrypt(
-            Nonce::from_slice(&blob[1..1 + NONCE_BYTES]),
+            &Nonce::from(nonce),
             Payload {
                 msg: &blob[1 + NONCE_BYTES..],
                 aad: &[],
