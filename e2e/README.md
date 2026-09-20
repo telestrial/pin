@@ -12,6 +12,15 @@ interrupted publish resuming from its checkpoint, granular file
 pinning), room for a couple more before they become a maintenance
 burden.
 
+**Three of those four are `test.fixme`'d, so one test actually runs.**
+`cross-account`, `granular-pin` and `upload-resume` are disabled behind
+the browser-relay pkarr read-after-write lag, which is a property of the
+public relays rather than something a client can fix — so the Curator
+landing did not clear it, because these run in a browser. `author-smoke`
+exists as the single-account substitute. Read a green run as covering
+connect, upload, the share URL round-trip and the manifest write, and
+nothing about cross-account custody, packed uploads or resume.
+
 ## One-time setup
 
 You need **two sia.storage accounts** — that's it. Identity in Pin is a
@@ -49,6 +58,14 @@ bun run test:e2e     # builds dist/ first, then runs Playwright
 `test:e2e` is `bun run build && playwright test`. Playwright spins up
 `bun run preview --port 4173` to serve the built `dist/`, and the specs
 run serially (one worker — they share the alice/bob accounts).
+
+**Run `bunx playwright install chromium` after a `@playwright/test`
+bump.** A new Playwright expects a browser build it pins by number, and
+if that build is absent every spec fails at `browserType.launch` with a
+message about the executable not existing — before any test code runs.
+Nothing else catches it: the version bump is a `package.json` change
+like any other, and `tsc`, biome, the unit and integration tiers and the
+build all stay green.
 
 ## Architecture
 
