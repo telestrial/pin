@@ -117,18 +117,48 @@ async function readSnapshot(
   appKeyBytes: Uint8Array,
   recoverViaLocator: boolean,
 ): Promise<SnapshotRead> {
-  let url = readPointer()?.url ?? null
-  if (!url && recoverViaLocator) {
-    try {
-      url = await resolveSettingsPointer(appKeyBytes)
-    } catch (e) {
-      return { kind: 'unknown', error: `settings locator: ${String(e)}` }
-    }
-    // Cache the recovered URL (id unknown — only the URL lives on the DHT; the
-    // next full snapshot supersedes it with a prunable pointer).
-    if (url) writePointer({ id: '', url })
+  const cached = readPointer()?.url ?? null
+  if (cached) {
+    const read = await downloadSnapshot(client, appKeyBytes, cached)
+    if (read.kind === 'read' || !recoverViaLocator) return read
   }
-  if (!url) return { kind: 'none' }
+  if (!recoverViaLocator) return { kind: 'none' }
+
+  // Either nothing is cached, or what was cached names an object that has been
+  // superseded and reclaimed. Both want the same question put to the locator: which
+  // snapshot is current. Asking only on absence left a boot retrying one dead pointer
+  // out of localStorage, 83 times in the recorded case.
+  let current: string | null
+  try {
+    current = await resolveSettingsPointer(appKeyBytes)
+  } catch (e) {
+    return { kind: 'unknown', error: `settings locator: ${String(e)}` }
+  }
+  if (!current) {
+    // Holding a pointer means this identity has snapshotted at least once, so a
+    // locator naming nothing is a locator that failed to answer.
+    return cached
+      ? { kind: 'unknown', error: 'settings locator names no snapshot' }
+      : { kind: 'none' }
+  }
+  if (current === cached) {
+    return { kind: 'unknown', error: `snapshot ${current}: unreadable` }
+  }
+
+  const read = await downloadSnapshot(client, appKeyBytes, current)
+  // Cached once it has been read THROUGH, so a pointer that answers nothing is never
+  // the one a later boot starts from. Id unknown — only the URL lives on the DHT, and
+  // the next full snapshot supersedes it with a prunable pointer.
+  if (read.kind === 'read') writePointer({ id: '', url: current })
+  return read
+}
+
+/** One snapshot object, decrypted, or why it could not be. */
+async function downloadSnapshot(
+  client: SiaClient,
+  appKeyBytes: Uint8Array,
+  url: string,
+): Promise<SnapshotRead> {
   try {
     const key = await deriveSnapshotKey(appKeyBytes)
     const bytes = await client.downloadItem(url)

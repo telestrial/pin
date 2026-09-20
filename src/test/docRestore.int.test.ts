@@ -120,6 +120,41 @@ describe('integration: restoring the doc from the snapshot', () => {
     expect(written).toEqual([])
   })
 
+  it('falls back to the locator when the cached pointer names a reclaimed object', async () => {
+    // A pointer outlives the object it names: the snapshot loop supersedes and prunes,
+    // and a device that was away holds the URL of a generation already reclaimed. Asking
+    // the locator only when NO pointer was held left that boot reading its own cache
+    // against a corpse forever.
+    await publishSnapshot([{ c: 'endorse', k: 'like:subject-one' }])
+    localStorage.setItem(
+      POINTER_KEY,
+      JSON.stringify({ id: 'old', url: 'sia://reclaimed#encryption_key=ff' }),
+    )
+
+    const outcome = await hydrateFromSia(client, appKey)
+
+    expect(outcome).toEqual({ kind: 'restored', records: 1 })
+    expect(written).toEqual([{ c: 'endorse', k: 'like:subject-one' }])
+  })
+
+  it('leaves the pointer cache alone when the recovered snapshot will not read', async () => {
+    // Caching what resolved before reading through it is what made one bad answer
+    // permanent. The locator's answer earns the cache by working.
+    const url = await publishSnapshot([{ c: 'settings', k: 'self' }])
+    const original = JSON.stringify({
+      id: 'old',
+      url: 'sia://gone#encryption_key=ff',
+    })
+    localStorage.setItem(POINTER_KEY, original)
+    vi.spyOn(client, 'downloadItem').mockRejectedValue(new Error('host down'))
+
+    const outcome = await hydrateFromSia(client, appKey)
+
+    expect(outcome.kind).toBe('unknown')
+    expect(localStorage.getItem(POINTER_KEY)).toBe(original)
+    expect(url).toBeTruthy()
+  })
+
   it('answers unknown when the locator itself will not answer', async () => {
     // No pointer and no reachable DHT. Distinct from the locator saying nothing, which
     // is what makes this retryable where `none` is settled.
