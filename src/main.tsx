@@ -28,6 +28,7 @@ if (import.meta.env.DEV || inTauri()) {
     __pinMirrorRead?: () => Promise<string>
     __pinSettingsDocsCheck?: () => Promise<string>
     __pinDocsList?: () => Promise<string>
+    __pinRestoreDiag?: () => Promise<string>
     __pinSettingsFromSnapshot?: () => Promise<string>
     __pinDidDht?: () => Promise<string>
     __pinPkarrRoundTrip?: () => Promise<string>
@@ -339,6 +340,78 @@ if (import.meta.env.DEV || inTauri()) {
     const n = describeHydration(await hydrateFromSia(client, hexToBytes(hex)))
     const keys = await listAll()
     return `hydrated ${n}:\n${keys.map((k) => `  ${k.collection}/${k.rkey}`).join('\n')}`
+  }
+  // What the boot restore did, WITHOUT doing one.
+  //
+  // `__pinDocsList` above hydrates before it lists, which is the right shape for asking
+  // whether a snapshot can be read and exactly the wrong one for asking whether the boot
+  // already read it: a failed restore would be repaired by the act of looking, and then
+  // report a full doc. So this reads state and writes nothing.
+  //
+  // Three outcomes a filled-or-empty heart cannot tell apart. `pending` is a restore
+  // still in flight or one that never started; `unknown` is a snapshot that would not
+  // read, which holds the publishing loops deliberately and is the state that looks like
+  // the app being broken rather than careful; `ready` over an empty `endorse/` means the
+  // restore ran and had nothing to put back, which is a different answer from a restore
+  // that was skipped.
+  g.__pinRestoreDiag = async () => {
+    const { hex } = await session()
+    if (!hex) return 'not signed in'
+    const out: string[] = []
+
+    // The desktop's doc is a redb store, so there is nothing to restore and the hook
+    // reports ready having read nothing. Say so, or a healthy desktop reads as a restore
+    // that was skipped.
+    out.push(
+      inTauri()
+        ? 'platform: desktop — durable doc, restore is a no-op'
+        : 'platform: web — MemStore, the doc is rebuilt from the snapshot each session',
+    )
+
+    const { useCuratorStore } = await import('./stores/curator')
+    const cs = useCuratorStore.getState()
+    out.push(
+      `docRestore: ${cs.docRestore}${
+        cs.docRestore === 'unknown'
+          ? ` — ${cs.lastError ?? '(no error recorded)'}`
+          : ''
+      }`,
+    )
+
+    // What the doc holds now, by collection. `endorse/` is the one the restore exists
+    // for: the identity loop assembles a directory from it, and an absence there is
+    // published as a withdrawal.
+    try {
+      const { listAll } = await import('./lib/docs')
+      const keys = await listAll()
+      const byCollection = new Map<string, number>()
+      for (const k of keys) {
+        byCollection.set(
+          k.collection,
+          (byCollection.get(k.collection) ?? 0) + 1,
+        )
+      }
+      const counts = [...byCollection]
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([c, n]) => `${c}=${n}`)
+        .join(' ')
+      out.push(`doc: ${keys.length} record(s)${counts ? ` — ${counts}` : ''}`)
+      for (const k of keys.filter((k) => k.collection === 'endorse')) {
+        out.push(`  endorse/${k.rkey}`)
+      }
+    } catch (e) {
+      out.push(`doc: ${e instanceof Error ? e.message : e}`)
+    }
+
+    // The other half, and why a missing endorsement is not automatically a bug: a record
+    // this identity withdrew is skipped by the restore on purpose, and stays skipped
+    // until the snapshot stops carrying it.
+    const { withdrawnAddresses } = await import('./lib/withdrawn')
+    const withdrawn = withdrawnAddresses()
+    out.push(`withdrawn ledger: ${withdrawn.size}`)
+    for (const a of withdrawn) out.push(`  ${a}`)
+
+    return out.join('\n')
   }
   // Phase C inc.3 proof: exercises the EXACT snapshot-read path the settings load
   // uses (readRecordFromSnapshot + decryptSettings, no pin-core). freshest-wins
