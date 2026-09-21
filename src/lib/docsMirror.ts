@@ -112,8 +112,59 @@ export type SnapshotRead =
  *  `recoverViaLocator` is what makes `none` mean anything. A caller passing false and
  *  holding no pointer has declined to look — which is the brand-new-account gate, where
  *  the point is to skip the DHT round trip — so it gets `none` without having asked
- *  anybody. A caller that needs the distinction passes true. */
+ *  anybody. A caller that needs the distinction passes true.
+ *
+ *  An `unknown` then gets a second question, about the scope rather than the snapshot,
+ *  because those are two different reads and only the first of them failed. See
+ *  `scopeIsEmpty` for why its answer may be acted on where the snapshot's may not. */
 async function readSnapshot(
+  client: SiaClient,
+  appKeyBytes: Uint8Array,
+  recoverViaLocator: boolean,
+): Promise<SnapshotRead> {
+  const read = await readSnapshotViaPointers(
+    client,
+    appKeyBytes,
+    recoverViaLocator,
+  )
+  if (read.kind !== 'unknown') return read
+  // Nobody answered about the snapshot, so ask about the scope it would live in. An
+  // account whose objects were reclaimed answers `unknown` forever otherwise, and the
+  // loop that would publish a fresh snapshot is one of the three held until this
+  // settles — a guard with no way out is a lockout rather than a guard.
+  return (await scopeIsEmpty(client)) ? { kind: 'none' } : read
+}
+
+/** Whether this identity's Sia scope positively holds nothing.
+ *
+ *  The snapshot is an object in this identity's OWN scope, so a scope holding nothing
+ *  cannot be concealing one: an enumeration that comes back empty is not a failure to
+ *  read, it is having read that there is nothing there. That is the whole of what makes
+ *  acting on it safe. Everywhere else here an absence is refused because it could not be
+ *  established; this is the one place it can be, and it is the same move reclamation
+ *  makes — positive identification rather than deny-by-absence.
+ *
+ *  Two reads and not one, because a wrong `true` here is the wipe this file exists to
+ *  prevent. A listing and a byte total are separate answers from the indexer, so a list
+ *  served empty by a hiccup is caught by a total that is not zero. A read that THROWS
+ *  leaves this false: an unanswered question is not an empty scope, which is the rule
+ *  one level up restated at the size of one call. */
+async function scopeIsEmpty(client: SiaClient): Promise<boolean> {
+  try {
+    const [held, account] = await Promise.all([
+      client.listPinnedObjects(),
+      client.accountSnapshot(),
+    ])
+    return held.length === 0 && account.rawContentBytes === 0
+  } catch {
+    return false
+  }
+}
+
+/** The snapshot a cached pointer or the durable locator names, and why it could not be
+ *  read. Every `unknown` it reports is about the SNAPSHOT — whether the scope beneath it
+ *  makes that unknown settleable is the caller's question. */
+async function readSnapshotViaPointers(
   client: SiaClient,
   appKeyBytes: Uint8Array,
   recoverViaLocator: boolean,

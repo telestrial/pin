@@ -91,6 +91,12 @@ describe('integration: restoring the doc from the snapshot', () => {
     return uploaded.itemURL
   }
 
+  /** Put one object in this identity's scope, so an unreadable snapshot is a snapshot
+   *  that could not be read rather than one that cannot exist. */
+  async function holdSomething() {
+    await client.uploadItem(new TextEncoder().encode('held'))
+  }
+
   it('restores every record a published snapshot holds', async () => {
     await publishSnapshot([
       { c: 'settings', k: 'self' },
@@ -168,6 +174,11 @@ describe('integration: restoring the doc from the snapshot', () => {
   it('answers unknown when the snapshot a pointer names will not download', async () => {
     // The dangerous case, and the one a record count cannot tell from the case above:
     // a snapshot exists and this boot could not read it.
+    //
+    // The scope has to hold something for that to be the situation at all — an
+    // unreadable pointer over an empty scope is the reclaimed-account case below, and
+    // this test asserted the wrong outcome for it until the scope read existed.
+    await holdSomething()
     localStorage.setItem(
       POINTER_KEY,
       JSON.stringify({ id: 'obj', url: 'sia://gone#encryption_key=ff' }),
@@ -216,9 +227,70 @@ describe('integration: restoring the doc from the snapshot', () => {
 
   it('answers unknown when the locator itself will not answer', async () => {
     // No pointer and no reachable DHT. Distinct from the locator saying nothing, which
-    // is what makes this retryable where `none` is settled.
+    // is what makes this retryable where `none` is settled. Objects held, so the scope
+    // cannot settle it either.
+    await holdSomething()
     const transport = await pkarrTransport()
     vi.spyOn(transport, 'resolve').mockRejectedValueOnce(new Error('no relay'))
+
+    const outcome = await hydrateFromSia(client, appKey)
+
+    expect(outcome.kind).toBe('unknown')
+    expect(written).toEqual([])
+  })
+
+  it('answers none when the scope that would hold the snapshot holds nothing', async () => {
+    // A reclaimed account: the objects are gone, and the pointer and the locator both
+    // name one of them. Read as unknown this is a lockout — the loops that would publish
+    // a fresh snapshot are held until the restore settles, and the only thing that could
+    // settle it is a snapshot none of them may write. The scope is what settles it
+    // instead, positively: the snapshot lives there, so nothing there is no snapshot.
+    localStorage.setItem(
+      POINTER_KEY,
+      JSON.stringify({ id: 'obj', url: 'sia://gone#encryption_key=ff' }),
+    )
+
+    const outcome = await hydrateFromSia(client, appKey)
+
+    expect(outcome).toEqual({ kind: 'none' })
+    expect(written).toEqual([])
+  })
+
+  it('stays unknown when the scope itself will not enumerate', async () => {
+    // The direction that matters. A scope that did not answer is not an empty scope, and
+    // reading it as one would turn every outage into a published withdrawal of
+    // everything — the orphan sweep's shape, reached through this door.
+    await holdSomething()
+    localStorage.setItem(
+      POINTER_KEY,
+      JSON.stringify({ id: 'obj', url: 'sia://gone#encryption_key=ff' }),
+    )
+    vi.spyOn(client, 'listPinnedObjects').mockRejectedValue(
+      new Error('indexer down'),
+    )
+
+    const outcome = await hydrateFromSia(client, appKey)
+
+    expect(outcome.kind).toBe('unknown')
+    expect(written).toEqual([])
+  })
+
+  it('stays unknown when the listing is empty but the byte total is not', async () => {
+    // The two reads disagreeing is exactly the hiccup the second one is there for, and
+    // the safe reading of a disagreement is the one that publishes nothing.
+    localStorage.setItem(
+      POINTER_KEY,
+      JSON.stringify({ id: 'obj', url: 'sia://gone#encryption_key=ff' }),
+    )
+    vi.spyOn(client, 'listPinnedObjects').mockResolvedValue([])
+    vi.spyOn(client, 'accountSnapshot').mockResolvedValue({
+      pinnedData: 0,
+      pinnedSize: 0,
+      rawContentBytes: 4096,
+      maxPinnedData: 0,
+      remainingStorage: 0,
+      fetchedAt: '2026-09-21T00:00:00.000Z',
+    })
 
     const outcome = await hydrateFromSia(client, appKey)
 
