@@ -24,8 +24,11 @@ import {
 } from '../../crates/pin-core/pkg/pin_core.js'
 import { CommentThread } from '../components/engagement/CommentThread'
 import type { ChannelManifest } from '../core/types'
+import { runComment } from '../lib/actions/comment'
 import { maxCommentBytes } from '../lib/comments'
 import { listRecords } from '../lib/docs'
+import { useActionStore } from '../stores/actionQueue'
+import { useAuthStore } from '../stores/auth'
 import { useComposeStore } from '../stores/compose'
 import { useFeedStore } from '../stores/feed'
 import { fakeDocStore as docStore } from './fakeModules'
@@ -93,6 +96,30 @@ function published(
   )
 }
 
+/** Run the comment the composer queued.
+ *
+ *  Submitting enqueues a journal action now, so the record lands when the runner reaches
+ *  it. These tests drive the handler themselves rather than mounting the runner: the path
+ *  under test is composer → action → record, and a mounted runner would add a poll to
+ *  every assertion without covering a step.
+ */
+async function drainComments() {
+  const store = useActionStore.getState()
+  const client = useAuthStore.getState().client
+  const appKeyHex = useAuthStore.getState().storedKeyHex
+  if (!appKeyHex) throw new Error('test is not signed in')
+  for (const action of store.actions) {
+    if (action.kind !== 'comment') continue
+    await runComment(action, {
+      client,
+      appKeyHex,
+      setPhase: () => {},
+      setProgress: () => {},
+      checkpoint: (carried) => store.checkpointComment(action.id, carried),
+    })
+  }
+}
+
 describe('integration: a post’s conversation', () => {
   beforeEach(() => {
     resetAllStores()
@@ -150,6 +177,7 @@ describe('integration: a post’s conversation', () => {
     const box = await screen.findByPlaceholderText('Say something')
     await userEvent.type(box, 'worth saying')
     await userEvent.click(screen.getByRole('button', { name: 'Reply' }))
+    await drainComments()
 
     await waitFor(async () => {
       expect(await listRecords(comment_collection())).toHaveLength(1)
@@ -183,6 +211,7 @@ describe('integration: a post’s conversation', () => {
     expect(await screen.findByAltText('shot.png')).toBeTruthy()
 
     await userEvent.click(screen.getByRole('button', { name: 'Reply' }))
+    await drainComments()
 
     await waitFor(async () => {
       expect(await listRecords(comment_collection())).toHaveLength(1)
@@ -227,6 +256,7 @@ describe('integration: a post’s conversation', () => {
       'just words',
     )
     await userEvent.click(screen.getByRole('button', { name: 'Reply' }))
+    await drainComments()
     await waitFor(async () => {
       expect(await listRecords(comment_collection())).toHaveLength(1)
     })
@@ -253,6 +283,7 @@ describe('integration: a post’s conversation', () => {
     expect(await screen.findByAltText('wordless.png')).toBeTruthy()
 
     await userEvent.click(screen.getByRole('button', { name: 'Reply' }))
+    await drainComments()
     await waitFor(async () => {
       expect(await listRecords(comment_collection())).toHaveLength(1)
     })
@@ -294,6 +325,7 @@ describe('integration: a post’s conversation', () => {
       'this one',
     )
     await userEvent.click(screen.getByRole('button', { name: 'Reply' }))
+    await drainComments()
 
     await waitFor(async () => {
       expect(await listRecords(comment_collection())).toHaveLength(1)

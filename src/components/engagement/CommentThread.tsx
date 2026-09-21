@@ -1,11 +1,9 @@
 import { useEffect, useState } from 'react'
-import type { SiaClient } from '../../core/siaClient'
 import type { PublishedComment } from '../../lib/channelConversations'
 import {
+  type CommentFileSource,
   type UploadedCommentFile,
-  uploadCommentFiles,
   withdrawComment,
-  writeComment,
 } from '../../lib/comments'
 import type { EndorsedItem } from '../../lib/engagement'
 import { referenceAuthorFor } from '../../lib/engagement'
@@ -14,6 +12,7 @@ import {
   useIdentityName,
   useIdentityProfile,
 } from '../../lib/hooks/useIdentityName'
+import { useActionStore } from '../../stores/actionQueue'
 import { useAuthStore } from '../../stores/auth'
 import { useFeedStore } from '../../stores/feed'
 import {
@@ -57,24 +56,26 @@ const LIMIT_UNKNOWN = 0
  *  record could not hold would fail at the signature, having uploaded it first. */
 const FILE_CAP_UNKNOWN = 0
 
-/** A comment's files, ready for the record to name them.
+/** A comment's files, split by whether their bytes exist yet.
  *
  *  Two kinds arrive from the composer and they are handled differently for one reason:
- *  whether the bytes exist yet. Something picked off the disk is uploaded into the
- *  commenter's own scope and becomes reclaimable when the comment goes. Something already
- *  in that scope — an armed library item — is referenced where it stands and carries NO
- *  object id, because the library still holds those bytes and withdrawing the comment must
- *  not take them from it.
+ *  something picked off the disk is uploaded into the commenter's own scope and becomes
+ *  reclaimable when the comment goes, and something already in that scope — an armed
+ *  library item — is referenced where it stands and carries NO object id, because the
+ *  library still holds those bytes and withdrawing the comment must not take them from it.
  *
  *  A library item with no content hash is refused rather than patched over: the record
- *  requires one and every reader self-checks the URL against it, so there is nothing honest
- *  to put there. Only items predating the field are affected. */
-async function carryFiles(
-  client: SiaClient | null,
-  drafts: AttachmentDraft[],
-): Promise<UploadedCommentFile[]> {
+ *  requires one and every reader self-checks the URL against it, so there is nothing
+ *  honest to put there. Only items predating the field are affected.
+ *
+ *  Pure, and it runs at enqueue: the bytes have to be read off the File before the action
+ *  is journaled, since a File handle would not survive the reload the journal exists for. */
+function splitDrafts(drafts: AttachmentDraft[]): {
+  sources: CommentFileSource[]
+  referenced: UploadedCommentFile[]
+} {
   const referenced: UploadedCommentFile[] = []
-  const sources = []
+  const sources: CommentFileSource[] = []
   for (const a of drafts) {
     if (a.source === 'bytes') {
       sources.push({
@@ -97,11 +98,7 @@ async function carryFiles(
       },
     })
   }
-  const uploaded =
-    sources.length > 0 && client
-      ? await uploadCommentFiles(client, sources)
-      : []
-  return [...uploaded, ...referenced]
+  return { sources, referenced }
 }
 
 function CommentRow({
@@ -170,10 +167,10 @@ export function CommentThread({
   const conversation = useConversation(item)
 
   const client = useAuthStore((s) => s.client)
+  const enqueueComment = useActionStore((s) => s.enqueueComment)
 
   const [limit, setLimit] = useState(LIMIT_UNKNOWN)
   const [fileCap, setFileCap] = useState(FILE_CAP_UNKNOWN)
-  const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -203,33 +200,26 @@ export function CommentThread({
   // carrying its own — the record points at objects in the commenter's own scope.
   async function submit(submission: ComposerSubmission) {
     if (!storedKeyHex) throw new Error('Not signed in')
-    if (submission.attachments.length > 0 && !client) {
+    const { sources, referenced } = splitDrafts(submission.attachments)
+    if (sources.length > 0 && !client) {
       const message = 'Not connected to Sia yet'
       setError(message)
+      // Thrown so the composer keeps the draft: nothing was queued, so nothing the
+      // person wrote should disappear.
       throw new Error(message)
     }
-    setBusy(true)
     setError(null)
-    try {
-      // Bytes first, then the record that names them — an outage surfaces before anything
-      // is written, and a record never points at files that failed to land.
-      const carried = await carryFiles(client, submission.attachments)
-      await writeComment(
-        storedKeyHex,
-        item,
-        await referenceAuthorFor(item.channelID),
-        submission.body,
-        carried,
-        submission.facets,
-      )
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not add that comment')
-      // Rethrown so the composer keeps the draft: nothing was published, so nothing the
-      // person wrote should disappear.
-      throw e
-    } finally {
-      setBusy(false)
-    }
+    enqueueComment({
+      subject: item,
+      referenceAuthor: await referenceAuthorFor(item.channelID),
+      body: submission.body,
+      facets: submission.facets,
+      sources,
+      referenced,
+      // The record's address, frozen here — see `CommentIntent`. It is also the more
+      // honest stamp: when the words were written, and not when the upload finished.
+      createdAt: new Date().toISOString(),
+    })
   }
 
   async function remove(comment: PublishedComment) {
@@ -271,8 +261,6 @@ export function CommentThread({
         }
         placeholder="Say something"
         submitLabel="Reply"
-        busyLabel="Adding…"
-        busy={busy}
         error={error}
         /* BYTES, not characters: a host counts bytes and would refuse a longer record, so
            counting anything else here would let someone write what cannot be published. */

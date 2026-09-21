@@ -8,6 +8,7 @@ import { useAuthStore } from '../../stores/auth'
 import { usePinStore } from '../../stores/pin'
 import { useToastStore } from '../../stores/toast'
 import { loadPersistedActions } from '../actionQueuePersist'
+import { type CommentContext, runComment } from '../actions/comment'
 import {
   type DeleteObjectsContext,
   runDeleteObjects,
@@ -111,6 +112,22 @@ export function useActionRunner() {
               store.checkpointProfileImages(action.id, urls),
           }
           return runProfileImages(action, ctx)
+        }
+        case 'comment': {
+          const store = useActionStore.getState()
+          const appKeyHex = useAuthStore.getState().storedKeyHex
+          if (!appKeyHex)
+            return Promise.reject(new SilentActionError('Not signed in'))
+          const ctx: CommentContext = {
+            client,
+            appKeyHex,
+            setPhase: (phase, progress) =>
+              store.setPhase(action.id, phase, progress),
+            setProgress: (progress) => store.setProgress(action.id, progress),
+            checkpoint: (carried) =>
+              store.checkpointComment(action.id, carried),
+          }
+          return runComment(action, ctx)
         }
         case 'delete-objects': {
           const store = useActionStore.getState()

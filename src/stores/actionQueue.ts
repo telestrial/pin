@@ -6,6 +6,12 @@ import {
   deletePersistedAction,
   persistAction,
 } from '../lib/actionQueuePersist'
+import type {
+  CommentFacet,
+  CommentFileSource,
+  UploadedCommentFile,
+} from '../lib/comments'
+import type { EndorsedItem } from '../lib/engagement'
 
 // The action journal. Every state-changing mutation is a durable, resumable
 // Action with one legitimate lifecycle: pending → running → success, or
@@ -129,8 +135,44 @@ export type ProfileImagesAction = ActionBase & {
   ledger: ProfileImagesLedger
 }
 
+// Writing a comment: the files it carries, then the signed record naming them.
+//
+// The RECORD'S ADDRESS IS FROZEN HERE, which is what makes the handler safe to re-run.
+// A comment's id is derived from who wrote it and when, so `createdAt` decides the
+// address — stamp it in the handler and a resume writes a SECOND comment, where a
+// gesture would simply rewrite its own singleton. Frozen at enqueue it is also more
+// honest: the moment recorded is when the words were written rather than when the
+// upload happened to finish.
+export type CommentIntent = {
+  subject: EndorsedItem
+  referenceAuthor: string | null
+  body: string
+  facets: CommentFacet[]
+  // Bytes this comment has to upload. Files already in this scope — an armed library
+  // item — arrive in `referenced` instead, and are never reclaimed on withdrawal.
+  sources: CommentFileSource[]
+  referenced: UploadedCommentFile[]
+  createdAt: string
+}
+
+export type CommentLedger = {
+  // Set once the upload finishes; `carried` is what the record will name.
+  uploaded?: boolean
+  carried?: UploadedCommentFile[]
+}
+
+export type CommentAction = ActionBase & {
+  kind: 'comment'
+  intent: CommentIntent
+  ledger: CommentLedger
+}
+
 // The journal's action union. Grows as kinds are added.
-export type Action = PublishAction | DeleteObjectsAction | ProfileImagesAction
+export type Action =
+  | PublishAction
+  | DeleteObjectsAction
+  | ProfileImagesAction
+  | CommentAction
 
 // Recognized kinds — hydration drops any persisted record whose kind isn't in
 // this set (e.g. legacy upload-queue tasks from before the journal rename,
@@ -139,6 +181,7 @@ export const ACTION_KINDS = [
   'publish',
   'delete-objects',
   'profile-images',
+  'comment',
 ] as const
 
 function newId(): string {
@@ -171,6 +214,9 @@ function persistableSnapshot(action: Action): Action {
       ...action,
       intent: { ...action.intent, avatar: undefined, cover: undefined },
     }
+  }
+  if (action.kind === 'comment' && action.ledger.uploaded) {
+    return { ...action, intent: { ...action.intent, sources: [] } }
   }
   if (action.kind === 'publish' && action.ledger.uploadedItemRef) {
     return {
@@ -239,6 +285,8 @@ type ActionQueueState = {
   // Enqueue the byte half of a profile save. No-ops (returns '') when the save
   // moves no bytes and orphans nothing.
   enqueueProfileImages: (intent: ProfileImagesIntent) => string
+  // Enqueue one comment. Its `createdAt` is stamped here, being the record's address.
+  enqueueComment: (intent: CommentIntent) => string
   retry: (id: string) => void
   remove: (id: string) => void
   setProgress: (id: string, progress: number) => void
@@ -251,6 +299,8 @@ type ActionQueueState = {
     id: string,
     urls: { avatarURL?: string; coverURL?: string },
   ) => void
+  // The same checkpoint for a comment: the files its upload produced.
+  checkpointComment: (id: string, carried: UploadedCommentFile[]) => void
   // Mark one channel published (and persist) before moving to the next.
   markChannelPublished: (id: string, channelID: string) => void
   // Mark one delete-objects intent key (object ID or URL) reclaimed.
@@ -340,6 +390,24 @@ export const useActionStore = create<ActionQueueState>()((set) => ({
     persistResumable(action)
     return id
   },
+  enqueueComment: (intent) => {
+    const id = newId()
+    const action: CommentAction = {
+      id,
+      kind: 'comment',
+      state: 'pending',
+      progress: 0,
+      createdAt: new Date().toISOString(),
+      title: intent.body.slice(0, 60) || 'comment',
+      successLabel: 'Added',
+      failLabel: 'Add',
+      intent,
+      ledger: {},
+    }
+    set((s) => ({ actions: [...s.actions, action] }))
+    persistResumable(action)
+    return id
+  },
   retry: (id) =>
     set((s) => {
       const actions = s.actions.map((a) =>
@@ -421,6 +489,17 @@ export const useActionStore = create<ActionQueueState>()((set) => ({
       const actions = s.actions.map((a) =>
         a.id === id && a.kind === 'profile-images'
           ? { ...a, ledger: { ...a.ledger, ...urls, uploaded: true } }
+          : a,
+      )
+      const updated = actions.find((a) => a.id === id)
+      if (updated) persistResumable(updated)
+      return { actions }
+    }),
+  checkpointComment: (id, carried) =>
+    set((s) => {
+      const actions = s.actions.map((a) =>
+        a.id === id && a.kind === 'comment'
+          ? { ...a, ledger: { ...a.ledger, carried, uploaded: true } }
           : a,
       )
       const updated = actions.find((a) => a.id === id)
