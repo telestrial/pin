@@ -146,28 +146,25 @@ export type EditChannelPatch = {
   description?: string
   // Absent leaves it as it stands, like every other field here.
   comments?: boolean
-  avatarImage?: { bytes: Uint8Array; mimeType: string }
-  coverImage?: { bytes: Uint8Array; mimeType: string }
+  // Already on Sia. The upload is the action journal's leg — it packs both images into
+  // one slab and checkpoints their URLs before anything names them — so what arrives
+  // here is a reference, and this function moves no bytes.
+  avatar?: ChannelImage
+  cover?: ChannelImage
   removeAvatar?: boolean
   removeCover?: boolean
 }
 
 export async function editChannel(
-  client: SiaClient,
   current: ChannelManifest,
   patch: EditChannelPatch,
 ): Promise<{ manifest: ChannelManifest; reclaimURLs: string[] }> {
-  // Store any replacement images first — that's the part that needs the Sia client —
-  // then let pin_manifest settle which image survives and which bytes the edit
-  // orphaned. Those orphans are why the caller gets `reclaimURLs` back: per-object Sia
-  // encryption gives every upload its own object, so an old avatar is never shared with
-  // anything else and can be journaled for cleanup without a refcount check.
-  const avatar = patch.removeAvatar
-    ? undefined
-    : await uploadChannelImage(client, patch.avatarImage)
-  const cover = patch.removeCover
-    ? undefined
-    : await uploadChannelImage(client, patch.coverImage)
+  // pin_manifest settles which image survives and which bytes the edit orphaned. Those
+  // orphans are why the caller gets `reclaimURLs` back: per-object Sia encryption gives
+  // every upload its own object, so an old avatar is never shared with anything else and
+  // can be journaled for cleanup without a refcount check.
+  const avatar = patch.removeAvatar ? undefined : patch.avatar
+  const cover = patch.removeCover ? undefined : patch.cover
 
   await ensureWasm()
   const { manifest, reclaimURLs } = JSON.parse(

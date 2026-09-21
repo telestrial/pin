@@ -543,10 +543,7 @@ export function Home({
         channelID={view.channelID}
         channelKey={view.channelKey}
         onCancel={() => setView(returnTo)}
-        onSaved={(name) => {
-          addToast(`Channel “${name}” updated`)
-          setView(returnTo)
-        }}
+        onSaved={() => setView(returnTo)}
         sidebar={renderSidebar(view.channelID)}
         rightSidebar={renderPinSidebar()}
       />

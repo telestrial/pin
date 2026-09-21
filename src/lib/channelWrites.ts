@@ -157,7 +157,7 @@ export async function saveChannelEdits(
   patch: EditChannelPatch,
 ): Promise<{ manifest: ChannelManifest; reclaimURLs: string[] }> {
   const current = await loadCurrentManifest(channel)
-  const { manifest, reclaimURLs } = await editChannel(client, current, patch)
+  const { manifest, reclaimURLs } = await editChannel(current, patch)
   await commitChannelManifest(
     client,
     appKey(),

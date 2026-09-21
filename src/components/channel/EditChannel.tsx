@@ -1,10 +1,11 @@
 import { type ChangeEvent, useEffect, useState } from 'react'
-import type { EditChannelPatch } from '../../core/channels'
 import type { ChannelImage, ChannelManifest } from '../../core/types'
 import { makeLocatorReader } from '../../lib/channelLocator'
-import { saveChannelEdits } from '../../lib/channelWrites'
 import { useItemBlobURL } from '../../lib/hooks/useItemBytes'
-import { useActionStore } from '../../stores/actionQueue'
+import {
+  type ChannelEditIntent,
+  useActionStore,
+} from '../../stores/actionQueue'
 import { useAuthStore } from '../../stores/auth'
 import { useFeedStore } from '../../stores/feed'
 import { FormCard } from '../ui/FormCard'
@@ -22,14 +23,14 @@ export function EditChannel({
   channelID: string
   channelKey: string
   onCancel: () => void
-  onSaved: (name: string) => void
+  onSaved: () => void
   sidebar?: React.ReactNode
   rightSidebar?: React.ReactNode
 }) {
   const client = useAuthStore((s) => s.client)
   const updateMyChannelName = useAuthStore((s) => s.updateMyChannelName)
   const updateSubscriptionName = useAuthStore((s) => s.updateSubscriptionName)
-  const setChannelVisibility = useAuthStore((s) => s.setChannelVisibility)
+  const enqueueChannelEdit = useActionStore((s) => s.enqueueChannelEdit)
   const setChannelShowOnProfile = useAuthStore((s) => s.setChannelShowOnProfile)
   // Absent means on, so the box starts checked for every channel that predates it.
   const showOnProfile = useAuthStore(
@@ -138,41 +139,33 @@ export function EditChannel({
     setSubmitting(true)
     setError(null)
     try {
-      const toImage = async (f: File) => ({
+      const toSource = async (f: File) => ({
         bytes: new Uint8Array(await f.arrayBuffer()),
         mimeType: f.type,
       })
-      const patch: EditChannelPatch = {}
-      if (trimmedName !== original.name) patch.name = trimmedName
-      const trimmedDesc = description.trim()
-      if (trimmedDesc !== original.description) patch.description = trimmedDesc
-      if (comments !== (original.comments === true)) patch.comments = comments
-      if (newAvatarFile) patch.avatarImage = await toImage(newAvatarFile)
-      else if (removeAvatar) patch.removeAvatar = true
-      if (newCoverFile) patch.coverImage = await toImage(newCoverFile)
-      else if (removeCover) patch.removeCover = true
-
-      const { manifest: updated, reclaimURLs } = await saveChannelEdits(
-        client,
-        { channelID, channelKey },
-        patch,
-      )
-      // Reclaim the old avatar/cover bytes via the journal (durable, retried).
-      useActionStore.getState().enqueueDeleteObjects({
-        urls: reclaimURLs,
-        label: 'Reclaiming old channel image',
-      })
-      if (patch.name) {
-        updateMyChannelName(channelID, updated.name)
-        updateSubscriptionName(channelID, updated.name)
+      const intent: ChannelEditIntent = {
+        channelID,
+        channelKey,
+        name: trimmedName !== original.name ? trimmedName : undefined,
+        description:
+          description.trim() !== original.description
+            ? description.trim()
+            : undefined,
+        comments:
+          comments !== (original.comments === true) ? comments : undefined,
+        avatar: newAvatarFile ? await toSource(newAvatarFile) : undefined,
+        cover: newCoverFile ? await toSource(newCoverFile) : undefined,
+        removeAvatar: !newAvatarFile && removeAvatar,
+        removeCover: !newCoverFile && removeCover,
       }
-      // Backfill visibility for channels created before settings recorded it.
-      // Sticky, so this only ever writes down what the manifest already says —
-      // and until it's written, the identity publisher won't advertise the
-      // channel, because it can't tell public from obscure.
-      if (updated.visibility)
-        setChannelVisibility(channelID, updated.visibility)
-      onSaved(updated.name)
+      // The name the sidebar shows is a cache of the manifest's, so it moves now and the
+      // handler sets it again from what the manifest ends up saying.
+      if (intent.name) {
+        updateMyChannelName(channelID, intent.name)
+        updateSubscriptionName(channelID, intent.name)
+      }
+      enqueueChannelEdit(intent, trimmedName)
+      onSaved()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to save changes')
       setSubmitting(false)

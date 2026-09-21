@@ -8,6 +8,7 @@ import { useAuthStore } from '../../stores/auth'
 import { usePinStore } from '../../stores/pin'
 import { useToastStore } from '../../stores/toast'
 import { loadPersistedActions } from '../actionQueuePersist'
+import { type ChannelEditContext, runChannelEdit } from '../actions/channelEdit'
 import { type CommentContext, runComment } from '../actions/comment'
 import {
   type DeleteObjectsContext,
@@ -128,6 +129,18 @@ export function useActionRunner() {
               store.checkpointComment(action.id, carried),
           }
           return runComment(action, ctx)
+        }
+        case 'channel-edit': {
+          const store = useActionStore.getState()
+          const ctx: ChannelEditContext = {
+            client,
+            setPhase: (phase, progress) =>
+              store.setPhase(action.id, phase, progress),
+            setProgress: (progress) => store.setProgress(action.id, progress),
+            checkpoint: (images) =>
+              store.checkpointChannelEdit(action.id, images),
+          }
+          return runChannelEdit(action, ctx)
         }
         case 'delete-objects': {
           const store = useActionStore.getState()

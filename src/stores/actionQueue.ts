@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import type { ItemPayload } from '../core/channels'
-import type { ItemRef } from '../core/types'
+import type { ChannelImage, ItemRef } from '../core/types'
 import {
   clearPersistedActions,
   deletePersistedAction,
@@ -167,12 +167,42 @@ export type CommentAction = ActionBase & {
   ledger: CommentLedger
 }
 
+// Saving a channel's settings, with whatever images the edit brought.
+//
+// Same split as a profile save, for the same reason and with one difference: a channel's
+// name lives in its MANIFEST, so the whole patch is the slow leg and only the store's
+// cached copy of the name is applied at enqueue.
+export type ChannelEditIntent = {
+  channelID: string
+  channelKey: string
+  name?: string
+  description?: string
+  comments?: boolean
+  avatar?: ProfileImageSource
+  cover?: ProfileImageSource
+  removeAvatar?: boolean
+  removeCover?: boolean
+}
+
+export type ChannelEditLedger = {
+  uploaded?: boolean
+  avatar?: ChannelImage
+  cover?: ChannelImage
+}
+
+export type ChannelEditAction = ActionBase & {
+  kind: 'channel-edit'
+  intent: ChannelEditIntent
+  ledger: ChannelEditLedger
+}
+
 // The journal's action union. Grows as kinds are added.
 export type Action =
   | PublishAction
   | DeleteObjectsAction
   | ProfileImagesAction
   | CommentAction
+  | ChannelEditAction
 
 // Recognized kinds — hydration drops any persisted record whose kind isn't in
 // this set (e.g. legacy upload-queue tasks from before the journal rename,
@@ -182,6 +212,7 @@ export const ACTION_KINDS = [
   'delete-objects',
   'profile-images',
   'comment',
+  'channel-edit',
 ] as const
 
 function newId(): string {
@@ -210,6 +241,12 @@ function publishLabels(intent: PublishIntent): {
 // so IDB doesn't hold a redundant (potentially large) byte payload.
 function persistableSnapshot(action: Action): Action {
   if (action.kind === 'profile-images' && action.ledger.uploaded) {
+    return {
+      ...action,
+      intent: { ...action.intent, avatar: undefined, cover: undefined },
+    }
+  }
+  if (action.kind === 'channel-edit' && action.ledger.uploaded) {
     return {
       ...action,
       intent: { ...action.intent, avatar: undefined, cover: undefined },
@@ -287,6 +324,8 @@ type ActionQueueState = {
   enqueueProfileImages: (intent: ProfileImagesIntent) => string
   // Enqueue one comment. Its `createdAt` is stamped here, being the record's address.
   enqueueComment: (intent: CommentIntent) => string
+  // Enqueue a channel's settings save, images and all.
+  enqueueChannelEdit: (intent: ChannelEditIntent, title: string) => string
   retry: (id: string) => void
   remove: (id: string) => void
   setProgress: (id: string, progress: number) => void
@@ -301,6 +340,11 @@ type ActionQueueState = {
   ) => void
   // The same checkpoint for a comment: the files its upload produced.
   checkpointComment: (id: string, carried: UploadedCommentFile[]) => void
+  // The same checkpoint for a channel edit: the images its upload produced.
+  checkpointChannelEdit: (
+    id: string,
+    images: { avatar?: ChannelImage; cover?: ChannelImage },
+  ) => void
   // Mark one channel published (and persist) before moving to the next.
   markChannelPublished: (id: string, channelID: string) => void
   // Mark one delete-objects intent key (object ID or URL) reclaimed.
@@ -408,6 +452,24 @@ export const useActionStore = create<ActionQueueState>()((set) => ({
     persistResumable(action)
     return id
   },
+  enqueueChannelEdit: (intent, title) => {
+    const id = newId()
+    const action: ChannelEditAction = {
+      id,
+      kind: 'channel-edit',
+      state: 'pending',
+      progress: 0,
+      createdAt: new Date().toISOString(),
+      title,
+      successLabel: 'Saved',
+      failLabel: 'Save',
+      intent,
+      ledger: {},
+    }
+    set((s) => ({ actions: [...s.actions, action] }))
+    persistResumable(action)
+    return id
+  },
   retry: (id) =>
     set((s) => {
       const actions = s.actions.map((a) =>
@@ -500,6 +562,17 @@ export const useActionStore = create<ActionQueueState>()((set) => ({
       const actions = s.actions.map((a) =>
         a.id === id && a.kind === 'comment'
           ? { ...a, ledger: { ...a.ledger, carried, uploaded: true } }
+          : a,
+      )
+      const updated = actions.find((a) => a.id === id)
+      if (updated) persistResumable(updated)
+      return { actions }
+    }),
+  checkpointChannelEdit: (id, images) =>
+    set((s) => {
+      const actions = s.actions.map((a) =>
+        a.id === id && a.kind === 'channel-edit'
+          ? { ...a, ledger: { ...a.ledger, ...images, uploaded: true } }
           : a,
       )
       const updated = actions.find((a) => a.id === id)
