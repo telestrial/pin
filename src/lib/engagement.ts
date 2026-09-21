@@ -233,15 +233,13 @@ function differs(
   return false
 }
 
-/** Releases whose record didn't come off, by rkey.
+/** Withdraw one endorsement, remembering it either way.
  *
- *  Held rather than re-derived for the reason a pin's release is: two devices share this
- *  doc, so a record the local state doesn't mention might be an endorsement the other
+ *  Remembered rather than re-derived for the reason a pin's release is: two devices share
+ *  this doc, so a record the local state doesn't mention might be an endorsement the other
  *  one just made. Only the action that withdrew knows — and a leftover record is an
- *  over-count that nothing else would ever correct. */
-const pendingReleases = new Set<string>()
-
-/** Withdraw one endorsement, remembering it if that fails. */
+ *  over-count that nothing else would ever correct. The ledger is durable, so a deletion
+ *  that failed is still retried by `settleWithdrawals` a session later. */
 export async function deleteEndorsement(
   appKeyHex: string,
   kind: EndorsementKind,
@@ -251,35 +249,10 @@ export async function deleteEndorsement(
   const coll = await collection()
   // Before the delete, and it stays through a delete that lands: on web the record is
   // durable only once the snapshot catches up, and a restore in between would put it
-  // back. `lib/withdrawn` forgets it when a snapshot no longer carries it.
+  // back. `lib/withdrawn` decides when it has nothing left to protect.
   rememberWithdrawn(coll, rkey)
-  try {
-    await openDocs(appKeyHex)
-    await deleteRecord(coll, rkey)
-    pendingReleases.delete(rkey)
-  } catch (e) {
-    pendingReleases.add(rkey)
-    throw e
-  }
-}
-
-/** Retry the withdrawals that didn't land. A still-failing one stays pending, because
- *  a record that outlives its gesture keeps being counted. */
-export async function drainPendingReleases(appKeyHex: string): Promise<number> {
-  if (pendingReleases.size === 0) return 0
   await openDocs(appKeyHex)
-  const coll = await collection()
-  let released = 0
-  for (const rkey of [...pendingReleases]) {
-    try {
-      await deleteRecord(coll, rkey)
-      pendingReleases.delete(rkey)
-      released++
-    } catch {
-      // Stays pending.
-    }
-  }
-  return released
+  await deleteRecord(coll, rkey)
 }
 
 /** Catch up: record every endorsement that should exist and doesn't yet.

@@ -19,6 +19,9 @@
 // doc is the thing this outlives. A ledger inside it would be restored, lost and
 // resurrected by exactly the mechanism it exists to survive.
 
+import { deleteRecord, getRecord } from './docs'
+import { inTauri } from './openExternal'
+
 const KEY = 'pin:withdrawn'
 
 /** A record's address, spelled the way `listAll` and the snapshot spell it. */
@@ -66,4 +69,52 @@ export function forgetWithdrawn(addresses: Iterable<string>): void {
   let changed = false
   for (const a of addresses) changed = held.delete(a) || changed
   if (changed) write(held)
+}
+
+/** Put the ledger and the doc back in agreement.
+ *
+ *  Two jobs, and they are the same pass because they read the same record. A deletion
+ *  that did not land leaves the record in the doc, still assembled into everything this
+ *  identity publishes, so it is retried. An address the doc is rid of has nothing left
+ *  to retry, and whether it can be forgotten is the one question the two platforms
+ *  answer differently.
+ *
+ *  WHAT MAKES A DELETION DURABLE DIFFERS, and it is the physical difference rather than
+ *  a device tier: the desktop's doc is a redb store that survives a restart, so a record
+ *  absent from it is gone for good. A tab's doc is a MemStore rebuilt from the snapshot,
+ *  so a record absent from it says nothing at all — the snapshot may still carry it, and
+ *  the restore is what sees that. So the desktop forgets here and a tab forgets in
+ *  `hydrateFromSia`. Forgetting here on web would drop the entry a moment before the
+ *  next restore put the record back.
+ *
+ *  Answers how many deletions it retried. */
+export async function settleWithdrawals(): Promise<number> {
+  const held = withdrawnAddresses()
+  if (held.size === 0) return 0
+  const docIsDurable = inTauri()
+  const settled: string[] = []
+  let retried = 0
+  for (const address of held) {
+    // Split on the FIRST separator: a collection carries no slash and an rkey may.
+    const cut = address.indexOf('/')
+    if (cut < 0) {
+      settled.push(address)
+      continue
+    }
+    const collection = address.slice(0, cut)
+    const rkey = address.slice(cut + 1)
+    try {
+      if (await getRecord(collection, rkey)) {
+        await deleteRecord(collection, rkey)
+        retried += 1
+      } else if (docIsDurable) {
+        settled.push(address)
+      }
+    } catch {
+      // The engine is not up, or the write failed. The entry stays, which is the whole
+      // point of it being durable.
+    }
+  }
+  forgetWithdrawn(settled)
+  return retried
 }

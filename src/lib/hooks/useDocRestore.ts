@@ -4,6 +4,7 @@ import { useCuratorStore } from '../../stores/curator'
 import { openDocs } from '../docs'
 import { hydrateFromSia } from '../docsMirror'
 import { inTauri } from '../openExternal'
+import { settleWithdrawals } from '../withdrawn'
 
 // Put back what this instance's doc held last session.
 //
@@ -35,6 +36,9 @@ export function useDocRestore() {
     // would churn the doc the snapshot loop is fingerprinting.
     if (inTauri()) {
       useCuratorStore.getState().set({ docRestore: 'ready' })
+      // The doc is durable here, so it is also what settles the withdrawal ledger — no
+      // restore runs to do it. See `settleWithdrawals`.
+      void settleWithdrawals()
       return
     }
     if (!client || !storedKeyHex) return

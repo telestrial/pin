@@ -41,12 +41,12 @@ import {
 // without re-signing because the reference sits outside the signature.
 async function catchUpEndorsements(appKeyHex: string): Promise<void> {
   const { endorsedItemFor } = await import('../../stores/pin')
-  const { syncEndorsements, drainPendingReleases: drainEndorsements } =
-    await import('../engagement')
+  const { syncEndorsements } = await import('../engagement')
+  const { settleWithdrawals } = await import('../withdrawn')
   const { useFeedStore } = await import('../../stores/feed')
   const manifests = useFeedStore.getState().manifests
 
-  await drainEndorsements(appKeyHex)
+  await settleWithdrawals()
   const wanted = usePinStore.getState().pinned.flatMap((p) => {
     const item = endorsedItemFor(p)
     if (!item) return []
