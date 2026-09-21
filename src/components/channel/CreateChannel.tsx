@@ -1,11 +1,10 @@
 import { type ChangeEvent, useEffect, useState } from 'react'
-import { buildSubscribeURL } from '../../core/channels'
+import { buildSubscribeURL, newChannelKey } from '../../core/channels'
+import { channelKeyFromBase64, deriveChannelID } from '../../core/crypto'
 import type { ChannelVisibility } from '../../core/types'
-import { createAndPublishChannel } from '../../lib/channelWrites'
-import { flushSettingsBestEffort } from '../../lib/hooks/useSettingsSync'
 import { deriveDidDht } from '../../lib/pkarr'
+import { useActionStore } from '../../stores/actionQueue'
 import { useAuthStore } from '../../stores/auth'
-import { useFeedStore } from '../../stores/feed'
 import { FormCard } from '../ui/FormCard'
 
 const ACCEPTED_COVER_MIMES = ['image/jpeg', 'image/png', 'image/webp']
@@ -23,9 +22,7 @@ export function CreateChannel({
 }) {
   const client = useAuthStore((s) => s.client)
   const storedKeyHex = useAuthStore((s) => s.storedKeyHex)
-  const addMyChannel = useAuthStore((s) => s.addMyChannel)
-  const addSubscription = useAuthStore((s) => s.addSubscription)
-  const setManifest = useFeedStore((s) => s.setManifest)
+  const enqueueChannelCreate = useActionStore((s) => s.enqueueChannelCreate)
 
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
@@ -89,55 +86,32 @@ export function CreateChannel({
     setSubmitting(true)
     setError(null)
     try {
-      const toImage = async (f: File | null) =>
+      const toSource = async (f: File | null) =>
         f
-          ? {
-              bytes: new Uint8Array(await f.arrayBuffer()),
-              mimeType: f.type,
-            }
+          ? { bytes: new Uint8Array(await f.arrayBuffer()), mimeType: f.type }
           : undefined
-      // Derive our did:dht (from the AppKey — same identity the Curator /
-      // identity-doc use) up front: it's stamped into the manifest as the
-      // iroh-world author identity AND carried in the shareable capability link.
+      // Derive our did:dht (from the AppKey — same identity the Curator / identity-doc
+      // use) up front: it's stamped into the manifest as the iroh-world author identity
+      // AND carried in the shareable capability link.
       const { did } = await deriveDidDht(Uint8Array.fromHex(storedKeyHex))
-      const result = await createAndPublishChannel(client, {
+      // K, here rather than in the handler — see `ChannelCreateIntent`. The channel's
+      // address and its subscribe URL both fall out of it, so both exist before any byte
+      // moves and the confirmation screen has something real to hand over.
+      const channelKey = await newChannelKey()
+      const channelID = await deriveChannelID(channelKeyFromBase64(channelKey))
+
+      enqueueChannelCreate({
+        channelKey,
+        channelID,
         name: trimmedName,
         description: description.trim(),
         visibility,
-        avatarImage: await toImage(avatarFile),
-        coverImage: await toImage(coverFile),
+        showOnProfile,
         authorDidDht: did,
+        avatar: await toSource(avatarFile),
+        cover: await toSource(coverFile),
       })
-      const subscribeURL = buildSubscribeURL(did, result.channelKey)
-      addMyChannel({
-        channelID: result.channelID,
-        channelKey: result.channelKey,
-        name: result.manifest.name,
-        createdAt: result.manifest.publishedAt,
-        visibility,
-        // Recorded only when turned off, so the setting reads the same as a
-        // channel made before it existed.
-        ...(showOnProfile ? {} : { showOnProfile: false }),
-      })
-      addSubscription({
-        // did:dht is the identity now; the legacy atproto handle/DID fields
-        // stay on the type but are empty for did:dht-native subscriptions.
-        authorHandle: '',
-        authorDID: '',
-        didDht: did,
-        channelID: result.channelID,
-        channelKey: result.channelKey,
-        cachedName: result.manifest.name,
-        addedAt: new Date().toISOString(),
-        label: result.manifest.name,
-      })
-      setManifest(result.channelID, result.manifest)
-      // Persist the new channel + auto-subscription to Sia settings before
-      // we hand off to the confirmation screen — otherwise a quick reload
-      // before the background debounce loses it from the local list (the
-      // atproto record survives, but the channel falls off "Your channels").
-      await flushSettingsBestEffort()
-      onCreated(subscribeURL, result.manifest.name)
+      onCreated(buildSubscribeURL(did, channelKey), trimmedName)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to create channel')
       setSubmitting(false)
@@ -291,8 +265,8 @@ export function CreateChannel({
         {submitting && (
           <p className="text-neutral-500 text-xs">
             {avatarFile || coverFile
-              ? 'Uploading image(s) to Sia (~20 seconds each), encrypting manifest, writing to ATProto.'
-              : 'Generating channel key, encrypting manifest, writing to ATProto.'}
+              ? 'Uploading image(s) to Sia, encrypting the manifest, publishing the locator.'
+              : 'Generating the channel key, encrypting the manifest, publishing the locator.'}
           </p>
         )}
 

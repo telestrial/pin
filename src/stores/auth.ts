@@ -172,7 +172,14 @@ export const useAuthStore = create<AuthState>()(
       setIndexerURL: (url) => set({ indexerURL: url }),
       setApprovalURL: (url) => set({ approvalURL: url }),
       addMyChannel: (channel) =>
-        set((s) => ({ myChannels: [...s.myChannels, channel] })),
+        // Keyed by channelID, the way `addSubscription` beside it is: a channelID names
+        // one channel, so adding one twice is a resumed creation rather than a second
+        // channel, and two entries would advertise it twice and count it twice.
+        set((s) =>
+          s.myChannels.some((c) => c.channelID === channel.channelID)
+            ? s
+            : { myChannels: [...s.myChannels, channel] },
+        ),
       updateMyChannelName: (channelID, name) =>
         set((s) => ({
           myChannels: s.myChannels.map((c) =>

@@ -21,7 +21,7 @@ vi.mock('../lib/docs', async () =>
   (await import('./fakeModules')).fakeDocsModule(),
 )
 
-import { createChannel } from '../core/channels'
+import { createChannel, newChannelKey } from '../core/channels'
 import type { ChannelManifest, ItemRef } from '../core/types'
 import {
   commitChannelManifest,
@@ -58,6 +58,7 @@ describe('integration: channel locator grace deletion', () => {
     const client = alice.client
 
     const created = await createChannel(client, {
+      channelKey: await newChannelKey(),
       name: "Alice's voice",
       description: '',
     })

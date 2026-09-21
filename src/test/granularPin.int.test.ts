@@ -21,6 +21,7 @@ import {
   buildItemRef,
   createChannel,
   deletePublishedItem,
+  newChannelKey,
   removeAttachmentFromItem,
   unpinChannel,
 } from '../core/channels'
@@ -93,6 +94,7 @@ describe('integration: author-side granular pinning', () => {
     // Build the channel WITHOUT committing a locator, so alice's scope holds
     // only the content objects the enumeration tests assert on.
     const channel = await createChannel(alice.client, {
+      channelKey: await newChannelKey(),
       name: "Alice's voice",
       description: '',
     })

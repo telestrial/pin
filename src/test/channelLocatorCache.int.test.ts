@@ -20,7 +20,7 @@ vi.mock('../lib/docs', async () =>
   (await import('./fakeModules')).fakeDocsModule(),
 )
 
-import { createChannel } from '../core/channels'
+import { createChannel, newChannelKey } from '../core/channels'
 import {
   channelKeyFromBase64,
   decryptForChannel,
@@ -51,6 +51,7 @@ describe('integration: caching locator reader seeds sub/<id>', () => {
     const client = alice.client
 
     const created = await createChannel(client, {
+      channelKey: await newChannelKey(),
       name: "Alice's voice",
       description: '',
     })
@@ -91,6 +92,7 @@ describe('integration: caching locator reader seeds sub/<id>', () => {
     })
     const client = alice.client
     const created = await createChannel(client, {
+      channelKey: await newChannelKey(),
       name: 'Resilient',
       description: '',
     })
@@ -118,6 +120,7 @@ describe('integration: caching locator reader seeds sub/<id>', () => {
     })
     const client = alice.client
     const created = await createChannel(client, {
+      channelKey: await newChannelKey(),
       name: 'Fresh',
       description: '',
     })
@@ -156,6 +159,7 @@ describe('integration: caching locator reader seeds sub/<id>', () => {
     })
     const client = alice.client
     const created = await createChannel(client, {
+      channelKey: await newChannelKey(),
       name: 'Current',
       description: '',
     })
@@ -206,6 +210,7 @@ describe('integration: caching locator reader seeds sub/<id>', () => {
     })
     const client = alice.client
     const created = await createChannel(client, {
+      channelKey: await newChannelKey(),
       name: 'Fresh',
       description: '',
     })
@@ -331,6 +336,7 @@ describe('integration: revalidate fills the feed in out of band', () => {
       handle: 'alice8.test',
     })
     const created = await createChannel(alice.client, {
+      channelKey: await newChannelKey(),
       name: 'Ordered',
       description: '',
     })
@@ -375,6 +381,7 @@ describe('integration: revalidate fills the feed in out of band', () => {
     const client = alice.client
 
     const created = await createChannel(client, {
+      channelKey: await newChannelKey(),
       name: 'Live',
       description: '',
     })
@@ -440,6 +447,7 @@ describe('integration: revalidate fills the feed in out of band', () => {
       handle: 'alice.test',
     })
     const created = await createChannel(alice.client, {
+      channelKey: await newChannelKey(),
       name: 'Mine',
       description: '',
     })

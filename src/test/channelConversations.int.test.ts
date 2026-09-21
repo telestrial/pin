@@ -18,7 +18,7 @@ vi.mock('../lib/docs', async () =>
   (await import('./fakeModules')).fakeDocsModule(),
 )
 
-import { createChannel } from '../core/channels'
+import { createChannel, newChannelKey } from '../core/channels'
 import { channelKeyFromBase64 } from '../core/crypto'
 import {
   readConversation,
@@ -52,6 +52,7 @@ async function aChannelWithComments(did: string, bodies: string[]) {
   const app = createFakeApp()
   const alice = app.createAccount({ did, handle: `${did}.test` })
   const created = await createChannel(alice.client, {
+    channelKey: await newChannelKey(),
     name: 'Talkative',
     description: '',
   })
@@ -154,6 +155,7 @@ describe('integration: a channel’s published conversation reaches a reader', (
       handle: 'conv4.test',
     })
     const created = await createChannel(alice.client, {
+      channelKey: await newChannelKey(),
       name: 'Quiet',
       description: '',
     })

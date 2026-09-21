@@ -9,6 +9,7 @@ import {
   type CreatedChannel,
   createChannel,
   editItem,
+  newChannelKey,
 } from '../core/channels'
 import type { ChannelManifest, ItemRef, SubscriptionRef } from '../core/types'
 import {
@@ -155,6 +156,7 @@ export async function authorCreateChannel(
 ): Promise<CreatedChannel> {
   const client = author.client
   const created = await createChannel(client, {
+    channelKey: await newChannelKey(),
     name: args.name,
     description: args.description ?? '',
   })

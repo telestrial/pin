@@ -8,6 +8,10 @@ import { useAuthStore } from '../../stores/auth'
 import { usePinStore } from '../../stores/pin'
 import { useToastStore } from '../../stores/toast'
 import { loadPersistedActions } from '../actionQueuePersist'
+import {
+  type ChannelCreateContext,
+  runChannelCreate,
+} from '../actions/channelCreate'
 import { type ChannelEditContext, runChannelEdit } from '../actions/channelEdit'
 import { type CommentContext, runComment } from '../actions/comment'
 import {
@@ -129,6 +133,18 @@ export function useActionRunner() {
               store.checkpointComment(action.id, carried),
           }
           return runComment(action, ctx)
+        }
+        case 'channel-create': {
+          const store = useActionStore.getState()
+          const ctx: ChannelCreateContext = {
+            client,
+            setPhase: (phase, progress) =>
+              store.setPhase(action.id, phase, progress),
+            setProgress: (progress) => store.setProgress(action.id, progress),
+            checkpoint: (images) =>
+              store.checkpointChannelCreate(action.id, images),
+          }
+          return runChannelCreate(action, ctx)
         }
         case 'channel-edit': {
           const store = useActionStore.getState()

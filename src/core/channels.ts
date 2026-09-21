@@ -31,22 +31,6 @@ import type {
 } from './types'
 import { ensureWasm } from './wasm'
 
-// Upload an optional channel image (avatar or cover) to Sia and shape it into
-// a ChannelImage ref. Shared by createChannel and editChannel.
-async function uploadChannelImage(
-  client: SiaClient,
-  img?: { bytes: Uint8Array; mimeType: string },
-): Promise<ChannelImage | undefined> {
-  if (!img) return undefined
-  const uploaded = await client.uploadItem(img.bytes)
-  return {
-    itemURL: uploaded.itemURL,
-    mimeType: img.mimeType,
-    contentHash: uploaded.contentHash,
-    byteSize: uploaded.byteSize,
-  }
-}
-
 export type CreatedChannel = {
   channelID: string
   channelKey: string // base64
@@ -87,6 +71,16 @@ export type ItemPayload = {
   facets?: Facet[]
 }
 
+/** Mint a channel's K.
+ *
+ *  Its own function so there is one place a channel's identity comes into being. K both
+ *  locates and decrypts, so `channelID` and the locator both fall out of it — which is
+ *  what makes minting a second one the creation of a second channel rather than a retry
+ *  of the first. */
+export async function newChannelKey(): Promise<string> {
+  return channelKeyToBase64(await generateChannelKey())
+}
+
 export async function createChannel(
   client: SiaClient,
   args: {
@@ -100,23 +94,25 @@ export async function createChannel(
     // Whether the channel takes comments. Absent means the default a new channel
     // gets, which is on — one created now is created in a product that has them.
     comments?: boolean
-    avatarImage?: { bytes: Uint8Array; mimeType: string }
-    coverImage?: { bytes: Uint8Array; mimeType: string }
+    // Already on Sia, as for an edit — the upload is the journal's leg.
+    avatar?: ChannelImage
+    cover?: ChannelImage
+    // The channel's K, minted by the caller.
+    //
+    // Minted OUTSIDE so creating a channel can be resumed. A mint in here makes a second
+    // run a second channel, at a second address, with the first one's bytes already paid
+    // for. Held by the caller it also means the subscribe URL exists before any byte
+    // moves, so the form can hand it over while the images upload.
+    channelKey: string
     // The author's did:dht (derived by the caller from the AppKey — core stays
     // pure of the pkarr/wasm layer). Stamped into the manifest as the iroh-world
     // author identity.
     authorDidDht?: string
   },
 ): Promise<CreatedChannel> {
-  const keyBytes = await generateChannelKey()
-  const channelKey = channelKeyToBase64(keyBytes)
-  const channelID = await deriveChannelID(keyBytes)
-
-  // Store the images first, then build. Storing needs the Sia client — which is the
-  // platform-correct one already — so it stays here; the manifest itself is built by
-  // pin_manifest, the same code the Curator builds one with.
-  const avatar = await uploadChannelImage(client, args.avatarImage)
-  const cover = await uploadChannelImage(client, args.coverImage)
+  const channelKey = args.channelKey
+  const channelID = await deriveChannelID(channelKeyFromBase64(channelKey))
+  const { avatar, cover } = args
 
   await ensureWasm()
   const manifest: ChannelManifest = JSON.parse(

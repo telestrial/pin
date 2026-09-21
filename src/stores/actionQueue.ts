@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import type { ItemPayload } from '../core/channels'
-import type { ChannelImage, ItemRef } from '../core/types'
+import type { ChannelImage, ChannelVisibility, ItemRef } from '../core/types'
 import {
   clearPersistedActions,
   deletePersistedAction,
@@ -196,6 +196,37 @@ export type ChannelEditAction = ActionBase & {
   ledger: ChannelEditLedger
 }
 
+// Creating a channel: its images, its manifest, and its place in settings.
+//
+// THE CHANNEL'S K IS MINTED AT ENQUEUE and carried here, which is what makes this
+// resumable at all. K decides the channelID and the locator, so a handler minting its
+// own would answer a retry with a SECOND channel at a second address, leaving the first
+// one's images paid for and unreferenced. Held in the intent, every run writes the same
+// channel to the same place.
+export type ChannelCreateIntent = {
+  channelKey: string
+  channelID: string
+  name: string
+  description: string
+  visibility: ChannelVisibility
+  showOnProfile: boolean
+  authorDidDht: string
+  avatar?: ProfileImageSource
+  cover?: ProfileImageSource
+}
+
+export type ChannelCreateLedger = {
+  uploaded?: boolean
+  avatar?: ChannelImage
+  cover?: ChannelImage
+}
+
+export type ChannelCreateAction = ActionBase & {
+  kind: 'channel-create'
+  intent: ChannelCreateIntent
+  ledger: ChannelCreateLedger
+}
+
 // The journal's action union. Grows as kinds are added.
 export type Action =
   | PublishAction
@@ -203,6 +234,7 @@ export type Action =
   | ProfileImagesAction
   | CommentAction
   | ChannelEditAction
+  | ChannelCreateAction
 
 // Recognized kinds — hydration drops any persisted record whose kind isn't in
 // this set (e.g. legacy upload-queue tasks from before the journal rename,
@@ -213,6 +245,7 @@ export const ACTION_KINDS = [
   'profile-images',
   'comment',
   'channel-edit',
+  'channel-create',
 ] as const
 
 function newId(): string {
@@ -241,6 +274,12 @@ function publishLabels(intent: PublishIntent): {
 // so IDB doesn't hold a redundant (potentially large) byte payload.
 function persistableSnapshot(action: Action): Action {
   if (action.kind === 'profile-images' && action.ledger.uploaded) {
+    return {
+      ...action,
+      intent: { ...action.intent, avatar: undefined, cover: undefined },
+    }
+  }
+  if (action.kind === 'channel-create' && action.ledger.uploaded) {
     return {
       ...action,
       intent: { ...action.intent, avatar: undefined, cover: undefined },
@@ -326,6 +365,8 @@ type ActionQueueState = {
   enqueueComment: (intent: CommentIntent) => string
   // Enqueue a channel's settings save, images and all.
   enqueueChannelEdit: (intent: ChannelEditIntent, title: string) => string
+  // Enqueue a channel's creation. Its K and channelID are minted by the caller.
+  enqueueChannelCreate: (intent: ChannelCreateIntent) => string
   retry: (id: string) => void
   remove: (id: string) => void
   setProgress: (id: string, progress: number) => void
@@ -342,6 +383,11 @@ type ActionQueueState = {
   checkpointComment: (id: string, carried: UploadedCommentFile[]) => void
   // The same checkpoint for a channel edit: the images its upload produced.
   checkpointChannelEdit: (
+    id: string,
+    images: { avatar?: ChannelImage; cover?: ChannelImage },
+  ) => void
+  // The same checkpoint for a channel's creation.
+  checkpointChannelCreate: (
     id: string,
     images: { avatar?: ChannelImage; cover?: ChannelImage },
   ) => void
@@ -470,6 +516,24 @@ export const useActionStore = create<ActionQueueState>()((set) => ({
     persistResumable(action)
     return id
   },
+  enqueueChannelCreate: (intent) => {
+    const id = newId()
+    const action: ChannelCreateAction = {
+      id,
+      kind: 'channel-create',
+      state: 'pending',
+      progress: 0,
+      createdAt: new Date().toISOString(),
+      title: intent.name,
+      successLabel: 'Created',
+      failLabel: 'Create',
+      intent,
+      ledger: {},
+    }
+    set((s) => ({ actions: [...s.actions, action] }))
+    persistResumable(action)
+    return id
+  },
   retry: (id) =>
     set((s) => {
       const actions = s.actions.map((a) =>
@@ -572,6 +636,17 @@ export const useActionStore = create<ActionQueueState>()((set) => ({
     set((s) => {
       const actions = s.actions.map((a) =>
         a.id === id && a.kind === 'channel-edit'
+          ? { ...a, ledger: { ...a.ledger, ...images, uploaded: true } }
+          : a,
+      )
+      const updated = actions.find((a) => a.id === id)
+      if (updated) persistResumable(updated)
+      return { actions }
+    }),
+  checkpointChannelCreate: (id, images) =>
+    set((s) => {
+      const actions = s.actions.map((a) =>
+        a.id === id && a.kind === 'channel-create'
           ? { ...a, ledger: { ...a.ledger, ...images, uploaded: true } }
           : a,
       )

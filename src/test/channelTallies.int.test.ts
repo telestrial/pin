@@ -18,7 +18,7 @@ vi.mock('../lib/docs', async () =>
   (await import('./fakeModules')).fakeDocsModule(),
 )
 
-import { createChannel } from '../core/channels'
+import { createChannel, newChannelKey } from '../core/channels'
 import { channelKeyFromBase64 } from '../core/crypto'
 import {
   commitChannelManifest,
@@ -49,6 +49,7 @@ async function aChannelWithCounts(did: string, count: number) {
   const app = createFakeApp()
   const alice = app.createAccount({ did, handle: `${did}.test` })
   const created = await createChannel(alice.client, {
+    channelKey: await newChannelKey(),
     name: 'Counted',
     description: '',
   })
@@ -121,6 +122,7 @@ describe('integration: a channel’s published counts reach a reader', () => {
       handle: 'tally3.test',
     })
     const created = await createChannel(alice.client, {
+      channelKey: await newChannelKey(),
       name: 'Quiet',
       description: '',
     })
