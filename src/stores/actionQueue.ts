@@ -98,13 +98,48 @@ export type DeleteObjectsAction = ActionBase & {
   ledger: DeleteObjectsLedger
 }
 
+// An image a profile save has to put on Sia before the record can name it.
+export type ProfileImageSource = { bytes: Uint8Array; mimeType: string }
+
+// The slow half of saving a profile. The text fields are a local store write that
+// cannot fail, so they are applied at enqueue and never enter the journal; what
+// arrives here is the part that moves bytes — and, with them, the URLs the save
+// orphans, which are reclaimed once the record naming the new ones has landed.
+export type ProfileImagesIntent = {
+  avatar?: ProfileImageSource
+  cover?: ProfileImageSource
+  removeAvatar?: boolean
+  removeCover?: boolean
+  // Share URLs of the images being replaced or removed.
+  reclaimURLs: string[]
+}
+
+export type ProfileImagesLedger = {
+  // Set once the upload finishes, so a resume names the bytes it already put on Sia
+  // instead of paying for them twice. `uploaded` distinguishes a save with no images
+  // from one whose upload hasn't run — both leave the two URLs undefined.
+  uploaded?: boolean
+  avatarURL?: string
+  coverURL?: string
+}
+
+export type ProfileImagesAction = ActionBase & {
+  kind: 'profile-images'
+  intent: ProfileImagesIntent
+  ledger: ProfileImagesLedger
+}
+
 // The journal's action union. Grows as kinds are added.
-export type Action = PublishAction | DeleteObjectsAction
+export type Action = PublishAction | DeleteObjectsAction | ProfileImagesAction
 
 // Recognized kinds — hydration drops any persisted record whose kind isn't in
 // this set (e.g. legacy upload-queue tasks from before the journal rename,
 // which have no `kind` and a different shape).
-export const ACTION_KINDS = ['publish', 'delete-objects'] as const
+export const ACTION_KINDS = [
+  'publish',
+  'delete-objects',
+  'profile-images',
+] as const
 
 function newId(): string {
   return `act-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
@@ -131,6 +166,12 @@ function publishLabels(intent: PublishIntent): {
 // reads uploadedItemRef and never re-uploads. Drop them from the persisted copy
 // so IDB doesn't hold a redundant (potentially large) byte payload.
 function persistableSnapshot(action: Action): Action {
+  if (action.kind === 'profile-images' && action.ledger.uploaded) {
+    return {
+      ...action,
+      intent: { ...action.intent, avatar: undefined, cover: undefined },
+    }
+  }
   if (action.kind === 'publish' && action.ledger.uploadedItemRef) {
     return {
       ...action,
@@ -195,6 +236,9 @@ type ActionQueueState = {
     urls?: string[]
     label: string
   }) => string
+  // Enqueue the byte half of a profile save. No-ops (returns '') when the save
+  // moves no bytes and orphans nothing.
+  enqueueProfileImages: (intent: ProfileImagesIntent) => string
   retry: (id: string) => void
   remove: (id: string) => void
   setProgress: (id: string, progress: number) => void
@@ -202,6 +246,11 @@ type ActionQueueState = {
   setState: (id: string, state: ActionState, error?: string) => void
   // Record the post-upload checkpoint so a resume skips re-uploading.
   checkpoint: (id: string, uploadedItemRef: ItemRef) => void
+  // The same checkpoint for a profile save: the URLs its upload produced.
+  checkpointProfileImages: (
+    id: string,
+    urls: { avatarURL?: string; coverURL?: string },
+  ) => void
   // Mark one channel published (and persist) before moving to the next.
   markChannelPublished: (id: string, channelID: string) => void
   // Mark one delete-objects intent key (object ID or URL) reclaimed.
@@ -259,6 +308,32 @@ export const useActionStore = create<ActionQueueState>()((set) => ({
       failLabel: 'Reclaim',
       silent: true,
       intent: { objectIDs, urls },
+      ledger: {},
+    }
+    set((s) => ({ actions: [...s.actions, action] }))
+    persistResumable(action)
+    return id
+  },
+  enqueueProfileImages: (intent) => {
+    if (
+      !intent.avatar &&
+      !intent.cover &&
+      !intent.removeAvatar &&
+      !intent.removeCover &&
+      intent.reclaimURLs.length === 0
+    )
+      return ''
+    const id = newId()
+    const action: ProfileImagesAction = {
+      id,
+      kind: 'profile-images',
+      state: 'pending',
+      progress: 0,
+      createdAt: new Date().toISOString(),
+      title: intent.avatar || intent.cover ? 'Profile images' : 'Profile',
+      successLabel: 'Saved',
+      failLabel: 'Save',
+      intent,
       ledger: {},
     }
     set((s) => ({ actions: [...s.actions, action] }))
@@ -335,6 +410,17 @@ export const useActionStore = create<ActionQueueState>()((set) => ({
       const actions = s.actions.map((a) =>
         a.id === id && a.kind === 'publish'
           ? { ...a, ledger: { ...a.ledger, uploadedItemRef } }
+          : a,
+      )
+      const updated = actions.find((a) => a.id === id)
+      if (updated) persistResumable(updated)
+      return { actions }
+    }),
+  checkpointProfileImages: (id, urls) =>
+    set((s) => {
+      const actions = s.actions.map((a) =>
+        a.id === id && a.kind === 'profile-images'
+          ? { ...a, ledger: { ...a.ledger, ...urls, uploaded: true } }
           : a,
       )
       const updated = actions.find((a) => a.id === id)

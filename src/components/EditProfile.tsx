@@ -24,6 +24,7 @@ export function EditProfile({
 }) {
   const client = useAuthStore((s) => s.client)
   const setProfile = useAuthStore((s) => s.setProfile)
+  const enqueueImages = useActionStore((s) => s.enqueueProfileImages)
 
   const [loading, setLoading] = useState(true)
   const [original, setOriginal] = useState<ProfileRecord | null>(null)
@@ -133,49 +134,39 @@ export function EditProfile({
     setSubmitting(true)
     setError(null)
     try {
+      // The text, now. It is a local store write that cannot fail, so the name on your
+      // own profile changes as you save rather than when Sia is done with the pictures.
+      //
+      // setProfile's read-current-then-patch path interprets undefined as "keep what's
+      // there." Explicit clearing for displayName/bio isn't a v1 affordance (vs.
+      // avatar/cover, which are explicit via removeAvatar / removeCover flags). Local
+      // write; the identity-doc publisher pushes it.
       const patch: ProfilePatch = {
         username: normalizeUsername(username) || undefined,
         displayName: displayName.trim() || undefined,
         bio: bio.trim() || undefined,
       }
-
-      // Upload new image bytes (if any) before writing the record so the
-      // URL we record is real. Each upload is its own Sia object —
-      // sub-slab cost today; future repack scope expansion can consolidate.
-      if (newAvatarFile) {
-        const buf = await newAvatarFile.arrayBuffer()
-        const uploaded = await client.uploadItem(new Uint8Array(buf))
-        patch.avatarURL = uploaded.itemURL
-      } else if (removeExistingAvatar) {
-        patch.removeAvatar = true
-      }
-
-      if (newCoverFile) {
-        const buf = await newCoverFile.arrayBuffer()
-        const uploaded = await client.uploadItem(new Uint8Array(buf))
-        patch.coverURL = uploaded.itemURL
-      } else if (removeExistingCover) {
-        patch.removeCover = true
-      }
-
-      // setProfile's read-current-then-patch path interprets undefined as
-      // "keep what's there." Explicit clearing for displayName/bio isn't a v1
-      // affordance (vs. avatar/cover, which are explicit via removeAvatar /
-      // removeCover flags). Local write; the identity-doc publisher pushes it.
       setProfile(patch)
 
-      // Reclaim old avatar/cover bytes a replace/remove orphaned — durable,
-      // retried byte-cleanup via the journal. Per-object Sia encryption makes
-      // each image's objectID unique, so this is reference-safe. (Closes the
-      // image-swap leak; previously these bytes just accumulated.)
+      // The images, through the journal: bytes are the unbounded, failure-prone half, and
+      // reading them here rather than in the handler keeps the File out of a record that
+      // has to survive a reload. The old URLs ride along so the reclaim happens after the
+      // record naming the new ones has landed.
       const reclaimURLs: string[] = []
       if ((newAvatarFile || removeExistingAvatar) && original?.avatarURL)
         reclaimURLs.push(original.avatarURL)
       if ((newCoverFile || removeExistingCover) && original?.coverURL)
         reclaimURLs.push(original.coverURL)
-      useActionStore.getState().enqueueDeleteObjects({
-        urls: reclaimURLs,
-        label: 'Reclaiming old profile image',
+      const toSource = async (f: File) => ({
+        bytes: new Uint8Array(await f.arrayBuffer()),
+        mimeType: f.type,
+      })
+      enqueueImages({
+        avatar: newAvatarFile ? await toSource(newAvatarFile) : undefined,
+        cover: newCoverFile ? await toSource(newCoverFile) : undefined,
+        removeAvatar: removeExistingAvatar,
+        removeCover: removeExistingCover,
+        reclaimURLs,
       })
 
       onSaved()

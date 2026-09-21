@@ -13,6 +13,10 @@ import {
   runDeleteObjects,
 } from '../actions/deleteObjects'
 import {
+  type ProfileImagesContext,
+  runProfileImages,
+} from '../actions/profileImages'
+import {
   type PublishContext,
   runPublish,
   SilentActionError,
@@ -95,6 +99,18 @@ export function useActionRunner() {
               store.markChannelPublished(action.id, channelID),
           }
           return runPublish(action, ctx)
+        }
+        case 'profile-images': {
+          const store = useActionStore.getState()
+          const ctx: ProfileImagesContext = {
+            client,
+            setPhase: (phase, progress) =>
+              store.setPhase(action.id, phase, progress),
+            setProgress: (progress) => store.setProgress(action.id, progress),
+            checkpoint: (urls) =>
+              store.checkpointProfileImages(action.id, urls),
+          }
+          return runProfileImages(action, ctx)
         }
         case 'delete-objects': {
           const store = useActionStore.getState()
