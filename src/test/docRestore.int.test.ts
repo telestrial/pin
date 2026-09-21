@@ -275,6 +275,23 @@ describe('integration: restoring the doc from the snapshot', () => {
     expect(written).toEqual([])
   })
 
+  it('answers unknown when the locator says nothing but the scope holds objects', async () => {
+    // A locator that answers with nothing and an identity that published nothing are the
+    // same bytes. A relay rate-limiting the tab returns no packet and no error, and a
+    // browser reads the relays while a desktop publishes to Mainline — so a locator that
+    // exists can be invisible to whoever is asking. Read as `none` this releases the
+    // loops to publish an empty doc over a full one, which is the cross-device wipe.
+    //
+    // Objects held is what says somebody has been here, and no pointer is cached, so
+    // nothing else could.
+    await holdSomething()
+
+    const outcome = await hydrateFromSia(client, appKey)
+
+    expect(outcome.kind).toBe('unknown')
+    expect(written).toEqual([])
+  })
+
   it('stays unknown when the listing is empty but the byte total is not', async () => {
     // The two reads disagreeing is exactly the hiccup the second one is there for, and
     // the safe reading of a disagreement is the one that publishes nothing.

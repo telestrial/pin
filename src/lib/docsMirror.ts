@@ -187,11 +187,17 @@ async function readSnapshotViaPointers(
     return { kind: 'unknown', error: `settings locator: ${String(e)}` }
   }
   if (!current) {
-    // Holding a pointer means this identity has snapshotted at least once, so a
-    // locator naming nothing is a locator that failed to answer.
-    return cached
-      ? { kind: 'unknown', error: 'settings locator names no snapshot' }
-      : { kind: 'none' }
+    // A locator naming nothing is a locator that did not answer, and it must not be read
+    // as an identity that has published nothing. The two are the same bytes: a relay
+    // rate-limiting us returns no packet and no error, and a browser reads the relays
+    // while a desktop publishes to Mainline, so a locator that genuinely exists can be
+    // invisible to the tab asking. Either one, taken for `none`, releases the loops to
+    // publish an empty doc over a full one.
+    //
+    // Whether anything was published is settled by the scope instead, one level up. That
+    // subsumes the pointer this used to test — holding one proves a snapshot existed
+    // once, where the scope says whether anything survives now, which is the question.
+    return { kind: 'unknown', error: 'settings locator names no snapshot' }
   }
   if (current === cached) {
     return { kind: 'unknown', error: `snapshot ${current}: unreadable` }
