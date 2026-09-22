@@ -83,7 +83,6 @@ type AuthState = {
   // recovery-read: a new user never resolves the DHT locator (they create their
   // settings), while a restore / wiped-pointer boot does. Runtime-only (session-
   // scoped, never persisted): a later boot is no longer "just created".
-  justCreatedAccount: boolean
   // Soft lock: when true, the connected surface is replaced by the lock
   // screen. The session (sdk, AppKey) stays live and the background runners
   // keep going — this is a visual gate, not a teardown — so unlocking is
@@ -136,7 +135,6 @@ type AuthState = {
   setSettingsObjectID: (id: string) => void
   setSettingsLoaded: (loaded: boolean) => void
   setSettingsDirty: (dirty: boolean) => void
-  setJustCreatedAccount: (justCreated: boolean) => void
   setLocked: (locked: boolean) => void
   reset: () => void
 }
@@ -163,7 +161,6 @@ export const useAuthStore = create<AuthState>()(
       settingsObjectID: null,
       settingsLoaded: false,
       settingsDirty: false,
-      justCreatedAccount: false,
       locked: false,
       setClient: (client) => set({ client, step: 'connected', error: null }),
       setStep: (step) => set({ step, error: null }),
@@ -305,8 +302,6 @@ export const useAuthStore = create<AuthState>()(
       setSettingsObjectID: (settingsObjectID) => set({ settingsObjectID }),
       setSettingsLoaded: (settingsLoaded) => set({ settingsLoaded }),
       setSettingsDirty: (settingsDirty) => set({ settingsDirty }),
-      setJustCreatedAccount: (justCreatedAccount) =>
-        set({ justCreatedAccount }),
       setLocked: (locked) => set({ locked }),
       reset: () => {
         useFeedStore.getState().reset()
@@ -328,7 +323,6 @@ export const useAuthStore = create<AuthState>()(
           settingsObjectID: null,
           settingsLoaded: false,
           settingsDirty: false,
-          justCreatedAccount: false,
           locked: false,
         })
       },

@@ -9,8 +9,7 @@ import { useAuthStore } from '../../stores/auth'
 import { CopyButton } from '../ui/CopyButton'
 
 export function RecoveryScreen() {
-  const { setClient, setStoredKeyHex, setError, setJustCreatedAccount } =
-    useAuthStore()
+  const { setClient, setStoredKeyHex, setError } = useAuthStore()
   const [mode, setMode] = useState<'choose' | 'generate' | 'import'>('choose')
   const [phrase, setPhrase] = useState('')
   const [generatedPhrase, setGeneratedPhrase] = useState('')
@@ -58,7 +57,6 @@ export function RecoveryScreen() {
       // existing one (recover settings from the DHT locator). Set BEFORE setClient
       // (which transitions to connected + runs the settings load) so the load knows
       // whether to attempt recovery.
-      setJustCreatedAccount(mode === 'generate')
       const { indexerURL } = useAuthStore.getState()
       setClient(await connectSiaClient(appKeyHex, indexerURL))
     } catch (e) {
