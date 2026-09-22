@@ -283,7 +283,13 @@ export async function hydrateFromSia(
   return { kind: 'restored', records }
 }
 
-/** Read one record's bytes straight from the latest Sia snapshot, WITHOUT the
+/** DIAGNOSTIC ONLY — no production caller, and reviving one would re-open the second
+ *  recovery path that emptied an account. The settings load reads the doc now, and the
+ *  doc is filled by the restore; this exists so a person can ask the SNAPSHOT directly,
+ *  bypassing both, when the question is whether the durable copy is readable at all.
+ *  Unlike the load path it does not swallow the distinction: `unknown` throws.
+ *
+ *  Read one record's bytes straight from the latest Sia snapshot, WITHOUT the
  *  pin-core engine (no wasm, no relay). The boot read path: settings / channels
  *  can be sourced from the durable snapshot cheaply. Pass `recoverViaLocator` to
  *  fall back to the durable DHT locator when there's no local pointer (a restore /

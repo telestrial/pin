@@ -1,9 +1,9 @@
-import { useEffect, useRef } from 'react'
+import { useEffect } from 'react'
 import { decryptSettings, deriveSettingsKey } from '../../core/crypto'
 import { type DispatchSettings, SETTINGS_VERSION } from '../../core/settings'
-import type { SiaClient } from '../../core/siaClient'
 import { useAuthStore } from '../../stores/auth'
-import { readRecordFromSnapshot } from '../docsMirror'
+import { useCuratorStore } from '../../stores/curator'
+import { getRecord, openDocs } from '../docs'
 import { flushSettingsMirror } from './useSettingsDocsMirror'
 
 // The durable settings write is the Sia snapshot (useSettingsDocsMirror) now —
@@ -25,95 +25,93 @@ export async function flushSettingsBestEffort(): Promise<void> {
   }
 }
 
-// Loads the user's settings on boot from the Sia snapshot (the canonical store,
-// written by useSettingsDocsMirror). No atproto: settings are keyed on the Sia
-// AppKey alone, so a session-less did:dht-native user rehydrates from Sia just
-// the same.
+// Load this identity's settings from the doc, once the restore has settled.
+//
+// THE DOC IS THE ONLY SOURCE, which is the boundary this file used to sit outside of:
+// the Curator owns state and the network, and the frontend reads the repo. This hook
+// resolved settings by reaching past that — its own Sia download, its own locator
+// recovery, its own decision about what an unreadable snapshot meant — and that second
+// recovery path is what emptied an account. It read the snapshot, a failure came back
+// indistinguishable from an absence, the naming gate fired on the empty state it left,
+// and the `settings/self` that naming wrote carried a newer timestamp than the peer's.
+//
+// So the two paths are one now. The doc holds `settings/self`; what fills the doc differs
+// by platform for a physical reason and is already handled in `useDocRestore` — a redb
+// store already has it, a MemStore is refilled from the snapshot. Either way this reads
+// one record and the distinction never reaches here.
+//
+// `docRestore` is what makes an absence mean something. Ready is the restore having put
+// back what the snapshot held, or having established there was nothing to put back;
+// unknown is nobody having answered, and this hook then does NOT load, so the naming gate
+// stays away and no loop publishes. A browser where Sia cannot be read now declines to
+// start rather than publishing an empty identity over a full one. That is the 08-07
+// lockout objection answered rather than dodged: the read retries with backoff and the
+// account survives being unreadable, where it did not survive being read as empty.
 export function useSettingsSync() {
   const client = useAuthStore((s) => s.client)
   const storedKeyHex = useAuthStore((s) => s.storedKeyHex)
-  const settingsKeyRef = useRef<Uint8Array | null>(null)
+  const docRestored = useCuratorStore((s) => s.docRestore === 'ready')
 
   useEffect(() => {
-    if (!client || !storedKeyHex) return
+    if (!client || !storedKeyHex || !docRestored) return
     if (useAuthStore.getState().settingsLoaded) return
 
     let cancelled = false
     ;(async () => {
       try {
-        const appKeyBytes = Uint8Array.fromHex(storedKeyHex)
-        const key = await deriveSettingsKey(appKeyBytes)
-        if (cancelled) return
-        settingsKeyRef.current = key
-
+        // Local holds mutations that were never mirrored (a crash mid-write last
+        // session). Local is fresher, so mark loaded and let the mirror's boot catch-up
+        // push it out; reading the doc over it would clobber the newer state.
         if (useAuthStore.getState().settingsDirty) {
-          // Local has unpushed mutations (crash mid-mirror last session). Local
-          // is fresher — don't overwrite it; mark loaded and let the mirror's
-          // boot catch-up (stale fingerprint) re-push.
           useAuthStore.getState().setSettingsLoaded(true)
           return
         }
 
-        // A brand-new account (this session created it) has nothing to recover, so
-        // skip the DHT locator resolve. A restore / wiped-pointer boot recovers
-        // settings from the durable locator when there's no local pointer.
-        const recoverViaLocator = !useAuthStore.getState().justCreatedAccount
-        const snap = await readSettingsFromSnapshot(
-          client,
-          appKeyBytes,
-          key,
-          recoverViaLocator,
-        ).catch(() => null)
+        await openDocs(storedKeyHex)
         if (cancelled) return
-        if (snap) {
-          useAuthStore
-            .getState()
-            .hydrateSettings(
-              snap.myChannels,
-              snap.subscriptions,
-              snap.dismissedAutoWatch ?? [],
-              snap.theme ?? useAuthStore.getState().theme,
-              snap.follows ?? [],
-              snap.handleFollows ?? [],
-              snap.profile ?? null,
-            )
-        } else {
-          // No snapshot yet — first user mutation creates it.
+        const raw = await getRecord('settings', 'self')
+        if (cancelled) return
+        if (!raw) {
+          // No record, and the restore is what makes that an answer rather than a gap:
+          // a brand-new identity, which is the state every account starts in.
           useAuthStore.getState().setSettingsLoaded(true)
+          return
         }
+
+        const key = await deriveSettingsKey(Uint8Array.fromHex(storedKeyHex))
+        const s = JSON.parse(
+          await decryptSettings(key, new TextDecoder().decode(raw)),
+        ) as DispatchSettings
+        if (cancelled) return
+        if (s.version !== SETTINGS_VERSION) {
+          // Never apply what cannot be trusted. Loaded anyway: the version is a fact
+          // about the record rather than a failure to read it, and refusing to load
+          // would leave the app unable to start with no way out.
+          useAuthStore.getState().setSettingsLoaded(true)
+          return
+        }
+        useAuthStore
+          .getState()
+          .hydrateSettings(
+            s.myChannels,
+            s.subscriptions,
+            s.dismissedAutoWatch ?? [],
+            s.theme ?? useAuthStore.getState().theme,
+            s.follows ?? [],
+            s.handleFollows ?? [],
+            s.profile ?? null,
+          )
       } catch (e) {
         if (cancelled) return
-        console.warn('Settings load failed:', e)
-        // Treat load failure as "no settings yet" rather than blocking — a
-        // transient hiccup shouldn't wipe local state.
-        useAuthStore.getState().setSettingsLoaded(true)
+        // A doc read that threw, which is NOT an absence of settings. Staying unloaded
+        // holds the naming gate and every publishing loop; the effect re-runs when the
+        // restore reports again. Converting this into a load is the bug this hook had.
+        console.warn('Settings load failed; staying unloaded:', e)
       }
     })()
 
     return () => {
       cancelled = true
     }
-  }, [client, storedKeyHex])
-}
-
-// Read + decrypt settings/self straight from the latest Sia snapshot (the doc's
-// durable projection), without the pin-core engine. Returns null if there's no
-// snapshot, no settings entry, or a version mismatch.
-async function readSettingsFromSnapshot(
-  client: SiaClient,
-  appKeyBytes: Uint8Array,
-  key: Uint8Array,
-  recoverViaLocator: boolean,
-): Promise<DispatchSettings | null> {
-  const bytes = await readRecordFromSnapshot(
-    client,
-    appKeyBytes,
-    'settings',
-    'self',
-    recoverViaLocator,
-  )
-  if (!bytes) return null
-  const json = await decryptSettings(key, new TextDecoder().decode(bytes))
-  const s = JSON.parse(json) as DispatchSettings
-  return s.version === SETTINGS_VERSION ? s : null
+  }, [client, storedKeyHex, docRestored])
 }
