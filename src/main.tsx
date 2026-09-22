@@ -381,9 +381,21 @@ if (import.meta.env.DEV || inTauri()) {
     // What the doc holds now, by collection. `endorse/` is the one the restore exists
     // for: the identity loop assembles a directory from it, and an absence there is
     // published as a withdrawal.
+    // Bounded, because the doc may not be open — on the naming screen the restore is
+    // still deciding, and a read that waits on it hangs the whole report. An instrument
+    // that can hang cannot report, and the line it would have printed is worth less than
+    // knowing the read did not come back.
+    const withTimeout = async <T,>(p: Promise<T>, ms: number): Promise<T> =>
+      await Promise.race([
+        p,
+        new Promise<T>((_, reject) =>
+          setTimeout(() => reject(new Error(`timed out after ${ms}ms`)), ms),
+        ),
+      ])
+
     try {
       const { listAll } = await import('./lib/docs')
-      const keys = await listAll()
+      const keys = await withTimeout(listAll(), 5000)
       const byCollection = new Map<string, number>()
       for (const k of keys) {
         byCollection.set(
