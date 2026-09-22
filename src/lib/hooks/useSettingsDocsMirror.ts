@@ -158,6 +158,21 @@ export function useSettingsDocsMirror() {
     }
 
     const mirror = async () => {
+      // NOTHING IS MIRRORED BEFORE THE LOAD HAS ESTABLISHED WHAT LOCAL STATE IS.
+      //
+      // A fresh tab holds an empty persisted store and no fingerprint, so those differ
+      // and the boot catch-up below schedules a mirror of that emptiness. The restore it
+      // is racing is a DHT resolve and a Sia download, which takes longer than the 2s
+      // debounce every time — so the write lands first, carries a newer `updatedAt` than
+      // the peer's, and the peer's overlay applies it. That is the cross-device wipe, and
+      // it is a WRITE-side failure: the reader being careful cannot help when the writer
+      // publishes state it never read.
+      //
+      // `settingsLoaded` is only true once the doc has answered — hydrated, positively
+      // empty, or local being the fresher copy — so it is exactly the question this needs
+      // answered before it may publish. The transition back into `schedule` is below, or
+      // a boot with unmirrored local state would never push it.
+      if (!useAuthStore.getState().settingsLoaded) return
       const fp = settingsFingerprint()
       // Already mirrored this exact content — skip before touching pin-core.
       if (fp === readFingerprint()) return
@@ -205,6 +220,14 @@ export function useSettingsDocsMirror() {
     }
 
     const unsub = useAuthStore.subscribe((s, p) => {
+      // The load finishing is itself a reason to mirror: `mirror` declines while settings
+      // are unloaded, so whatever the boot catch-up wanted to push was dropped rather
+      // than deferred. Without this a session whose local state was never mirrored — a
+      // crash mid-write last time — would keep it local forever.
+      if (!p.settingsLoaded && s.settingsLoaded) {
+        schedule()
+        return
+      }
       if (
         s.myChannels === p.myChannels &&
         s.subscriptions === p.subscriptions &&
