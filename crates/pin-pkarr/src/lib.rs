@@ -102,8 +102,43 @@ const RETRY_DELAY_MS: u32 = 2000;
 /// subtract resilience under this design rather than adding it; a dead one would cost the
 /// full timeout. The wider-overlap argument for read-after-write doesn't pay for that,
 /// since the two below are the relays our own records actually live on.
-#[cfg(target_arch = "wasm32")]
+#[cfg(any(target_arch = "wasm32", test))]
 const RELAYS: [&str; 2] = ["https://pkarr.pubky.org", "https://pkarr.pubky.app"];
+
+/// The relay set in force, when something has set one.
+///
+/// Held on both targets although only the browser reads it, so a caller never needs a
+/// `cfg` to configure the transport: native publishes and resolves against Mainline
+/// directly and has no relay leg to point anywhere. Accepting a list it will not use is
+/// the honest shape, because the alternative is every applier branching on target to
+/// decide whether the call is legal.
+///
+/// A `RwLock` rather than a `OnceLock` because the choice is a user's, made on the
+/// welcome screen, and a user can change it.
+static RELAY_OVERRIDE: std::sync::RwLock<Option<Vec<String>>> = std::sync::RwLock::new(None);
+
+/// Point the browser's publish and resolve at a chosen relay set.
+///
+/// Until the app sets one, [`RELAYS`] stands in — which is the value every record
+/// published before this existed lives on, so an unconfigured build behaves as it
+/// always did rather than failing. Once the app owns the default that fallback is the
+/// quietest failure left here: it would work, against relays nobody picked.
+pub fn set_relays(relays: Vec<String>) {
+    *RELAY_OVERRIDE.write().expect("poisoned") = Some(relays);
+}
+
+/// The relay set to fan out across, chosen or inherited.
+///
+/// A set is taken as given, empty included — refusing an empty one belongs to
+/// `pin_rpc::relays::Relays::parse`, which is where a configured set is read, and two
+/// places enforcing one rule is how they come to disagree about it.
+#[cfg(any(target_arch = "wasm32", test))]
+fn relays() -> Vec<String> {
+    match RELAY_OVERRIDE.read().expect("poisoned").as_ref() {
+        Some(chosen) => chosen.clone(),
+        None => RELAYS.iter().map(|r| (*r).to_string()).collect(),
+    }
+}
 
 /// How many times to re-attempt a DHT lookup. Cold-client Mainline lookups are
 /// timing-sensitive — a single attempt can miss a record that is genuinely there — so
@@ -230,12 +265,12 @@ pub fn extract_txt(packet: &SignedPacket) -> Vec<TxtRecord> {
 /// write out to every relay and gather every answer on read.
 #[cfg(target_arch = "wasm32")]
 fn relay_clients(timeout_ms: u64) -> Result<Vec<Client>, String> {
-    RELAYS
-        .iter()
+    relays()
+        .into_iter()
         .map(|relay| {
             let mut b = Client::builder();
             b.no_dht();
-            b.relays(&[*relay])
+            b.relays(&[relay.as_str()])
                 .map_err(|e| format!("relay {relay}: {e}"))?;
             b.request_timeout(std::time::Duration::from_millis(timeout_ms));
             b.build().map_err(|e| format!("relay client: {e}"))
@@ -363,6 +398,20 @@ pub async fn resolve(did_or_key: &str) -> Result<Vec<TxtRecord>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Both transitions in one test because the set is process-global: two tests
+    /// asserting on it would race each other under the default parallel runner, and the
+    /// one that lost would report the other's value as a failure of its own.
+    #[test]
+    fn a_chosen_relay_set_replaces_the_inherited_one() {
+        assert_eq!(
+            relays(),
+            RELAYS.to_vec(),
+            "unset falls back to the published pair"
+        );
+        set_relays(vec!["http://localhost:6881".to_string()]);
+        assert_eq!(relays(), vec!["http://localhost:6881".to_string()]);
+    }
 
     #[test]
     fn public_key_from_seed_is_deterministic() {

@@ -52,6 +52,8 @@
 //! a direct path, but it answers the same protocol — hence one shared crate instead
 //! of a native copy and a wasm copy that could drift apart.
 
+pub mod relays;
+
 use std::sync::{Arc, Mutex};
 
 use iroh::endpoint::{Connection, VarInt};
