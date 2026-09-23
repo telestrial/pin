@@ -4,10 +4,10 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "bash scripts/dev.sh",
-    "dev:lan": "PIN_LAN=1 bash scripts/dev.sh",
+    "dev": "bash scripts/with-relays.sh ./node_modules/.bin/vite",
+    "dev:lan": "PIN_LAN=1 VITE_RELAY_PRESET=public vite",
     "dev:relays": "bash scripts/dev-relays.sh",
-    "dev:desktop": "bun run build && tauri dev",
+    "dev:desktop": "bun run build && bash scripts/with-relays.sh bunx tauri dev",
     "dev:desktop:pair": "bash scripts/dev-desktop.sh",
     "dev:desktop:trio": "bash scripts/dev-desktop.sh primary b c",
     "build": "tsc -b && vite build",

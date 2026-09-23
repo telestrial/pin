@@ -9,6 +9,14 @@ import { defineConfig } from 'vite'
 // the app's Web Crypto (crypto.subtle — every HKDF/AES-GCM key derivation) is
 // unavailable outside a secure context. 127.0.0.1/localhost are secure even
 // over http, so the normal `bun run dev` stays plain http on 127.0.0.1.
+//
+// That HTTPS is also why `dev:lan` pins VITE_RELAY_PRESET=public. The relays we run
+// serve plain http, and an https page cannot reach http:// or ws:// — browsers block
+// both as mixed content. So a LAN device pointed at the local relays would resolve
+// nothing, in the shape this app is worst at reporting: indistinguishable from a
+// network where nobody has published anything. Typing the host's address into the
+// custom relay field fails identically; the scheme is the problem, not the host.
+// Reaching our own relays from a second device would mean giving both of them TLS.
 // Local declaration so we don't pull in all of @types/node for one env read.
 declare const process: { env: Record<string, string | undefined> }
 const lan = process.env.PIN_LAN === '1'

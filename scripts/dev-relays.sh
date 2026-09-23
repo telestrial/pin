@@ -20,9 +20,6 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-PKARR_PORT=6881
-IROH_PORT=3340
-
 missing=""
 for bin in pkarr-relay iroh-relay; do
   command -v "$bin" >/dev/null 2>&1 || missing="$missing $bin"
@@ -38,15 +35,7 @@ if [ -n "$missing" ]; then
   exit 1
 fi
 
-# A listening socket says a process holds the port; only a response says a relay is
-# answering on it. The difference matters here because a half-dead relay and a healthy
-# one are exactly what this posture cannot tell apart later.
-#
-# Each relay gets the path it actually serves. iroh's is `/ping`, which exists for this
-# — its root is not a route, so probing there reports a healthy relay as down.
-answering() {
-  curl -fsS -o /dev/null --max-time 2 "http://127.0.0.1:$1$2" 2>/dev/null
-}
+. scripts/relay-common.sh
 
 # The relay refuses to start when its cache directory is absent.
 mkdir -p target/pkarr-relay-cache
@@ -57,7 +46,7 @@ mkdir -p target/pkarr-relay-cache
 trap 'kill 0' INT TERM
 
 started=0
-if answering "$PKARR_PORT" /; then
+if answering "$PKARR_URL"; then
   echo "pkarr relay already answering on $PKARR_PORT"
 else
   echo "starting pkarr relay on $PKARR_PORT..."
@@ -65,7 +54,7 @@ else
   started=1
 fi
 
-if answering "$IROH_PORT" /ping; then
+if answering "$IROH_URL"; then
   echo "iroh relay already answering on $IROH_PORT"
 else
   echo "starting iroh relay on $IROH_PORT..."
