@@ -9,6 +9,24 @@ export const APP_KEY = 'f6b7539e181e45ee750a491a58aa8392830a17c402115cf47c6e7dfe
 export const APP_NAME = 'Pin'
 export const DEFAULT_INDEXER_URL = 'https://sia.storage'
 
+// The relays a fresh instance reaches the network through. See lib/relays.ts for what
+// each kind carries.
+//
+// The pkarr pair is the set every record published before this was configurable lives
+// on, so an instance that changes nothing resolves what it always did. The iroh four
+// are n0's, matching what `presets::N0` bound to at each of the three call sites this
+// replaced.
+export const DEFAULT_PKARR_RELAYS = [
+  'https://pkarr.pubky.org',
+  'https://pkarr.pubky.app',
+]
+export const DEFAULT_IROH_RELAYS = [
+  'https://use1-1.relay.n0.iroh.link.',
+  'https://usw1-1.relay.n0.iroh.link.',
+  'https://euc1-1.relay.n0.iroh.link.',
+  'https://aps1-1.relay.n0.iroh.link.',
+]
+
 // Erasure coding parameters — passed to sdk.upload() and encodedSize().
 export const DATA_SHARDS = 10
 export const PARITY_SHARDS = 20

@@ -19,7 +19,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use futures_lite::StreamExt as _;
-use iroh::{endpoint::presets, protocol::Router, Endpoint};
+use iroh::{protocol::Router, Endpoint};
 use iroh_blobs::{store::mem::MemStore, BlobsProtocol, ALPN as BLOBS_ALPN};
 use iroh_docs::{
     api::{
@@ -113,16 +113,45 @@ fn engine() -> Result<Rc<Engine>, JsValue> {
         .ok_or_else(|| JsValue::from_str("pin-core not initialized (call open first)"))
 }
 
+// The relays this tab reaches the network through, once something has chosen them.
+//
+// Held here rather than passed to each entry point because two callers handing the
+// same setting in separately is how they come to hand in different ones — and both
+// legs are wanted: `pin_pkarr` fans our own records across the pkarr set, and the
+// endpoint below binds against the iroh set.
+thread_local! {
+    static RELAYS: RefCell<Option<pin_rpc::relays::Relays>> = const { RefCell::new(None) };
+}
+
+/// Choose the relays before anything that reaches the network is built.
+///
+/// Sets `pin_pkarr`'s fan-out as a side effect, so the two legs cannot be configured
+/// out of step with one another.
+#[wasm_bindgen]
+pub fn configure_relays(pkarr: Vec<String>, iroh: Vec<String>) -> Result<(), JsValue> {
+    let relays = pin_rpc::relays::Relays::parse(&pkarr, &iroh).map_err(je)?;
+    pin_pkarr::set_relays(relays.pkarr().to_vec());
+    RELAYS.with(|r| *r.borrow_mut() = Some(relays));
+    Ok(())
+}
+
 /// Open (create) the in-memory doc engine, with the namespace + author derived from
 /// the Sia AppKey. Returns the namespace id. A second call rebuilds from scratch.
+///
+/// Refuses to bind until `configure_relays` has run. An endpoint built on a compiled-in
+/// default would reach the network and work, against relays nobody picked, which is the
+/// failure that takes longest to notice.
 #[wasm_bindgen]
 pub async fn open(app_key_hex: String) -> Result<String, JsValue> {
+    let relays = RELAYS
+        .with(|r| r.borrow().clone())
+        .ok_or_else(|| JsValue::from_str("relays not configured (call configure_relays first)"))?;
     let app_key = decode_app_key(&app_key_hex)
         .ok_or_else(|| JsValue::from_str("app key hex must be 32 bytes (64 hex chars)"))?;
     let ns_seed = hkdf32(&app_key, NS_INFO);
     let author_seed = hkdf32(&app_key, AUTHOR_INFO);
 
-    let endpoint = Endpoint::bind(presets::N0).await.map_err(je)?;
+    let endpoint = Endpoint::bind(&relays).await.map_err(je)?;
     let blobs = MemStore::default();
     let gossip = Gossip::builder().spawn(endpoint.clone());
     let docs = Docs::memory()

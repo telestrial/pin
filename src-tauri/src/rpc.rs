@@ -9,7 +9,6 @@
 
 use std::time::Duration;
 
-use iroh::endpoint::presets;
 use iroh::{Endpoint, EndpointAddr};
 
 pub use pin_rpc::{clear, new_inbox, queued, HeyHandler, HeyInbox, ALPN};
@@ -30,8 +29,12 @@ const LANDING_TIMEOUT: Duration = Duration::from_secs(5);
 /// replaces: an ack only said the frame was received, where inbox depth says it was
 /// understood and parked. The caller clears the inbox afterward, since this knock is
 /// synthetic.
-pub async fn self_test(server_addr: EndpointAddr, inbox: &HeyInbox) -> Result<String, String> {
-    let client = Endpoint::bind(presets::N0)
+pub async fn self_test(
+    server_addr: EndpointAddr,
+    inbox: &HeyInbox,
+    relays: &pin_rpc::relays::Relays,
+) -> Result<String, String> {
+    let client = Endpoint::bind(relays)
         .await
         .map_err(|e| format!("client bind: {e}"))?;
     let result = run_self_test(&client, server_addr, inbox).await;

@@ -206,8 +206,12 @@ export async function startCurator(
   if (!inTauri()) return webStatus()
   const { invoke } = await import('@tauri-apps/api/core')
   const { useCuratorStore } = await import('../stores/curator')
+  const { resolveRelays } = await import('./relays')
+  const relays = resolveRelays()
   const report = await invoke<NativeCuratorReport>('start_curator', {
     appKeyHex: appKeyHex ?? null,
+    pkarrRelays: relays.pkarr,
+    irohRelays: relays.iroh,
   })
   return {
     ...report,

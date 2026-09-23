@@ -22,6 +22,7 @@ import {
 } from '../../crates/pin-core/pkg/pin_core.js'
 import { deriveDidDhtSeed } from '../core/crypto'
 import { ensureWasm } from '../core/wasm'
+import { ensureRelays } from './relays'
 
 /** A name/value pair to publish as a TXT record in a pkarr document. */
 export type PkarrTxt = { name: string; value: string }
@@ -100,7 +101,7 @@ export async function publishRecords(
   seed: Uint8Array,
   records: PkarrTxt[],
 ): Promise<void> {
-  await ensureWasm()
+  await ensureRelays()
   await pkarr_publish(seed, JSON.stringify(records))
 }
 
@@ -108,6 +109,6 @@ export async function publishRecords(
  *  records, asking every relay and keeping the newest answer. `name` comes back
  *  fully-qualified (`_x.<pubkey>`). Nothing published resolves to []. */
 export async function resolveDidDht(didOrKey: string): Promise<PkarrTxt[]> {
-  await ensureWasm()
+  await ensureRelays()
   return JSON.parse(await pkarr_resolve(didOrKey)) as PkarrTxt[]
 }

@@ -135,6 +135,14 @@ export function comment_seal_collection(): string;
 export function comment_subject(actor: string, created_at: string): string;
 
 /**
+ * Choose the relays before anything that reaches the network is built.
+ *
+ * Sets `pin_pkarr`'s fan-out as a side effect, so the two legs cannot be configured
+ * out of step with one another.
+ */
+export function configure_relays(pkarr: string[], iroh: string[]): void;
+
+/**
  * A plaintext content fingerprint (CIDv1, raw codec, SHA-256).
  *
  * Uploads already carry their own hash back from `pin-sia`, so nothing in the
@@ -434,6 +442,10 @@ export function max_comment_bytes(): number;
 /**
  * Open (create) the in-memory doc engine, with the namespace + author derived from
  * the Sia AppKey. Returns the namespace id. A second call rebuilds from scratch.
+ *
+ * Refuses to bind until `configure_relays` has run. An endpoint built on a compiled-in
+ * default would reach the network and work, against relays nobody picked, which is the
+ * failure that takes longest to notice.
  */
 export function open(app_key_hex: string): Promise<string>;
 
@@ -943,6 +955,7 @@ export interface InitOutput {
     readonly comment_rkey: (a: number, b: number, c: number, d: number) => [number, number];
     readonly comment_seal_collection: () => [number, number];
     readonly comment_subject: (a: number, b: number, c: number, d: number) => [number, number];
+    readonly configure_relays: (a: number, b: number, c: number, d: number) => [number, number];
     readonly content_hash: (a: number, b: number) => [number, number];
     readonly decrypt_for_channel: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly decrypt_settings: (a: number, b: number, c: number, d: number) => [number, number, number, number];

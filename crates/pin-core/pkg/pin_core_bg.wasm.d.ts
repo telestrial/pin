@@ -16,6 +16,7 @@ export const comment_files_collection: () => [number, number];
 export const comment_rkey: (a: number, b: number, c: number, d: number) => [number, number];
 export const comment_seal_collection: () => [number, number];
 export const comment_subject: (a: number, b: number, c: number, d: number) => [number, number];
+export const configure_relays: (a: number, b: number, c: number, d: number) => [number, number];
 export const content_hash: (a: number, b: number) => [number, number];
 export const decrypt_for_channel: (a: number, b: number, c: number, d: number) => [number, number, number, number];
 export const decrypt_settings: (a: number, b: number, c: number, d: number) => [number, number, number, number];

@@ -25,7 +25,6 @@ use std::time::{Duration, Instant};
 use std::str::FromStr as _;
 
 use futures_lite::StreamExt as _;
-use iroh::endpoint::presets;
 use iroh::{Endpoint, SecretKey, TransportAddr};
 use iroh_docs::api::protocol::{AddrInfoOptions, ShareMode};
 use iroh_docs::store::Query;
@@ -261,11 +260,29 @@ pub fn start_curator(
     app: tauri::AppHandle,
     state: tauri::State<CuratorState>,
     app_key_hex: Option<String>,
+    pkarr_relays: Vec<String>,
+    iroh_relays: Vec<String>,
 ) -> CuratorStatus {
     let mut inner = state.0.lock().unwrap();
     if inner.running.load(Ordering::SeqCst) {
         return CuratorState::snapshot(&inner);
     }
+    // Required, where the AppKey beside it is optional: a node with no repo is a
+    // diagnosable state, and a node bound to relays nobody chose is one that works
+    // while reaching somewhere else entirely.
+    let relays = match pin_rpc::relays::Relays::parse(&pkarr_relays, &iroh_relays) {
+        Ok(relays) => relays,
+        Err(e) => {
+            let diag = Arc::new(Mutex::new(Diag::off()));
+            {
+                let mut d = diag.lock().unwrap();
+                d.phase = "error";
+                d.last_error = Some(e);
+            }
+            inner.diag = Some(diag);
+            return CuratorState::snapshot(&inner);
+        }
+    };
     // The frontend passes the already-unlocked Sia AppKey; it's the seed the docs
     // namespace and the did:dht identity derive from. Without it the node still
     // binds, it just has no repo (surfaced in diagnostics, not fatal).
@@ -311,6 +328,7 @@ pub fn start_curator(
             inbox_slot,
             data_dir,
             creds,
+            relays,
         )
     }));
 
@@ -1686,6 +1704,7 @@ fn run_curator(
     inbox_slot: InboxSlot,
     data_dir: Option<PathBuf>,
     creds: Option<SiaCreds>,
+    relays: pin_rpc::relays::Relays,
 ) {
     let rt = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -1707,6 +1726,7 @@ fn run_curator(
         inbox_slot,
         data_dir,
         creds,
+        relays,
     ));
 }
 
@@ -1743,6 +1763,7 @@ async fn curator_loop(
     inbox_slot: InboxSlot,
     data_dir: Option<PathBuf>,
     creds: Option<SiaCreds>,
+    relays: pin_rpc::relays::Relays,
 ) {
     let node_key_path = data_dir.as_ref().map(|d| d.join("node_key"));
 
@@ -1751,11 +1772,7 @@ async fn curator_loop(
         "curator binding iroh endpoint (identity: {})",
         if persisted { "persisted" } else { "ephemeral" }
     );
-    let endpoint = match Endpoint::builder(presets::N0)
-        .secret_key(secret)
-        .bind()
-        .await
-    {
+    let endpoint = match Endpoint::builder(&relays).secret_key(secret).bind().await {
         Ok(ep) => ep,
         Err(e) => {
             log::error!("curator endpoint bind failed: {e}");
@@ -1843,7 +1860,7 @@ async fn curator_loop(
 
     // One-shot self-test: a throwaway client dials us and sends a /hey knock. The
     // knock is synthetic, so clear the inbox afterward — real knocks start from zero.
-    match crate::rpc::self_test(endpoint.addr(), &inbox).await {
+    match crate::rpc::self_test(endpoint.addr(), &inbox, &relays).await {
         Ok(msg) => {
             log::info!("curator hey self-test: {msg}");
             diag.lock().unwrap().rpc_selftest = Some(msg);

@@ -46,6 +46,7 @@ import {
 import { ensureWasm } from '../core/wasm'
 import { useCuratorStore } from '../stores/curator'
 import { inTauri } from './openExternal'
+import { ensureRelays } from './relays'
 import {
   channelNamespacesNative,
   deleteChannelRecordNative,
@@ -94,7 +95,7 @@ export async function openDocs(appKeyHex: string): Promise<string> {
   if (openState && openState.key === appKeyHex) return openState.promise
   const promise = (async () => {
     if (inTauri()) return openDocsNative()
-    await ensureWasm()
+    await ensureRelays()
     return coreOpen(appKeyHex)
   })()
   openState = { key: appKeyHex, promise }
