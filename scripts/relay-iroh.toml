@@ -1,0 +1,33 @@
+# The iroh transport relay, for development on this machine.
+#
+# Every connection takes this path until holepunching finds a direct one — and for a
+# browser peer, which has no listening socket and no UDP, it is the path for the
+# connection's whole life. So desktop-to-tab sync, gossip and /hey are relayed start to
+# finish, and running the relay is what makes that traffic observable.
+#
+#   iroh-relay --dev --config-path scripts/relay-iroh.toml
+#
+# `--dev` serves plain HTTP on 3340 and ignores any TLS config. That is what makes a
+# relay on localhost possible at all: iroh's client maps an `http` relay URL to `ws` and
+# anything else to `wss`, so a page served over http opens a plain WebSocket to this,
+# with no certificate, no DNS name and no public IP.
+#
+# No `tls` section, so every service is served over plain HTTP, and
+# `enable_quic_addr_discovery` stays off — it requires TLS, and discovering an observed
+# address buys nothing between two processes on one machine.
+#
+# IPv4 all-interfaces, and both halves of that are deliberate.
+#
+# `--dev` would bind `[::]:3340`, which on Windows is IPv6-ONLY — a socket there answers
+# `[::1]` and refuses `127.0.0.1`, because Windows leaves IPV6_V6ONLY set where Linux
+# does not. pkarr-relay beside it binds IPv4, so taking the default would leave the two
+# relays on different families and make one address form work for one of them.
+#
+# All-interfaces rather than loopback because `bun run dev:lan` exists so a phone on the
+# LAN can reach the app, and a loopback-only relay leaves that device with no transport
+# at all. Such a device needs this machine's LAN address rather than 127.0.0.1, which is
+# what the custom relay option on the welcome screen is for.
+http_bind_addr = "0.0.0.0:3340"
+
+# Off, so the relay doesn't also bind 9090. Nothing reads it here.
+enable_metrics = false

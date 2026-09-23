@@ -1,0 +1,48 @@
+# The pkarr relay, for development on this machine.
+#
+# A browser can't send UDP, so it reaches the Mainline DHT through one of these. This
+# one is ours, which buys two things a public relay can't: no rate limit, and a log of
+# every GET and PUT with its status. That second one is the point — through a public
+# relay a resolve that comes back empty could be an empty answer, a 429, or a cached
+# miss, and pkarr's client API is `Option` with no error channel, so there is no way to
+# tell them apart from inside the app.
+#
+#   pkarr-relay --config scripts/relay-pkarr.toml
+#
+# Started for you by `bun run dev:relays` (and by `dev` / `dev:desktop*`, which leave an
+# already-running one alone).
+
+[http]
+port = 6881
+
+# Different protocol, so it shares the HTTP port without conflict.
+[mainline]
+port = 6881
+
+[cache]
+# Relative to THIS FILE rather than to the working directory: the relay resolves a
+# relative cache path against the config file's own parent. It must already exist or the
+# relay refuses to start, and the dev script creates it. Under target/ so `cargo clean`
+# clears it — otherwise clearing this cache means stopping the relay first, because a
+# running one holds an LMDB lock on it.
+path = "../target/pkarr-relay-cache"
+size = 100000
+
+# SMALL, and NOT zero. The relay clamps a packet's own TTL into this range before
+# deciding whether to serve its cache or go ask Mainline, and the public relays' floor
+# of 300 is the browser read-after-write lag in its entirety — it is the relay's
+# staleness rather than ours, and only whoever runs the relay can change it.
+#
+# Zero is the trap. With no cache window the relay never serves what it just accepted,
+# so a read moments after a PUT goes to Mainline, which has not seen it yet, and answers
+# with NOTHING. Measured natively and from a browser tab: an overwrite in flight became
+# indistinguishable from a key nobody had ever published, which is the one conflation
+# this codebase cannot afford. A few seconds of a peer's update staying hidden is
+# invisible; an absence gets published as a withdrawal.
+minimum_ttl = 1
+maximum_ttl = 5
+
+# No [rate_limiter] section, which is how the crate's own config.example.toml says to
+# disable it. The default is 2r/s with a burst of 10, per IP — and one resolve fans out
+# to every relay while a discovery pass makes eight of them, so a tab trips that
+# immediately, and each 429 arrives as "nothing published".

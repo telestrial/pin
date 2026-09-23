@@ -52,6 +52,12 @@ fi
 # orphaned windows to hunt through the tray.
 trap 'kill 0' INT TERM
 
+# The relays these instances reach the network through. Desktop publishes its own
+# records straight to Mainline, so the pkarr one matters here for a browser tab signed
+# into the same identity — which is the case two desktops can't cover. The iroh one
+# carries every connection until holepunching lands, and all of a tab's.
+bash scripts/dev-relays.sh &
+
 for name in "${instances[@]}"; do
   echo "launching $name..."
   if [ "$name" = "primary" ]; then
