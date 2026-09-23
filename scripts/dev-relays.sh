@@ -51,6 +51,9 @@ answering() {
 # The relay refuses to start when its cache directory is absent.
 mkdir -p target/pkarr-relay-cache
 
+# `sed -u`, or each relay's request log sits in a block buffer and the access log —
+# the whole reason for running these rather than reaching a public relay — arrives in
+# bursts minutes after the traffic it describes, if at all.
 trap 'kill 0' INT TERM
 
 started=0
@@ -58,7 +61,7 @@ if answering "$PKARR_PORT" /; then
   echo "pkarr relay already answering on $PKARR_PORT"
 else
   echo "starting pkarr relay on $PKARR_PORT..."
-  pkarr-relay --config scripts/relay-pkarr.toml 2>&1 | sed 's/^/[pkarr] /' &
+  pkarr-relay --config scripts/relay-pkarr.toml 2>&1 | sed -u 's/^/[pkarr] /' &
   started=1
 fi
 
@@ -66,7 +69,11 @@ if answering "$IROH_PORT" /ping; then
   echo "iroh relay already answering on $IROH_PORT"
 else
   echo "starting iroh relay on $IROH_PORT..."
-  iroh-relay --dev --config-path scripts/relay-iroh.toml 2>&1 | sed 's/^/[iroh] /' &
+  # iroh-relay filters from RUST_LOG alone, and an unset one leaves it at error — so
+  # without this it runs silently and the access log, which is the reason for running
+  # our own, does not exist. pkarr-relay needs no equivalent: its own default is
+  # `pkarr_relay=info,tower_http=debug`, which is the request log already.
+  RUST_LOG="${RUST_LOG:-iroh_relay=info}"     iroh-relay --dev --config-path scripts/relay-iroh.toml 2>&1 | sed -u 's/^/[iroh] /' &
   started=1
 fi
 
