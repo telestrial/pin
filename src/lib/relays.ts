@@ -18,13 +18,49 @@
 
 import { configure_relays } from '../../crates/pin-core/pkg/pin_core.js'
 import { ensureWasm } from '../core/wasm'
-import { DEFAULT_IROH_RELAYS, DEFAULT_PKARR_RELAYS } from './constants'
+import { useAuthStore } from '../stores/auth'
+import {
+  LOCAL_IROH_RELAYS,
+  LOCAL_PKARR_RELAYS,
+  PUBLIC_IROH_RELAYS,
+  PUBLIC_PKARR_RELAYS,
+  type RelayPreset,
+} from './constants'
 
 export type RelaySet = { pkarr: string[]; iroh: string[] }
 
+/** The URLs a preset stands for. `custom` carries its own, so it resolves to nothing
+ *  here and the caller supplies them. */
+export function relaysForPreset(preset: RelayPreset): RelaySet {
+  if (preset === 'public') {
+    return { pkarr: [...PUBLIC_PKARR_RELAYS], iroh: [...PUBLIC_IROH_RELAYS] }
+  }
+  if (preset === 'local') {
+    return { pkarr: [...LOCAL_PKARR_RELAYS], iroh: [...LOCAL_IROH_RELAYS] }
+  }
+  return { pkarr: [], iroh: [] }
+}
+
+/** The preset an environment variable pins this run to, when one does.
+ *
+ *  The test tiers are what this is for: `test:sync` runs against the local relays it
+ *  starts, and `test:sync:public` runs the same specs against the public path so that
+ *  path keeps being exercised by something. A person's own choice lives in the store. */
+function pinnedPreset(): RelayPreset | null {
+  const pinned = import.meta.env.VITE_RELAY_PRESET
+  return pinned === 'local' || pinned === 'public' ? pinned : null
+}
+
 /** The relays in force for this instance. */
 export function resolveRelays(): RelaySet {
-  return { pkarr: [...DEFAULT_PKARR_RELAYS], iroh: [...DEFAULT_IROH_RELAYS] }
+  const pinned = pinnedPreset()
+  if (pinned) return relaysForPreset(pinned)
+
+  const s = useAuthStore.getState()
+  if (s.relayPreset === 'custom') {
+    return { pkarr: [...s.customPkarrRelays], iroh: [...s.customIrohRelays] }
+  }
+  return relaysForPreset(s.relayPreset)
 }
 
 let configured: Promise<void> | null = null
@@ -34,7 +70,10 @@ let configured: Promise<void> | null = null
  *  Memoized for the reason `ensureWasm` is: this is one question with one answer, and
  *  two callers configuring the transport separately is how they come to configure it
  *  differently. Both legs are set by the one call, so the pkarr fan-out and the iroh
- *  endpoint can't end up pointed at different networks. */
+ *  endpoint can't end up pointed at different networks.
+ *
+ *  Which means a change to the choice takes a reload to land, and that matches what is
+ *  underneath: the endpoint reads its relays when it binds, and it binds once. */
 export function ensureRelays(): Promise<void> {
   if (!configured) {
     const set = resolveRelays()

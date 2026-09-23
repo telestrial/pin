@@ -13,7 +13,7 @@ import type {
   SubscriptionRef,
   ThemeMode,
 } from '../core/types'
-import { APP_KEY } from '../lib/constants'
+import { APP_KEY, type RelayPreset } from '../lib/constants'
 import { useActionStore } from './actionQueue'
 import { useFeedStore } from './feed'
 import { usePinStore } from './pin'
@@ -37,6 +37,13 @@ type AuthState = {
   client: SiaClient | null
   storedKeyHex: string | null
   indexerURL: string
+  // Which relays this instance reaches the network through. Device-local like the
+  // indexer beside it and for the same reason: a relay is a fact about where this
+  // instance is running, so syncing it to a second device would send that one at a
+  // loopback address. Read when the endpoint binds, so a change takes a reload.
+  relayPreset: RelayPreset
+  customPkarrRelays: string[]
+  customIrohRelays: string[]
   step: AuthStep
   error: string | null
   approvalURL: string | null
@@ -96,6 +103,7 @@ type AuthState = {
   setError: (error: string | null) => void
   setStoredKeyHex: (hex: string) => void
   setIndexerURL: (url: string) => void
+  setRelays: (preset: RelayPreset, pkarr?: string[], iroh?: string[]) => void
   setApprovalURL: (url: string | null) => void
   addMyChannel: (channel: OwnedChannel) => void
   updateMyChannelName: (channelID: string, name: string) => void
@@ -145,6 +153,9 @@ export const useAuthStore = create<AuthState>()(
       client: null,
       storedKeyHex: null,
       indexerURL: '',
+      relayPreset: 'local',
+      customPkarrRelays: [],
+      customIrohRelays: [],
       step: 'loading',
       error: null,
       approvalURL: null,
@@ -167,6 +178,12 @@ export const useAuthStore = create<AuthState>()(
       setError: (error) => set({ error }),
       setStoredKeyHex: (hex) => set({ storedKeyHex: hex }),
       setIndexerURL: (url) => set({ indexerURL: url }),
+      setRelays: (preset, pkarr, iroh) =>
+        set({
+          relayPreset: preset,
+          customPkarrRelays: pkarr ?? [],
+          customIrohRelays: iroh ?? [],
+        }),
       setApprovalURL: (url) => set({ approvalURL: url }),
       addMyChannel: (channel) =>
         // Keyed by channelID, the way `addSubscription` beside it is: a channelID names
@@ -332,6 +349,9 @@ export const useAuthStore = create<AuthState>()(
       partialize: (state) => ({
         storedKeyHex: state.storedKeyHex,
         indexerURL: state.indexerURL,
+        relayPreset: state.relayPreset,
+        customPkarrRelays: state.customPkarrRelays,
+        customIrohRelays: state.customIrohRelays,
         myChannels: state.myChannels,
         subscriptions: state.subscriptions,
         dismissedAutoWatch: state.dismissedAutoWatch,

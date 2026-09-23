@@ -9,18 +9,33 @@ export const APP_KEY = 'f6b7539e181e45ee750a491a58aa8392830a17c402115cf47c6e7dfe
 export const APP_NAME = 'Pin'
 export const DEFAULT_INDEXER_URL = 'https://sia.storage'
 
-// The relays a fresh instance reaches the network through. See lib/relays.ts for what
-// each kind carries.
+// The relays Pin reaches the network through. See lib/relays.ts for what each kind
+// carries, and scripts/relay-*.toml for the relays themselves.
 //
-// The pkarr pair is the set every record published before this was configurable lives
-// on, so an instance that changes nothing resolves what it always did. The iroh four
-// are n0's, matching what `presets::N0` bound to at each of the three call sites this
-// replaced.
-export const DEFAULT_PKARR_RELAYS = [
+// LOCAL is the default, and it is the whole set — nothing falls back to a public relay
+// when these are down. A set gathered across one relay we run and one we don't makes an
+// empty answer unattributable again, which is the thing running our own is meant to
+// fix. Reaching the public path is a choice made on the welcome screen.
+//
+// 127.0.0.1 rather than localhost: on Windows that name resolves to ::1 first, and the
+// relays bind IPv4.
+/** Which set an instance is on. `custom` carries its own URLs in the store.
+ *
+ *  Here beside the sets rather than in core/types because nothing about it is
+ *  serialized — it stays device-local, the way the indexer URL does. */
+export type RelayPreset = 'local' | 'public' | 'custom'
+
+export const LOCAL_PKARR_RELAYS = ['http://127.0.0.1:6881']
+export const LOCAL_IROH_RELAYS = ['http://127.0.0.1:3340']
+
+// The public set, for when the local relays are not the point. The pkarr pair is
+// pubky's and is where every record published before any of this was configurable
+// lives; the iroh four are n0's, matching what `presets::N0` bound to.
+export const PUBLIC_PKARR_RELAYS = [
   'https://pkarr.pubky.org',
   'https://pkarr.pubky.app',
 ]
-export const DEFAULT_IROH_RELAYS = [
+export const PUBLIC_IROH_RELAYS = [
   'https://use1-1.relay.n0.iroh.link.',
   'https://usw1-1.relay.n0.iroh.link.',
   'https://euc1-1.relay.n0.iroh.link.',

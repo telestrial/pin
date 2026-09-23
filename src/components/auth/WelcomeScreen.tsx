@@ -1,11 +1,33 @@
 import { useState } from 'react'
-import { DEFAULT_INDEXER_URL } from '../../lib/constants'
+import { DEFAULT_INDEXER_URL, type RelayPreset } from '../../lib/constants'
+import { relaysForPreset } from '../../lib/relays'
 import { requestSiaConnection } from '../../lib/siaAuth'
 import { useAuthStore } from '../../stores/auth'
+
+// What each preset means on the line above the picker. Short because the choice is
+// between two places rather than between two lists of URLs.
+const PRESET_LABEL: Record<RelayPreset, string> = {
+  local: 'this machine',
+  public: 'public relays',
+  custom: 'a relay you named',
+}
+
+/** Several relays go in one field, comma-separated. Blank entries are dropped so a
+ *  trailing comma mid-edit doesn't read as an empty URL. */
+function splitList(value: string): string[] {
+  return value
+    .split(',')
+    .map((v) => v.trim())
+    .filter(Boolean)
+}
 
 export function WelcomeScreen({ isReturning }: { isReturning: boolean }) {
   const indexerURL = useAuthStore((s) => s.indexerURL)
   const setIndexerURL = useAuthStore((s) => s.setIndexerURL)
+  const relayPreset = useAuthStore((s) => s.relayPreset)
+  const customPkarrRelays = useAuthStore((s) => s.customPkarrRelays)
+  const customIrohRelays = useAuthStore((s) => s.customIrohRelays)
+  const setRelays = useAuthStore((s) => s.setRelays)
   const setStep = useAuthStore((s) => s.setStep)
   const setError = useAuthStore((s) => s.setError)
   const setApprovalURL = useAuthStore((s) => s.setApprovalURL)
@@ -13,6 +35,7 @@ export function WelcomeScreen({ isReturning }: { isReturning: boolean }) {
   const [url, setUrl] = useState(indexerURL || DEFAULT_INDEXER_URL)
   const [loading, setLoading] = useState(false)
   const [showAdvanced, setShowAdvanced] = useState(false)
+  const [showRelays, setShowRelays] = useState(false)
 
   async function startSiaConnect() {
     setLoading(true)
@@ -84,6 +107,82 @@ export function WelcomeScreen({ isReturning }: { isReturning: boolean }) {
             placeholder="https://sia.storage"
             className="w-full px-4 py-2 bg-white border border-neutral-300 rounded-lg text-sm text-neutral-900 placeholder-neutral-400 focus:outline-none focus:border-green-600"
           />
+        )}
+        <p>
+          Network via{' '}
+          <code className="text-neutral-700 font-mono">
+            {PRESET_LABEL[relayPreset]}
+          </code>
+          {' · '}
+          <button
+            type="button"
+            onClick={() => setShowRelays((v) => !v)}
+            className="underline underline-offset-2 hover:text-neutral-900"
+          >
+            {showRelays ? 'Hide' : 'Change'}
+          </button>
+        </p>
+        {showRelays && (
+          <div className="space-y-2">
+            <div className="flex gap-2">
+              {(['local', 'public', 'custom'] as const).map((p) => (
+                <button
+                  key={p}
+                  type="button"
+                  onClick={() => {
+                    const set = relaysForPreset(p)
+                    setRelays(
+                      p,
+                      p === 'custom' ? customPkarrRelays : set.pkarr,
+                      p === 'custom' ? customIrohRelays : set.iroh,
+                    )
+                  }}
+                  className={`flex-1 py-2 rounded-lg border text-sm transition-colors ${
+                    relayPreset === p
+                      ? 'border-green-600 text-green-700 bg-green-50'
+                      : 'border-neutral-300 text-neutral-600 hover:border-neutral-400'
+                  }`}
+                >
+                  {PRESET_LABEL[p]}
+                </button>
+              ))}
+            </div>
+            {relayPreset === 'custom' && (
+              <>
+                <input
+                  type="url"
+                  value={customPkarrRelays.join(', ')}
+                  onChange={(e) =>
+                    setRelays(
+                      'custom',
+                      splitList(e.target.value),
+                      customIrohRelays,
+                    )
+                  }
+                  placeholder="pkarr relay, e.g. http://127.0.0.1:6881"
+                  className="w-full px-4 py-2 bg-white border border-neutral-300 rounded-lg text-sm text-neutral-900 placeholder-neutral-400 focus:outline-none focus:border-green-600"
+                />
+                <input
+                  type="url"
+                  value={customIrohRelays.join(', ')}
+                  onChange={(e) =>
+                    setRelays(
+                      'custom',
+                      customPkarrRelays,
+                      splitList(e.target.value),
+                    )
+                  }
+                  placeholder="iroh relay, e.g. http://127.0.0.1:3340"
+                  className="w-full px-4 py-2 bg-white border border-neutral-300 rounded-lg text-sm text-neutral-900 placeholder-neutral-400 focus:outline-none focus:border-green-600"
+                />
+              </>
+            )}
+            <p className="text-neutral-400">
+              Pin reaches the network through these and nothing else. Local
+              wants <code className="font-mono">bun run dev:relays</code>{' '}
+              running. A change takes effect on reload.
+            </p>
+          </div>
         )}
       </div>
     </div>
