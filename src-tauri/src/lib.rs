@@ -92,9 +92,23 @@ fn ours_level(raw: Option<String>) -> log::LevelFilter {
 /// `PIN_LOG` overrides the level our crates log at (`debug`, `trace`, `off`), for a session
 /// that needs more than a pass report without a rebuild. An unparseable value is ignored
 /// rather than silencing anything.
+///
+/// The rotation is set because the defaults DELETE. `tauri-plugin-log` ships 40 KB with
+/// `RotationStrategy::KeepOne`, and `KeepOne` is `fs::remove_file` on the log — no
+/// archive, no trace that anything was dropped. An idle account writes an engagement and
+/// a deliver line every 30s — measured at ~1.2 KB/min — so the default cap is reached in
+/// about half an hour. What makes that cost something is that the loops this log exists
+/// to watch run on 10-, 15- and 30-minute cadences: the window the default keeps is
+/// shorter than the thing being looked at.
+///
+/// So: a size no session reaches, and archives that are kept and dated rather than
+/// removed. Four files at 5 MB bounds it at 20 MB, which is nothing beside a target dir.
 fn log_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
     let ours = ours_level(std::env::var("PIN_LOG").ok());
-    let mut builder = tauri_plugin_log::Builder::default().level(log::LevelFilter::Warn);
+    let mut builder = tauri_plugin_log::Builder::default()
+        .level(log::LevelFilter::Warn)
+        .max_file_size(5 * 1024 * 1024)
+        .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepSome(3));
     for target in OURS {
         builder = builder.level_for(target, ours);
     }
