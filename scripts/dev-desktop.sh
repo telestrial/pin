@@ -68,7 +68,8 @@ for _ in $(seq 1 30); do
   relays_up && break
 done
 if ! relays_up; then
-  echo "relays did not come up; see the [pkarr] and [iroh] output above" >&2
+  echo "relays did not come up." >&2
+  relay_diagnosis
   exit 1
 fi
 

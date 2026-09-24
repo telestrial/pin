@@ -30,6 +30,7 @@ for _ in $(seq 1 30); do
 done
 if ! relays_up; then
   echo "relays did not come up${RELAY_LOG:+; see $RELAY_LOG}" >&2
+  relay_diagnosis
   exit 1
 fi
 
