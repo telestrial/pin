@@ -55,6 +55,20 @@ export type Slab = {
   length: number
 }
 
+/** The object id a Sia share URL names, or null when it names none.
+ *
+ *  A share URL carries its object's id in its own path — `/objects/<id>/shared`, built
+ *  that way by the SDK and asserted by its own tests — so asking which object a URL
+ *  refers to costs no round trip and cannot fail the way asking the indexer can. That
+ *  matters where it is used: deciding whether an unreadable snapshot is GONE or merely
+ *  unreachable, which is a question a second network call could only muddy.
+ *
+ *  Null for anything else, and null means "this URL says nothing", never "no object".
+ *  A caller that cannot read an id has not learned that the object is absent. */
+export function objectIDInShareURL(url: string): string | null {
+  return /\/objects\/([^/?#]+)\/shared(?:[?#]|$)/.exec(url)?.[1] ?? null
+}
+
 /** A pinned object reduced to the plain data its consumers actually read —
  *  serializable, so it survives the hop to whichever implementation is in use. */
 export type PinnedObjectInfo = {

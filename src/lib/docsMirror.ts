@@ -25,6 +25,7 @@ import {
   deriveSnapshotKey,
 } from '../core/crypto'
 import type { SiaClient } from '../core/siaClient'
+import { objectIDInShareURL } from '../core/siaClient'
 import { ensureWasm } from '../core/wasm'
 import { listAll, putRecord } from './docs'
 import { identityFromSeed, reassembleTxt } from './pkarr'
@@ -102,7 +103,9 @@ export function cacheSnapshotPointer(p: Pointer): void {
 export type SnapshotRead =
   | { kind: 'read'; entries: SnapshotEntry[] }
   | { kind: 'none' }
-  | { kind: 'unknown'; error: string }
+  // `url` is present only when the LOCATOR named it. A cached pointer's url is absent
+  // on purpose — see `readSnapshotViaPointers`, where the two are told apart.
+  | { kind: 'unknown'; error: string; url?: string }
 
 /** Read the current snapshot, saying which of the three it got.
  *
@@ -128,11 +131,46 @@ async function readSnapshot(
     recoverViaLocator,
   )
   if (read.kind !== 'unknown') return read
+  // Two ways to settle an unknown, finest first. The object the locator names is gone
+  // from this scope while the scope holds other things — a reset followed by any
+  // activity — which the scope question below cannot see, because it can only ask
+  // whether the scope holds NOTHING.
+  if (read.url && (await snapshotObjectIsGone(client, read.url))) {
+    return { kind: 'none' }
+  }
   // Nobody answered about the snapshot, so ask about the scope it would live in. An
   // account whose objects were reclaimed answers `unknown` forever otherwise, and the
   // loop that would publish a fresh snapshot is one of the three held until this
   // settles — a guard with no way out is a lockout rather than a guard.
   return (await scopeIsEmpty(client)) ? { kind: 'none' } : read
+}
+
+/** Whether the snapshot this URL names is positively gone from this identity's scope.
+ *
+ *  The finer grain of `scopeIsEmpty`, and the reason it is needed: an empty scope is
+ *  positively nothing to restore, but a scope holding OTHER objects says nothing about
+ *  the snapshot — so a reset followed by one new channel reads as `unknown` forever and
+ *  the loops held on it never release. The object's id is in the share URL's own path,
+ *  so the question is a match against what the scope holds rather than a count of it.
+ *
+ *  Every way of not knowing returns false, because only a true here releases the
+ *  publishing loops. A URL that names no id, a listing that throws, a listing served
+ *  EMPTY by a hiccup — that last one especially, since an empty list contains no id and
+ *  would otherwise read as proof. Emptiness is `scopeIsEmpty`'s question and it
+ *  corroborates it against a byte total; here it is simply declined. */
+async function snapshotObjectIsGone(
+  client: SiaClient,
+  url: string,
+): Promise<boolean> {
+  const id = objectIDInShareURL(url)
+  if (!id) return false
+  try {
+    const held = await client.listPinnedObjects()
+    if (held.length === 0) return false
+    return !held.some((o) => o.id === id)
+  } catch {
+    return false
+  }
 }
 
 /** Whether this identity's Sia scope positively holds nothing.
@@ -200,7 +238,11 @@ async function readSnapshotViaPointers(
     return { kind: 'unknown', error: 'settings locator names no snapshot' }
   }
   if (current === cached) {
-    return { kind: 'unknown', error: `snapshot ${current}: unreadable` }
+    return {
+      kind: 'unknown',
+      error: `snapshot ${current}: unreadable`,
+      url: current,
+    }
   }
 
   const read = await downloadSnapshot(client, appKeyBytes, current)
@@ -208,7 +250,12 @@ async function readSnapshotViaPointers(
   // the one a later boot starts from. Id unknown — only the URL lives on the DHT, and
   // the next full snapshot supersedes it with a prunable pointer.
   if (read.kind === 'read') writePointer({ id: '', url: current })
-  return read
+  // The url rides along only from here and the branch above, both of which have the
+  // LOCATOR's answer. A cached pointer's url must never reach that check: it can name a
+  // generation already superseded and reclaimed, so "that object is gone" would be true
+  // of a snapshot the locator has long since replaced, and reading it as nothing-to-
+  // restore is the wipe this file exists to prevent.
+  return read.kind === 'unknown' ? { ...read, url: current } : read
 }
 
 /** One snapshot object, decrypted, or why it could not be. */
