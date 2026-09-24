@@ -614,6 +614,20 @@ impl Session {
 
     /// One object's slabs by id. `None` when it is not in scope — a normal answer
     /// (repack asks about references that may already be gone), not an error.
+    ///
+    /// NOT A POSITIVE ANSWER, and nothing may treat it as one: the `.ok()` below drops
+    /// the error, so an indexer that could not be reached returns `None` exactly as a
+    /// reclaimed object does. That is the empty-versus-unknown conflation this codebase
+    /// has paid for three times, sitting in a primitive that looks like the obvious way
+    /// to ask whether an object survives. Deciding a snapshot is gone through this would
+    /// turn an outage into a published emptiness.
+    ///
+    /// It cannot simply be fixed here: `sdk.object` maps the typed `AppApiError` — whose
+    /// `Api(StatusCode, _)` carries the 404 that would settle it — into a stringified
+    /// `Error::App`, so telling "not found" from "unreachable" means matching on a debug
+    /// format. A caller that needs the distinction asks `list_pinned_objects`, which
+    /// FAILS rather than answering, and matches the id itself; `docsMirror`'s
+    /// `snapshotObjectIsGone` is that, and says why there.
     pub async fn get_object_slabs(&self, id: &str) -> Result<Option<PinnedObjectInfo>, String> {
         let hash: Hash256 = id.parse().map_err(|e| format!("bad object id: {e:?}"))?;
         let sdk = self.sdk().await?;
