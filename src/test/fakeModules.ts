@@ -25,6 +25,7 @@ import {
 } from '../../crates/pin-core/pkg/pin_core.js'
 import { ensureWasm } from '../core/wasm'
 import type { FakeWorld } from './fakeSia'
+import { fakeObjectID, fakeShareURL } from './shareURL'
 
 let currentWorld: FakeWorld | null = null
 
@@ -97,7 +98,7 @@ export function fakeChannelLocatorNativeModule() {
         bytes: new TextEncoder().encode(blob),
         createdAt: new Date(),
       })
-      const itemURL = `sia://fake/${id}#k=${id}`
+      const itemURL = fakeShareURL(id)
       world.pkarr.set(locatorKeyFor(channelKey), [
         { name: '_c0', value: itemURL },
       ])
@@ -109,7 +110,7 @@ export function fakeChannelLocatorNativeModule() {
       const records = world.pkarr.get(locatorKeyFor(channelKey))
       const itemURL = records?.find((r) => r.name === '_c0')?.value
       if (!itemURL) return null
-      const id = itemURL.slice('sia://fake/'.length, itemURL.indexOf('#'))
+      const id = fakeObjectID(itemURL) ?? ''
       const bytes = world.objects.get(id)?.bytes
       // The pointer outliving its object is a real state (grace deletion), and the
       // caller treats it as a hard read failure rather than an absent channel.
@@ -134,7 +135,7 @@ export function fakeChannelLocatorNativeModule() {
 
     fetchTallies: async (channelKey: Uint8Array, itemURL: string) => {
       const world = getCurrentWorld()
-      const id = itemURL.slice('sia://fake/'.length, itemURL.indexOf('#'))
+      const id = fakeObjectID(itemURL) ?? ''
       const bytes = world.objects.get(id)?.bytes
       if (!bytes) throw new Error(`Object not found: ${itemURL}`)
       return decrypt_for_channel(channelKey, new TextDecoder().decode(bytes))
@@ -147,7 +148,7 @@ export function fakeChannelLocatorNativeModule() {
 
     fetchConversations: async (channelKey: Uint8Array, itemURL: string) => {
       const world = getCurrentWorld()
-      const id = itemURL.slice('sia://fake/'.length, itemURL.indexOf('#'))
+      const id = fakeObjectID(itemURL) ?? ''
       const bytes = world.objects.get(id)?.bytes
       if (!bytes) throw new Error(`Object not found: ${itemURL}`)
       return decrypt_for_channel(channelKey, new TextDecoder().decode(bytes))
@@ -171,7 +172,7 @@ export function publishFakeConversations(
     createdAt: new Date(),
   })
   world.pkarr.set(`cnv-${fakePublicKey(channelKey)}`, [
-    { name: '_v0', value: `sia://fake/${id}#k=${id}` },
+    { name: '_v0', value: fakeShareURL(id) },
   ])
 }
 
@@ -192,7 +193,7 @@ export function publishFakeTallies(
     createdAt: new Date(),
   })
   world.pkarr.set(`eng-${fakePublicKey(channelKey)}`, [
-    { name: '_e0', value: `sia://fake/${id}#k=${id}` },
+    { name: '_e0', value: fakeShareURL(id) },
   ])
 }
 
@@ -220,9 +221,7 @@ export async function publishFakeDirectory(
   // would be a second definition of that convention living in a test.
   world.pkarr.set(
     keyOf(didDht),
-    JSON.parse(
-      pkarr_chunk_txt('_dir', `sia://fake/${id}#k=${id}`),
-    ) as FakeTxt[],
+    JSON.parse(pkarr_chunk_txt('_dir', fakeShareURL(id))) as FakeTxt[],
   )
 }
 

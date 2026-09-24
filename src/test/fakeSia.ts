@@ -15,6 +15,7 @@ import { content_hash } from '../../crates/pin-core/pkg/pin_core.js'
 import type { AccountSnapshot } from '../core/pin'
 import type { UploadedItem } from '../core/sia'
 import type { PinnedObjectInfo, SiaClient } from '../core/siaClient'
+import { fakeObjectID, fakeShareURL } from './shareURL'
 
 const DEFAULT_MAX_PINNED = 5 * 1024 * 1024 * 1024 // 5 GiB
 
@@ -63,17 +64,12 @@ export function createFakeWorld(): FakeWorld {
   return new FakeWorld()
 }
 
-/** The share URL shape, mirroring real Sia's key-in-the-fragment form. The fake
- *  doesn't encrypt, so the fragment just carries the id — but the SHAPE matters,
- *  because parsing it is what the app does. */
-function shareURLFor(objectID: string): string {
-  return `sia://fake/${objectID}#k=${objectID}`
-}
+const shareURLFor = fakeShareURL
 
 function objectIDFromShareURL(url: string): string {
-  const match = url.match(/^sia:\/\/fake\/([^#]+)#/)
-  if (!match) throw new Error(`Bad share URL: ${url}`)
-  return match[1]
+  const id = fakeObjectID(url)
+  if (!id) throw new Error(`Bad share URL: ${url}`)
+  return id
 }
 
 export class FakeSiaClient implements SiaClient {
