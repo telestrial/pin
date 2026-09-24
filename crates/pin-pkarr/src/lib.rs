@@ -74,12 +74,19 @@ pub fn rejoin_txt(records: &[TxtRecord], prefix: &str) -> String {
 
 /// DNS TTL on every record we publish.
 ///
-/// This governs how long relays and resolver caches hold a packet — NOT how long the
-/// record lives on the DHT (that's Mainline's own ~2h expiry, refreshed by keep-alive
-/// republishing). It's deliberately short: a high TTL leaves a just-published change
-/// invisible behind stale caches for that long, which is precisely what once hid a
-/// freshly-published post from a subscriber. Mutable pointers want fast propagation,
-/// and the cost is only more frequent re-resolves.
+/// A REQUEST, not a governor. A reader clamps a packet's smallest record TTL into its
+/// own `[minimum_ttl, maximum_ttl]` and gates its cache on the clamped value
+/// (`SignedPacket::ttl` feeding `is_expired`, which is what both a relay's dht_service
+/// and pkarr's own client cache decide on). So 60 survives only for a reader whose
+/// bounds straddle it: against the stock `[300, 86400]` it reads as 300, and against
+/// the relays on this machine (`scripts/relay-pkarr.toml`, `[1, 5]`) as 5.
+///
+/// That 300 is the browser read-after-write lag in its entirety — the relay's own
+/// staleness, not ours, and only whoever runs the relay can change it. Publishing a
+/// lower number here cannot lower anybody's floor.
+///
+/// NOT how long the record lives on the DHT: that is Mainline's ~2h expiry, refreshed
+/// by keep-alive republishing.
 pub const RECORD_TTL_SECS: u32 = 60;
 
 /// Publishes fail transiently — flaky networks, cold-client warmup, and pkarr's own
