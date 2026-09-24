@@ -56,7 +56,21 @@ trap 'kill 0' INT TERM
 # records straight to Mainline, so the pkarr one matters here for a browser tab signed
 # into the same identity — which is the case two desktops can't cover. The iroh one
 # carries every connection until holepunching lands, and all of a tab's.
+. scripts/relay-common.sh
 bash scripts/dev-relays.sh &
+
+# Hold until they answer. Pin reaches the network through these and nothing else, so an
+# instance that binds first fails its relay connection — noise in the log at the moment
+# you are reading the log, which is what running our own is for. `with-relays.sh` waits
+# for the same reason; this is the third consumer relay-common.sh says it was written
+# for, and was the one not using it.
+for _ in $(seq 1 30); do
+  relays_up && break
+done
+if ! relays_up; then
+  echo "relays did not come up; see the [pkarr] and [iroh] output above" >&2
+  exit 1
+fi
 
 for name in "${instances[@]}"; do
   echo "launching $name..."
