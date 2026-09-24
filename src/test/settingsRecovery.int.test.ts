@@ -83,26 +83,19 @@ describe('integration: settings recovery via pkarr locator', () => {
     localStorage.removeItem(POINTER_KEY)
   })
 
-  it('recovers the settings record from the DHT locator when recovery is allowed', async () => {
+  it('recovers the settings record from the DHT locator', async () => {
+    // No local pointer, so the locator is the only way to the snapshot — and it is
+    // always taken now. The flag that could decline it is gone: `scopeIsEmpty` answers
+    // the brand-new-account case it existed for, by reading the scope rather than by
+    // being told. Its own test went with it, since it asserted the absent behaviour.
     const bytes = await readRecordFromSnapshot(
       client,
       appKey,
       'settings',
       'self',
-      true,
     )
+
     expect(bytes).toBeDefined()
     expect(new TextDecoder().decode(bytes as Uint8Array)).toBe(SETTINGS_BLOB)
-  })
-
-  it('does NOT resolve the locator when recovery is off (brand-new-account gate)', async () => {
-    const bytes = await readRecordFromSnapshot(
-      client,
-      appKey,
-      'settings',
-      'self',
-      false,
-    )
-    expect(bytes).toBeUndefined()
   })
 })

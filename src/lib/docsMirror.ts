@@ -112,10 +112,14 @@ export type SnapshotRead =
  *  Never throws: each of the three ways to come back empty is a value here, since the
  *  caller is the one that knows whether it may act on an absence.
  *
- *  `recoverViaLocator` is what makes `none` mean anything. A caller passing false and
- *  holding no pointer has declined to look — which is the brand-new-account gate, where
- *  the point is to skip the DHT round trip — so it gets `none` without having asked
- *  anybody. A caller that needs the distinction passes true.
+ *  The locator is ALWAYS resolved. This used to take a flag to skip it — the
+ *  brand-new-account gate, whose point was to save the DHT round trip by answering
+ *  `none` without asking anybody. `scopeIsEmpty` does that job now and does it
+ *  differently in the way that matters: the old condition was a caller ASSERTING there
+ *  was nothing, the new one is the scope positively holding nothing, read and
+ *  corroborated. It costs a new account a resolve and two indexer reads, and it is what
+ *  lets a RECLAIMED account boot at all — that one is not brand new, so the old gate
+ *  would have had it hang on `unknown` forever.
  *
  *  An `unknown` then gets a second question, about the scope rather than the snapshot,
  *  because those are two different reads and only the first of them failed. See
@@ -123,13 +127,8 @@ export type SnapshotRead =
 async function readSnapshot(
   client: SiaClient,
   appKeyBytes: Uint8Array,
-  recoverViaLocator: boolean,
 ): Promise<SnapshotRead> {
-  const read = await readSnapshotViaPointers(
-    client,
-    appKeyBytes,
-    recoverViaLocator,
-  )
+  const read = await readSnapshotViaPointers(client, appKeyBytes)
   if (read.kind !== 'unknown') return read
   // Two ways to settle an unknown, finest first. The object the locator names is gone
   // from this scope while the scope holds other things — a reset followed by any
@@ -205,14 +204,12 @@ async function scopeIsEmpty(client: SiaClient): Promise<boolean> {
 async function readSnapshotViaPointers(
   client: SiaClient,
   appKeyBytes: Uint8Array,
-  recoverViaLocator: boolean,
 ): Promise<SnapshotRead> {
   const cached = readPointer()?.url ?? null
   if (cached) {
     const read = await downloadSnapshot(client, appKeyBytes, cached)
-    if (read.kind === 'read' || !recoverViaLocator) return read
+    if (read.kind === 'read') return read
   }
-  if (!recoverViaLocator) return { kind: 'none' }
 
   // Either nothing is cached, or what was cached names an object that has been
   // superseded and reclaimed. Both want the same question put to the locator: which
@@ -305,7 +302,7 @@ export async function hydrateFromSia(
   client: SiaClient,
   appKeyBytes: Uint8Array,
 ): Promise<HydrateOutcome> {
-  const read = await readSnapshot(client, appKeyBytes, true)
+  const read = await readSnapshot(client, appKeyBytes)
   if (read.kind !== 'read') return read
   // The doc's own key format, which is what `listAll` splits and `record_key` composes.
   const held = new Set(
@@ -337,19 +334,18 @@ export async function hydrateFromSia(
  *  Unlike the load path it does not swallow the distinction: `unknown` throws.
  *
  *  Read one record's bytes straight from the latest Sia snapshot, WITHOUT the
- *  pin-core engine (no wasm, no relay). The boot read path: settings / channels
- *  can be sourced from the durable snapshot cheaply. Pass `recoverViaLocator` to
- *  fall back to the durable DHT locator when there's no local pointer (a restore /
- *  wiped-pointer boot — never a brand-new account). undefined if there's no
- *  snapshot or the record isn't in it. */
+ *  pin-core engine (no wasm, no relay). It resolves the durable locator when this
+ *  device holds no pointer, which for a diagnostic is the only honest behaviour —
+ *  reporting "no snapshot" because THIS device has no pointer is the misleading answer,
+ *  not a cheap one. `undefined` when there is genuinely no snapshot or the record is
+ *  not in it; `unknown` throws. */
 export async function readRecordFromSnapshot(
   client: SiaClient,
   appKeyBytes: Uint8Array,
   collection: string,
   rkey: string,
-  recoverViaLocator = false,
 ): Promise<Uint8Array | undefined> {
-  const read = await readSnapshot(client, appKeyBytes, recoverViaLocator)
+  const read = await readSnapshot(client, appKeyBytes)
   // Throws where the old read threw, so the settings boot path keeps treating an
   // unreadable snapshot as a failure it can retry.
   if (read.kind === 'unknown') throw new Error(read.error)
