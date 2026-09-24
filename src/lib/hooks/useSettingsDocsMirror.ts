@@ -48,7 +48,21 @@ import {
 // availability failsafe/floor (the WRITE side below is unchanged); this is a live
 // overlay on top of it, never a replacement.
 
-const DEBOUNCE_MS = 2000
+/** How long a change waits for the next one, so a burst becomes one doc write.
+ *
+ *  COALESCING, and nothing more. It was 2000ms for a job it no longer has: back when
+ *  the boot catch-up could mirror an empty store, the delay was the only thing standing
+ *  between that write and the restore racing it — and a debounce is not an ordering
+ *  primitive, which is exactly why 2s against a multi-second network read was a coin
+ *  toss that Chrome usually won and Firefox always lost. `settingsLoaded` is the
+ *  ordering primitive now, and it is absolute rather than timed, so this no longer has
+ *  to cover anything.
+ *
+ *  What is left wants a window long enough to catch one mutation touching several
+ *  fields and short enough to be invisible. Every extra second only widens the gap
+ *  where a closed tab leaves the change unmirrored — recoverable, since the boot
+ *  catch-up pushes it on the `settingsLoaded` transition, but work for nothing. */
+export const SETTINGS_MIRROR_DEBOUNCE_MS = 250
 const FINGERPRINT_KEY = 'pin:docsnapshot:settingsFingerprint'
 
 // Module-scope flush so non-React callers (channel mutations, etc.) can await the
@@ -162,8 +176,8 @@ export function useSettingsDocsMirror() {
       //
       // A fresh tab holds an empty persisted store and no fingerprint, so those differ
       // and the boot catch-up below schedules a mirror of that emptiness. The restore it
-      // is racing is a DHT resolve and a Sia download, which takes longer than the 2s
-      // debounce every time — so the write lands first, carries a newer `updatedAt` than
+      // is racing is a DHT resolve and a Sia download, which outlasts any debounce worth
+      // having — so the write lands first, carries a newer `updatedAt` than
       // the peer's, and the peer's overlay applies it. That is the cross-device wipe, and
       // it is a WRITE-side failure: the reader being careful cannot help when the writer
       // publishes state it never read.
@@ -216,7 +230,7 @@ export function useSettingsDocsMirror() {
       timer = setTimeout(() => {
         if (saving) pending = true
         else void mirror()
-      }, DEBOUNCE_MS)
+      }, SETTINGS_MIRROR_DEBOUNCE_MS)
     }
 
     const unsub = useAuthStore.subscribe((s, p) => {

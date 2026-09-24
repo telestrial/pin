@@ -3,7 +3,7 @@
 // THE CROSS-DEVICE WIPE IS A WRITE, and this is the write. A fresh tab holds an empty
 // persisted store and no mirror fingerprint, so those differ and the boot catch-up
 // schedules a mirror of that emptiness. What it races is the doc restore — a DHT resolve
-// and a Sia download — which takes longer than the 2s debounce every time. So the empty
+// and a Sia download — which outlasts any debounce worth having. So the empty
 // record lands first with a newer `updatedAt` than the peer's, the peer's overlay finds
 // something newer and applies it, and an account that existed on another device is gone.
 //
@@ -26,7 +26,10 @@ vi.mock('../lib/docs', () => ({
 }))
 
 import type { OwnedChannel } from '../core/types'
-import { useSettingsDocsMirror } from '../lib/hooks/useSettingsDocsMirror'
+import {
+  SETTINGS_MIRROR_DEBOUNCE_MS,
+  useSettingsDocsMirror,
+} from '../lib/hooks/useSettingsDocsMirror'
 import { useAuthStore } from '../stores/auth'
 import { createFakeApp, resetAllStores } from './setupFakeApp'
 
@@ -39,10 +42,12 @@ const channel: OwnedChannel = {
   createdAt: '2026-01-01T00:00:00.000Z',
 }
 
-/** Past the 2s debounce and the awaits inside the mirror. */
+/** Past the coalescing window and the awaits inside the mirror. Taken from the
+ *  constant rather than a number chosen to clear it, so retuning the window cannot
+ *  leave these tests asserting against a debounce that has already fired. */
 const settleDebounce = async () => {
   await act(async () => {
-    await vi.advanceTimersByTimeAsync(2500)
+    await vi.advanceTimersByTimeAsync(SETTINGS_MIRROR_DEBOUNCE_MS + 500)
     for (let i = 0; i < 10; i++) await Promise.resolve()
   })
 }
@@ -91,6 +96,29 @@ describe('integration: what the settings mirror may write', () => {
 
     await act(async () => {
       useAuthStore.setState({ settingsLoaded: true })
+    })
+    await settleDebounce()
+
+    expect(writes).toEqual(['settings/self'])
+  })
+
+  it('folds a burst of changes into one write', async () => {
+    // What the window is FOR, now that ordering belongs to the load gate. Each of these
+    // trips the subscription on its own, and a mirror is an encrypt plus a doc write
+    // that every peer then syncs — so one action touching three fields would otherwise
+    // cost three of them. Each step advances less than the window, so the timer keeps
+    // being reset rather than firing.
+    useAuthStore.setState({ settingsLoaded: true })
+    renderHook(() => useSettingsDocsMirror())
+    await settleDebounce()
+    writes.length = 0
+
+    await act(async () => {
+      useAuthStore.setState({ myChannels: [channel] })
+      await vi.advanceTimersByTimeAsync(SETTINGS_MIRROR_DEBOUNCE_MS / 2)
+      useAuthStore.setState({ theme: 'corners' })
+      await vi.advanceTimersByTimeAsync(SETTINGS_MIRROR_DEBOUNCE_MS / 2)
+      useAuthStore.setState({ dismissedAutoWatch: ['ch1'] })
     })
     await settleDebounce()
 
