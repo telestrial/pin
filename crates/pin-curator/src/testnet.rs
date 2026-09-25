@@ -752,6 +752,18 @@ mod visibility {
         })
     }
 
+    /// The subject of the one post `follows_and_publishes` writes.
+    ///
+    /// Spelled the way `own_subjects` spells it, from the same channel key and the same
+    /// `publishedAt` the harness puts in the manifest — a second spelling here would be a
+    /// test agreeing with itself.
+    fn own_post_subject(who: &Identity) -> String {
+        pin_crypto::engagement_subject(
+            &pin_crypto::channel_id(&who.channel_key()),
+            "2026-09-12T00:00:00.000Z",
+        )
+    }
+
     /// Run one discovery pass and return what it did.
     async fn pass(who: &Identity) -> crate::DiscoverOutcome {
         crate::discover_once(
@@ -1062,6 +1074,158 @@ mod visibility {
             "an empty channel is not a post"
         );
         assert!(john.held(&alice.did).await.is_none());
+    }
+
+    /// A SECOND PASS OVER UNCHANGED STATE PUBLISHES NOTHING.
+    ///
+    /// The fold stamps `updated_at` with the time it ran, so the bytes it produces differ
+    /// on every pass whether a count moved or not. Written ungated, that is an entry per
+    /// subject per pass replicated to every subscriber of the channel, on an account
+    /// nobody has touched — the shape the cached tally and the cached thread were each
+    /// given a gate for, on the entry those two are caches OF.
+    ///
+    /// The cadence is what makes it worth a test rather than a note: a fold-only pass runs
+    /// every 30 seconds, and its whole job is to notice a knock or this identity's own
+    /// writes. When there are neither, it should cost nothing.
+    #[tokio::test]
+    async fn a_second_pass_over_unchanged_state_publishes_no_tally() {
+        let world = World::new();
+        let john = Identity::new(&world, 1).await;
+        john.follows_and_publishes(&[]).await;
+
+        // John pins his own post, which is what publishing does in the app: the author is
+        // pin #1 on their own bytes. One real signed record, so the fold has something to
+        // fold and the crawl's `verify` has something to accept.
+        let subject = own_post_subject(&john);
+        let pin = pin_engagement::Endorsement::sign(
+            &pin_derive::did_dht_seed(&john.app_key),
+            pin_engagement::KIND_PIN,
+            &subject,
+            "version-1",
+            "2026-09-12T00:00:00.000Z",
+            None,
+        )
+        .expect("sign");
+        // Into his OWN doc, which is where the pass reads an identity's own records from.
+        // Never over the network, because the published copy lags local edits — so the
+        // endorsing-directory helper above is for somebody ELSE's records, not his.
+        crate::write_record(
+            &john.doc,
+            john.author_id,
+            pin_derive::ENDORSE_COLLECTION,
+            &pin_derive::endorse_rkey(pin_engagement::KIND_PIN, &subject),
+            serde_json::to_vec(&pin).expect("encode"),
+        )
+        .await
+        .expect("write endorsement");
+
+        let first = engagement(&john).await;
+        assert_eq!(first.tallies, 1, "the count has to land once");
+
+        let second = engagement(&john).await;
+        assert_eq!(
+            second.tallies, 0,
+            "and not again, nothing having endorsed or unendorsed it in between",
+        );
+
+        // And a count that MOVES is still published. Without this a gate that skipped
+        // whenever anything was already held would pass both assertions above and then
+        // silently stop publishing for good.
+        let like = pin_engagement::Endorsement::sign(
+            &pin_derive::did_dht_seed(&john.app_key),
+            pin_engagement::KIND_LIKE,
+            &subject,
+            "version-1",
+            "2026-09-12T00:00:02.000Z",
+            None,
+        )
+        .expect("sign");
+        crate::write_record(
+            &john.doc,
+            john.author_id,
+            pin_derive::ENDORSE_COLLECTION,
+            &pin_derive::endorse_rkey(pin_engagement::KIND_LIKE, &subject),
+            serde_json::to_vec(&like).expect("encode"),
+        )
+        .await
+        .expect("write endorsement");
+
+        assert_eq!(
+            engagement(&john).await.tallies,
+            1,
+            "a new gesture is a new count, and it has to reach the channel",
+        );
+    }
+
+    /// The conversation beside it, which is the same gate on the entry next door.
+    ///
+    /// Worth its own scenario rather than trusting the tally's: the two are gated on
+    /// different predicates, because a tally has folded its set down to a number and needs
+    /// a `setRoot` to compare, where a conversation still carries the signed records and
+    /// comparing them IS the set comparison.
+    #[tokio::test]
+    async fn a_second_pass_over_unchanged_state_republishes_no_conversation() {
+        let world = World::new();
+        let john = Identity::new(&world, 1).await;
+        let alice = Identity::new(&world, 2).await;
+        john.follows_and_publishes(&[]).await;
+
+        // Alice comments on john's post and john holds it — the state after a knock was
+        // taken, which is what the fold turns into a published conversation.
+        //
+        // John's own pin goes in beside it, and not as scenery: `touched` is seeded from
+        // endorsements and knocks, so a comment merely HELD marks nothing and the subject
+        // loop never reaches it. A post carrying its author's pin is what keeps the
+        // subject in `touched` on every pass, which is exactly the idle account this is
+        // about.
+        let subject = own_post_subject(&john);
+        let pin = pin_engagement::Endorsement::sign(
+            &pin_derive::did_dht_seed(&john.app_key),
+            pin_engagement::KIND_PIN,
+            &subject,
+            "version-1",
+            "2026-09-12T00:00:00.000Z",
+            None,
+        )
+        .expect("sign");
+        crate::write_record(
+            &john.doc,
+            john.author_id,
+            pin_derive::ENDORSE_COLLECTION,
+            &pin_derive::endorse_rkey(pin_engagement::KIND_PIN, &subject),
+            serde_json::to_vec(&pin).expect("encode"),
+        )
+        .await
+        .expect("write endorsement");
+        let comment = pin_engagement::Endorsement::sign_comment(
+            &pin_derive::did_dht_seed(&alice.app_key),
+            &subject,
+            "version-1",
+            "2026-09-12T00:00:01.000Z",
+            None,
+            "a remark",
+            Vec::new(),
+            Vec::new(),
+        )
+        .expect("sign comment");
+        crate::write_record(
+            &john.doc,
+            john.author_id,
+            pin_derive::COMMENT_LOG_COLLECTION,
+            &pin_derive::comment_log_rkey(&subject, &comment.comment_id(), &alice.did),
+            serde_json::to_vec(&comment).expect("encode"),
+        )
+        .await
+        .expect("hold comment");
+
+        let first = engagement(&john).await;
+        assert_eq!(first.comments.published, 1, "the conversation has to land");
+
+        let second = engagement(&john).await;
+        assert_eq!(
+            second.comments.published, 0,
+            "and not again, nobody having commented or withdrawn in between",
+        );
     }
 
     /// The same scenario with alice's edge removed: carol stays invisible.

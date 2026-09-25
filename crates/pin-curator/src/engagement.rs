@@ -1026,11 +1026,15 @@ pub async fn engagement_once<N: crate::net::Network>(
         // shortcut: byte-identical bytes are a STRONGER proof their endorsements still stand
         // than downloading and re-parsing would be. So retention stops being the thing that
         // makes a pass expensive.
+        // What this channel already publishes for the subject. Read once and used
+        // twice — for the stamp to carry forward, and below for whether publishing again
+        // would say anything new.
+        let published_tally = read_tally(ctx, &channel_doc, subject).await;
         let all_reached = all_confirmed(&gestures, &reached, &commented, &comments_reached);
         let retention = if all_reached {
             Some(now_iso.clone())
         } else {
-            held_retention(ctx, &channel_doc, subject).await
+            retention_of(published_tally.as_ref())
         };
 
         let records: Vec<Endorsement> = gestures
@@ -1038,11 +1042,22 @@ pub async fn engagement_once<N: crate::net::Network>(
             .chain(commented.iter().cloned())
             .collect();
         let aggregate = pin_engagement::fold(&records, retention, now_iso.clone())?;
-        let bytes = serde_json::to_vec(&aggregate).map_err(|e| format!("encode tally: {e}"))?;
-        channel_doc
-            .set_bytes(ctx.author_id, tally_key(subject), bytes)
-            .await
-            .map_err(|e| format!("write tally {subject}: {e}"))?;
+        // Published only when what it ASSERTS moved — the gate `cache_tally` below
+        // already has, on the entry it caches. `fold` stamps `updated_at` with the time
+        // it ran, so these bytes differ on every pass whether a count moved or not, and
+        // this entry replicates to every subscriber of the channel.
+        //
+        // Gated on substance alone, with no `tally_is_older` beside it. That guard exists
+        // where a record has two feeders arriving at different distances from the source;
+        // this IS the source.
+        if !crate::cache_is_current(published_tally.as_ref(), &aggregate) {
+            let bytes = serde_json::to_vec(&aggregate).map_err(|e| format!("encode tally: {e}"))?;
+            channel_doc
+                .set_bytes(ctx.author_id, tally_key(subject), bytes)
+                .await
+                .map_err(|e| format!("write tally {subject}: {e}"))?;
+            outcome.tallies += 1;
+        }
         // And where this identity's own screens read it. Free here — the fold is already
         // in hand — where a screen reaching the channel doc for it would have to hold that
         // replica, which for a channel you own means deriving a namespace the UI has no
@@ -1056,7 +1071,6 @@ pub async fn engagement_once<N: crate::net::Network>(
             &aggregate,
         )
         .await;
-        outcome.tallies += 1;
 
         // The words, in their own entry. An empty conversation is a deletion rather than an
         // empty list, for the reason an empty tally is: a reader treats absent and empty the
@@ -1071,12 +1085,20 @@ pub async fn engagement_once<N: crate::net::Network>(
                 comments: commented,
                 updated_at: now_iso.clone(),
             };
-            let bytes = serde_json::to_vec(&conversation)
-                .map_err(|e| format!("encode conversation: {e}"))?;
-            channel_doc
-                .set_bytes(ctx.author_id, conversation_key(subject), bytes)
-                .await
-                .map_err(|e| format!("publish conversation: {e}"))?;
+            // The same gate for the same reason: `updated_at` is stamped per pass, so
+            // the bytes move whether the conversation did or not. The comments are signed
+            // records, so comparing them IS the set comparison — a conversation still
+            // carries its set where a tally has folded one down to a number.
+            let published = read_conversation(ctx, &channel_doc, subject).await;
+            if !crate::thread_is_current(published.as_ref(), &conversation) {
+                let bytes = serde_json::to_vec(&conversation)
+                    .map_err(|e| format!("encode conversation: {e}"))?;
+                channel_doc
+                    .set_bytes(ctx.author_id, conversation_key(subject), bytes)
+                    .await
+                    .map_err(|e| format!("publish conversation: {e}"))?;
+                outcome.comments.published += 1;
+            }
             crate::cache_thread(
                 &ctx.doc,
                 &ctx.blobs,
@@ -1086,7 +1108,6 @@ pub async fn engagement_once<N: crate::net::Network>(
                 &conversation,
             )
             .await;
-            outcome.comments.published += 1;
         }
     }
 
@@ -1166,18 +1187,34 @@ async fn read_tally<N: crate::net::Network>(
     serde_json::from_slice(&bytes).ok()
 }
 
-/// The retention time a subject's published tally already claims, if any.
-async fn held_retention<N: crate::net::Network>(
-    ctx: &EngagementContext<N>,
-    channel_doc: &Doc,
-    subject: &str,
-) -> Option<String> {
+/// The retention time a published tally claims, if any.
+///
+/// Takes the tally rather than reading one: the caller needs the same record to decide
+/// whether its own fold differs from what is published, and two reads of one entry per
+/// subject per pass is the cost this pass is trying to stop paying.
+fn retention_of(held: Option<&Aggregate>) -> Option<String> {
     // Any kind's stamp will do: they are written together, so they agree.
-    read_tally(ctx, channel_doc, subject)
-        .await?
+    held?
         .kinds
         .values()
         .find_map(|t| t.retention_checked_at.clone())
+}
+
+/// The conversation a subject already publishes, if any. `read_tally`'s shape, for the
+/// entry beside it.
+async fn read_conversation<N: crate::net::Network>(
+    ctx: &EngagementContext<N>,
+    channel_doc: &Doc,
+    subject: &str,
+) -> Option<pin_engagement::Conversation> {
+    let entry = channel_doc
+        .get_one(
+            iroh_docs::store::Query::single_latest_per_key().key_exact(conversation_key(subject)),
+        )
+        .await
+        .ok()??;
+    let bytes = ctx.blobs.get_bytes(entry.content_hash()).await.ok()?;
+    serde_json::from_slice(&bytes).ok()
 }
 
 // --- the floor rung ---------------------------------------------------------------
