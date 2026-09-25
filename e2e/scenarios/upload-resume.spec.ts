@@ -1,5 +1,5 @@
-// E2E: the persistent upload queue resume loop, against real Sia + the public
-// Mainline DHT (pkarr), driven through the real UI in Chrome.
+// E2E: the persistent upload queue resume loop, against real Sia and the real
+// Mainline DHT, driven through the real UI in Chrome.
 //
 // Simulates "tab closed mid-publish" by HANGING the manifest-commit leg — the
 // pkarr relay PUT that publishes a channel's locator to the DHT (atproto's
@@ -20,7 +20,12 @@
 // a background best-effort pkarr PUT that may hang harmlessly) and just before
 // Publish, so it catches the post's manifest commit specifically.
 
-import { expect, type Page, test } from '@playwright/test'
+import {
+  type BrowserContext,
+  expect,
+  type Page,
+  test,
+} from '@playwright/test'
 import {
   createChannelButton,
   drainE2EChannels,
@@ -30,14 +35,31 @@ import {
 
 const SIA_KEY = 'sia-auth-f6b7539e181e45ee'
 const QUEUE_DB = 'pin-upload-queue'
-// Public pkarr relays the browser publishes/resolves DHT records through. The
-// publish is a PUT; resolves are GETs, which we let through.
-const PKARR_RELAY = /pkarr\.pubky\.(app|org)/
+// The pkarr relays the browser publishes/resolves DHT records through. The publish
+// is a PUT; resolves are GETs, which we let through.
+//
+// Both presets are matched because this has to hang whichever relay is in force, and
+// a pattern that misses it does not fail the route — the publish simply succeeds and
+// the interruption this spec is built on never happens. The app's default is the local
+// relay; the public pair is here so a run pinned to VITE_RELAY_PRESET=public still
+// blocks the right host.
+const PKARR_RELAY = /pkarr\.pubky\.(app|org)|127\.0\.0\.1:6881/
 
 type QueueSnapshot = {
   total: number
   checkpointed: number
   states: string[]
+  // Kind alongside state so a leftover task identifies ITSELF. The drain
+  // assertion below used to compare a bare count, which reports "expected 0,
+  // received 1" and names neither what lingered nor why — and several kinds
+  // now share this queue (publish, channel create, delete-objects), only some
+  // of which are meant to drain.
+  kinds: string[]
+  // Identity, so a leftover can be told from a REPLACEMENT: the same id still
+  // present means the task never dropped itself, a different one means
+  // something enqueued a second publish. A count cannot distinguish those, and
+  // they are different bugs.
+  ids: string[]
 }
 
 // Read the persisted upload queue out of IndexedDB from the page context.
@@ -56,39 +78,67 @@ async function readQueue(page: Page): Promise<QueueSnapshot> {
               const tasks = all.result as Array<{
                 ledger?: { uploadedItemRef?: unknown }
                 state?: string
+                kind?: string
+                id?: string
               }>
               resolve({
                 total: tasks.length,
                 checkpointed: tasks.filter((t) => t.ledger?.uploadedItemRef)
                   .length,
                 states: tasks.map((t) => t.state ?? '?'),
+                kinds: tasks.map((t) => t.kind ?? '?'),
+                ids: tasks.map((t) => t.id ?? '?'),
               })
             }
             all.onerror = () =>
-              resolve({ total: -1, checkpointed: -1, states: [] })
+              resolve({ total: -1, checkpointed: -1, states: [], kinds: [], ids: [] })
           } catch {
             // store doesn't exist yet (no upload has run) → empty
-            resolve({ total: 0, checkpointed: 0, states: [] })
+            resolve({ total: 0, checkpointed: 0, states: [], kinds: [], ids: [] })
           }
         }
-        req.onerror = () => resolve({ total: -1, checkpointed: -1, states: [] })
+        req.onerror = () => resolve({ total: -1, checkpointed: -1, states: [], kinds: [], ids: [] })
       }),
     QUEUE_DB,
+  )
+}
+
+// Re-register the auth seed from the page's CURRENT state, and answer with it.
+//
+// signInAccount's init script runs on every page load and seeds a payload with no
+// myChannels, so any reload rehydrates a channel-less account unless something puts
+// the live state back — a harness artifact; in production localStorage already holds
+// myChannels. Init scripts accumulate and the last one wins, so re-registering before
+// each reload is what keeps the app's own state across one. Every reload in this spec
+// needs it: the first is covered by the resumed task re-adding the channel, but the
+// second has no pending work left to repopulate anything, and without this it boots
+// into an empty account and renders nothing.
+async function reseedAuth(page: Page, context: BrowserContext): Promise<void> {
+  const live = await page.evaluate((k) => localStorage.getItem(k), SIA_KEY)
+  await context.addInitScript(
+    ({ key, payload }) => {
+      try {
+        if (window.location.origin === 'http://127.0.0.1:4173' && payload) {
+          localStorage.setItem(key, payload)
+        }
+      } catch {
+        // ignore origins that block localStorage
+      }
+    },
+    { key: SIA_KEY, payload: live },
   )
 }
 
 test('an interrupted publish resumes from its checkpoint on reload', async ({
   browser,
 }) => {
-  // Known browser boundary (not a code bug): the final "post visible after
-  // reload" assertion needs the feed to re-resolve alice's own channel locator
-  // off the public pkarr relays, which lag on read-after-write for minutes from
-  // the browser (cache we can't control). The checkpoint/resume mechanism this
-  // test targets works and is covered against fakes in the integration tier; only
-  // the post-reload visibility depends on the relay resolve. The desktop Curator
-  // (direct Mainline DHT) is the fix. See CLAUDE.md, "pkarr relay
-  // read-after-write" (2026-07-23).
-  test.fixme(true, 'browser-relay pkarr read-after-write lag; Curator-era')
+  // Re-enabled 2026-09-24. This was fixme'd because the final "post visible after
+  // reload" assertion needs the feed to re-resolve alice's own channel locator, and
+  // the public relays clamp a packet's TTL to a 300s floor before deciding whether to
+  // serve their cache — a wait no client can shorten, since it is the relay's
+  // staleness rather than ours. The relays are ours now and run a 1-5s window, so the
+  // resolve is the one thing in this spec that is no longer a property of somebody
+  // else's infrastructure. See scripts/relay-pkarr.toml.
   const context = await browser.newContext()
   context.on('weberror', (e) => console.log('[alice weberror]', e.error()))
 
@@ -166,19 +216,7 @@ test('an interrupted publish resumes from its checkpoint on reload', async ({
     // already holds myChannels on reload, so this restores production-faithful
     // state. (A later-registered init script runs after the helper's, so this
     // full-state seed wins.)
-    const liveAuth = await alice.evaluate((k) => localStorage.getItem(k), SIA_KEY)
-    await context.addInitScript(
-      ({ key, payload }) => {
-        try {
-          if (window.location.origin === 'http://127.0.0.1:4173' && payload) {
-            localStorage.setItem(key, payload)
-          }
-        } catch {
-          // ignore origins that block localStorage
-        }
-      },
-      { key: SIA_KEY, payload: liveAuth },
-    )
+    await reseedAuth(alice, context)
 
     await alice.unroute(PKARR_RELAY)
     await alice.reload()
@@ -190,18 +228,68 @@ test('an interrupted publish resumes from its checkpoint on reload', async ({
     })
 
     // The succeeded task drains itself from IndexedDB — nothing lingers.
+    // Asserted as kind:state pairs rather than a count, so a leftover says what
+    // it is: only `success` drops itself, `failed` persists on purpose, and this
+    // queue carries more kinds than it did when the spec was written.
+    //
+    // Note what the persisted `state` can and cannot say: 'running' is
+    // deliberately never written to IDB (actionQueue's setState), so a record
+    // reads 'pending' for the whole time it is in flight and vanishes only on
+    // success. This poll therefore means "not yet succeeded" — it cannot
+    // distinguish a resume that never started from one still working, which is
+    // why the window has to cover a real Sia commit rather than a UI beat.
     await expect
-      .poll(async () => (await readQueue(alice!)).total, {
-        timeout: 30_000,
-        intervals: [1000],
-      })
-      .toBe(0)
+      .poll(
+        async () => {
+          const q = await readQueue(alice!)
+          return q.kinds.map(
+            (k, i) =>
+              `${k}:${q.states[i]}:${
+                q.ids[i] === parked.ids[0] ? 'same-task' : 'new-task'
+              }`,
+          )
+        },
+        { timeout: 150_000, intervals: [1000] },
+      )
+      .toEqual([])
 
     // -- Reopen once more: clean slate (drained queue), no in-flight noise --
+    // Reseeded again, from the state the resume produced: this boot has no
+    // pending task to rebuild anything, so it is the reload that proves the
+    // post survives on its own rather than on work still in the queue.
+    await reseedAuth(alice, context)
     await alice.reload()
-    await expect(alice.getByText(postBody).first()).toBeVisible({
-      timeout: 90_000,
-    })
+    try {
+      await expect(alice.getByText(postBody).first()).toBeVisible({
+        timeout: 90_000,
+      })
+    } catch (e) {
+      // A cold boot renders this post from the network, so "not visible" has
+      // several distinct causes that look identical from the assertion: the
+      // channel missing from local state, a manifest resolved without the post
+      // in it, or a feed that has it and doesn't collate it. Report which
+      // before failing — the production build this tier serves has no __pin*
+      // diagnostics, so this is the only way in.
+      const diag = await alice.evaluate((k) => {
+        const st = JSON.parse(localStorage.getItem(k) || '{}').state ?? {}
+        return {
+          myChannels: (st.myChannels ?? []).length,
+          subscriptions: (st.subscriptions ?? []).length,
+          username: st.profile?.username ?? null,
+        }
+      }, SIA_KEY)
+      const onHome = await alice
+        .locator('article, li')
+        .allInnerTexts()
+        .catch(() => [])
+      console.log('[cold-boot diag] local state:', JSON.stringify(diag))
+      console.log('[cold-boot diag] home rows:', onHome.length)
+      console.log(
+        '[cold-boot diag] home text sample:',
+        JSON.stringify(onHome.slice(0, 8)),
+      )
+      throw e
+    }
 
     // No duplicate post: on the new channel's own page exactly one item row
     // carries the body (the channel page lists only that channel's items, so
