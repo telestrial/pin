@@ -66,7 +66,6 @@ describe('integration: what the settings mirror may write', () => {
       client: account.client,
       storedKeyHex: APP_KEY_HEX,
       settingsLoaded: false,
-      settingsDirty: false,
       myChannels: [],
       profile: null,
     })

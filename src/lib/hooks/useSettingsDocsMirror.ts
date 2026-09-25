@@ -63,7 +63,21 @@ import {
  *  where a closed tab leaves the change unmirrored — recoverable, since the boot
  *  catch-up pushes it on the `settingsLoaded` transition, but work for nothing. */
 export const SETTINGS_MIRROR_DEBOUNCE_MS = 250
-const FINGERPRINT_KEY = 'pin:docsnapshot:settingsFingerprint'
+// Exported so the tests name it once rather than spelling it a second time.
+export const FINGERPRINT_KEY = 'pin:docsnapshot:settingsFingerprint'
+// The `updatedAt` carried by the record this device last mirrored.
+//
+// Kept beside the fingerprint rather than in the auth store because it is the same kind
+// of fact — something about the last mirror, not part of the account — and because a new
+// field in the store's `partialize` reads as `undefined` for everyone on upgrade, which
+// for a neighbour like `settingsObjectID` would strand a snapshot generation.
+//
+// It exists so the boot load can tell an OLDER record from a NEWER one. The read side
+// below distinguishes them by fingerprint, which answers "does this differ from what I
+// mirrored" and not "which of the two is newer" — enough for a live peer write, and not
+// enough at boot, where the doc is refilled from a snapshot that can predate local state.
+// Exported so the tests name it once rather than spelling it a second time.
+export const MIRRORED_AT_KEY = 'pin:docsnapshot:settingsMirroredAt'
 
 // Module-scope flush so non-React callers (channel mutations, etc.) can await the
 // durable settings write before proceeding. Set by the hook on mount.
@@ -104,6 +118,30 @@ function settingsFingerprint(): string {
   return fingerprintOf(useAuthStore.getState())
 }
 
+/** Whether the doc's copy is behind the store, so a mirror is owed.
+ *
+ *  A device that has never mirrored owes one, which is why an absent fingerprint counts
+ *  as behind. Spelled out at four call sites before this, which is three chances for one
+ *  of them to drift into a different answer to the same question. */
+function needsMirroring(): boolean {
+  return settingsFingerprint() !== readFingerprint()
+}
+
+/** Whether the store has moved since this device last mirrored.
+ *
+ *  Close to `needsMirroring` and deliberately not the same, because they disagree on the
+ *  case that matters: a device that has never mirrored owes a write, and it is NOT ahead
+ *  of the doc — it has nothing to be ahead with. Answering that one "yes" would have the
+ *  read side refuse to load, so a new account could never start.
+ *
+ *  This is what replaces `settingsDirty`. The flag was set by one of the store's dozen
+ *  mutations, so creating a channel left it reading "mirrored" while the channel had
+ *  reached nothing. A fingerprint cannot fall out of step that way: whatever the
+ *  mutation was, the state either matches what was mirrored or it does not. */
+export function localIsAheadOfMirror(): boolean {
+  return readFingerprint() !== null && needsMirroring()
+}
+
 /** Decide whether a peer's decrypted settings (synced into the replica) should be
  *  applied over what we hold — the catastrophe-relevant guards, extracted pure so
  *  they're unit-tested. Returns the fields to apply, or null to skip. Skips when:
@@ -138,6 +176,24 @@ function readFingerprint(): string | null {
     return localStorage.getItem(FINGERPRINT_KEY)
   } catch {
     return null
+  }
+}
+
+/** The `updatedAt` of the state this device last mirrored, or null if it never has. */
+export function lastMirroredAt(): string | null {
+  try {
+    return localStorage.getItem(MIRRORED_AT_KEY)
+  } catch {
+    return null
+  }
+}
+
+function writeMirroredAt(iso: string): void {
+  try {
+    localStorage.setItem(MIRRORED_AT_KEY, iso)
+  } catch {
+    // Same posture as the fingerprint: without it the boot load cannot compare and
+    // falls back to applying what the doc holds, which is where it stood before this.
   }
 }
 
@@ -196,6 +252,10 @@ export function useSettingsDocsMirror() {
         await ensureOpen()
         if (cancelled) return
         const state = useAuthStore.getState()
+        // Minted once, here, and remembered below. This is the ONLY place a settings
+        // `updatedAt` is stamped, which is what lets the boot load compare without every
+        // mutation having to remember that it changed something.
+        const updatedAt = new Date().toISOString()
         const settings: DispatchSettings = {
           version: SETTINGS_VERSION,
           myChannels: state.myChannels,
@@ -205,14 +265,17 @@ export function useSettingsDocsMirror() {
           follows: state.follows,
           handleFollows: state.handleFollows,
           profile: state.profile,
-          updatedAt: new Date().toISOString(),
+          updatedAt,
         }
         const key = await deriveSettingsKey(appKeyBytes)
         const enc = await encryptSettings(key, JSON.stringify(settings))
         await putRecord('settings', 'self', new TextEncoder().encode(enc))
         // Only advance the fingerprint on full success — a failure leaves it
-        // stale so the next change/boot retries (no silent loss).
+        // stale so the next change/boot retries (no silent loss). Same for the
+        // timestamp: claiming to have mirrored state that did not land would let a
+        // later boot refuse a doc record that really was newer.
         writeFingerprint(fp)
+        writeMirroredAt(updatedAt)
       } catch (e) {
         console.warn('settings mirror failed (will retry):', e)
       } finally {
@@ -260,14 +323,14 @@ export function useSettingsDocsMirror() {
     // failed write last session, first run, or new fields added since), re-mirror.
     // mirror() self-skips when the fingerprint already matches, so it's free when
     // up to date.
-    if (settingsFingerprint() !== readFingerprint()) schedule()
+    if (needsMirroring()) schedule()
 
     // Flush contract (durable-when-done): await any in-flight mirror, then mirror
     // once if still stale. Callers awaiting this get the current settings durable
     // on Sia — the replacement for the dropped atproto flush.
     activeMirrorFlush = async () => {
       while (saving) await new Promise((r) => setTimeout(r, 50))
-      if (settingsFingerprint() !== readFingerprint()) await mirror()
+      if (needsMirroring()) await mirror()
     }
 
     // READ overlay: reflect a peer's freshly-synced settings into the store.
@@ -281,7 +344,7 @@ export function useSettingsDocsMirror() {
         // mismatch means an unsynced local edit we must not clobber (the mirror
         // will push it, then this resumes). This is also the wipe guard: we never
         // overwrite pending local work.
-        if (settingsFingerprint() !== readFingerprint()) return
+        if (needsMirroring()) return
 
         await ensureOpen()
         if (cancelled) return
@@ -304,7 +367,7 @@ export function useSettingsDocsMirror() {
         const next = decidePeerSettings(
           peer,
           s,
-          settingsFingerprint() === readFingerprint(),
+          !needsMirroring(),
           s.theme,
         )
         if (!next || cancelled) return

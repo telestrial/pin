@@ -36,6 +36,11 @@ vi.mock('../lib/docs', () => ({
 
 import { deriveSettingsKey, encryptSettings } from '../core/crypto'
 import { SETTINGS_VERSION } from '../core/settings'
+import {
+  FINGERPRINT_KEY,
+  fingerprintOf,
+  MIRRORED_AT_KEY,
+} from '../lib/hooks/useSettingsDocsMirror'
 import { useSettingsSync } from '../lib/hooks/useSettingsSync'
 import { useAuthStore } from '../stores/auth'
 import { useCuratorStore } from '../stores/curator'
@@ -87,7 +92,6 @@ describe('integration: loading settings from the doc', () => {
       client: account.client,
       storedKeyHex: APP_KEY_HEX,
       settingsLoaded: false,
-      settingsDirty: false,
       myChannels: [],
       profile: null,
     })
@@ -163,11 +167,76 @@ describe('integration: loading settings from the doc', () => {
     expect(useAuthStore.getState().myChannels).toEqual([])
   })
 
-  it('keeps unmirrored local state rather than reading over it', async () => {
+  // A channel created in a tab used to disappear on the next refresh, and these three
+  // are the guard that stopped it. Observed live first — create a channel, reload the
+  // moment it reaches the sidebar, come back to an empty list — then reproduced with
+  // the flag as the only variable between losing it and keeping it.
+  //
+  // The window is ordinary on web rather than exotic: the doc is a MemStore that dies
+  // with the tab, so the durable copy is the Sia snapshot, and that lands seconds after
+  // the local write. A refresh in between restores a doc that predates the channel.
+  it('refuses a record older than the state this device mirrored', async () => {
+    // The doc's record predates what local holds, so applying it would drop a channel
+    // that exists. Loaded anyway: the app has to start, and the mirror's catch-up
+    // pushes local state out, which is what makes the doc current again.
+    localStorage.setItem(MIRRORED_AT_KEY, '2026-01-03T00:00:00.000Z')
+    docState.record = await published({
+      myChannels: [],
+      updatedAt: '2026-01-02T00:00:00.000Z',
+    })
+    useAuthStore.setState({ myChannels: [channel] })
+    useCuratorStore.getState().set({ docRestore: 'ready' })
+
+    renderHook(() => useSettingsSync())
+    await settle()
+
+    expect(useAuthStore.getState().myChannels).toEqual([channel])
+    expect(useAuthStore.getState().settingsLoaded).toBe(true)
+  })
+
+  it('applies a record newer than the state this device mirrored', async () => {
+    // The other device's edit, which is the whole reason this path reads the doc at
+    // all. A guard that kept local state unconditionally would be a different bug.
+    localStorage.setItem(MIRRORED_AT_KEY, '2026-01-01T00:00:00.000Z')
+    docState.record = await published({
+      myChannels: [channel],
+      updatedAt: '2026-01-02T00:00:00.000Z',
+    })
+    useAuthStore.setState({ myChannels: [] })
+    useCuratorStore.getState().set({ docRestore: 'ready' })
+
+    renderHook(() => useSettingsSync())
+    await settle()
+
+    expect(useAuthStore.getState().myChannels).toEqual([channel])
+  })
+
+  it('applies what the doc holds when this device has never mirrored', async () => {
+    // No stamp is not a claim that local is newer — it is the absence of one, which is
+    // where every device sits on first run and on the upgrade that introduced the
+    // stamp. Refusing here would leave a fresh device unable to load its own account.
+    docState.record = await published({ myChannels: [] })
+    useAuthStore.setState({ myChannels: [channel] })
+    useCuratorStore.getState().set({ docRestore: 'ready' })
+
+    renderHook(() => useSettingsSync())
+    await settle()
+
+    expect(useAuthStore.getState().myChannels).toEqual([])
+  })
+
+  it('keeps local state that has moved since the last mirror', async () => {
     // A crash mid-write last session leaves local fresher than the doc. The mirror's
     // boot catch-up pushes it out; reading the doc over it would lose the newer state.
+    //
+    // The fingerprint written here is of the state that WAS mirrored (no channels),
+    // while the store holds one — which is what "local has moved" means, derived rather
+    // than declared. A `settingsDirty` flag used to answer this and was set by one
+    // mutation out of a dozen, so it said "mirrored" for a channel that had reached
+    // nothing.
+    localStorage.setItem(FINGERPRINT_KEY, fingerprintOf(useAuthStore.getState()))
+    useAuthStore.setState({ myChannels: [channel] })
     docState.record = await published({ myChannels: [] })
-    useAuthStore.setState({ settingsDirty: true, myChannels: [channel] })
     useCuratorStore.getState().set({ docRestore: 'ready' })
 
     renderHook(() => useSettingsSync())
