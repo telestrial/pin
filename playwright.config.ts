@@ -36,6 +36,17 @@ export default defineConfig({
   // retract), which compounds within the single test until the backlog clears.
   timeout: 10 * 60 * 1000,
   webServer: {
+    // Vite's preview alone, never a script that also starts the relays. `webServer` owns
+    // the tree it spawns and waits on its stdout at teardown, so a relay in here holds
+    // the pipe open and the run sits after the last test. `test:e2e` wraps the whole
+    // Playwright invocation in scripts/with-relays.sh instead, which owns their
+    // lifetime — the same split playwright.sync.config.ts makes, for the same reason.
+    //
+    // The built app takes its relays from the store's default, which is `local`, so
+    // these specs run against the relays on this machine. That is what unblocked the
+    // three that were fixme'd: the public relays clamp a packet's TTL to a 300s floor,
+    // which is the browser read-after-write lag in its entirety, and ours runs a 1-5s
+    // window (scripts/relay-pkarr.toml). Sia and Mainline are still real.
     command: 'bun run preview --port 4173',
     port: 4173,
     reuseExistingServer: !process.env.CI,

@@ -1,9 +1,10 @@
 # E2E tests
 
 Real-network tests against a built `dist/` served by `bun run preview`.
-Uses real Sia hosts and the public Mainline DHT (pkarr) — the
-reconciliation point for our fake-SDK contract. If the fake drifts from
-real behavior, this tier fails and we fix the fake.
+Uses real Sia hosts and the real Mainline DHT, reached through the pkarr
+relay on this machine — the reconciliation point for our fake-SDK
+contract. If the fake drifts from real behavior, this tier fails and we
+fix the fake.
 
 The integration tier (`*.int.test.tsx`) is fast and deterministic
 against fakes; this tier is slow and honest. Small by design: a few
@@ -12,14 +13,21 @@ interrupted publish resuming from its checkpoint, granular file
 pinning), room for a couple more before they become a maintenance
 burden.
 
-**Three of those four are `test.fixme`'d, so one test actually runs.**
-`cross-account`, `granular-pin` and `upload-resume` are disabled behind
-the browser-relay pkarr read-after-write lag, which is a property of the
-public relays rather than something a client can fix — so the Curator
-landing did not clear it, because these run in a browser. `author-smoke`
-exists as the single-account substitute. Read a green run as covering
-connect, upload, the share URL round-trip and the manifest write, and
-nothing about cross-account custody, packed uploads or resume.
+**Two of those four are still `test.fixme`'d.** All three were disabled
+behind the browser-relay pkarr read-after-write lag: the public relays
+clamp a packet's TTL into a 300s floor before deciding whether to serve
+their cache, so a just-published record stays invisible for minutes and
+no client can shorten it. Running our own relay does
+(`scripts/relay-pkarr.toml`, a 1-5s window), which is why `upload-resume`
+came back on 2026-09-24.
+
+`cross-account` and `granular-pin` are still off, and no longer for that
+reason: both drive the old paste-a-URL-to-subscribe flow, which `fc6d1b7`
+replaced with opening a link and pressing Watch on the page it lands on.
+Their selectors need repairing before the fixme comes off. Until then,
+read a green run as covering connect, upload, the share URL round-trip,
+the manifest write and checkpoint resume, and nothing about
+cross-account custody or granular file pinning.
 
 ## One-time setup
 
@@ -55,9 +63,20 @@ hosts.
 bun run test:e2e     # builds dist/ first, then runs Playwright
 ```
 
-`test:e2e` is `bun run build && playwright test`. Playwright spins up
-`bun run preview --port 4173` to serve the built `dist/`, and the specs
-run serially (one worker — they share the alice/bob accounts).
+`test:e2e` builds `dist/`, then runs Playwright inside
+`scripts/with-relays.sh` so the relays are up for the run and the ones it
+started are stopped after. They start out there rather than in
+Playwright's `webServer` because that tree's stdout is waited on at
+teardown, and a relay holds it open forever. Playwright spins up `bun run
+preview --port 4173` to serve the built `dist/`, and the specs run
+serially (one worker — they share the alice/bob accounts).
+
+A relay already answering is left alone and left running, so this
+composes with a `bun run dev:relays` or a desktop you already have up.
+Note what that means for the log: `target/e2e-relays.log` holds the
+output of the relays *this run started*, so when it started none it says
+only that they were already up, and the output to read when a resolve
+comes back empty is whatever terminal owns them.
 
 **Run `bunx playwright install chromium` after a `@playwright/test`
 bump.** A new Playwright expects a browser build it pins by number, and
