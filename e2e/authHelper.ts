@@ -24,10 +24,10 @@ const SIA_LOCALSTORAGE_KEY = 'sia-auth-f6b7539e181e45ee'
 
 // The left nav sidebar, scoped by its unique Home button. Several <aside>s and
 // surfaces carry overlapping accessible names — the sidebar's add-actions are
-// `+` icon buttons labeled "Create a channel" / "Subscribe to a channel", and
-// the EMPTY-home welcome renders CTA buttons with those exact same names — so
-// create/subscribe clicks must be scoped here to avoid a strict-mode match on
-// two elements. Mirrors the scoping the drain helpers already use.
+// `+` icon buttons labeled "Create a channel" / "Open a Pin link", and the
+// EMPTY-home welcome renders CTA buttons with those exact same names — so those
+// clicks must be scoped here to avoid a strict-mode match on two elements.
+// Mirrors the scoping the drain helpers already use.
 export function leftSidebar(page: Page): Locator {
   return page.locator('aside').filter({
     has: page.getByRole('button', { name: 'Home', exact: true }),
@@ -43,13 +43,27 @@ export function createChannelButton(page: Page): Locator {
   })
 }
 
-// The sidebar's "+" subscribe action. Distinct from the subscribe FORM's submit
-// button (name "Subscribe", exact) — this is "Subscribe to a channel".
-export function subscribeButton(page: Page): Locator {
+// The sidebar's "+" open-a-link action, under the Following section.
+//
+// This was "Subscribe to a channel" and the form behind it subscribed on submit.
+// Pasting a link is NAVIGATION now: it opens the channel and the relation is a
+// separate decision made on the page, by the same Watch pill every other route
+// to that page offers. So a spec that wants bob subscribed opens the link and
+// then presses Watch — two steps, because there are two decisions.
+export function openPinLinkButton(page: Page): Locator {
   return leftSidebar(page).getByRole('button', {
-    name: 'Subscribe to a channel',
+    name: 'Open a Pin link',
     exact: true,
   })
+}
+
+// The sidebar list of everything reaching you — follows AND watches, since a
+// subscription is the mechanism under both. Titled for the superset, which is
+// why it is no longer "Subscribed channels".
+export function followingList(page: Page): Locator {
+  return leftSidebar(page).locator(
+    'ul[aria-label="Channels you follow or watch"]',
+  )
 }
 
 // Surface where a create/publish stalls. Channel create/publish does real
@@ -180,15 +194,56 @@ export async function signInAccount(
 
   // Universal "connected + on Home" signal: the left sidebar's Home button.
   // Present on the connected home surface (empty or populated), absent on the
-  // auth/naming screens — it replaces the removed "Sign Out" button. Sia
-  // restore from the seeded AppKey lands us here; a restore failure (bad or
-  // revoked hex) leaves us on the Welcome screen and this times out — fail
-  // loudly so the AppKey gets re-baked.
+  // auth/naming screens — it replaces the removed "Sign Out" button.
+  //
+  // Sized for a real Sia read, not a UI beat. Sign-in no longer lands on Home
+  // directly: the doc restore stands between them, and it is a DHT resolve plus
+  // a Sia download of the settings snapshot, held behind "Restoring your
+  // channels from Sia…" until it settles. A host that will not answer costs the
+  // SDK's full 60s read timeout before the next one is tried, so 30s here was a
+  // window that happened to fit and then stopped fitting.
+  //
+  // Two failures still land on this line and they look identical from here: a
+  // bad or revoked AppKey hex leaves us on Welcome, and an unreadable snapshot
+  // holds us on the restore screen. The error-context snapshot names which.
   await expect(
     page.getByRole('button', { name: 'Home', exact: true }).first(),
-  ).toBeVisible({ timeout: 30_000 })
+  ).toBeVisible({ timeout: 150_000 })
 
   return page
+}
+
+// The signal that a channel is LIVE — manifest on Sia, pkarr pointer published —
+// which the "Channel created" heading is NOT.
+//
+// Creating a channel is a journaled action: K is minted at enqueue so the channelID
+// and the share link exist before any byte moves, and the heading appears then. The
+// settings entry is written only once `createAndPublishChannel` returns, deliberately
+// — an entry in settings is one the identity loop advertises, and advertising a
+// channel whose locator resolves to nothing sends every reader to a dead end.
+//
+// So `myChannels` gaining the name IS the commit having landed, and it is what a spec
+// has to wait on before handing the link to anybody or expecting the channel to be
+// selectable as a voice. These specs were written when create was synchronous and
+// "Channel created" meant both legs were live; it no longer does.
+export async function waitForChannelPublished(
+  page: Page,
+  channelName: string,
+): Promise<void> {
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(
+          ({ key, name }) => {
+            const s = JSON.parse(localStorage.getItem(key) || '{}').state
+            const mine = (s?.myChannels ?? []) as Array<{ name?: string }>
+            return mine.some((c) => c.name === name)
+          },
+          { key: SIA_LOCALSTORAGE_KEY, name: channelName },
+        ),
+      { timeout: 180_000, intervals: [1_000, 2_000, 5_000] },
+    )
+    .toBe(true)
 }
 
 // Shared, bounded retract of this suite's "e2e test" channels. A test's
@@ -223,6 +278,13 @@ export async function drainE2EChannels(
   // "Subscribed channels"; narrow to the "Your channels" UL so we retract
   // (owned) rather than unsubscribe.
   const yourChannels = sidebar.locator('ul[aria-label="Your channels"]')
+
+  // React paints the sidebar a beat after the persisted store hydrates, and
+  // `.count()` does not auto-wait — so counting straight after
+  // waitForChannelsLoaded can read zero and break the loop before it starts,
+  // which is a cleanup that reports success having drained nothing. Bounded and
+  // swallowed, because a genuinely empty list must still return promptly.
+  await yourChannels.waitFor({ state: 'visible', timeout: 30_000 }).catch(() => {})
 
   const start = Date.now()
   let drained = 0
@@ -272,10 +334,7 @@ export async function drainE2ESubscriptions(
   // finds nothing to drain.
   await page.goto('/', { timeout: 60_000 }).catch(() => {})
   await waitForChannelsLoaded(page)
-  const sidebar = page.locator('aside').filter({
-    has: page.getByRole('button', { name: 'Home', exact: true }),
-  })
-  const subscribed = sidebar.locator('ul[aria-label="Subscribed channels"]')
+  const subscribed = followingList(page)
 
   const start = Date.now()
   let drained = 0
@@ -285,13 +344,22 @@ export async function drainE2ESubscriptions(
     if ((await candidates.count()) === 0) break
     try {
       await candidates.first().click({ timeout: 30_000 })
-      page.once('dialog', (d) => d.accept())
-      const unsub = page.getByRole('button', { name: 'Unsubscribe' })
-      await unsub.click({ timeout: 30_000 })
+      // The relation pill, which replaced the "Unsubscribe" button. It carries
+      // the state rather than the action, so the one to click is whichever of
+      // the two ON labels is showing — and dropping the relation now takes no
+      // confirm, so there is no dialog to accept.
+      const drop = page.getByRole('button', { name: /^(Watching|Following)$/ })
+      await drop.click({ timeout: 30_000 })
+      // Confirm by the OFF label APPEARING, not by the ON one going away: the
+      // pill persists across the toggle and only its label changes, so waiting
+      // for it to vanish would also be satisfied by it never having rendered.
       // waitFor + catch, NOT expect() — see drainE2EChannels: a caught expect()
       // still fails the test, so cleanup must not assert.
-      await unsub.waitFor({ state: 'hidden', timeout: 45_000 }).catch(() => {})
-      if (!(await unsub.isVisible().catch(() => false))) drained++
+      const dropped = page.getByRole('button', { name: /^(Watch|Follow)$/ })
+      await dropped
+        .waitFor({ state: 'visible', timeout: 45_000 })
+        .catch(() => {})
+      if (await dropped.isVisible().catch(() => false)) drained++
     } catch (e) {
       console.warn(`[drainE2ESubscriptions] pass ${i} failed, recovering:`, e)
       await page
