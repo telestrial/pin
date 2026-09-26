@@ -223,6 +223,75 @@ describe('accounting', () => {
   })
 })
 
+// The read that needs no share URL, and the metadata that makes it findable. Both
+// exist for a device whose pointers have aged off the DHT while its objects sit in its
+// own Sia scope — so what matters is that the scope answers and that a failed read
+// stays a failure.
+describe('reading an object out of the scope', () => {
+  it('returns the bytes of an object this account holds', async () => {
+    const { alice } = twoAccounts()
+    const uploaded = await alice.uploadItem(ENCODER.encode('by id'))
+
+    expect(DECODER.decode(await alice.downloadObjectByID(uploaded.id))).toBe(
+      'by id',
+    )
+  })
+
+  // `sdk.object` resolves within the AppKey's own scope, so another account's id is
+  // not a thing to read however well-known it is. A throw rather than empty bytes: the
+  // caller must not be able to mistake this for the object being gone.
+  it("throws on an id outside this account's scope", async () => {
+    const { alice, bob } = twoAccounts()
+    const uploaded = await alice.uploadItem(ENCODER.encode('mine'))
+
+    await expect(bob.downloadObjectByID(uploaded.id)).rejects.toThrow()
+    await expect(alice.downloadObjectByID('nonexistent')).rejects.toThrow()
+  })
+
+  it('reports an untagged object as carrying no metadata', async () => {
+    const { alice } = twoAccounts()
+    await alice.uploadItem(ENCODER.encode('plain'))
+
+    const [info] = await alice.listPinnedObjects()
+    expect(info.metadata).toBe('')
+  })
+
+  // What the Curator's tagged upload leaves behind, which nothing reachable through
+  // this seam can produce.
+  it('carries the metadata of a tagged object out of the walk', async () => {
+    const { world, alice } = twoAccounts()
+    const id = world.putTagged(
+      'alice',
+      ENCODER.encode('snapshot bytes'),
+      '{"t":"pin.snapshot.v1"}',
+      new Date('2026-09-26T10:00:00Z'),
+    )
+
+    const held = await alice.listPinnedObjects()
+    expect(held.find((o) => o.id === id)?.metadata).toBe(
+      '{"t":"pin.snapshot.v1"}',
+    )
+    expect(DECODER.decode(await alice.downloadObjectByID(id))).toBe(
+      'snapshot bytes',
+    )
+  })
+
+  it('stamps a planted object with the time it was given', async () => {
+    const { world, alice } = twoAccounts()
+    const id = world.putTagged(
+      'alice',
+      new Uint8Array(1),
+      '{}',
+      new Date('2026-01-02T03:04:05Z'),
+    )
+
+    const held = await alice.listPinnedObjects()
+    expect(held.find((o) => o.id === id)?.createdAt).toBe(
+      '2026-01-02T03:04:05.000Z',
+    )
+  })
+})
+
 describe('identity', () => {
   it('gives each account a stable, distinct key', () => {
     const { alice, bob } = twoAccounts()

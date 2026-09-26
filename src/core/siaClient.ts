@@ -26,6 +26,7 @@ import {
   sia_account_snapshot,
   sia_delete_object,
   sia_download_item,
+  sia_download_object_by_id,
   sia_get_object_slabs,
   sia_list_pinned_objects,
   sia_pin_from_share_url,
@@ -73,8 +74,21 @@ export function objectIDInShareURL(url: string): string | null {
  *  serializable, so it survives the hop to whichever implementation is in use. */
 export type PinnedObjectInfo = {
   id: string
-  // ISO 8601.
+  // ISO 8601, stamped by the indexer rather than by us — so two objects can be ordered
+  // by it with no clock of ours in the way, and a metadata write leaves it alone.
   createdAt: string
+  /** What the object says it is, in metadata only its owner can read.
+   *
+   *  Pin's objects are otherwise anonymous: what an object holds is answered by a
+   *  record in the doc naming it, which a device that has just signed in does not have
+   *  yet. This travels with the object, comes back decrypted from the same walk the
+   *  storage meter runs, and does not cross a share.
+   *
+   *  `''` for an untagged object, which is everything the app uploads through this
+   *  seam — only the Curator's snapshot writes one, and it reaches Sia without passing
+   *  through here. Read it with `is_snapshot_tag` rather than parsing it: the writer is
+   *  Rust, and a second spelling of the shape would stop matching without erroring. */
+  metadata: string
   slabs: Slab[]
 }
 
@@ -86,6 +100,12 @@ export interface SiaClient {
     onShard?: () => void,
   ): Promise<UploadedItem[]>
   downloadItem(url: string): Promise<Uint8Array>
+  // One object's bytes by id, for an object this identity holds. Where `downloadItem`
+  // needs a pointer somebody published, this needs only the scope — which is what a
+  // device has left once every pointer to an object has aged off the DHT. Throws when
+  // the object cannot be fetched, and a caller must never read that as the object
+  // being gone.
+  downloadObjectByID(objectID: string): Promise<Uint8Array>
 
   // --- pin / custody ------------------------------------------------------
   // Mirror a share URL's bytes into this scope.
@@ -140,6 +160,10 @@ export function makeWasmSiaClient(publicKey: string): SiaClient {
     downloadItem: async (url) => {
       await ensureWasm()
       return sia_download_item(url)
+    },
+    downloadObjectByID: async (objectID) => {
+      await ensureWasm()
+      return sia_download_object_by_id(objectID)
     },
 
     pinFromShareURL: async (url) => {

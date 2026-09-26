@@ -23,6 +23,10 @@ type FakeObjectRecord = {
   id: string
   bytes: Uint8Array
   createdAt: Date
+  // What the object says it is. Empty for everything uploaded through the client
+  // surface, matching production: only the Curator tags an object, and it reaches Sia
+  // below this seam. `FakeWorld.putTagged` is how a test stands in for that.
+  metadata: string
 }
 
 export class FakeWorld {
@@ -57,6 +61,30 @@ export class FakeWorld {
 
   bytesOf(objectID: string): Uint8Array | undefined {
     return this.objects.get(objectID)?.bytes
+  }
+
+  /** Put a TAGGED object in an account's scope, standing in for the one writer that
+   *  produces them.
+   *
+   *  Not on the client, because the client cannot do this and neither can the app: only
+   *  the Curator uploads with metadata, and it reaches Sia through `pin_sia::Session`
+   *  below this seam. So a fake whose objects were always untagged would be modelling a
+   *  state production never reaches, and one that let `uploadItem` tag would be
+   *  offering the app a power it does not have.
+   *
+   *  `createdAt` is explicit because ordering two snapshots is the thing being tested
+   *  and `new Date()` twice in a row can return the same millisecond. Real Sia has no
+   *  such problem: the indexer stamps it. */
+  putTagged(
+    accountID: string,
+    bytes: Uint8Array,
+    metadata: string,
+    createdAt: Date,
+  ): string {
+    const id = this.nextObjectID()
+    this.objects.set(id, { id, bytes, createdAt, metadata })
+    this.scopeOf(accountID).add(id)
+    return id
   }
 }
 
@@ -112,6 +140,20 @@ export class FakeSiaClient implements SiaClient {
   async downloadItem(url: string): Promise<Uint8Array> {
     const record = this.world.objects.get(objectIDFromShareURL(url))
     if (!record) throw new Error(`Object not found: ${url}`)
+    return record.bytes
+  }
+
+  /** Scoped to this account, like the real read: `sdk.object` resolves inside the
+   *  AppKey's own scope, so an object this account does not hold is unreadable here
+   *  however well-known its id. Throws rather than answering, because a caller learning
+   *  "there is nothing to read" from a failed read is the conflation this whole path
+   *  exists to keep out. */
+  async downloadObjectByID(objectID: string): Promise<Uint8Array> {
+    if (!this.world.scopeOf(this.accountID).has(objectID)) {
+      throw new Error(`Object not in scope: ${objectID}`)
+    }
+    const record = this.world.objects.get(objectID)
+    if (!record) throw new Error(`Object not found: ${objectID}`)
     return record.bytes
   }
 
@@ -206,7 +248,12 @@ export class FakeSiaClient implements SiaClient {
    *  never pins separately. */
   private async store(bytes: Uint8Array): Promise<UploadedItem> {
     const id = this.world.nextObjectID()
-    const record: FakeObjectRecord = { id, bytes, createdAt: new Date() }
+    const record: FakeObjectRecord = {
+      id,
+      bytes,
+      createdAt: new Date(),
+      metadata: '',
+    }
     this.world.objects.set(id, record)
     this.world.scopeOf(this.accountID).add(id)
     return {
@@ -228,6 +275,7 @@ function describe(record: FakeObjectRecord): PinnedObjectInfo {
   return {
     id: record.id,
     createdAt: record.createdAt.toISOString(),
+    metadata: record.metadata,
     // Structurally what consumers read; the SDK's own `Slab` carries sector detail
     // no test asserts on, so the cast keeps the fake from restating it.
     slabs: [

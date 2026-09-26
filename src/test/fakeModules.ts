@@ -97,6 +97,7 @@ export function fakeChannelLocatorNativeModule() {
         id,
         bytes: new TextEncoder().encode(blob),
         createdAt: new Date(),
+        metadata: '',
       })
       const itemURL = fakeShareURL(id)
       world.pkarr.set(locatorKeyFor(channelKey), [
@@ -170,6 +171,7 @@ export function publishFakeConversations(
       encrypt_for_channel(channelKey, JSON.stringify(conversations)),
     ),
     createdAt: new Date(),
+    metadata: '',
   })
   world.pkarr.set(`cnv-${fakePublicKey(channelKey)}`, [
     { name: '_v0', value: fakeShareURL(id) },
@@ -191,6 +193,7 @@ export function publishFakeTallies(
       encrypt_for_channel(channelKey, JSON.stringify(tallies)),
     ),
     createdAt: new Date(),
+    metadata: '',
   })
   world.pkarr.set(`eng-${fakePublicKey(channelKey)}`, [
     { name: '_e0', value: fakeShareURL(id) },
@@ -215,6 +218,7 @@ export async function publishFakeDirectory(
     id,
     bytes: new TextEncoder().encode(JSON.stringify(doc)),
     createdAt: new Date(),
+    metadata: '',
   })
   // Chunked by the REAL Rust splitter, for the same reason the pkarr fake rejoins with
   // it: the record naming is a contract with whoever reads it, and a hand-written `_dir0`

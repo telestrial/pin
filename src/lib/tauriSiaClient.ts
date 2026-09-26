@@ -61,6 +61,12 @@ export async function makeTauriSiaClient(
       const buf = await invoke<ArrayBuffer>('sia_download_item', { url })
       return new Uint8Array(buf)
     },
+    downloadObjectByID: async (objectID) => {
+      const buf = await invoke<ArrayBuffer>('sia_download_object_by_id', {
+        id: objectID,
+      })
+      return new Uint8Array(buf)
+    },
 
     pinFromShareURL: async (url) => ({
       objectID: await invoke<string>('sia_pin_from_share_url', { url }),
