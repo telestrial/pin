@@ -98,9 +98,16 @@ function holdFollower(didDht: string) {
   )
 }
 
-/** The number a `Stat` shows, by the label under it. */
+/** The number a `Stat` is showing, by the label under it.
+ *
+ *  Found by SHAPE — a number (or the uncounted dash) directly above the label — because
+ *  the same word is also a section heading further down the page. */
 function stat(label: string): string {
-  return screen.getByText(label).previousElementSibling?.textContent ?? ''
+  for (const el of screen.getAllByText(label)) {
+    const n = el.previousElementSibling?.textContent ?? ''
+    if (/^(\d+|—)$/.test(n)) return n
+  }
+  return ''
 }
 
 function view(channelKey?: string) {

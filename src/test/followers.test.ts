@@ -9,6 +9,7 @@ import {
   type FollowerEdges,
   followersOfChannel,
   followersOfPerson,
+  followsOfOthers,
   ownFollowerEdges,
 } from '../core/followers'
 
@@ -69,6 +70,43 @@ describe('followersOfChannel', () => {
   it('is empty for a channel nobody held has followed', () => {
     // Empty means the crawl has read nobody who follows it — never that nobody does.
     expect(followersOfChannel([who('did:a', ['did:x'])], 'ch1')).toEqual([])
+  })
+})
+
+describe('followsOfOthers', () => {
+  it('drops a follow of your own channel', () => {
+    // Following your own channel counts toward the CHANNEL — it is what puts its author
+    // among its followers — and says nothing about who the author follows. Counting it
+    // would read a profile as following somebody when it follows nobody but itself.
+    const out = followsOfOthers(
+      'did:me',
+      [
+        { didDht: 'did:me', channelID: 'mine' },
+        { didDht: 'did:them', channelID: 'theirs' },
+      ],
+      [],
+    )
+    expect(out.follows).toEqual([{ didDht: 'did:them', channelID: 'theirs' }])
+  })
+
+  it('drops a wholesale follow of yourself', () => {
+    const out = followsOfOthers('did:me', [], ['did:me', 'did:them'])
+    expect(out.handleFollows).toEqual(['did:them'])
+  })
+
+  it('is keyed on the subject, so it holds on any profile', () => {
+    // Not a fact about the viewer. Somebody else's profile excludes THEIR self-follows,
+    // by the same rule and in the same place.
+    const out = followsOfOthers(
+      'did:them',
+      [
+        { didDht: 'did:them', channelID: 'theirs' },
+        { didDht: 'did:me', channelID: 'mine' },
+      ],
+      ['did:them'],
+    )
+    expect(out.follows).toEqual([{ didDht: 'did:me', channelID: 'mine' }])
+    expect(out.handleFollows).toEqual([])
   })
 })
 

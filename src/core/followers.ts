@@ -62,6 +62,27 @@ export function ownFollowerEdges(
   }
 }
 
+/** The follow edges that point at somebody ELSE.
+ *
+ *  An author follows their own channel so that it counts toward the CHANNEL: the claim is
+ *  about the voice, and it is what puts its author among its followers. It says nothing
+ *  about who they follow, and counting it would read a profile as following N people when
+ *  it follows nobody but itself.
+ *
+ *  The mirror of the guard in {@link followersOfPerson} — nobody is their own follower,
+ *  and nobody follows themselves. Keyed on whoever the page is ABOUT, so it holds on
+ *  somebody else's profile exactly as it holds on your own. */
+export function followsOfOthers(
+  didDht: string,
+  follows: readonly FollowEdge[],
+  handleFollows: readonly string[],
+): { follows: FollowEdge[]; handleFollows: string[] } {
+  return {
+    follows: follows.filter((f) => f.didDht !== didDht),
+    handleFollows: handleFollows.filter((d) => d !== didDht),
+  }
+}
+
 /** The did:dhts that follow this PERSON wholesale.
  *
  *  Wholesale only. Somebody who follows one of their channels is a follower of that

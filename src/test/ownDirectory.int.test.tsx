@@ -203,9 +203,16 @@ function holdFollowing(
   )
 }
 
-/** The number a `Stat` is showing, by the label under it. `'—'` while uncounted. */
+/** The number a `Stat` is showing, by the label under it.
+ *
+ *  Found by SHAPE — a number (or the uncounted dash) directly above the label — because
+ *  the same word is also a section heading further down the page. */
 function stat(label: string): string {
-  return screen.getByText(label).previousElementSibling?.textContent ?? ''
+  for (const el of screen.getAllByText(label)) {
+    const n = el.previousElementSibling?.textContent ?? ''
+    if (/^(\d+|—)$/.test(n)) return n
+  }
+  return ''
 }
 
 function directory(handle: string, onCreate?: () => void) {
@@ -271,6 +278,29 @@ describe('integration: your own directory comes from local state', () => {
     // Visibility absent means UNKNOWN, and unknown is never advertised — the rule that
     // stops a channel written before the field existed being enumerated on a guess.
     expect(screen.queryByText('Older')).toBeNull()
+  })
+
+  it('leaves your own channels out of your Following', async () => {
+    // An author follows their own channel so it counts toward the CHANNEL. That claim is
+    // about the voice; reading it as attention would show a profile following N people
+    // while it follows nobody but itself. One follow of somebody else, one of your own —
+    // the count is 1 and the list names only theirs.
+    signedInWith([owned()])
+    useAuthStore.setState({
+      follows: [
+        { didDht: ME, channelID: 'chan1', name: 'My own voice' },
+        { didDht: THEM, channelID: 'ch-theirs', name: 'Their voice' },
+      ],
+    })
+    await inTheDoc('chan1', 'A channel')
+
+    render(directory(ME))
+
+    await waitFor(() => {
+      expect(screen.getByText('Their voice')).toBeInTheDocument()
+    })
+    expect(stat('Following')).toBe('1')
+    expect(screen.queryByText('My own voice')).toBeNull()
   })
 
   it('counts YOUR OWN follow toward their followers, beside the held ones', async () => {

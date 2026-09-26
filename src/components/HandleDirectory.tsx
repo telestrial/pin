@@ -2,6 +2,7 @@ import { Plus } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { advertisedChannels } from '../core/channels'
 import type { FeedEntry } from '../core/feed'
+import { followsOfOthers } from '../core/followers'
 import { buildProfileFeed, includedOnProfile } from '../core/profileFeed'
 import type { ChannelManifest, FollowEdge } from '../core/types'
 import {
@@ -503,11 +504,16 @@ function LoadedDirectory({
   onEditProfile?: () => void
   onCreate?: () => void
 }) {
+  // A follow of your own channel is authorship rather than attention — see
+  // `followsOfOthers`. Filtered once, so the count, the list and the empty check cannot
+  // end up with three readings of what "following" means.
+  const others = followsOfOthers(did, follows, handleFollows)
+
   const isEmpty =
     !profile &&
     ownChannels.length === 0 &&
-    follows.length === 0 &&
-    handleFollows.length === 0
+    others.follows.length === 0 &&
+    others.handleFollows.length === 0
 
   // Built from the manifests the cards above already hold, so the feed costs no network of
   // its own: a card needs a manifest and a manifest carries the items. Rebuilt whenever the
@@ -528,7 +534,7 @@ function LoadedDirectory({
         did={did}
         isSelf={isSelf}
         profile={profile}
-        followingCount={follows.length + handleFollows.length}
+        followingCount={others.follows.length + others.handleFollows.length}
         followerCount={followerCount}
         onBack={onBack}
         onEdit={onEditProfile}
@@ -633,21 +639,21 @@ function LoadedDirectory({
         </div>
       )}
 
-      {(handleFollows.length > 0 || follows.length > 0) && (
+      {(others.handleFollows.length > 0 || others.follows.length > 0) && (
         <Section title="Following">
           {/* People first, then channels. One section rather than two, because they are
               one act at two grains — following a person, or following one of their
               voices — and splitting them would ask a reader to hold a distinction the
               gesture does not make. People lead because a person is the larger claim:
               following someone takes everything they advertise. */}
-          {handleFollows.map((did) => (
+          {others.handleFollows.map((did) => (
             <PersonFollowRow
               key={did}
               didDht={did}
               onHandleClick={onHandleClick}
             />
           ))}
-          {follows.map((f) => (
+          {others.follows.map((f) => (
             <FollowRow
               key={`${f.didDht}:${f.channelID}`}
               edge={f}
