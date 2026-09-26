@@ -106,6 +106,31 @@ describe('integration: creating a channel through the journal', () => {
     expect(useAuthStore.getState().subscriptions).toHaveLength(1)
   })
 
+  it('follows a public channel it creates, once across resumes', async () => {
+    // An author standing behind their own voice, which is what puts them among its
+    // followers — the count on its page reads 1 the moment it exists. Written at the
+    // commit and never reconciled: `addFollow` dedupes on channelID, so a resume adds
+    // nothing, and a pass that re-added it would fight the unfollow.
+    const a = action()
+    await runChannelCreate(a, ctx(a))
+    await runChannelCreate(a, ctx(a))
+
+    expect(useAuthStore.getState().follows).toEqual([
+      { didDht: 'did:dht:alice', channelID, name: 'A channel' },
+    ])
+  })
+
+  it('follows nothing when the channel is unlisted', async () => {
+    // A `FollowEdge` carries no K and resolves through the author's directory, where an
+    // unlisted channel is absent by construction. An edge naming one resolves to nothing
+    // for everybody, in a blob the whole graph downloads.
+    const a = action({ visibility: 'obscure' })
+    await runChannelCreate(a, ctx(a))
+
+    expect(useAuthStore.getState().myChannels).toHaveLength(1)
+    expect(useAuthStore.getState().follows).toEqual([])
+  })
+
   it('publishes the channel at the address the intent named', async () => {
     // The subscribe URL is handed over at enqueue, so the channel has to land where that
     // URL points rather than wherever the handler happened to put it.

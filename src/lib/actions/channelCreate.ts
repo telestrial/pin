@@ -105,6 +105,27 @@ export async function runChannelCreate(
     addedAt: new Date().toISOString(),
     label: created.manifest.name,
   })
+  // A public channel you author, followed by you. The claim is about the VOICE — it is
+  // what puts an author among their own channel's followers, so its page reads 1 from the
+  // moment it exists rather than 0 until a stranger arrives. `followsOfOthers` keeps it
+  // out of your own Following, where it would read as attention rather than authorship.
+  //
+  // PUBLIC only: a `FollowEdge` carries no K and resolves through the author's directory,
+  // where an unlisted channel is absent by construction. An edge naming one resolves to
+  // nothing for everybody, in the blob the whole graph downloads to read a display name.
+  //
+  // Written here and nowhere else. A pass that re-added it would fight the unfollow, which
+  // deliberately leaves its tombstone standing so dropping one channel of somebody you
+  // also follow wholesale outlasts the next reconcile — and a second writer beside
+  // `FollowButton` for one derived record is the shape that rewrites itself forever.
+  // `addFollow` dedupes on channelID, so a resumed run writes it once.
+  if (intent.visibility === 'public') {
+    auth.addFollow({
+      didDht: intent.authorDidDht,
+      channelID: created.channelID,
+      name: created.manifest.name,
+    })
+  }
   // Awaited, so the channel is durable before this reports done — a reload inside the
   // mirror's debounce used to drop it from the list while the manifest stayed published.
   await flushSettingsBestEffort()
