@@ -16,7 +16,40 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+use iroh_docs::engine::LiveEvent;
 use pin_pkarr::TxtRecord;
+
+/// A local write of `key`, as the engine reports one.
+///
+/// Here rather than beside one loop's tests because SEVERAL loops filter the doc stream by
+/// an allowlist, and each one's filter has to be shown to admit what it reads and refuse
+/// what its own pass writes. Two spellings of "what a write looks like" would be two
+/// slightly different ideas of what the loops are being shown.
+pub(crate) fn wrote(key: &str) -> LiveEvent {
+    let id = iroh_docs::sync::RecordIdentifier::new(
+        iroh_docs::NamespaceId::from(&[1u8; 32]),
+        iroh_docs::AuthorId::from(&[2u8; 32]),
+        key,
+    );
+    // A non-empty length: `Record::new` insists a zero-length record carry the hash of the
+    // empty range, and the length is nothing to do with what's under test.
+    let record = iroh_docs::sync::Record::new(iroh_blobs::Hash::from([3u8; 32]), 1, 0);
+    LiveEvent::InsertLocal {
+        entry: iroh_docs::sync::Entry::new(id, record),
+    }
+}
+
+/// A write arriving from another instance of this same identity.
+pub(crate) fn synced(key: &str) -> LiveEvent {
+    let LiveEvent::InsertLocal { entry } = wrote(key) else {
+        unreachable!()
+    };
+    LiveEvent::InsertRemote {
+        entry,
+        from: iroh::PublicKey::from_bytes(&[0u8; 32]).unwrap(),
+        content_status: iroh_docs::ContentStatus::Complete,
+    }
+}
 
 /// What every identity in a scenario can see: published packets, and the blobs they name.
 ///
@@ -731,6 +764,207 @@ mod loops {
             5,
             "four writes cost four passes beyond the first, and no more",
         );
+    }
+    /// Run the engagement loop until `drive` says it is done.
+    ///
+    /// Its cadence is the one a doc wake is meant to replace: before the wake existed, the
+    /// only reason to run every 30 seconds was to notice a gesture of this identity's own,
+    /// which the frontend writes straight into the doc. So `NEVER` here is not merely a
+    /// long timer — it is the whole point, since a second pass under it can have come from
+    /// nothing but the stream.
+    async fn driving_engagement<F, Fut>(
+        me: &Identity,
+        drive: F,
+    ) -> Vec<Result<crate::EngagementOutcome, String>>
+    where
+        F: FnOnce(Arc<Mutex<Vec<Result<crate::EngagementOutcome, String>>>>) -> Fut,
+        Fut: std::future::Future<Output = ()>,
+    {
+        let passes = Arc::new(Mutex::new(Vec::new()));
+        let recorder = passes.clone();
+        let spinning = crate::run_engagement_loop(
+            me.engagement_ctx(),
+            me.did.clone(),
+            NEVER,
+            20,
+            || "2026-09-26T00:00:00.000Z".to_string(),
+            move |outcome| recorder.lock().unwrap().push(outcome),
+        );
+        tokio::select! {
+            _ = spinning => unreachable!("the loop never returns"),
+            () = drive(passes.clone()) => {}
+        }
+        let held = passes.lock().unwrap();
+        held.clone()
+    }
+
+    /// Wait for at least `n` engagement passes, or give up after `within`.
+    async fn folds_reach(
+        passes: &Arc<Mutex<Vec<Result<crate::EngagementOutcome, String>>>>,
+        n: usize,
+        within: Duration,
+    ) -> bool {
+        let deadline = tokio::time::Instant::now() + within;
+        while tokio::time::Instant::now() < deadline {
+            if passes.lock().unwrap().len() >= n {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        passes.lock().unwrap().len() >= n
+    }
+
+    #[tokio::test]
+    async fn a_gesture_wakes_the_fold_rather_than_waiting_out_the_cadence() {
+        let world = World::new();
+        let me = Identity::new(&world, 1).await;
+        let doc = me.doc.clone();
+        let author = me.author_id;
+
+        let reported = driving_engagement(&me, |passes| async move {
+            assert!(
+                folds_reach(&passes, 1, Duration::from_secs(5)).await,
+                "the loop folds once before it ever waits",
+            );
+
+            // Liking something is a frontend write into this doc. The cadence is ten
+            // minutes away and no knock is coming, so a second pass can only have come
+            // from the stream.
+            crate::write_record(
+                &doc,
+                author,
+                pin_derive::ENDORSE_COLLECTION,
+                "like:abc",
+                b"x".to_vec(),
+            )
+            .await
+            .expect("write endorsement");
+
+            assert!(
+                folds_reach(&passes, 2, Duration::from_secs(5)).await,
+                "an endorsement wakes the fold",
+            );
+        })
+        .await;
+
+        assert!(reported.len() >= 2, "two passes were reported");
+    }
+
+    /// A WAKE FOLDS AND DOES NOT CRAWL, which is the property the knock already has and
+    /// the one a local write could quietly take away.
+    ///
+    /// The tick a wake does not advance is what spaces the crawl out, so a pass that both
+    /// woke early and crawled would let whatever does the waking set the schedule on which
+    /// this identity resolves and downloads every directory in its graph. Somebody else's
+    /// knocks are the sharp version; fifty likes of your own in a row is the same shape.
+    ///
+    /// Observable because the identity has a graph actor AND a post: a crawling pass reaches
+    /// two where a folding one reaches one, and the difference is exactly the actor whose
+    /// directory was resolved. Both halves of the setup are needed — a pass with nothing
+    /// published returns before its crawl, so an identity that only follows somebody would
+    /// report the same number either way and prove nothing.
+    #[tokio::test]
+    async fn a_woken_pass_folds_without_crawling() {
+        let world = World::new();
+        let me = Identity::new(&world, 1).await;
+        let them = Identity::new(&world, 2).await;
+        world.publish(
+            &them.did,
+            "sia://them-dir",
+            serde_json::json!({
+                "profile": { "$type": "dev.sia.pin.profile", "username": "them" },
+                "channels": [],
+                "handleFollows": [],
+            }),
+        );
+        me.follows_and_publishes(&[&them.did]).await;
+        let doc = me.doc.clone();
+        let author = me.author_id;
+
+        let reported = driving_engagement(&me, |passes| async move {
+            assert!(
+                folds_reach(&passes, 1, Duration::from_secs(5)).await,
+                "the first pass crawls, so a fresh start learns what it missed",
+            );
+
+            crate::write_record(
+                &doc,
+                author,
+                pin_derive::ENDORSE_COLLECTION,
+                "like:abc",
+                b"x".to_vec(),
+            )
+            .await
+            .expect("write endorsement");
+
+            assert!(
+                folds_reach(&passes, 2, Duration::from_secs(5)).await,
+                "the endorsement woke a second pass",
+            );
+        })
+        .await;
+
+        let reached = |i: usize| reported[i].as_ref().expect("a pass ran").reached;
+        // Two on a crawling pass: this identity, whose own endorsements are read locally
+        // and cost no network, plus the actor whose directory was resolved and downloaded.
+        // One on a folding pass — a fold always reads its own, which is why the difference
+        // between the two numbers is the crawl and not the fold.
+        assert_eq!(reached(0), 2, "the first pass read the graph");
+        assert_eq!(reached(1), 1, "the woken pass read only its own");
+    }
+
+    /// The spin guard, with the liveness half that makes it mean anything.
+    ///
+    /// "No second pass" is satisfied just as well by a loop that died, so this writes the
+    /// log the pass itself writes, insists nothing happened, and THEN writes an
+    /// endorsement to prove the stream was being read the whole time.
+    #[tokio::test]
+    async fn its_own_log_does_not_wake_it_and_the_loop_is_still_listening() {
+        let world = World::new();
+        let me = Identity::new(&world, 1).await;
+        let doc = me.doc.clone();
+        let author = me.author_id;
+
+        driving_engagement(&me, |passes| async move {
+            assert!(
+                folds_reach(&passes, 1, Duration::from_secs(5)).await,
+                "the loop folds once before it ever waits",
+            );
+
+            // What a pass writes when it accepts a record. Gated on substance, so waking
+            // on it would settle rather than spin — which is why nothing would go wrong
+            // loudly and why this is worth pinning.
+            crate::write_record(
+                &doc,
+                author,
+                pin_derive::ENGAGEMENT_LOG_COLLECTION,
+                "like:abc:did:dht:x",
+                b"x".to_vec(),
+            )
+            .await
+            .expect("write log");
+
+            assert!(
+                !folds_reach(&passes, 2, Duration::from_millis(300)).await,
+                "the fold is not woken by its own output",
+            );
+
+            crate::write_record(
+                &doc,
+                author,
+                pin_derive::ENDORSE_COLLECTION,
+                "like:abc",
+                b"x".to_vec(),
+            )
+            .await
+            .expect("write endorsement");
+
+            assert!(
+                folds_reach(&passes, 2, Duration::from_secs(5)).await,
+                "the stream was still being read",
+            );
+        })
+        .await;
     }
 }
 

@@ -914,33 +914,7 @@ pub async fn run_identity_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// A local write of `key`, as the engine reports one.
-    fn wrote(key: &str) -> LiveEvent {
-        let id = iroh_docs::sync::RecordIdentifier::new(
-            iroh_docs::NamespaceId::from(&[1u8; 32]),
-            iroh_docs::AuthorId::from(&[2u8; 32]),
-            key,
-        );
-        // A non-empty length: `Record::new` insists a zero-length record carry the hash of
-        // the empty range, and the length is nothing to do with what's under test.
-        let record = iroh_docs::sync::Record::new(iroh_blobs::Hash::from([3u8; 32]), 1, 0);
-        LiveEvent::InsertLocal {
-            entry: iroh_docs::sync::Entry::new(id, record),
-        }
-    }
-
-    /// A write arriving from another instance of this same identity.
-    fn synced(key: &str) -> LiveEvent {
-        let LiveEvent::InsertLocal { entry } = wrote(key) else {
-            unreachable!()
-        };
-        LiveEvent::InsertRemote {
-            entry,
-            from: iroh::PublicKey::from_bytes(&[0u8; 32]).unwrap(),
-            content_status: iroh_docs::ContentStatus::Complete,
-        }
-    }
+    use crate::testnet::{synced, wrote};
 
     #[test]
     fn a_write_to_what_the_packet_is_made_of_wakes_the_publisher() {

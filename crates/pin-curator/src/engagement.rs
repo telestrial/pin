@@ -51,8 +51,10 @@ use std::time::Duration;
 use iroh_blobs::api::Store;
 use iroh_docs::{
     api::{Doc, DocsApi},
+    engine::LiveEvent,
     AuthorId, Capability, NamespaceSecret,
 };
+use n0_future::StreamExt as _;
 use pin_engagement::{Aggregate, Endorsement, Retraction};
 
 use crate::{read_record, read_settings, SettingsView};
@@ -1505,13 +1507,52 @@ fn should_crawl(pass: u32, crawl_every: u32) -> bool {
 
 /// Whether this pass should read the graph as well as fold.
 ///
-/// A knock-woken pass folds only. The tick it would otherwise advance is what spaces the
-/// crawl out, so letting knocks drive it would hand somebody else the schedule on which
-/// this identity resolves and downloads every directory in its graph: twenty likes in a
-/// row and a crawl fires. The due crawl isn't lost — the tick hasn't moved, so the next
-/// scheduled pass at that tick still takes it.
-fn crawl_this_pass(ticks: u32, crawl_every: u32, knock_woken: bool) -> bool {
-    !knock_woken && should_crawl(ticks, crawl_every)
+/// A pass woken OUT OF BAND folds only. The tick it would otherwise advance is what spaces
+/// the crawl out, so letting a wake drive it would hand the schedule on which this identity
+/// resolves and downloads every directory in its graph to whatever does the waking: twenty
+/// likes in a row and a crawl fires. Somebody else's knocks are the sharp version of that,
+/// and this identity's own writes are the same shape at a smaller scale. The due crawl
+/// isn't lost — the tick hasn't moved, so the next scheduled pass at that tick still takes
+/// it.
+fn crawl_this_pass(ticks: u32, crawl_every: u32, out_of_band: bool) -> bool {
+    !out_of_band && should_crawl(ticks, crawl_every)
+}
+
+/// Whether an event says something the FOLD reads has moved.
+///
+/// An ALLOWLIST, and the same one `identity::directory_moved` is, for the same reason: a
+/// collection nobody listed costs one cadence of staleness, where a collection that the
+/// pass itself writes on every turn costs a spin. Two collections, both written by
+/// somebody other than this loop:
+///
+/// - `endorse` is where this identity's own gestures land, written by the frontend. It is
+///   the whole reason a doc wake is worth having: a like of your own moves a count, and
+///   nothing else would tell this loop so.
+/// - `comment` is the same for words, and the identity loop already takes it despite
+///   `mint_bodies` writing there, because that write converges — a body is minted once and
+///   the next pass writes nothing.
+///
+/// DELIBERATELY ABSENT: `engagement-log`, `crawl`, `tally` and `thread`, which this pass
+/// writes as a consequence of running. All four are gated on substance and so would settle
+/// rather than spin, but there is nothing to gain: an instance that wrote them already
+/// folded, and an instance receiving them by sync receives the folded tally alongside.
+///
+/// The prefix carries its separator, which matters more here than anywhere else in the
+/// tree: `comment/` has SIX siblings it must not match — `comment-object/`, `-seal/`,
+/// `-files/`, `-log/`, `-crawl/` and `-deliver/` — and this pass writes three of them.
+fn fold_input_moved(event: &LiveEvent) -> bool {
+    let key = match event {
+        LiveEvent::InsertLocal { entry } => entry.key(),
+        LiveEvent::InsertRemote { entry, .. } => entry.key(),
+        _ => return false,
+    };
+    let key = String::from_utf8_lossy(key);
+    [
+        pin_derive::ENDORSE_COLLECTION,
+        pin_derive::COMMENT_COLLECTION,
+    ]
+    .iter()
+    .any(|c| key.starts_with(&pin_derive::collection_prefix(c)))
 }
 
 /// What ended a wait.
@@ -1520,6 +1561,10 @@ enum Woke {
     Scheduled,
     /// A knock landed.
     Knock,
+    /// A record the fold reads was written, here or on another instance of this identity.
+    Written,
+    /// The doc's stream closed and will not wake us again.
+    Ended,
 }
 
 /// Pass, wait, repeat — forever.
@@ -1529,10 +1574,13 @@ enum Woke {
 /// `cadence * crawl_every`. The first pass crawls, so a fresh start doesn't wait to learn
 /// what it missed while it was down.
 ///
-/// A knock wakes it early, because a knock IS the count moving: an out-of-graph like
-/// reaches this identity no other way, and waiting out the cadence to fold one is the last
-/// stretch of delay between someone liking a post and its author showing it. What that
-/// wake does not do is crawl — see `crawl_this_pass`.
+/// TWO THINGS WAKE IT EARLY, and both are the count moving rather than time passing. A
+/// knock reaches this identity no other way — an out-of-graph like has no directory the
+/// crawl would ever read — and waiting out the cadence to fold one is the last stretch of
+/// delay between somebody liking a post and its author showing it. A doc write is the same
+/// event from the inside: a gesture of this identity's own lands in `endorse`, written by
+/// the frontend, and without a wake the cadence exists to poll for it. What neither wake
+/// does is crawl — see `crawl_this_pass`.
 pub async fn run_engagement_loop<N: crate::net::Network>(
     ctx: EngagementContext<N>,
     own_did: String,
@@ -1541,10 +1589,13 @@ pub async fn run_engagement_loop<N: crate::net::Network>(
     now_iso: impl Fn() -> String,
     on_pass: impl Fn(Result<EngagementOutcome, String>),
 ) -> ! {
+    // A doc whose stream is unavailable falls back to the cadence and the inbox, which is
+    // slower for a local gesture and never wrong.
+    let mut events = ctx.doc.subscribe().await.ok().map(Box::pin);
     let mut ticks: u32 = 0;
-    let mut knock_woken = false;
+    let mut out_of_band = false;
     loop {
-        let crawl = crawl_this_pass(ticks, crawl_every, knock_woken);
+        let crawl = crawl_this_pass(ticks, crawl_every, out_of_band);
         on_pass(engagement_once(&ctx, &own_did, now_iso(), crawl).await);
 
         let scheduled = async {
@@ -1555,12 +1606,35 @@ pub async fn run_engagement_loop<N: crate::net::Network>(
             pin_rpc::wait(&ctx.inbox).await;
             Woke::Knock
         };
-        knock_woken = match n0_future::future::race(scheduled, knocked).await {
+        let woke = match events.as_mut() {
+            Some(stream) => {
+                let written = async {
+                    loop {
+                        match stream.next().await {
+                            Some(Ok(ev)) if fold_input_moved(&ev) => return Woke::Written,
+                            Some(_) => continue,
+                            None => return Woke::Ended,
+                        }
+                    }
+                };
+                n0_future::future::race(n0_future::future::race(scheduled, knocked), written).await
+            }
+            None => n0_future::future::race(scheduled, knocked).await,
+        };
+        out_of_band = match woke {
             Woke::Scheduled => {
                 ticks = ticks.wrapping_add(1);
                 false
             }
-            Woke::Knock => true,
+            Woke::Knock | Woke::Written => true,
+            // Dropped rather than re-polled: a closed stream yields `None` forever, so
+            // racing it again would return instantly and turn the cadence into a spin. The
+            // pass that follows folds without crawling, which is one redundant fold and
+            // then the cadence alone.
+            Woke::Ended => {
+                events = None;
+                true
+            }
         };
     }
 }
@@ -1568,6 +1642,7 @@ pub async fn run_engagement_loop<N: crate::net::Network>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testnet::{synced, wrote};
 
     const SUBJECT: &str = "f4xlljzqxtqpv7ul6ngkyeafusdwqrirpmhochqyjz2hgz3djo6a";
     const ALICE: &str = "did:dht:alice";
@@ -2293,5 +2368,53 @@ mod tests {
         // already crawled — silently, since every pass would report a clean skip.
         let held = mark("sia://a", CRAWL_EPOCH - 1);
         assert!(!may_skip(Some(&held), &mark("sia://a", CRAWL_EPOCH)));
+    }
+
+    #[test]
+    fn a_gesture_of_this_identitys_own_wakes_the_fold() {
+        // The case the doc wake exists for. A like is written by the FRONTEND, so nothing
+        // else in this loop would hear about it and the cadence was there to poll for one.
+        assert!(fold_input_moved(&wrote("endorse/like:abc")));
+        assert!(fold_input_moved(&wrote("comment/abc:def")));
+
+        // Both directions of write. A remote one is another instance of this identity
+        // syncing in a gesture it made while it was the one that happened to be up, and
+        // the fold reads the doc rather than what this instance did.
+        assert!(fold_input_moved(&synced("endorse/pin:abc")));
+    }
+
+    #[test]
+    fn what_the_pass_itself_writes_does_not_wake_it() {
+        // All four are gated on substance and so would settle rather than spin, which is
+        // exactly why they need a test: nothing would go wrong loudly. An instance that
+        // wrote them has already folded, and one receiving them by sync receives the
+        // folded tally alongside.
+        assert!(!fold_input_moved(&wrote(
+            "engagement-log/like:abc:did:dht:x"
+        )));
+        assert!(!fold_input_moved(&wrote("crawl/did:dht:x")));
+        assert!(!fold_input_moved(&wrote("tally/chan:abc")));
+        assert!(!fold_input_moved(&wrote("thread/chan:abc")));
+    }
+
+    #[test]
+    fn a_neighbouring_collection_is_not_the_same_collection() {
+        // `comment` has SIX siblings and this pass writes three of them, so a prefix match
+        // without its separator would wake the loop for its own work on every mint.
+        for sibling in [
+            "comment-object/abc:def",
+            "comment-seal/abc:def",
+            "comment-files/abc:def",
+            "comment-log/abc:def:did:dht:x",
+            "comment-crawl/did:dht:x",
+            "comment-deliver/abc:def",
+        ] {
+            assert!(
+                !fold_input_moved(&wrote(sibling)),
+                "{sibling} must not read as a comment",
+            );
+        }
+        // And the one that does.
+        assert!(fold_input_moved(&wrote("comment/abc:def")));
     }
 }
