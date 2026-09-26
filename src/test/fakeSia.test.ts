@@ -11,6 +11,7 @@
 import { describe, expect, it } from 'vitest'
 import { is_snapshot_tag } from '../../crates/pin-core/pkg/pin_core.js'
 import { createFakeWorld, FakeSiaClient, snapshotTag } from './fakeSia'
+import { fakeObjectID, fakeShareURL } from './shareURL'
 
 const ENCODER = new TextEncoder()
 const DECODER = new TextDecoder()
@@ -302,6 +303,33 @@ describe('reading an object out of the scope', () => {
     expect(held.find((o) => o.id === id)?.createdAt).toBe(
       '2026-01-02T03:04:05.000Z',
     )
+  })
+})
+
+// The shape the fake mints, pinned against what the SDK builds.
+//
+// Production stopped parsing share URLs when `snapshotObjectIsGone` went, so there is no
+// longer a real parser for the tier above to exercise — which is what the deleted
+// `shareURLIds.test.ts` existed to prove it was exercising. What survives that is the
+// reason the shape was made faithful in the first place: the fake speaks this to ITSELF,
+// across two modules, and a drift between the minting and the reading is invisible until
+// something that looks unrelated breaks. A literal is the honest anchor now, since there
+// is nothing real left to check it against.
+describe('the fake share URL', () => {
+  const ID = 'a'.repeat(64)
+
+  it('puts the object id in the path, where real Sia puts it', () => {
+    expect(fakeShareURL(ID)).toBe(`sia://fake/objects/${ID}/shared#k=${ID}`)
+  })
+
+  it('reads back what it minted', () => {
+    expect(fakeObjectID(fakeShareURL(ID))).toBe(ID)
+  })
+
+  it('says nothing for a URL that is not one', () => {
+    // Null is "this URL names no id", never "no such object".
+    expect(fakeObjectID('sia://fake/nope')).toBeNull()
+    expect(fakeObjectID('')).toBeNull()
   })
 })
 
