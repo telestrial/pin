@@ -210,7 +210,16 @@ fn metadata_string(bytes: Vec<u8>) -> String {
 // --- the pinned-objects walk --------------------------------------------------
 
 const EVENTS_PAGE_LIMIT: usize = 200;
-/// Defensive cap — 200 x 50 = 10000 events covers any plausible scope.
+/// How far the walk pages before refusing to answer.
+///
+/// 200 x 50 = 10,000 EVENTS, which is not 10,000 objects. The indexer keeps a tombstone
+/// for every delete, so the log grows with everything the account has ever done and
+/// never shrinks — measured 2026-09-26 on accounts in daily use since May: 710 events
+/// behind 175 live objects, 535 of them deletes. A full account reset makes it LONGER,
+/// a reset being deletes.
+///
+/// So this is a budget on history rather than on holdings, and raising it should be done
+/// against a measurement: every page is a round trip, and 50 of them already is one.
 const EVENTS_MAX_PAGES: usize = 50;
 
 /// One current (non-deleted) object, owned so it outlives the event that carried it.
@@ -228,6 +237,14 @@ struct CurrentObject {
 /// listing because the indexer exposes the scope as an event log; "what do I currently
 /// have" is a fold over it.
 ///
+/// A COMPLETE fold or an error, never a partial one. The log is append-only — a delete
+/// leaves a tombstone — and the cursor only pages forward from the oldest event, so
+/// knowing the current state means reading all of it. A budget cut short used to return
+/// what it had, which every consumer read as the whole scope: the meter undercounted and
+/// repack saw a smaller scope, quietly. The snapshot rung then made it worse by reading
+/// "no tagged object" as "this identity has published no snapshot", which is
+/// deny-by-absence over a partial read.
+///
 /// It carries each object's METADATA out, already decrypted: `object_events` opens the
 /// sealed object with the AppKey on the way past, so asking what an object is costs
 /// nothing beyond this walk — no downloads, no trial decryption. That was being read
@@ -238,6 +255,9 @@ async fn walk_current(sdk: &Sdk) -> Result<Vec<CurrentObject>, String> {
 
     let mut latest: HashMap<String, ObjectEvent> = HashMap::new();
     let mut cursor: Option<ObjectsCursor> = None;
+    // Whether the log ran out, as opposed to the budget running out. Set on the two exits
+    // that mean "that was the end"; an exhausted budget leaves it false and errors below.
+    let mut reached_the_end = false;
 
     for _ in 0..EVENTS_MAX_PAGES {
         let events = sdk
@@ -246,6 +266,7 @@ async fn walk_current(sdk: &Sdk) -> Result<Vec<CurrentObject>, String> {
             .map_err(|e| format!("object_events: {e}"))?;
         let n = events.len();
         if n == 0 {
+            reached_the_end = true;
             break;
         }
         let last_after = events[n - 1].updated_at;
@@ -261,12 +282,20 @@ async fn walk_current(sdk: &Sdk) -> Result<Vec<CurrentObject>, String> {
         }
         // A short page is the last page.
         if n < EVENTS_PAGE_LIMIT {
+            reached_the_end = true;
             break;
         }
         cursor = Some(ObjectsCursor {
             after: last_after,
             id: last_id,
         });
+    }
+
+    if !reached_the_end {
+        return Err(format!(
+            "object_events: this scope's log exceeds {} events, so the walk was cut short",
+            EVENTS_MAX_PAGES * EVENTS_PAGE_LIMIT
+        ));
     }
 
     let mut out = Vec::new();
