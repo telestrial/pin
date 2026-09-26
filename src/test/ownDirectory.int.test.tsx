@@ -177,6 +177,37 @@ function published(displayName: string) {
   }
 }
 
+/** A held record whose author follows things, which is the corpus a follower scan reads. */
+function holdFollowing(
+  didDht: string,
+  edges: {
+    follows?: { didDht: string; channelID: string }[]
+    handleFollows?: string[]
+  },
+) {
+  docStore.set(
+    `${directory_collection()}/${didDht}`,
+    new TextEncoder().encode(
+      JSON.stringify({
+        tier: 'full',
+        profile: { username: didDht, displayName: didDht },
+        channels: [],
+        reach: [],
+        follows: edges.follows ?? [],
+        handleFollows: edges.handleFollows ?? [],
+        url: 'sia://held',
+        epoch: 1,
+        seenAt: '2026-09-01T12:00:00.000Z',
+      }),
+    ),
+  )
+}
+
+/** The number a `Stat` is showing, by the label under it. `'—'` while uncounted. */
+function stat(label: string): string {
+  return screen.getByText(label).previousElementSibling?.textContent ?? ''
+}
+
 function directory(handle: string, onCreate?: () => void) {
   return (
     <HandleDirectory
@@ -240,6 +271,25 @@ describe('integration: your own directory comes from local state', () => {
     // Visibility absent means UNKNOWN, and unknown is never advertised — the rule that
     // stops a channel written before the field existed being enumerated on a guess.
     expect(screen.queryByText('Older')).toBeNull()
+  })
+
+  it('counts YOUR OWN follow toward their followers, beside the held ones', async () => {
+    // The corpus is the held `directory/<did>` records and there is never one for you —
+    // both crawlers skip your own did on purpose. So without your local edges unioned in,
+    // every count you read is short by exactly yourself, on every subject you follow.
+    //
+    // Two followers, one from each half: a held record that names them, and you. A
+    // sabotage of either half reads 1 rather than 2.
+    signedInWith([])
+    useAuthStore.setState({ handleFollows: [THEM] })
+    hold(THEM, 'them')
+    holdFollowing('did:dht:someone', { handleFollows: [THEM] })
+
+    render(directory(THEM))
+
+    await waitFor(() => {
+      expect(stat('Followers')).toBe('2')
+    })
   })
 
   it('renders a held profile before the network has answered', async () => {

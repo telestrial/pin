@@ -2,7 +2,7 @@ import { Plus } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { advertisedChannels } from '../core/channels'
 import type { FeedEntry } from '../core/feed'
-import { followersOfPerson } from '../core/followers'
+import { followersOfPerson, ownFollowerEdges } from '../core/followers'
 import { buildProfileFeed, includedOnProfile } from '../core/profileFeed'
 import type { ChannelManifest, FollowEdge } from '../core/types'
 import {
@@ -200,24 +200,44 @@ async function readOwnDirectory(): Promise<{
  *  answers and only one of them is about the person. */
 function useFollowerCount(didDht: string): number | null {
   const storedKeyHex = useAuthStore((s) => s.storedKeyHex)
-  const [count, setCount] = useState<number | null>(null)
+  const myDidDht = useAuthStore((s) => s.myDidDht)
+  const follows = useAuthStore((s) => s.follows)
+  const handleFollows = useAuthStore((s) => s.handleFollows)
+  // Carries the subject it was counted FOR, which is what blanks the number when the
+  // subject changes and leaves it standing when only the corpus does. Recounting because
+  // your own follow moved must not flash a dash over a number about to be one higher,
+  // and the dash means "not counted yet on this device" rather than "counting".
+  const [counted, setCounted] = useState<{
+    subject: string
+    count: number
+  } | null>(null)
 
   useEffect(() => {
     let cancelled = false
-    setCount(null)
     if (!storedKeyHex || !didDht) return
     void followerEdges(storedKeyHex)
       .then((held) => {
-        if (!cancelled) setCount(followersOfPerson(held, didDht).length)
+        // Your own edges are never among the held records — see `ownFollowerEdges`.
+        // Unioned here rather than inside `followerEdges`, which reads the doc and has
+        // no business reaching into local state.
+        const corpus = myDidDht
+          ? [...held, ownFollowerEdges(myDidDht, follows, handleFollows)]
+          : held
+        if (!cancelled) {
+          setCounted({
+            subject: didDht,
+            count: followersOfPerson(corpus, didDht).length,
+          })
+        }
       })
       // A crawl index that will not open is not an absence of followers.
       .catch(() => {})
     return () => {
       cancelled = true
     }
-  }, [storedKeyHex, didDht])
+  }, [storedKeyHex, didDht, myDidDht, follows, handleFollows])
 
-  return count
+  return counted?.subject === didDht ? counted.count : null
 }
 
 export function HandleDirectory({

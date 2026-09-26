@@ -16,6 +16,8 @@
 // one doc read per held identity, so asking the doc per render would scan the whole thing
 // every time.
 
+import type { FollowEdge } from './types'
+
 /** What a follower scan reads out of one held record.
  *
  *  Narrow on purpose, like the search corpus: the edges and who owns them, and nothing
@@ -26,6 +28,38 @@ export type FollowerEdges = {
   follows: { didDht: string; channelID: string }[]
   /** People followed wholesale. */
   handleFollows: string[]
+}
+
+/** This identity's OWN follow edges, in the shape a reverse scan reads.
+ *
+ *  The corpus a scan runs over is the held `directory/<did>` records, and nothing ever
+ *  writes one for you: the engagement crawl skips its own did before resolving, and
+ *  discovery's `covered_elsewhere` excludes it. That is deliberate and right — anyone who
+ *  follows one of your channels names your did as an edge target, so without the exclusion
+ *  the crawl would spend a resolve and a download to be told, staler, what local state
+ *  already holds.
+ *
+ *  It leaves the corpus short of exactly one participant, and only for the person doing
+ *  the counting. Your follows ARE published — the identity loop assembles them into the
+ *  directory blob everyone else crawls — so every other viewer counts you and you do not,
+ *  on every channel you follow, including your own.
+ *
+ *  So this is the resolution ladder's own rule reaching a caller that had not applied it:
+ *  your own directory is assembled from local state, and only somebody else's is resolved.
+ *  Union this into the held set before scanning. */
+export function ownFollowerEdges(
+  didDht: string,
+  follows: readonly FollowEdge[],
+  handleFollows: readonly string[],
+): FollowerEdges {
+  return {
+    didDht,
+    // Narrowed to the two fields a scan reads, the same as the held records are — a
+    // `FollowEdge` also carries a cached name, and carrying it here would make one
+    // corpus hold two shapes.
+    follows: follows.map((f) => ({ didDht: f.didDht, channelID: f.channelID })),
+    handleFollows: [...handleFollows],
+  }
 }
 
 /** The did:dhts that follow this PERSON wholesale.
