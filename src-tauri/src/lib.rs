@@ -163,6 +163,7 @@ pub fn run() {
             sia::sia_upload_item,
             sia::sia_upload_items_packed,
             sia::sia_download_item,
+            sia::sia_download_object_by_id,
             sia::sia_pin_from_share_url,
             sia::sia_resolve_object_id,
             sia::sia_delete_object,

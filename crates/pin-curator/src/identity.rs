@@ -532,7 +532,7 @@ async fn publish_comments(
             fp,
             superseded,
         } => {
-            let up = ctx.sia.upload_item(bytes, None).await?;
+            let up = ctx.sia.upload_item(bytes, None, None).await?;
             Ok(CommentsPublish {
                 url: Some(up.item_url.clone()),
                 state: Some(PublishedState {
@@ -663,7 +663,7 @@ pub async fn publish_identity_once(
         }
         _ => {
             let bytes = serde_json::to_vec(&doc).map_err(|e| format!("encode directory: {e}"))?;
-            let up = ctx.sia.upload_item(bytes, None).await?;
+            let up = ctx.sia.upload_item(bytes, None, None).await?;
             outcome.uploaded = true;
             (up.item_url, up.id)
         }

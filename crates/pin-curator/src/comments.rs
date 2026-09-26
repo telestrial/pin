@@ -465,7 +465,7 @@ pub async fn mint_bodies(
 
         // Bytes first, then the record that names them — the ordering every create in this
         // codebase takes. A failure here leaves the comment exactly as it was.
-        let Ok(up) = sia.upload_item(body.into_bytes(), None).await else {
+        let Ok(up) = sia.upload_item(body.into_bytes(), None, None).await else {
             outcome.failed += 1;
             continue;
         };

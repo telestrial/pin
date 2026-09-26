@@ -579,6 +579,12 @@ export function sia_delete_object(id: string): Promise<void>;
 
 export function sia_download_item(url: string): Promise<Uint8Array>;
 
+/**
+ * One object's bytes by id, for an object this identity holds — the read that needs no
+ * published pointer. Errors rather than answering when it cannot be fetched.
+ */
+export function sia_download_object_by_id(id: string): Promise<Uint8Array>;
+
 export function sia_generate_recovery_phrase(): string;
 
 /**
@@ -1025,6 +1031,7 @@ export interface InitOutput {
     readonly sia_connect: (a: number, b: number, c: number, d: number) => any;
     readonly sia_delete_object: (a: number, b: number) => any;
     readonly sia_download_item: (a: number, b: number) => any;
+    readonly sia_download_object_by_id: (a: number, b: number) => any;
     readonly sia_generate_recovery_phrase: () => [number, number];
     readonly sia_get_object_slabs: (a: number, b: number) => any;
     readonly sia_is_connected: () => any;

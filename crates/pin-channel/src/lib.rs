@@ -112,7 +112,7 @@ async fn seal_and_point(
     payload_json: &str,
 ) -> Result<Published, String> {
     let sealed = pin_crypto::encrypt(channel_key, payload_json.as_bytes())?;
-    let uploaded = sia.upload_item(sealed.into_bytes(), None).await?;
+    let uploaded = sia.upload_item(sealed.into_bytes(), None, None).await?;
 
     let locator_key = pin_pkarr::public_key_from_seed(&pointer.seed)?;
     pin_pkarr::publish(

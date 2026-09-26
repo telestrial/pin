@@ -122,7 +122,7 @@ pub async fn snapshot_once(ctx: &SnapshotContext) -> Result<SnapshotOutcome, Str
     let ciphertext = pin_crypto::encrypt(&key, json.as_bytes())?;
     let uploaded = ctx
         .sia
-        .upload_item(ciphertext.into_bytes(), None)
+        .upload_item(ciphertext.into_bytes(), None, None)
         .await
         .map_err(|e| format!("snapshot upload: {e}"))?;
 

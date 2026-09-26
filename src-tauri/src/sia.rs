@@ -149,7 +149,7 @@ pub async fn sia_upload_item(
 ) -> Result<Uploaded, String> {
     let bytes = raw_body(&request)?;
     state
-        .run(move |s| async move { s.upload_item(bytes, None).await })
+        .run(move |s| async move { s.upload_item(bytes, None, None).await })
         .await
 }
 
@@ -173,6 +173,20 @@ pub async fn sia_download_item(
 ) -> Result<tauri::ipc::Response, String> {
     let bytes = state
         .run(move |s| async move { s.download_item(&url).await })
+        .await?;
+    Ok(tauri::ipc::Response::new(bytes))
+}
+
+/// The same, for an object in this identity's own scope rather than one a pointer
+/// names. Errors when it cannot be fetched — a caller must never read a failure here as
+/// the object being gone.
+#[tauri::command]
+pub async fn sia_download_object_by_id(
+    state: tauri::State<'_, SiaState>,
+    id: String,
+) -> Result<tauri::ipc::Response, String> {
+    let bytes = state
+        .run(move |s| async move { s.download_object_by_id(&id).await })
         .await?;
     Ok(tauri::ipc::Response::new(bytes))
 }

@@ -2458,7 +2458,7 @@ pub async fn sia_upload_item(
     on_shard: Option<js_sys::Function>,
 ) -> Result<String, JsValue> {
     let uploaded = sia()
-        .upload_item(bytes, shard_callback(on_shard))
+        .upload_item(bytes, None, shard_callback(on_shard))
         .await
         .map_err(|e| JsValue::from_str(&e))?;
     serde_json::to_string(&uploaded).map_err(|e| JsValue::from_str(&format!("encode: {e}")))
@@ -2492,6 +2492,16 @@ pub async fn sia_upload_items_packed(
 pub async fn sia_download_item(url: String) -> Result<Vec<u8>, JsValue> {
     sia()
         .download_item(&url)
+        .await
+        .map_err(|e| JsValue::from_str(&e))
+}
+
+/// One object's bytes by id, for an object this identity holds — the read that needs no
+/// published pointer. Errors rather than answering when it cannot be fetched.
+#[wasm_bindgen]
+pub async fn sia_download_object_by_id(id: String) -> Result<Vec<u8>, JsValue> {
+    sia()
+        .download_object_by_id(&id)
         .await
         .map_err(|e| JsValue::from_str(&e))
 }

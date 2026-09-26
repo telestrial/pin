@@ -86,6 +86,7 @@ export const sia_app_key_hex: () => any;
 export const sia_connect: (a: number, b: number, c: number, d: number) => any;
 export const sia_delete_object: (a: number, b: number) => any;
 export const sia_download_item: (a: number, b: number) => any;
+export const sia_download_object_by_id: (a: number, b: number) => any;
 export const sia_generate_recovery_phrase: () => [number, number];
 export const sia_get_object_slabs: (a: number, b: number) => any;
 export const sia_is_connected: () => any;

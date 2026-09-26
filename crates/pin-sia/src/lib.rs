@@ -176,9 +176,35 @@ pub fn slab_key_string(slab: &Slab) -> String {
 #[serde(rename_all = "camelCase")]
 pub struct PinnedObjectInfo {
     pub id: String,
-    /// ISO 8601.
+    /// ISO 8601. Stamped by the INDEXER rather than by us, which is what makes it safe
+    /// to order two objects by: no clock of ours can skew it, and a metadata write
+    /// leaves it alone (`updated_at` moves instead).
     pub created_at: String,
+    /// The object's application-defined metadata, as the string it was written as.
+    ///
+    /// Owner-private and authenticated — sealed under a per-object key that is itself
+    /// sealed to the AppKey, and separately signed — so this is something the identity
+    /// said about its own object rather than anything a reader could plant. It does not
+    /// cross a share, so an object can say what it is without telling whoever holds a
+    /// link to it.
+    ///
+    /// A String and not bytes, because the only writer in this scope is Pin and Pin
+    /// writes JSON. An object nobody tagged arrives as `""`, which is indistinguishable
+    /// from a tag that will not parse — and both mean the same thing to every reader
+    /// here, so the distinction would be one nothing could act on.
+    pub metadata: String,
     pub slabs: Vec<Slab>,
+}
+
+/// An object's metadata as the string a reader parses.
+///
+/// Lossy on purpose. Metadata is arbitrary bytes to the SDK, and a reader here asks one
+/// question of it — is this one of ours, and what does it say. Bytes that are not UTF-8
+/// were not written by us, and replacement characters answer that as plainly as an error
+/// would while sparing every caller a failure case that means the same thing as a tag it
+/// cannot parse.
+fn metadata_string(bytes: Vec<u8>) -> String {
+    String::from_utf8_lossy(&bytes).into_owned()
 }
 
 // --- the pinned-objects walk --------------------------------------------------
@@ -191,6 +217,7 @@ const EVENTS_MAX_PAGES: usize = 50;
 struct CurrentObject {
     id: String,
     created_at: DateTime<Utc>,
+    metadata: Vec<u8>,
     slabs: Vec<Slab>,
 }
 
@@ -200,6 +227,12 @@ struct CurrentObject {
 /// full-reset enumeration and the slab inspector all need. It is a walk rather than a
 /// listing because the indexer exposes the scope as an event log; "what do I currently
 /// have" is a fold over it.
+///
+/// It carries each object's METADATA out, already decrypted: `object_events` opens the
+/// sealed object with the AppKey on the way past, so asking what an object is costs
+/// nothing beyond this walk — no downloads, no trial decryption. That was being read
+/// and thrown away here, and it is what lets a device with no pointer find its own
+/// snapshot.
 async fn walk_current(sdk: &Sdk) -> Result<Vec<CurrentObject>, String> {
     use std::collections::HashMap;
 
@@ -245,9 +278,38 @@ async fn walk_current(sdk: &Sdk) -> Result<Vec<CurrentObject>, String> {
             out.push(CurrentObject {
                 id: ev.id.to_string(),
                 created_at: obj.created_at,
+                // Borrowed before `metadata` is moved out of the same object.
                 slabs: obj.slabs().to_vec(),
+                metadata: obj.metadata,
             });
         }
+    }
+    Ok(out)
+}
+
+/// Drain a download to bytes.
+///
+/// Uses `read_chunk` rather than an `AsyncRead` adapter, which keeps this free of a
+/// tokio io dependency and so identical on both targets. This is also the path that
+/// fails outright under the browser SDK inside WebView2 ("readable byte streams not
+/// supported") — running it here is what fixes that.
+///
+/// Shared by the two ways to name an object: a share URL somebody published, and an id
+/// in this identity's own scope. They differ only in how the handle is obtained.
+async fn read_object(sdk: &Sdk, obj: &Object) -> Result<Vec<u8>, String> {
+    let mut download = sdk
+        .download(obj, DownloadOptions::default())
+        .map_err(|e| format!("download start: {e}"))?;
+    let mut out = Vec::new();
+    loop {
+        let chunk = download
+            .read_chunk()
+            .await
+            .map_err(|e| format!("download read: {e}"))?;
+        if chunk.is_empty() {
+            break;
+        }
+        out.extend_from_slice(&chunk);
     }
     Ok(out)
 }
@@ -407,9 +469,18 @@ impl Session {
 
     // -- byte I/O --------------------------------------------------------------
 
+    /// Upload bytes and take custody of them.
+    ///
+    /// `metadata` is application-defined bytes the object carries, readable from the
+    /// scope walk without downloading anything — so it is how an object says what it
+    /// is to a device that holds no record naming it. It does not cross a share and is
+    /// not part of the object's identity, which is computed from the slabs alone.
+    /// Callers with nothing to say pass `None`, which is what every caller but the
+    /// snapshot does.
     pub async fn upload_item(
         &self,
         bytes: Vec<u8>,
+        metadata: Option<Vec<u8>>,
         on_shard: Option<ShardCallback>,
     ) -> Result<Uploaded, String> {
         let sdk = self.sdk().await?;
@@ -419,7 +490,7 @@ impl Session {
             let content_hash = pin_crypto::content_hash(&bytes);
             let obj = sdk
                 .upload(
-                    Object::default(),
+                    Object::new(metadata),
                     Cursor::new(bytes),
                     upload_options(on_shard),
                 )
@@ -491,12 +562,7 @@ impl Session {
         .await
     }
 
-    /// Read a share URL's bytes in full.
-    ///
-    /// Drains via `read_chunk` rather than an `AsyncRead` adapter, which keeps this
-    /// free of a tokio io dependency and so identical on both targets. This is also
-    /// the path that fails outright under the browser SDK inside WebView2 ("readable
-    /// byte streams not supported") — running it here is what fixes that.
+    /// Read a share URL's bytes in full. See `read_object` for the drain.
     pub async fn download_item(&self, url: &str) -> Result<Vec<u8>, String> {
         let sdk = self.sdk().await?;
         drive(async move {
@@ -504,21 +570,31 @@ impl Session {
                 .object_from_share_url(url)
                 .await
                 .map_err(|e| format!("object_from_share_url: {e}"))?;
-            let mut download = sdk
-                .download(&obj, DownloadOptions::default())
-                .map_err(|e| format!("download start: {e}"))?;
-            let mut out = Vec::new();
-            loop {
-                let chunk = download
-                    .read_chunk()
-                    .await
-                    .map_err(|e| format!("download read: {e}"))?;
-                if chunk.is_empty() {
-                    break;
-                }
-                out.extend_from_slice(&chunk);
-            }
-            Ok(out)
+            read_object(&sdk, &obj).await
+        })
+        .await
+    }
+
+    /// Read an object's bytes by id, for an object this identity holds.
+    ///
+    /// `download_item` needs a pointer somebody published; this needs only the scope.
+    /// That is the difference that matters for recovery: every mutable pointer Pin
+    /// publishes ages off the DHT in about two hours, while the object it named is
+    /// still sitting in the scope of whoever uploaded it.
+    ///
+    /// ERRORS rather than answering when the object cannot be fetched, and that is the
+    /// load-bearing half. `get_object_slabs` returns `None` for a reclaimed object and
+    /// for an unreachable indexer alike; nothing here may learn "there is nothing to
+    /// read" from a read that failed.
+    pub async fn download_object_by_id(&self, id: &str) -> Result<Vec<u8>, String> {
+        let hash: Hash256 = id.parse().map_err(|e| format!("bad object id: {e:?}"))?;
+        let sdk = self.sdk().await?;
+        drive(async move {
+            let obj = sdk
+                .object(&hash)
+                .await
+                .map_err(|e| format!("object {hash}: {e}"))?;
+            read_object(&sdk, &obj).await
         })
         .await
     }
@@ -605,6 +681,7 @@ impl Session {
                 .map(|o| PinnedObjectInfo {
                     id: o.id,
                     created_at: o.created_at.to_rfc3339(),
+                    metadata: metadata_string(o.metadata),
                     slabs: o.slabs,
                 })
                 .collect())
@@ -636,6 +713,7 @@ impl Session {
                 id: hash.to_string(),
                 created_at: obj.created_at.to_rfc3339(),
                 slabs: obj.slabs().to_vec(),
+                metadata: metadata_string(obj.metadata),
             }))
         })
         .await
@@ -716,10 +794,11 @@ mod tests {
         let object = serde_json::to_value(PinnedObjectInfo {
             id: "id".into(),
             created_at: "t".into(),
+            metadata: "{}".into(),
             slabs: vec![],
         })
         .unwrap();
-        assert_eq!(keys(object), ["createdAt", "id", "slabs"]);
+        assert_eq!(keys(object), ["createdAt", "id", "metadata", "slabs"]);
     }
 
     #[test]
@@ -732,6 +811,27 @@ mod tests {
                 session.download_item("sia://whatever").await.unwrap_err(),
                 "Sia is not connected"
             );
+            // A well-formed id, because this one parses before it asks for the session
+            // — the same order `delete_object` takes.
+            assert_eq!(
+                session
+                    .download_object_by_id(&"ab".repeat(32))
+                    .await
+                    .unwrap_err(),
+                "Sia is not connected"
+            );
+        });
+    }
+
+    // A read by id must report rather than answer when it cannot read, since its whole
+    // job is telling a device what its own scope holds. A malformed id is the one way
+    // to reach that before any network call.
+    #[test]
+    fn a_read_by_id_rejects_a_malformed_id() {
+        block_on(async {
+            let session = Session::new();
+            let err = session.download_object_by_id("nope").await.unwrap_err();
+            assert!(err.starts_with("bad object id:"), "unexpected: {err}");
         });
     }
 
