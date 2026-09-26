@@ -351,6 +351,17 @@ export function get_record(collection: string, rkey: string): Promise<Uint8Array
 export function import_channel_doc(ticket: string, on_event: Function): Promise<string>;
 
 /**
+ * Whether an object's Sia metadata says it is one of this identity's settings
+ * snapshots.
+ *
+ * The Curator writes the tag and the frontend's restore reads it, so this is the
+ * reader itself rather than the value it matches on — a field name is as load-bearing
+ * as its value, and a second spelling in TypeScript would not error, it would simply
+ * stop finding snapshots. See `pin_derive::is_snapshot_tag`.
+ */
+export function is_snapshot_tag(metadata: string): boolean;
+
+/**
  * Every record in the doc, as `{collection, rkey}` pairs (JSON). Used to snapshot the
  * whole doc (docsMirror).
  *
@@ -993,6 +1004,7 @@ export interface InitOutput {
     readonly get_channel_record: (a: number, b: number, c: number, d: number, e: number, f: number) => any;
     readonly get_record: (a: number, b: number, c: number, d: number) => any;
     readonly import_channel_doc: (a: number, b: number, c: any) => any;
+    readonly is_snapshot_tag: (a: number, b: number) => number;
     readonly list_all: () => any;
     readonly list_records: (a: number, b: number) => any;
     readonly manifest_add_repost: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];

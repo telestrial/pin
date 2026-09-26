@@ -120,9 +120,20 @@ pub async fn snapshot_once(ctx: &SnapshotContext) -> Result<SnapshotOutcome, Str
 
     let key = pin_derive::snapshot_key(&ctx.app_key);
     let ciphertext = pin_crypto::encrypt(&key, json.as_bytes())?;
+    // TAGGED, so the object says what it is. Everything else that knows this object is
+    // a snapshot is a pointer with a battery: the publish state below travels in the
+    // doc a fresh device does not have yet, and the locator it publishes ages off
+    // Mainline about two hours after the last instance stops republishing it. The scope
+    // itself outlives both, and the tag is what makes it readable — the metadata is
+    // opened by the same walk the storage meter already runs, so finding this object
+    // again costs no downloads. See `pin_derive::snapshot_tag`.
     let uploaded = ctx
         .sia
-        .upload_item(ciphertext.into_bytes(), None, None)
+        .upload_item(
+            ciphertext.into_bytes(),
+            Some(pin_derive::snapshot_tag(&fingerprint)),
+            None,
+        )
         .await
         .map_err(|e| format!("snapshot upload: {e}"))?;
 

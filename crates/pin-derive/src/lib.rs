@@ -667,6 +667,65 @@ pub fn published_conversation_rkey(channel_id: &str) -> String {
 /// know what to republish.
 pub const PUBLISHED_SETTINGS_RKEY: &str = "settings";
 
+/// What a settings-snapshot object says it is, in its own Sia metadata.
+///
+/// Pin's objects are otherwise ANONYMOUS: every "what is this object" question is
+/// answered by a record in the doc that names it, so an identity holding no record —
+/// a fresh device, or one whose pointers have aged off the DHT — can enumerate its own
+/// scope and learn nothing about what is in it. A tag is the object answering for
+/// itself.
+///
+/// Metadata is owner-private and authenticated (sealed under a per-object key that is
+/// itself sealed to the AppKey, and separately signed), and it does not cross a share.
+/// So this says something to the identity that wrote it and to nobody else.
+///
+/// The version rides in the string. A reader ignores a `t` it does not know, which is
+/// what lets a later kind of tagged object appear without this one having to change.
+pub const SNAPSHOT_TAG_TYPE: &str = "pin.snapshot.v1";
+
+/// A settings snapshot's metadata tag.
+///
+/// `t` is the only load-bearing field — it is what lets an object say it is a snapshot
+/// rather than being an opaque id. `fp` carries the same fingerprint the publish state
+/// records, so a diagnostic can say which generations exist in a scope without
+/// downloading any of them, and a reader can correlate an object with the doc state it
+/// holds. Deliberately absent: a timestamp of ours (the indexer stamps `created_at`,
+/// which no clock of ours can skew), a sequence number (a fresh device by definition
+/// holds no prior state to continue), and the DID (the scope is already per-AppKey).
+///
+/// Nothing signs this, so it carries no byte-stability constraint — unlike the
+/// engagement layout, a field may be added here without invalidating anything.
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct SnapshotTag {
+    pub t: String,
+    /// Absent rather than empty when there is none, and optional on the way back in, so
+    /// a tag without it is still recognisably ours.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fp: Option<String>,
+}
+
+/// The metadata a settings-snapshot object carries.
+pub fn snapshot_tag(fingerprint: &str) -> Vec<u8> {
+    let tag = SnapshotTag {
+        t: SNAPSHOT_TAG_TYPE.to_string(),
+        fp: Some(fingerprint.to_string()),
+    };
+    serde_json::to_vec(&tag).expect("two owned strings always serialize")
+}
+
+/// Whether an object's metadata says it is one of this identity's settings snapshots.
+///
+/// The one place the tag is READ, so the reader never restates the shape the writer
+/// used — which is the divergence a constant alone would leave open, since the field
+/// name is as much a contract as its value. The frontend reaches this through wasm for
+/// that reason rather than spelling `t` again in TypeScript.
+///
+/// False for an untagged object, whose metadata is empty, and for anything that will
+/// not parse. Both mean the same thing to every caller: not one of ours.
+pub fn is_snapshot_tag(metadata: &str) -> bool {
+    serde_json::from_str::<SnapshotTag>(metadata).is_ok_and(|tag| tag.t == SNAPSHOT_TAG_TYPE)
+}
+
 /// A record's key in the doc: `collection/rkey`, as bytes. The one spelling both
 /// engines write and read — they sync the same doc, so this can't diverge.
 pub fn record_key(collection: &str, rkey: &str) -> Vec<u8> {
@@ -1103,6 +1162,37 @@ mod tests {
         // republishes under. Pinned: a reader looking for `_s` finds nothing if this
         // moves, and "recovery finds nothing" is indistinguishable from "no settings".
         assert_eq!(SETTINGS_POINTER_PREFIX, "_s");
+    }
+
+    // The tag is written by the Curator and read by a device that holds nothing else
+    // about the object, so both halves are pinned here: the value a reader matches on,
+    // and the field names it arrives under.
+    #[test]
+    fn a_snapshot_tag_identifies_itself() {
+        assert_eq!(SNAPSHOT_TAG_TYPE, "pin.snapshot.v1");
+        let tag = snapshot_tag("bafyfingerprint");
+        assert_eq!(
+            String::from_utf8(tag.clone()).unwrap(),
+            r#"{"t":"pin.snapshot.v1","fp":"bafyfingerprint"}"#
+        );
+        assert!(is_snapshot_tag(&String::from_utf8(tag).unwrap()));
+    }
+
+    // An untagged object's metadata is empty, and nothing else in this scope writes a
+    // tag at all — so the three ways of not being ours have to answer alike, or a
+    // reader picking the newest tagged object could pick something else entirely.
+    #[test]
+    fn nothing_else_reads_as_a_snapshot() {
+        assert!(!is_snapshot_tag(""));
+        assert!(!is_snapshot_tag("not json at all"));
+        assert!(!is_snapshot_tag(r#"{"t":"pin.something-else.v1"}"#));
+        // A field this version does not know is ignored, which is what lets the tag
+        // grow without a reader of this generation losing its own snapshots.
+        assert!(is_snapshot_tag(
+            r#"{"t":"pin.snapshot.v1","fp":"x","later":1}"#
+        ));
+        // And `fp` is not load-bearing: a tag carrying only the type is still ours.
+        assert!(is_snapshot_tag(r#"{"t":"pin.snapshot.v1"}"#));
     }
 
     #[test]

@@ -48,6 +48,7 @@ export const engagement_subject: (a: number, b: number, c: number, d: number, e:
 export const get_channel_record: (a: number, b: number, c: number, d: number, e: number, f: number) => any;
 export const get_record: (a: number, b: number, c: number, d: number) => any;
 export const import_channel_doc: (a: number, b: number, c: any) => any;
+export const is_snapshot_tag: (a: number, b: number) => number;
 export const list_all: () => any;
 export const list_records: (a: number, b: number) => any;
 export const manifest_add_repost: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];

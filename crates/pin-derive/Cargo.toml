@@ -17,7 +17,7 @@ sha2 = "0.10"
 # shape crosses the seam, so it needs one definition here rather than one per engine;
 # serde builds on wasm and native alike, so the "no iroh" property above holds.
 serde = { version = "1", features = ["derive"] }
-
-[dev-dependencies]
-# Pins `RecordKey`'s serialized field names, which the frontend destructures.
+# For the snapshot tag: an object's Sia metadata is bytes, and what Pin writes into it
+# is JSON. Building and reading it live together here so the field names have one home
+# — the frontend reaches the reader through wasm rather than spelling them again.
 serde_json = "1"

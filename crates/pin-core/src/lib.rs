@@ -2240,6 +2240,18 @@ pub fn settings_pointer_prefix() -> String {
     pin_derive::SETTINGS_POINTER_PREFIX.to_string()
 }
 
+/// Whether an object's Sia metadata says it is one of this identity's settings
+/// snapshots.
+///
+/// The Curator writes the tag and the frontend's restore reads it, so this is the
+/// reader itself rather than the value it matches on — a field name is as load-bearing
+/// as its value, and a second spelling in TypeScript would not error, it would simply
+/// stop finding snapshots. See `pin_derive::is_snapshot_tag`.
+#[wasm_bindgen]
+pub fn is_snapshot_tag(metadata: &str) -> bool {
+    pin_derive::is_snapshot_tag(metadata)
+}
+
 /// Publish-state encryption key.
 #[wasm_bindgen]
 pub fn derive_published_key(app_key: &[u8]) -> Vec<u8> {
