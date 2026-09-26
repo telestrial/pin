@@ -24,6 +24,7 @@ vi.mock('../lib/channelLocatorNative', async () =>
 )
 
 import userEvent from '@testing-library/user-event'
+import { directory_collection } from '../../crates/pin-core/pkg/pin_core.js'
 import { ChannelView } from '../components/channel/ChannelView'
 import { channelKeyFromBase64 } from '../core/crypto'
 import type { ChannelManifest, ItemRef } from '../core/types'
@@ -74,6 +75,32 @@ async function published(items: ItemRef[], visibility = 'public') {
     channelKeyFromBase64(KEY),
     JSON.stringify(manifest('Their channel', items, visibility)),
   )
+}
+
+/** A held directory record whose author follows this channel — the corpus a follower
+ *  scan reads, and the only place a follower can be learned from. */
+function holdFollower(didDht: string) {
+  docStore.set(
+    `${directory_collection()}/${didDht}`,
+    new TextEncoder().encode(
+      JSON.stringify({
+        tier: 'full',
+        profile: { username: didDht, displayName: didDht },
+        channels: [],
+        reach: [],
+        follows: [{ didDht: THEM, channelID: CHANNEL }],
+        handleFollows: [],
+        url: 'sia://held',
+        epoch: 1,
+        seenAt: '2026-09-01T12:00:00.000Z',
+      }),
+    ),
+  )
+}
+
+/** The number a `Stat` shows, by the label under it. */
+function stat(label: string): string {
+  return screen.getByText(label).previousElementSibling?.textContent ?? ''
 }
 
 function view(channelKey?: string) {
@@ -127,6 +154,36 @@ describe('integration: browsing a channel you do not hold', () => {
 
     await new Promise((r) => setTimeout(r, 20))
     expect(screen.queryByText('something they wrote')).toBeNull()
+  })
+
+  it('counts the channel followers it holds, and you among them', async () => {
+    // Two followers from the two halves the corpus has: a held record that names the
+    // channel, and your own local edge, which is never in the index because the crawl
+    // does not read you.
+    await published([post('a post', '2026-09-02T00:00:00.000Z')])
+    holdFollower('did:dht:someone')
+    useAuthStore.setState({
+      myDidDht: 'did:dht:me',
+      follows: [{ didDht: THEM, channelID: CHANNEL }],
+    })
+
+    view(KEY)
+
+    await waitFor(() => expect(stat('Followers')).toBe('2'))
+  })
+
+  it('offers no follower count on an unlisted channel', async () => {
+    // Not zero — absent. A `FollowEdge` carries no K and resolves through the author's
+    // directory, where an unlisted channel is absent by construction, so the scan is
+    // structurally empty forever and a number would state a fact about the channel where
+    // the truth is that the relation does not apply. The same predicate hides Follow.
+    await published([post('a post', '2026-09-02T00:00:00.000Z')], 'obscure')
+    holdFollower('did:dht:someone')
+
+    view(KEY)
+
+    await waitFor(() => expect(screen.getByText('a post')).toBeInTheDocument())
+    expect(screen.queryByText('Followers')).toBeNull()
   })
 
   it('leaves a channel you watch to the feed store', async () => {

@@ -2,7 +2,6 @@ import { Plus } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { advertisedChannels } from '../core/channels'
 import type { FeedEntry } from '../core/feed'
-import { followersOfPerson, ownFollowerEdges } from '../core/followers'
 import { buildProfileFeed, includedOnProfile } from '../core/profileFeed'
 import type { ChannelManifest, FollowEdge } from '../core/types'
 import {
@@ -10,8 +9,9 @@ import {
   readOwnManifest,
   resolveChannelViaLocator,
 } from '../lib/channelLocator'
-import { followerEdges, readDirectory, request } from '../lib/directories'
+import { readDirectory, request } from '../lib/directories'
 import { formatBytes } from '../lib/format'
+import { useFollowerCount } from '../lib/hooks/useFollowerCount'
 import {
   useIdentityName,
   useIdentityProfile,
@@ -24,6 +24,7 @@ import { ChannelHeroCard } from './channel/ChannelHeroCard'
 import { FollowHandleButton } from './FollowHandleButton'
 import { FeedRow } from './HomeFeed'
 import { IdentityAvatar } from './IdentityAvatar'
+import { Stat } from './ui/Stat'
 
 type ChannelEntry = {
   authorDID: string
@@ -190,56 +191,6 @@ async function readOwnDirectory(): Promise<{
   }
 }
 
-/** How many held identities follow this person.
- *
- *  Read once per landing rather than per render: the corpus is one doc read per held
- *  identity, so this is the same shape the search box uses — build a snapshot, ask it.
- *
- *  Null while it is still being counted, so the stat can stay blank rather than claiming
- *  zero followers for a moment on every profile. Zero and not-yet-counted are different
- *  answers and only one of them is about the person. */
-function useFollowerCount(didDht: string): number | null {
-  const storedKeyHex = useAuthStore((s) => s.storedKeyHex)
-  const myDidDht = useAuthStore((s) => s.myDidDht)
-  const follows = useAuthStore((s) => s.follows)
-  const handleFollows = useAuthStore((s) => s.handleFollows)
-  // Carries the subject it was counted FOR, which is what blanks the number when the
-  // subject changes and leaves it standing when only the corpus does. Recounting because
-  // your own follow moved must not flash a dash over a number about to be one higher,
-  // and the dash means "not counted yet on this device" rather than "counting".
-  const [counted, setCounted] = useState<{
-    subject: string
-    count: number
-  } | null>(null)
-
-  useEffect(() => {
-    let cancelled = false
-    if (!storedKeyHex || !didDht) return
-    void followerEdges(storedKeyHex)
-      .then((held) => {
-        // Your own edges are never among the held records — see `ownFollowerEdges`.
-        // Unioned here rather than inside `followerEdges`, which reads the doc and has
-        // no business reaching into local state.
-        const corpus = myDidDht
-          ? [...held, ownFollowerEdges(myDidDht, follows, handleFollows)]
-          : held
-        if (!cancelled) {
-          setCounted({
-            subject: didDht,
-            count: followersOfPerson(corpus, didDht).length,
-          })
-        }
-      })
-      // A crawl index that will not open is not an absence of followers.
-      .catch(() => {})
-    return () => {
-      cancelled = true
-    }
-  }, [storedKeyHex, didDht, myDidDht, follows, handleFollows])
-
-  return counted?.subject === didDht ? counted.count : null
-}
-
 export function HandleDirectory({
   handle: rawHandle,
   onBack,
@@ -282,7 +233,7 @@ export function HandleDirectory({
   // Counted off the crawl's index, for your own profile as much as anybody's: a follow
   // lives in the follower's directory, so even your own followers are only knowable by
   // having read the people who follow you.
-  const followerCount = useFollowerCount(rawHandle.replace(/^@+/, ''))
+  const followerCount = useFollowerCount('person', rawHandle.replace(/^@+/, ''))
 
   // Defensive normalize: callers should pass a bare handle, but a stray
   // leading `@` (from a paste, say) shouldn't break the lookup.
@@ -705,22 +656,6 @@ function LoadedDirectory({
           ))}
         </Section>
       )}
-    </div>
-  )
-}
-
-/** One number on the header.
- *
- *  `null` renders as a dash rather than a zero: a follower count is a scan of the crawl's
- *  index and is briefly unknown on every landing, and "0 followers" is a claim about the
- *  person where "not counted yet" is a fact about this device. */
-function Stat({ value, label }: { value: number | null; label: string }) {
-  return (
-    <div className="shrink-0 leading-tight">
-      <div className="text-2xl font-bold text-neutral-900">{value ?? '—'}</div>
-      <div className="text-xs text-neutral-500 uppercase tracking-wide">
-        {label}
-      </div>
     </div>
   )
 }

@@ -9,6 +9,7 @@ import {
 import type { ChannelImage, ChannelManifest } from '../../core/types'
 import { resolveChannelViaLocator } from '../../lib/channelLocator'
 import { useChannelClaim } from '../../lib/hooks/useChannelClaim'
+import { useFollowerCount } from '../../lib/hooks/useFollowerCount'
 import { useIdentityName } from '../../lib/hooks/useIdentityName'
 import { useItemBlobURL } from '../../lib/hooks/useItemBytes'
 import { renderMarkdown } from '../../lib/markdown'
@@ -18,6 +19,7 @@ import { FollowButton } from '../FollowButton'
 import { FeedRow } from '../HomeFeed'
 import { ChannelPinButton } from '../pin/ChannelPinButton'
 import { PinIcon } from '../pin/PinIcon'
+import { Stat } from '../ui/Stat'
 import { WatchButton } from '../WatchButton'
 import { ChannelAvatar } from './ChannelAvatar'
 import { ChannelOwnerMenu } from './ChannelOwnerMenu'
@@ -132,8 +134,16 @@ export function ChannelView({
   // manifest's atproto DID. Claim (advertise in the identity-doc) applies only
   // to public channels you own — obscure channels aren't advertised, others'
   // channels you Follow not claim.
-  const isOwnPublic = isOwned && manifest?.visibility === 'public'
+  // Public means followable, and that is the whole of what gates the Followers count
+  // beside the Follow button: a `FollowEdge` carries no K and resolves through the
+  // author's directory, where an unlisted channel is absent by construction. So nobody
+  // can follow one, the scan is structurally empty forever, and a "0" there would state a
+  // fact about the channel where the truth is that the relation does not apply. Spelled
+  // once, so the control and the number it explains cannot disagree about which is which.
+  const isPublic = manifest?.visibility === 'public'
+  const isOwnPublic = isOwned && isPublic
   const { claimed, setClaimed } = useChannelClaim(channelID, isOwnPublic)
+  const followerCount = useFollowerCount('channel', isPublic ? channelID : '')
 
   // Backfill the manifest cache on cold-mount (e.g. empty channel that
   // contributed no feed entries to the initial refresh). Updates arrive on
@@ -250,30 +260,38 @@ export function ChannelView({
                   />
                 </div>
                 <div className="flex-1 min-w-0 flex items-start justify-between gap-3 pt-3">
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <h1 className="text-xl font-semibold text-neutral-900 truncate">
-                        {channelName}
-                      </h1>
-                      {isOwnPublic && claimed === false && (
-                        <span className="shrink-0 inline-flex items-center px-2 py-0.5 text-[11px] font-medium text-neutral-400 bg-neutral-100 border border-neutral-200 rounded-full">
-                          Unclaimed
-                        </span>
-                      )}
+                  <div className="min-w-0 flex items-center gap-5">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <h1 className="text-xl font-semibold text-neutral-900 truncate">
+                          {channelName}
+                        </h1>
+                        {isOwnPublic && claimed === false && (
+                          <span className="shrink-0 inline-flex items-center px-2 py-0.5 text-[11px] font-medium text-neutral-400 bg-neutral-100 border border-neutral-200 rounded-full">
+                            Unclaimed
+                          </span>
+                        )}
+                      </div>
+                      {/* Author line: navigate to the author's directory. did:dht
+                          (the identity now) → identity-doc name; legacy handle →
+                          raw handle. Hidden only when neither exists. */}
+                      {(manifest?.authorDidDht || authorHandle) &&
+                        authorName && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              onHandleClick(
+                                manifest?.authorDidDht ?? authorHandle,
+                              )
+                            }
+                            className="block max-w-full text-sm text-neutral-500 truncate hover:underline cursor-pointer text-left"
+                          >
+                            @{authorName}
+                          </button>
+                        )}
                     </div>
-                    {/* Author line: navigate to the author's directory. did:dht
-                        (the identity now) → identity-doc name; legacy handle →
-                        raw handle. Hidden only when neither exists. */}
-                    {(manifest?.authorDidDht || authorHandle) && authorName && (
-                      <button
-                        type="button"
-                        onClick={() =>
-                          onHandleClick(manifest?.authorDidDht ?? authorHandle)
-                        }
-                        className="block max-w-full text-sm text-neutral-500 truncate hover:underline cursor-pointer text-left"
-                      >
-                        @{authorName}
-                      </button>
+                    {isPublic && (
+                      <Stat value={followerCount} label="Followers" />
                     )}
                   </div>
                   {/* Actions: below the cover, upper-right, even with the
@@ -342,14 +360,13 @@ export function ChannelView({
                               manifest={manifest}
                             />
                           )}
-                          {manifest?.visibility === 'public' &&
-                            manifest.authorDidDht && (
-                              <FollowButton
-                                authorDidDht={manifest.authorDidDht}
-                                channelID={channelID}
-                                channelName={channelName}
-                              />
-                            )}
+                          {isPublic && manifest.authorDidDht && (
+                            <FollowButton
+                              authorDidDht={manifest.authorDidDht}
+                              channelID={channelID}
+                              channelName={channelName}
+                            />
+                          )}
                           {/* Whole-channel pin (snapshot/catch-up/unpin) —
                               visibility-agnostic, so it shows for obscure
                               channels too. Rightmost, mirroring the owned row. */}
