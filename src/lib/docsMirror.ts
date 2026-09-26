@@ -18,14 +18,16 @@
 // stays a plain Sia download with no doc and no pin-core engine behind it. Cache and
 // record, not two copies of one thing.
 
-import { settings_pointer_prefix } from '../../crates/pin-core/pkg/pin_core.js'
+import {
+  is_snapshot_tag,
+  settings_pointer_prefix,
+} from '../../crates/pin-core/pkg/pin_core.js'
 import {
   decryptForChannel,
   deriveSettingsLocatorSeed,
   deriveSnapshotKey,
 } from '../core/crypto'
-import type { SiaClient } from '../core/siaClient'
-import { objectIDInShareURL } from '../core/siaClient'
+import type { PinnedObjectInfo, SiaClient } from '../core/siaClient'
 import { ensureWasm } from '../core/wasm'
 import { listAll, putRecord } from './docs'
 import { identityFromSeed, reassembleTxt } from './pkarr'
@@ -103,96 +105,107 @@ export function cacheSnapshotPointer(p: Pointer): void {
 export type SnapshotRead =
   | { kind: 'read'; entries: SnapshotEntry[] }
   | { kind: 'none' }
-  // `url` is present only when the LOCATOR named it. A cached pointer's url is absent
-  // on purpose — see `readSnapshotViaPointers`, where the two are told apart.
-  | { kind: 'unknown'; error: string; url?: string }
+  | { kind: 'unknown'; error: string }
 
 /** Read the current snapshot, saying which of the three it got.
  *
  *  Never throws: each of the three ways to come back empty is a value here, since the
  *  caller is the one that knows whether it may act on an absence.
  *
- *  The locator is ALWAYS resolved. This used to take a flag to skip it — the
- *  brand-new-account gate, whose point was to save the DHT round trip by answering
- *  `none` without asking anybody. `scopeIsEmpty` does that job now and does it
- *  differently in the way that matters: the old condition was a caller ASSERTING there
- *  was nothing, the new one is the scope positively holding nothing, read and
- *  corroborated. It costs a new account a resolve and two indexer reads, and it is what
- *  lets a RECLAIMED account boot at all — that one is not brand new, so the old gate
- *  would have had it hang on `unknown` forever.
+ *  TWO RUNGS, cheapest first, and the second is the one that does not expire. The
+ *  POINTERS — a device-local cache, then the durable locator — answer in a single
+ *  download whenever this device has been here before or the DHT still carries the
+ *  record. Both run out: the cache dies with the browser profile, and the locator ages
+ *  off Mainline about two hours after the last instance stops republishing it. So an
+ *  `unknown` from the pointers is where the SCOPE gets asked instead, and the scope is
+ *  the identity's own, holding the object all along.
  *
- *  An `unknown` then gets a second question, about the scope rather than the snapshot,
- *  because those are two different reads and only the first of them failed. See
- *  `scopeIsEmpty` for why its answer may be acted on where the snapshot's may not. */
+ *  What this replaces is a pair of questions that existed to disambiguate that
+ *  `unknown` — whether the object the locator named was still held, and whether the
+ *  scope held anything at all. Both were reaching for the answer the scope can now give
+ *  outright: which snapshot is current. */
 async function readSnapshot(
   client: SiaClient,
   appKeyBytes: Uint8Array,
 ): Promise<SnapshotRead> {
   const read = await readSnapshotViaPointers(client, appKeyBytes)
   if (read.kind !== 'unknown') return read
-  // Two ways to settle an unknown, finest first. The object the locator names is gone
-  // from this scope while the scope holds other things — a reset followed by any
-  // activity — which the scope question below cannot see, because it can only ask
-  // whether the scope holds NOTHING.
-  if (read.url && (await snapshotObjectIsGone(client, read.url))) {
-    return { kind: 'none' }
-  }
-  // Nobody answered about the snapshot, so ask about the scope it would live in. An
-  // account whose objects were reclaimed answers `unknown` forever otherwise, and the
-  // loop that would publish a fresh snapshot is one of the three held until this
-  // settles — a guard with no way out is a lockout rather than a guard.
-  return (await scopeIsEmpty(client)) ? { kind: 'none' } : read
+  return readSnapshotFromScope(client, appKeyBytes, read)
 }
 
-/** Whether the snapshot this URL names is positively gone from this identity's scope.
+/** The newest snapshot this identity's Sia scope holds, found by asking the objects
+ *  what they are.
  *
- *  The finer grain of `scopeIsEmpty`, and the reason it is needed: an empty scope is
- *  positively nothing to restore, but a scope holding OTHER objects says nothing about
- *  the snapshot — so a reset followed by one new channel reads as `unknown` forever and
- *  the loops held on it never release. The object's id is in the share URL's own path,
- *  so the question is a match against what the scope holds rather than a count of it.
+ *  Pin's objects are otherwise anonymous — what an object holds is answered by a record
+ *  in the doc that names it, and this runs exactly when no such record is in hand — so
+ *  a snapshot carries a tag saying so. Reading the tag costs no downloads: the walk the
+ *  storage meter already runs opens every object's metadata on the way past, and the
+ *  metadata is sealed under the AppKey and does not cross a share, so it says this to
+ *  its owner and to nobody else.
  *
- *  Every way of not knowing returns false, because only a true here releases the
- *  publishing loops. A URL that names no id, a listing that throws, a listing served
- *  EMPTY by a hiccup — that last one especially, since an empty list contains no id and
- *  would otherwise read as proof. Emptiness is `scopeIsEmpty`'s question and it
- *  corroborates it against a byte total; here it is simply declined. */
-async function snapshotObjectIsGone(
+ *  NEWEST BY `createdAt`, which the INDEXER stamps and a metadata write leaves alone.
+ *  Ordering matters as much as finding: restoring a superseded generation would put
+ *  stale records into the doc and the snapshot loop would then mirror them back out
+ *  over the current copy. A fingerprint cannot do this job — it says which doc state an
+ *  object holds, never which of two is later.
+ *
+ *  It does not write the pointer cache, which is keyed by share URL where this rung has
+ *  only an id. A device that comes in this way comes in this way again until a snapshot
+ *  pass publishes a fresh pointer. */
+async function readSnapshotFromScope(
   client: SiaClient,
-  url: string,
-): Promise<boolean> {
-  const id = objectIDInShareURL(url)
-  if (!id) return false
+  appKeyBytes: Uint8Array,
+  viaPointers: { kind: 'unknown'; error: string },
+): Promise<SnapshotRead> {
+  await ensureWasm()
+  let held: PinnedObjectInfo[]
   try {
-    const held = await client.listPinnedObjects()
-    if (held.length === 0) return false
-    return !held.some((o) => o.id === id)
-  } catch {
-    return false
+    held = await client.listPinnedObjects()
+  } catch (e) {
+    // The walk FAILS rather than answering, which is the whole of what keeps `none` and
+    // `unknown` apart down here.
+    return { kind: 'unknown', error: `scope walk: ${String(e)}` }
   }
+
+  // `is_snapshot_tag` is the writer's own reader, reached through wasm. Spelling the
+  // tag's shape again in TypeScript would not error when either side moved; it would
+  // quietly stop matching, and a scope full of snapshots would read as an account that
+  // has published none.
+  const tagged = held
+    .filter((o) => is_snapshot_tag(o.metadata))
+    .map((o) => ({ id: o.id, at: Date.parse(o.createdAt) }))
+  const placeable = tagged.filter((o) => !Number.isNaN(o.at))
+
+  if (placeable.length > 0) {
+    const newest = placeable.reduce((a, b) => (b.at > a.at ? b : a))
+    return downloadSnapshotByID(client, appKeyBytes, newest.id)
+  }
+  if (tagged.length > 0) {
+    // Snapshots with nothing to place them in time. The indexer stamps `createdAt`, so
+    // this is not a state it can produce — and taking one anyway is precisely the
+    // clobbering case, so it stays an `unknown`, which a later boot can retry.
+    return {
+      kind: 'unknown',
+      error: `${tagged.length} snapshots in scope carry no readable createdAt`,
+    }
+  }
+  // Nothing tagged. A listing that came back WITH objects has demonstrably answered, so
+  // their not being snapshots is a fact about the account.
+  if (held.length > 0) return { kind: 'none' }
+  // An empty listing is the one shape a hiccup can fake, and it contains no object to
+  // notice the absence of. The byte total is a separate answer from the indexer, so it
+  // is what says whether to believe it.
+  return (await accountHoldsNothing(client)) ? { kind: 'none' } : viaPointers
 }
 
-/** Whether this identity's Sia scope positively holds nothing.
+/** Whether the indexer says this scope holds no content bytes at all.
  *
- *  The snapshot is an object in this identity's OWN scope, so a scope holding nothing
- *  cannot be concealing one: an enumeration that comes back empty is not a failure to
- *  read, it is having read that there is nothing there. That is the whole of what makes
- *  acting on it safe. Everywhere else here an absence is refused because it could not be
- *  established; this is the one place it can be, and it is the same move reclamation
- *  makes — positive identification rather than deny-by-absence.
- *
- *  Two reads and not one, because a wrong `true` here is the wipe this file exists to
- *  prevent. A listing and a byte total are separate answers from the indexer, so a list
- *  served empty by a hiccup is caught by a total that is not zero. A read that THROWS
- *  leaves this false: an unanswered question is not an empty scope, which is the rule
- *  one level up restated at the size of one call. */
-async function scopeIsEmpty(client: SiaClient): Promise<boolean> {
+ *  Corroboration for an empty listing, and for nothing else. False when the read throws,
+ *  which leaves the caller holding its `unknown`: an unanswered question is not an empty
+ *  scope, which is the rule one level up restated at the size of one call. */
+async function accountHoldsNothing(client: SiaClient): Promise<boolean> {
   try {
-    const [held, account] = await Promise.all([
-      client.listPinnedObjects(),
-      client.accountSnapshot(),
-    ])
-    return held.length === 0 && account.rawContentBytes === 0
+    return (await client.accountSnapshot()).rawContentBytes === 0
   } catch {
     return false
   }
@@ -235,11 +248,7 @@ async function readSnapshotViaPointers(
     return { kind: 'unknown', error: 'settings locator names no snapshot' }
   }
   if (current === cached) {
-    return {
-      kind: 'unknown',
-      error: `snapshot ${current}: unreadable`,
-      url: current,
-    }
+    return { kind: 'unknown', error: `snapshot ${current}: unreadable` }
   }
 
   const read = await downloadSnapshot(client, appKeyBytes, current)
@@ -247,33 +256,59 @@ async function readSnapshotViaPointers(
   // the one a later boot starts from. Id unknown — only the URL lives on the DHT, and
   // the next full snapshot supersedes it with a prunable pointer.
   if (read.kind === 'read') writePointer({ id: '', url: current })
-  // The url rides along only from here and the branch above, both of which have the
-  // LOCATOR's answer. A cached pointer's url must never reach that check: it can name a
-  // generation already superseded and reclaimed, so "that object is gone" would be true
-  // of a snapshot the locator has long since replaced, and reading it as nothing-to-
-  // restore is the wipe this file exists to prevent.
-  return read.kind === 'unknown' ? { ...read, url: current } : read
+  return read
 }
 
-/** One snapshot object, decrypted, or why it could not be. */
+/** One snapshot object named by a share URL, decrypted, or why it could not be. */
 async function downloadSnapshot(
   client: SiaClient,
   appKeyBytes: Uint8Array,
   url: string,
 ): Promise<SnapshotRead> {
   try {
-    const key = await deriveSnapshotKey(appKeyBytes)
-    const bytes = await client.downloadItem(url)
-    const ciphertext = new TextDecoder().decode(bytes)
     return {
       kind: 'read',
-      entries: JSON.parse(
-        await decryptForChannel(key, ciphertext),
-      ) as SnapshotEntry[],
+      entries: await decryptSnapshot(
+        appKeyBytes,
+        await client.downloadItem(url),
+      ),
     }
   } catch (e) {
     return { kind: 'unknown', error: `snapshot ${url}: ${String(e)}` }
   }
+}
+
+/** The same, for an object read out of this identity's own scope by id. */
+async function downloadSnapshotByID(
+  client: SiaClient,
+  appKeyBytes: Uint8Array,
+  objectID: string,
+): Promise<SnapshotRead> {
+  try {
+    return {
+      kind: 'read',
+      entries: await decryptSnapshot(
+        appKeyBytes,
+        await client.downloadObjectByID(objectID),
+      ),
+    }
+  } catch (e) {
+    return {
+      kind: 'unknown',
+      error: `snapshot object ${objectID}: ${String(e)}`,
+    }
+  }
+}
+
+/** A snapshot object's bytes as the records it carries. Shared by the two ways to name
+ *  one, so a rung cannot arrive at its own idea of what a snapshot decrypts to. */
+async function decryptSnapshot(
+  appKeyBytes: Uint8Array,
+  bytes: Uint8Array,
+): Promise<SnapshotEntry[]> {
+  const key = await deriveSnapshotKey(appKeyBytes)
+  const ciphertext = new TextDecoder().decode(bytes)
+  return JSON.parse(await decryptForChannel(key, ciphertext)) as SnapshotEntry[]
 }
 
 /** What a hydration attempt did, carrying the same three answers `readSnapshot` gives.

@@ -9,7 +9,8 @@
 // and a real client if one is ever exercised here.
 
 import { describe, expect, it } from 'vitest'
-import { createFakeWorld, FakeSiaClient } from './fakeSia'
+import { is_snapshot_tag } from '../../crates/pin-core/pkg/pin_core.js'
+import { createFakeWorld, FakeSiaClient, snapshotTag } from './fakeSia'
 
 const ENCODER = new TextEncoder()
 const DECODER = new TextDecoder()
@@ -274,6 +275,18 @@ describe('reading an object out of the scope', () => {
     expect(DECODER.decode(await alice.downloadObjectByID(id))).toBe(
       'snapshot bytes',
     )
+  })
+
+  // The tag the fake plants has to be the one production writes, or every test below
+  // it passes against a shape nothing real produces. pin-derive pins the writer's half
+  // of this string; what is checked here is that the reader crossing the seam accepts
+  // what the fake hands it.
+  it('plants a tag the production reader accepts', () => {
+    expect(snapshotTag('bafyfingerprint')).toBe(
+      '{"t":"pin.snapshot.v1","fp":"bafyfingerprint"}',
+    )
+    expect(is_snapshot_tag(snapshotTag('x'))).toBe(true)
+    expect(is_snapshot_tag('')).toBe(false)
   })
 
   it('stamps a planted object with the time it was given', async () => {

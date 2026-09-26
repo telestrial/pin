@@ -92,6 +92,17 @@ export function createFakeWorld(): FakeWorld {
   return new FakeWorld()
 }
 
+/** The metadata the Curator's snapshot upload writes, for a test standing in for it.
+ *
+ *  Mirrors `pin_derive::snapshot_tag`, whose own test pins this exact string. Spelled
+ *  here because no production JavaScript writes a tag — only the READER crosses the
+ *  seam, as `is_snapshot_tag`, and `fakeSia.test.ts` checks that it accepts what this
+ *  produces. So a drift on either side fails somewhere: in pin-derive if the writer
+ *  moves, here if the reader does. */
+export function snapshotTag(fingerprint: string): string {
+  return JSON.stringify({ t: 'pin.snapshot.v1', fp: fingerprint })
+}
+
 const shareURLFor = fakeShareURL
 
 function objectIDFromShareURL(url: string): string {

@@ -34,8 +34,7 @@ import {
   deriveSnapshotKey,
   encryptForChannel,
 } from '../core/crypto'
-import type { SiaClient } from '../core/siaClient'
-import { objectIDInShareURL } from '../core/siaClient'
+import type { PinnedObjectInfo, SiaClient } from '../core/siaClient'
 import { hydrateFromSia } from '../lib/docsMirror'
 import { chunkForTxt } from '../lib/pkarr'
 import { pkarrTransport } from '../lib/pkarrTransport'
@@ -44,7 +43,10 @@ import {
   rememberWithdrawn,
   withdrawnAddresses,
 } from '../lib/withdrawn'
+import type { FakeWorld } from './fakeSia'
+import { snapshotTag } from './fakeSia'
 import { createFakeApp, resetAllStores } from './setupFakeApp'
+import { fakeShareURL } from './shareURL'
 
 const POINTER_KEY = 'pin:docsnapshot:pointer'
 // Mirrors docsMirror's private SETTINGS_POINTER_PREFIX.
@@ -58,22 +60,32 @@ function b64(bytes: Uint8Array): string {
 
 describe('integration: restoring the doc from the snapshot', () => {
   const appKey = new Uint8Array(32).fill(1)
+  const ALICE = 'did:plc:alice'
   let client: SiaClient
+  let world: FakeWorld
 
   beforeEach(() => {
     resetAllStores()
     localStorage.clear()
     written.length = 0
     held.length = 0
-    client = createFakeApp().createAccount({
-      did: 'did:plc:alice',
-      handle: 'alice.test',
-    }).client
+    const app = createFakeApp()
+    world = app.world
+    client = app.createAccount({ did: ALICE, handle: 'alice.test' }).client
   })
 
-  /** Publish a snapshot holding these records, exactly as the snapshot loop does: a
-   *  [{c,k,v}] array encrypted under the snapshot key, behind the durable locator. */
-  async function publishSnapshot(records: { c: string; k: string }[]) {
+  /** Put a snapshot in this identity's scope, exactly as the snapshot loop leaves one:
+   *  a [{c,k,v}] array encrypted under the snapshot key, in a TAGGED object.
+   *
+   *  Tagged because that is what the Curator uploads, and an untagged object is what
+   *  every other upload in the account produces — so a fake snapshot that skipped the
+   *  tag would be invisible to the rung under test while looking like a snapshot to the
+   *  test that planted it. `createdAt` is explicit, since which of two generations is
+   *  current is the thing being decided. */
+  async function holdSnapshot(
+    records: { c: string; k: string }[],
+    at = new Date('2026-09-26T12:00:00Z'),
+  ) {
     const entries = records.map((r) => ({
       ...r,
       v: b64(new TextEncoder().encode(`${r.c}/${r.k}`)),
@@ -82,14 +94,27 @@ describe('integration: restoring the doc from the snapshot', () => {
       await deriveSnapshotKey(appKey),
       JSON.stringify(entries),
     )
-    const uploaded = await client.uploadItem(
+    const id = world.putTagged(
+      ALICE,
       new TextEncoder().encode(ciphertext),
+      snapshotTag(`fp-${at.toISOString()}`),
+      at,
     )
+    return { id, url: fakeShareURL(id) }
+  }
+
+  /** The same, with the durable locator published at it — the full state a snapshot
+   *  pass leaves behind. */
+  async function publishSnapshot(
+    records: { c: string; k: string }[],
+    at?: Date,
+  ) {
+    const object = await holdSnapshot(records, at)
     await (await pkarrTransport()).publish(
       await deriveSettingsLocatorSeed(appKey),
-      await chunkForTxt(SETTINGS_POINTER_PREFIX, uploaded.itemURL),
+      await chunkForTxt(SETTINGS_POINTER_PREFIX, object.url),
     )
-    return uploaded.itemURL
+    return object
   }
 
   /** Put one object in this identity's scope, so an unreadable snapshot is a snapshot
@@ -172,18 +197,88 @@ describe('integration: restoring the doc from the snapshot', () => {
     expect(written).toEqual([])
   })
 
-  it('answers unknown when the snapshot a pointer names will not download', async () => {
+  it('answers unknown when a snapshot is held and every read of it fails', async () => {
     // The dangerous case, and the one a record count cannot tell from the case above:
-    // a snapshot exists and this boot could not read it.
+    // a snapshot exists and this boot could not read it. The SCOPE is what says it
+    // exists — the object is tagged and sitting right there — so a read that fails is a
+    // host or a network, and publishing over it is the wipe.
     //
-    // The scope has to hold something for that to be the situation at all — an
-    // unreadable pointer over an empty scope is the reclaimed-account case below, and
-    // this test asserted the wrong outcome for it until the scope read existed.
-    await holdSomething()
-    localStorage.setItem(
-      POINTER_KEY,
-      JSON.stringify({ id: 'obj', url: 'sia://gone#encryption_key=ff' }),
+    // Both reads are stopped, because in production one outage takes both: the pointer
+    // rung and the scope rung differ in how they name the object, never in what has to
+    // be reachable to fetch it.
+    await publishSnapshot([{ c: 'settings', k: 'self' }])
+    vi.spyOn(client, 'downloadItem').mockRejectedValue(new Error('host down'))
+    vi.spyOn(client, 'downloadObjectByID').mockRejectedValue(
+      new Error('host down'),
     )
+
+    const outcome = await hydrateFromSia(client, appKey)
+
+    expect(outcome.kind).toBe('unknown')
+    expect(written).toEqual([])
+  })
+
+  it('restores from the scope when no pointer names the snapshot', async () => {
+    // The rung that does not expire, doing the job the others cannot. No pointer is
+    // cached and nothing is published on the DHT — the state every account reaches two
+    // hours after its last instance stops republishing — and the object is still in the
+    // identity's own scope, saying what it is.
+    await holdSnapshot([{ c: 'endorse', k: 'like:subject-one' }])
+
+    const outcome = await hydrateFromSia(client, appKey)
+
+    expect(outcome).toEqual({ kind: 'restored', records: 1 })
+    expect(written).toEqual([{ c: 'endorse', k: 'like:subject-one' }])
+  })
+
+  it('restores the newest snapshot when the scope holds several', async () => {
+    // THE CLOBBERING CASE. A superseded generation restored over current state would be
+    // mirrored straight back out by the snapshot loop, so which one is newest is not a
+    // preference. Ordering is by the indexer's `createdAt`; a fingerprint cannot do it,
+    // since it says which doc state an object holds and never which of two came later.
+    //
+    // Planted out of order, so neither "the first one" nor "the last one" passes.
+    await holdSnapshot([{ c: 'settings', k: 'oldest' }], new Date('2026-07-01'))
+    await holdSnapshot([{ c: 'settings', k: 'newest' }], new Date('2026-09-26'))
+    await holdSnapshot([{ c: 'settings', k: 'middle' }], new Date('2026-08-15'))
+
+    const outcome = await hydrateFromSia(client, appKey)
+
+    expect(outcome).toEqual({ kind: 'restored', records: 1 })
+    expect(written).toEqual([{ c: 'settings', k: 'newest' }])
+  })
+
+  it('answers unknown when a held snapshot cannot be placed in time', async () => {
+    // Tagged objects the indexer gave no readable stamp. It cannot actually produce
+    // this — `created_at` is its own — but picking one anyway is the clobbering case
+    // decided by a coin toss, so the read stays retryable instead.
+    //
+    // Both objects are REAL and readable, and the listing is doctored only in the
+    // stamps. A first version planted ids naming nothing, so taking one failed the
+    // download and reported `unknown` anyway — the assertion held with the guard
+    // deleted, which is a test passing for the reason it exists to rule out.
+    const older = await holdSnapshot(
+      [{ c: 'settings', k: 'older' }],
+      new Date('2026-07-01'),
+    )
+    const newer = await holdSnapshot(
+      [{ c: 'settings', k: 'newer' }],
+      new Date('2026-09-26'),
+    )
+    vi.spyOn(client, 'listPinnedObjects').mockResolvedValue([
+      {
+        id: older.id,
+        createdAt: 'not a date',
+        metadata: snapshotTag('fp-older'),
+        slabs: [],
+      },
+      {
+        id: newer.id,
+        createdAt: '',
+        metadata: snapshotTag('fp-newer'),
+        slabs: [],
+      },
+    ] as PinnedObjectInfo[])
 
     const outcome = await hydrateFromSia(client, appKey)
 
@@ -218,6 +313,9 @@ describe('integration: restoring the doc from the snapshot', () => {
     })
     localStorage.setItem(POINTER_KEY, original)
     vi.spyOn(client, 'downloadItem').mockRejectedValue(new Error('host down'))
+    vi.spyOn(client, 'downloadObjectByID').mockRejectedValue(
+      new Error('host down'),
+    )
 
     const outcome = await hydrateFromSia(client, appKey)
 
@@ -226,18 +324,35 @@ describe('integration: restoring the doc from the snapshot', () => {
     expect(url).toBeTruthy()
   })
 
-  it('answers unknown when the locator itself will not answer', async () => {
-    // No pointer and no reachable DHT. Distinct from the locator saying nothing, which
-    // is what makes this retryable where `none` is settled. Objects held, so the scope
-    // cannot settle it either.
+  it('answers none when the DHT will not answer and the scope holds no snapshot', async () => {
+    // A COMPLETED SCOPE WALK OUTRANKS AN UNREACHABLE DHT, and this is where the scope
+    // rung changes the answer rather than merely finding one sooner. The snapshot
+    // object would be in this identity's own scope, so a walk that answered and turned
+    // up nothing tagged has established there is none — whatever the relays are doing.
+    //
+    // This was an `unknown` with nowhere to go: the locator was the only thing that
+    // could speak for the snapshot, and the loops that republish the locator are held
+    // on this very read.
     await holdSomething()
     const transport = await pkarrTransport()
     vi.spyOn(transport, 'resolve').mockRejectedValueOnce(new Error('no relay'))
 
     const outcome = await hydrateFromSia(client, appKey)
 
-    expect(outcome.kind).toBe('unknown')
+    expect(outcome).toEqual({ kind: 'none' })
     expect(written).toEqual([])
+  })
+
+  it('restores through an unreachable DHT when the scope holds the snapshot', async () => {
+    // The same unreachable relay over an account that HAS published. The locator cannot
+    // be asked and does not need to be.
+    await holdSnapshot([{ c: 'settings', k: 'self' }])
+    const transport = await pkarrTransport()
+    vi.spyOn(transport, 'resolve').mockRejectedValue(new Error('no relay'))
+
+    const outcome = await hydrateFromSia(client, appKey)
+
+    expect(outcome).toEqual({ kind: 'restored', records: 1 })
   })
 
   it('answers none when the scope that would hold the snapshot holds nothing', async () => {
@@ -264,8 +379,8 @@ describe('integration: restoring the doc from the snapshot', () => {
     // whether the scope holds NOTHING — so it says "not empty", the snapshot stays
     // unreadable, and the three loops held on this never release. The one thing that
     // could end that is a fresh snapshot, and the snapshot loop is one of the three.
-    const url = await publishSnapshot([{ c: 'settings', k: 'self' }])
-    await client.deleteObject(objectIDInShareURL(url) as string)
+    const snapshot = await publishSnapshot([{ c: 'settings', k: 'self' }])
+    await client.deleteObject(snapshot.id)
     await holdSomething()
 
     const outcome = await hydrateFromSia(client, appKey)
@@ -274,28 +389,13 @@ describe('integration: restoring the doc from the snapshot', () => {
     expect(written).toEqual([])
   })
 
-  it('stays unknown when the snapshot object is held and the read merely failed', async () => {
-    // The distinction the whole branch turns on, and the direction that costs data if
-    // it goes wrong. Same unreadable snapshot, but the object is right there in the
-    // scope — so this is a host or a network rather than a reclamation, and publishing
-    // over it is the wipe.
-    await publishSnapshot([{ c: 'settings', k: 'self' }])
-    await holdSomething()
-    vi.spyOn(client, 'downloadItem').mockRejectedValue(new Error('host down'))
-
-    const outcome = await hydrateFromSia(client, appKey)
-
-    expect(outcome.kind).toBe('unknown')
-    expect(written).toEqual([])
-  })
-
   it('declines an empty listing as proof that the snapshot is gone', async () => {
     // An empty list contains no id, so it would answer "gone" for any snapshot ever
     // published — which is the served-empty hiccup the scope question cross-checks
     // against a byte total. Emptiness is that question's to settle, not this one's, and
     // here the bytes say somebody has been here, so neither may.
-    const url = await publishSnapshot([{ c: 'settings', k: 'self' }])
-    await client.deleteObject(objectIDInShareURL(url) as string)
+    const snapshot = await publishSnapshot([{ c: 'settings', k: 'self' }])
+    await client.deleteObject(snapshot.id)
     vi.spyOn(client, 'listPinnedObjects').mockResolvedValue([])
     vi.spyOn(client, 'accountSnapshot').mockResolvedValue({
       pinnedData: 0,
@@ -316,8 +416,8 @@ describe('integration: restoring the doc from the snapshot', () => {
     // Asking is itself a read, so it inherits the rule: an indexer that did not answer
     // has not said the object is absent. Only a true releases the loops, so every way
     // of not knowing has to come back false.
-    const url = await publishSnapshot([{ c: 'settings', k: 'self' }])
-    await client.deleteObject(objectIDInShareURL(url) as string)
+    const snapshot = await publishSnapshot([{ c: 'settings', k: 'self' }])
+    await client.deleteObject(snapshot.id)
     await holdSomething()
     vi.spyOn(client, 'listPinnedObjects').mockRejectedValue(
       new Error('indexer down'),
@@ -329,12 +429,15 @@ describe('integration: restoring the doc from the snapshot', () => {
     expect(written).toEqual([])
   })
 
-  it('asks about the snapshot the locator names, never the one a stale cache does', async () => {
-    // The safety property the whole branch rests on. A cached pointer can name a
-    // generation the snapshot loop superseded and pruned, so that object IS gone — and
-    // it says nothing about the current snapshot, which is alive and merely unreadable
-    // right now. Asking about the cached one would answer "nothing to restore" and
-    // publish an empty doc over a good snapshot: the wipe, through a new door.
+  it('finds the live snapshot when a cached pointer names a reclaimed one', async () => {
+    // A cached pointer can name a generation the snapshot loop superseded and pruned,
+    // so that object IS gone — and it says nothing about the current snapshot, which is
+    // alive. Concluding "nothing to restore" from the dead one and publishing an empty
+    // doc over the live one is the wipe, through a new door.
+    //
+    // The scope closes that door by construction: a stale pointer is one way of naming
+    // an object, and the one thing this rung does not do is take its word for what the
+    // account holds.
     const superseded = await client.uploadItem(
       new TextEncoder().encode('an older snapshot'),
     )
@@ -348,8 +451,8 @@ describe('integration: restoring the doc from the snapshot', () => {
 
     const outcome = await hydrateFromSia(client, appKey)
 
-    expect(outcome.kind).toBe('unknown')
-    expect(written).toEqual([])
+    expect(outcome).toEqual({ kind: 'restored', records: 1 })
+    expect(written).toEqual([{ c: 'settings', k: 'self' }])
   })
 
   it('stays unknown when the scope itself will not enumerate', async () => {
@@ -371,16 +474,41 @@ describe('integration: restoring the doc from the snapshot', () => {
     expect(written).toEqual([])
   })
 
-  it('answers unknown when the locator says nothing but the scope holds objects', async () => {
-    // A locator that answers with nothing and an identity that published nothing are the
-    // same bytes. A relay rate-limiting the tab returns no packet and no error, and a
-    // browser reads the relays while a desktop publishes to Mainline — so a locator that
-    // exists can be invisible to whoever is asking. Read as `none` this releases the
-    // loops to publish an empty doc over a full one, which is the cross-device wipe.
+  it('is not misled by a locator that answers with nothing', async () => {
+    // A locator answering with nothing and an identity that published nothing are the
+    // same bytes: a relay rate-limiting the tab returns no packet and no error, and a
+    // browser reads the relays while a desktop publishes to Mainline, so a locator that
+    // exists can be invisible to whoever is asking. Read as `none` that releases the
+    // loops to publish an empty doc over a full one — the cross-device wipe.
     //
-    // Objects held is what says somebody has been here, and no pointer is cached, so
-    // nothing else could.
+    // The scope is what makes the relay's silence harmless: the snapshot is an object
+    // in this identity's own scope, so it is found whatever the DHT says.
+    await holdSnapshot([{ c: 'settings', k: 'self' }])
     await holdSomething()
+
+    const outcome = await hydrateFromSia(client, appKey)
+
+    expect(outcome).toEqual({ kind: 'restored', records: 1 })
+  })
+
+  it('stays unknown when the listing throws and the byte total says zero', async () => {
+    // A HALF-ANSWERING INDEXER, and the one case the byte total cannot cover. Every
+    // other way the walk fails is caught downstream, because an account with objects
+    // reports bytes and so declines to call itself empty — which is why turning the
+    // throw into an empty list failed no test until this one existed. Here the two
+    // reads disagree the other way: the listing did not answer at all, and the total
+    // says zero, so believing it releases the loops over an account that may be full.
+    vi.spyOn(client, 'listPinnedObjects').mockRejectedValue(
+      new Error('indexer down'),
+    )
+    vi.spyOn(client, 'accountSnapshot').mockResolvedValue({
+      pinnedData: 0,
+      pinnedSize: 0,
+      rawContentBytes: 0,
+      maxPinnedData: 0,
+      remainingStorage: 0,
+      fetchedAt: '2026-09-26T00:00:00.000Z',
+    })
 
     const outcome = await hydrateFromSia(client, appKey)
 
