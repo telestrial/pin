@@ -33,9 +33,7 @@ use std::time::Duration;
 use iroh_blobs::api::Store;
 use iroh_docs::{api::Doc, store::Query, AuthorId};
 use n0_future::StreamExt as _;
-use pin_derive::{
-    published_channel_rkey, RecordKey, PUBLISHED_SETTINGS_RKEY, SETTINGS_POINTER_PREFIX,
-};
+use pin_derive::{RecordKey, PUBLISHED_SETTINGS_RKEY, SETTINGS_POINTER_PREFIX};
 
 use crate::{read_record, write_published, PublishedState};
 
@@ -87,16 +85,28 @@ struct SnapshotEntry {
     v: String,
 }
 
+/// Which publish-state record the snapshot's pointer lives in.
+///
+/// Identity-level, and therefore UNPREFIXED — there is one settings snapshot, not one
+/// per anything. This wrapped the constant in `published_channel_rkey` and so wrote
+/// `channel:settings`, while the keep-alive loop and the frontend's boot cache both read
+/// `settings`. Neither errored: they found no record, read that as "nothing published
+/// yet", and the locator a device holding only the recovery phrase follows went
+/// unrepublished between snapshots.
+fn settings_rkey() -> &'static str {
+    PUBLISHED_SETTINGS_RKEY
+}
+
 /// One pass: mirror the doc if it has moved since the last one.
 pub async fn snapshot_once(ctx: &SnapshotContext) -> Result<SnapshotOutcome, String> {
     let entries = read_all(ctx).await?;
     let json = serde_json::to_string(&entries).map_err(|e| format!("snapshot encode: {e}"))?;
     let fingerprint = fingerprint_of(&entries)?;
 
-    let rkey = published_channel_rkey(PUBLISHED_SETTINGS_RKEY);
+    let rkey = settings_rkey();
     let published_key = pin_derive::published_key(&ctx.app_key);
     let previous =
-        crate::read_published(&ctx.doc, &ctx.blobs, ctx.author_id, &published_key, &rkey).await;
+        crate::read_published(&ctx.doc, &ctx.blobs, ctx.author_id, &published_key, rkey).await;
     if already_mirrored(
         previous.as_ref().and_then(|p| p.fp.as_deref()),
         &fingerprint,
@@ -124,7 +134,7 @@ pub async fn snapshot_once(ctx: &SnapshotContext) -> Result<SnapshotOutcome, Str
         &ctx.doc,
         ctx.author_id,
         &published_key,
-        &rkey,
+        rkey,
         &PublishedState {
             id: uploaded.id.clone(),
             url: Some(uploaded.item_url.clone()),
@@ -348,6 +358,51 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn the_keep_alive_can_find_what_the_snapshot_recorded() {
+        // The settings locator is the pointer a device holding only the recovery phrase
+        // follows to find the account, and between snapshots the keep-alive loop is the
+        // only thing that republishes it before it ages off Mainline. It reads
+        // `PUBLISHED_SETTINGS_RKEY`; this module wrote `channel:settings` for as long as
+        // both existed. Nothing errored -- the read found no record, which is a state the
+        // keep-alive is right to tolerate (`SettingsLocator::Unknown`, "nothing published
+        // yet"), so it skipped the republish on every pass and said so in a log line
+        // nobody was reading.
+        //
+        // A round trip rather than an assertion about the constant: the write takes its
+        // rkey from the writer's own code, and the read is the keep-alive's own reader.
+        // Two spellings of one record pass any test that names the key twice.
+        let world = crate::testnet::World::new();
+        let id = crate::testnet::Identity::new(&world, 11).await;
+        let published_key = pin_derive::published_key(&id.app_key);
+
+        write_published(
+            &id.doc,
+            id.author_id,
+            &published_key,
+            settings_rkey(),
+            &PublishedState {
+                id: "obj-1".into(),
+                url: Some("sia://snapshot".into()),
+                older_id: None,
+                fp: Some("H0".into()),
+            },
+        )
+        .await;
+
+        let ctx = crate::keepalive::KeepAliveContext {
+            doc: id.doc.clone(),
+            blobs: id.blobs.clone(),
+            author_id: id.author_id,
+            app_key: id.app_key,
+        };
+        let found =
+            crate::keepalive::read_published_url(&ctx, &published_key, PUBLISHED_SETTINGS_RKEY)
+                .await;
+
+        assert_eq!(found.as_deref(), Some("sia://snapshot"));
+    }
+
     #[test]
     fn an_unchanged_doc_is_not_re_uploaded() {
         assert!(already_mirrored(Some("cid-1"), "cid-1"));
@@ -374,14 +429,14 @@ mod tests {
         // no fixed point exists, and the loop re-uploads forever (observed: every ~17s).
         let before = vec![
             entry("settings", "self", "sealed-settings"),
-            entry("published", "channel:settings", r#"{"id":"X","fp":"H0"}"#),
+            entry("published", "settings", r#"{"id":"X","fp":"H0"}"#),
         ];
         let after = vec![
             entry("settings", "self", "sealed-settings"),
             // What publishing writes: new object, new supersession, new hash.
             entry(
                 "published",
-                "channel:settings",
+                "settings",
                 r#"{"id":"Y","older":"X","fp":"H1"}"#,
             ),
         ];
@@ -397,12 +452,8 @@ mod tests {
         // checksum is "leave out the hash" — and here that still spins. The record also
         // carries the object ids, and publishing moves those on every pass, so the unit
         // to omit is the RECORD, not the field.
-        let a = vec![entry("published", "channel:settings", r#"{"id":"X"}"#)];
-        let b = vec![entry(
-            "published",
-            "channel:settings",
-            r#"{"id":"Y","older":"X"}"#,
-        )];
+        let a = vec![entry("published", "settings", r#"{"id":"X"}"#)];
+        let b = vec![entry("published", "settings", r#"{"id":"Y","older":"X"}"#)];
         assert_eq!(fingerprint_of(&a).unwrap(), fingerprint_of(&b).unwrap());
     }
 

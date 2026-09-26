@@ -152,7 +152,7 @@ pub async fn keep_alive_once(ctx: &KeepAliveContext) -> Result<KeepAliveOutcome,
 /// The Sia URL a pointer currently names, or `None` when we don't know — no record, or
 /// one we can't open. Not knowing is survivable (skip this pointer); guessing would not
 /// be.
-async fn read_published_url(
+pub(crate) async fn read_published_url(
     ctx: &KeepAliveContext,
     published_key: &[u8; 32],
     rkey: &str,
