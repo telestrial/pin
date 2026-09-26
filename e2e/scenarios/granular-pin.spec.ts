@@ -28,7 +28,8 @@ import {
   loadAccount,
   refreshUntilVisible,
   signInAccount,
-  subscribeButton,
+  openPinLinkButton,
+  waitForChannelPublished,
 } from '../authHelper'
 
 const PINS_KEY = 'sia-pins-f6b7539e181e45ee'
@@ -52,13 +53,9 @@ async function readPins(page: Page): Promise<{ total: number; library: number }>
 test('pin the file vs pin the post: independent cross-account custody', async ({
   browser,
 }) => {
-  // Known browser boundary (not a code bug): bob can't promptly resolve alice's
-  // just-published post — the public pkarr relays lag on read-after-write and we
-  // can't control their cache from the browser. The desktop Curator (direct
-  // Mainline DHT) is the fix. Re-enable when it lands. See CLAUDE.md, "pkarr
-  // relay read-after-write" (2026-07-23). The granular pin/file custody this test
-  // targets is still covered against fakes in the integration tier.
-  test.fixme(true, 'browser-relay pkarr read-after-write lag; Curator-era')
+  // Re-enabled 2026-09-25, with cross-account.spec.ts and for the same reason:
+  // the relays it could not resolve through were the public ones, whose 300s cache
+  // floor a publisher cannot argue down. They are ours now, on a 1-5s TTL window.
   const aliceContext = await browser.newContext({
     permissions: ['clipboard-read', 'clipboard-write'],
   })
@@ -88,11 +85,25 @@ test('pin the file vs pin the post: independent cross-account custody', async ({
     await expect(
       alice.getByRole('heading', { name: /Channel created/i }),
     ).toBeVisible({ timeout: 150_000 })
-    await alice.getByRole('button', { name: /Copy subscribe URL/i }).click()
-    const subscribeURL = await alice.evaluate(() =>
+    // The heading is the ENQUEUE, not the commit — see waitForChannelPublished.
+    await waitForChannelPublished(alice, channelName)
+    // Clear the clipboard BEFORE the copy, then poll for a fresh value.
+    // `readText()` immediately after the click can return the PREVIOUS run's URL,
+    // and matching /^pin:\/\// cannot tell a stale Pin link from a new one — so a
+    // missed copy hands bob a link to a channel that no longer exists, and the
+    // failure lands three steps later on a channel page that will not resolve.
+    // Clearing makes the wait positive: the only thing that satisfies it is this
+    // run's copy landing.
+    await alice.evaluate(() => navigator.clipboard.writeText(''))
+    await alice.getByRole('button', { name: /^Copy link$/i }).click()
+    await expect
+      .poll(async () => alice!.evaluate(() => navigator.clipboard.readText()), {
+        timeout: 15_000,
+      })
+      .toMatch(/^pin:\/\//)
+    const channelURL = await alice.evaluate(() =>
       navigator.clipboard.readText(),
     )
-    expect(subscribeURL).toMatch(/^pin:\/\//)
     await alice.getByRole('button', { name: /^Done$/ }).click()
 
     // -- Alice publishes a post WITH a file attachment --
@@ -151,15 +162,33 @@ test('pin the file vs pin the post: independent cross-account custody', async ({
     // writes the manifest.
     await expect(alice.getByText(postBody)).toBeVisible({ timeout: 90_000 })
 
-    // -- Bob subscribes and sees the post + its attachment --
-    await subscribeButton(bob).click()
-    await bob.getByPlaceholder(/pin:\/\//i).fill(subscribeURL)
-    await bob.getByRole('button', { name: 'Subscribe', exact: true }).click()
+    // -- Bob opens alice's link, watches, and sees the post + its attachment --
+    // Opening is navigation and watching is the relation; see cross-account.spec.ts
+    // for why those are two steps.
+    await openPinLinkButton(bob).click()
+    await bob.getByPlaceholder(/pin:\/\//i).fill(channelURL)
+    await bob.getByRole('button', { name: 'Open', exact: true }).click()
+    await expect(
+      bob.getByRole('button', { name: 'Watch', exact: true }),
+    ).toBeVisible({ timeout: 150_000 })
+    await bob.getByRole('button', { name: 'Watch', exact: true }).click()
+    await expect(
+      bob.getByRole('button', { name: 'Watching', exact: true }),
+    ).toBeVisible({ timeout: 90_000 })
+    await bob.getByRole('button', { name: 'Home', exact: true }).first().click()
     // Read-on-refresh + eventually-consistent DHT: re-resolve until alice's post
     // propagates into bob's feed (see refreshUntilVisible).
     await refreshUntilVisible(bob, postBody)
+    // Scope every pin assertion below to THIS run's row. A feed row is an <li>,
+    // and bob's feed carries whatever he still watches — a leftover channel from
+    // an earlier run publishes the same fixture under the same filename, so a bare
+    // getByTitle resolves to two elements and strict mode fails. `.first()` would
+    // silence that while quietly asserting against somebody else's post; scoping
+    // makes the assertions about the post under test and independent of whatever
+    // cleanup did or did not manage.
+    const row = bob.locator('li').filter({ hasText: postBody })
     // The attachment tile renders inline in the same feed row.
-    await expect(bob.getByText(fileName).first()).toBeVisible({
+    await expect(row.getByText(fileName).first()).toBeVisible({
       timeout: 90_000,
     })
 
@@ -169,7 +198,7 @@ test('pin the file vs pin the post: independent cross-account custody', async ({
     // -- (2) Non-aliasing: pin the WHOLE post, file stays unpinned --
     // Post pin title is "Pin to your storage (…)"; file pin is "Pin this file
     // to your library (…)" — distinct, no collision.
-    await bob.getByTitle(/Pin to your storage/).first().click()
+    await row.getByTitle(/Pin to your storage/).first().click()
     await expect
       .poll(async () => (await readPins(bob!)).total, { timeout: 90_000 })
       .toBe(1)
@@ -178,35 +207,35 @@ test('pin the file vs pin the post: independent cross-account custody', async ({
     // …and crucially it did NOT mark the file pinned: the file button still
     // offers to pin (would read "Remove…" if the post pin had aliased it).
     await expect(
-      bob.getByTitle(/Pin this file to your library/),
+      row.getByTitle(/Pin this file to your library/),
     ).toBeVisible()
     await expect(
-      bob.getByTitle(/Remove this file from your library/),
+      row.getByTitle(/Remove this file from your library/),
     ).toHaveCount(0)
 
     // -- (1) Pin just the FILE → standalone Library item --
-    await bob.getByTitle(/Pin this file to your library/).first().click()
+    await row.getByTitle(/Pin this file to your library/).first().click()
     await expect
       .poll(async () => await readPins(bob!), { timeout: 90_000 })
       .toEqual({ total: 2, library: 1 })
     // Button flips to the release affordance.
     await expect(
-      bob.getByTitle(/Remove this file from your library/),
+      row.getByTitle(/Remove this file from your library/),
     ).toBeVisible({ timeout: 30_000 })
 
     // -- (3) Unpin the FILE → post pin survives --
-    await bob.getByTitle(/Remove this file from your library/).first().click()
+    await row.getByTitle(/Remove this file from your library/).first().click()
     await expect
       .poll(async () => await readPins(bob!), { timeout: 90_000 })
       .toEqual({ total: 1, library: 0 })
     // The file is pinnable again; the whole-post pin is untouched.
     await expect(
-      bob.getByTitle(/Pin this file to your library/),
+      row.getByTitle(/Pin this file to your library/),
     ).toBeVisible({ timeout: 30_000 })
-    await expect(bob.getByTitle(/Unpin from your storage/)).toBeVisible()
+    await expect(row.getByTitle(/Unpin from your storage/)).toBeVisible()
 
     // Release bob's whole-post pin too, so he leaves no mirrored bytes behind.
-    await bob.getByTitle(/Unpin from your storage/).first().click()
+    await row.getByTitle(/Unpin from your storage/).first().click()
     await expect
       .poll(async () => (await readPins(bob!)).total, { timeout: 90_000 })
       .toBe(0)

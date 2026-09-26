@@ -1,6 +1,6 @@
 // E2E happy-path: alice creates a channel and publishes a post in her
-// browser context; bob subscribes via URL in his context; bob's feed
-// shows alice's post; bob pins alice's whole channel (real cross-account
+// browser context; bob opens her link and watches the channel in his; bob's
+// feed shows alice's post; bob pins alice's whole channel (real cross-account
 // sharedObject + pinObject fan-out into his Sia scope) and unpins it.
 //
 // Runs against a built `dist/` served by `bun run preview --port 4173`,
@@ -19,21 +19,18 @@ import {
   loadAccount,
   refreshUntilVisible,
   signInAccount,
-  subscribeButton,
+  followingList,
+  openPinLinkButton,
+  waitForChannelPublished,
 } from '../authHelper'
 
-test('alice publishes a post; bob subscribes via URL and sees it', async ({
+test('alice publishes a post; bob opens her link, watches, and sees it', async ({
   browser,
 }) => {
-  // Known browser boundary (not a code bug): a just-published channel update is
-  // not reliably resolvable via the public pkarr relays for minutes — they lag on
-  // read-after-write and ignore our short TTL, and we can't control their cache
-  // from the browser. So bob can't see alice's post promptly. The desktop Curator
-  // (direct Mainline DHT, no relay in the read path) is the designed fix; the
-  // browser is a reader tier. Re-enable when the Curator lands. See CLAUDE.md,
-  // "pkarr relay read-after-write" (2026-07-23). The channel-pin custody this
-  // test targets is still covered against fakes in the integration tier.
-  test.fixme(true, 'browser-relay pkarr read-after-write lag; Curator-era')
+  // Re-enabled 2026-09-25. It was fixme'd because the PUBLIC pkarr relays lag on
+  // read-after-write by their own 300s cache floor, which a publisher cannot argue
+  // down — so bob could not resolve alice's just-published channel. The relays are
+  // ours now, on a 1-5s TTL window, and `test:e2e` runs inside with-relays.sh.
   // Both contexts need clipboard permission so we can capture alice's
   // subscribe URL (the post-create UI only exposes it via "Copy" → clipboard).
   const aliceContext = await browser.newContext({
@@ -82,12 +79,26 @@ test('alice publishes a post; bob subscribes via URL and sees it', async ({
     await expect(
       alice.getByRole('heading', { name: /Channel created/i }),
     ).toBeVisible({ timeout: 150_000 })
+    // The heading is the ENQUEUE, not the commit — see waitForChannelPublished.
+    await waitForChannelPublished(alice, channelName)
 
-    await alice.getByRole('button', { name: /Copy subscribe URL/i }).click()
-    const subscribeURL = await alice.evaluate(() =>
+    // Clear the clipboard BEFORE the copy, then poll for a fresh value.
+    // `readText()` immediately after the click can return the PREVIOUS run's URL,
+    // and matching /^pin:\/\// cannot tell a stale Pin link from a new one — so a
+    // missed copy hands bob a link to a channel that no longer exists, and the
+    // failure lands three steps later on a channel page that will not resolve.
+    // Clearing makes the wait positive: the only thing that satisfies it is this
+    // run's copy landing.
+    await alice.evaluate(() => navigator.clipboard.writeText(''))
+    await alice.getByRole('button', { name: /^Copy link$/i }).click()
+    await expect
+      .poll(async () => alice!.evaluate(() => navigator.clipboard.readText()), {
+        timeout: 15_000,
+      })
+      .toMatch(/^pin:\/\//)
+    const channelURL = await alice.evaluate(() =>
       navigator.clipboard.readText(),
     )
-    expect(subscribeURL).toMatch(/^pin:\/\//)
 
     await alice.getByRole('button', { name: /^Done$/ }).click()
 
@@ -120,17 +131,33 @@ test('alice publishes a post; bob subscribes via URL and sees it', async ({
 
     await expect(alice.getByText(postBody)).toBeVisible({ timeout: 90_000 })
 
-    // -- Bob subscribes via URL --
+    // -- Bob opens alice's link and watches the channel --
+    //
+    // Two steps, because there are two decisions. Opening a link is navigation:
+    // it resolves the channel from the key the link carries and renders it, and
+    // touches no store. Watching is the relation, taken on the page by the same
+    // pill every other route there offers.
 
-    await subscribeButton(bob).click()
+    await openPinLinkButton(bob).click()
 
     await expect(
-      bob.getByRole('heading', { name: /Subscribe to a channel/i }),
+      bob.getByRole('heading', { name: /Open a Pin link/i }),
     ).toBeVisible()
-    await bob.getByPlaceholder(/pin:\/\//i).fill(subscribeURL)
-    // Two "Subscribe" buttons exist (sidebar + form submit); the form
-    // submit is the exact "Subscribe", the sidebar is "+ Subscribe".
-    await bob.getByRole('button', { name: 'Subscribe', exact: true }).click()
+    await bob.getByPlaceholder(/pin:\/\//i).fill(channelURL)
+    await bob.getByRole('button', { name: 'Open', exact: true }).click()
+
+    // The channel page, resolved from the link's own key — bob holds no
+    // subscription yet, so this is the cold read the key alone buys.
+    await expect(
+      bob.getByRole('button', { name: 'Watch', exact: true }),
+    ).toBeVisible({ timeout: 150_000 })
+    await bob.getByRole('button', { name: 'Watch', exact: true }).click()
+    await expect(
+      bob.getByRole('button', { name: 'Watching', exact: true }),
+    ).toBeVisible({ timeout: 90_000 })
+
+    // Back to the feed, which is what the rest of this asserts against.
+    await bob.getByRole('button', { name: 'Home', exact: true }).first().click()
 
     // Bob's feed populates by resolving the channel's pkarr locator off the
     // DHT, then fetching + decrypting the Sia manifest and its item bytes. But
@@ -151,14 +178,10 @@ test('alice publishes a post; bob subscribes via URL and sees it', async ({
     // the fakes). Bob cleans up his own mirror here, before alice's channel
     // is retracted in finally, so neither account accumulates state.
 
-    // Open alice's channel from bob's subscribed list. Structural scope to
-    // the left Sidebar via its unique Home button — the channel name also
-    // appears in feed rows and the right PinSidebar.
-    const bobSidebar = bob.locator('aside').filter({
-      has: bob.getByRole('button', { name: 'Home', exact: true }),
-    })
-    await bobSidebar
-      .locator('ul[aria-label="Subscribed channels"]')
+    // Open alice's channel from bob's Following list. Scoped to the left
+    // sidebar's list — the channel name also appears in feed rows and in the
+    // right PinSidebar.
+    await followingList(bob)
       .getByRole('button', { name: channelName })
       .click({ timeout: 30_000 })
 
