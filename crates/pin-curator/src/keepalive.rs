@@ -6,11 +6,19 @@
 //! somebody republishes them — so a channel published in an earlier session quietly
 //! stops resolving for its subscribers, which is the same as disappearing.
 //!
-//! The settings locator ages off the same way, and its failure is worse: it's the
-//! pointer a device with nothing but the recovery phrase follows to find your account.
-//! It was published only when settings CHANGED, so an identity that stopped changing
-//! its settings stopped being recoverable — the single most recovery-critical pointer
-//! was the one nothing republished.
+//! The settings locator ages off the same way. It was published only when settings
+//! CHANGED, so an identity that stopped changing its settings stopped being findable by
+//! its own devices — the pointer most needed for recovery was the one nothing
+//! republished.
+//!
+//! IT IS NO LONGER WHAT RECOVERY RESTS ON, and this is the place to say so, because a
+//! loop whose comment overstates what its failure costs is how a lapse gets treated as a
+//! catastrophe. Since the snapshot object began carrying a tag saying what it is, a
+//! device holding nothing but the recovery phrase finds it by walking its OWN Sia scope,
+//! with no pointer of any kind. What this buys is speed: the walk costs what the account
+//! has ever done, where the pointer costs one resolve. So the scope is the FLOOR and this
+//! is the ACCELERANT — worth a signed packet a cadence to keep alive, and survivable when
+//! it lapses, where it used to be a lockout.
 //!
 //! It ran as a React effect until now, and fire-once: it republished on mount and then
 //! never again, so an instance left running for a day republished at hour zero and let
@@ -76,6 +84,10 @@ pub enum SettingsLocator {
     /// No snapshot pointer in publish state — nothing has been mirrored yet, or this
     /// instance's doc hasn't synced one. Ordinary on a fresh identity, and NOT a
     /// failure: there is genuinely nothing to keep alive.
+    ///
+    /// Worth watching anyway, for the reason `2d694fc` earned: this read and the
+    /// snapshot's write have to agree on one rkey, and when they did not, every pass
+    /// reported exactly this in a log line nobody read.
     #[default]
     Unknown,
     Refreshed,
@@ -136,7 +148,9 @@ pub async fn keep_alive_once(ctx: &KeepAliveContext) -> Result<KeepAliveOutcome,
     }
 
     // The settings locator, republished from the same publish state and by the same
-    // rule: re-sign the pointer we know, never one read back off the network.
+    // rule: re-sign the pointer we know, never one read back off the network. An
+    // accelerant rather than the floor — see this module's note — so a pass that cannot
+    // reach a relay costs a slower boot somewhere and never an unreachable account.
     if let Some(url) = read_published_url(ctx, &published_key, PUBLISHED_SETTINGS_RKEY).await {
         let seed = pin_derive::settings_locator_seed(&ctx.app_key);
         let records = pin_pkarr::chunk_txt(SETTINGS_POINTER_PREFIX, &url);

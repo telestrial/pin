@@ -3,7 +3,14 @@
 //
 // TAKING the snapshot is the Curator's (crates/pin-curator/src/snapshot.rs) — one
 // writer, reading the doc. What lives here is everything needed to get it back: find
-// the pointer, download, decrypt, put the records into a fresh doc.
+// the object, download, decrypt, put the records into a fresh doc.
+//
+// FINDING IT IS A LADDER, and only the bottom rung is durable. A cached pointer and the
+// published locator each answer in one hop, and each expires — the cache with the browser
+// profile, the locator about two hours after the last instance stops republishing it.
+// Underneath them the snapshot object sits in this identity's own Sia scope carrying a
+// tag that says what it is, which no clock runs out on. Same shape as the content ladder:
+// the thing you hold is the floor and the published pointer is the accelerant.
 //
 // Originally: The browser has no persistent iroh-docs store
 // (MemStore only), so the doc's contents are mirrored to Sia (durable) and put
@@ -228,6 +235,12 @@ async function readSnapshotViaPointers(
   // superseded and reclaimed. Both want the same question put to the locator: which
   // snapshot is current. Asking only on absence left a boot retrying one dead pointer
   // out of localStorage, 83 times in the recorded case.
+  //
+  // Kept above the scope walk for SPEED and for nothing else. Retiring it was the plan
+  // and was reconsidered: this is one resolve and one download, where the walk costs what
+  // the account has ever done — an append-only event log with a tombstone per delete, no
+  // reset and no descending cursor — and a cold boot is the one case that cannot be
+  // cached around, since a fresh device has no set to fold onto.
   let current: string | null
   try {
     current = await resolveSettingsPointer(appKeyBytes)

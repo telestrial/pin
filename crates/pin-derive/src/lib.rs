@@ -104,6 +104,11 @@ pub const ENGAGEMENT_LOCATOR_INFO: &[u8] = b"pin:engagement:v1";
 /// body in a channel every time somebody tapped a heart.
 pub const CONVERSATION_LOCATOR_INFO: &[u8] = b"pin:conversation:v1";
 /// HKDF `info` for the pkarr key holding the pointer to your settings snapshot.
+///
+/// A device-facing ACCELERANT, and nobody else's business: the seed derives from the
+/// AppKey, so no other identity can compute this key and the record has only ever served
+/// your own devices. The floor underneath it is the scope walk — the snapshot object
+/// carries a tag saying what it is — so this expiring costs a slower boot.
 pub const SETTINGS_LOCATOR_INFO: &[u8] = b"pin:settings-locator:v1";
 /// The TXT-record prefix the settings locator's pointer is chunked under. Here rather
 /// than beside either caller because the frontend PUBLISHES this record and the

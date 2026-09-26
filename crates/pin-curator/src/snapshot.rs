@@ -63,8 +63,9 @@ pub struct SnapshotOutcome {
     /// download.
     pub url: Option<String>,
     /// Whether the locator was republished this pass. Best-effort: a snapshot the DHT
-    /// hasn't heard about is still readable on any device holding the pointer, and the
-    /// keep-alive loop republishes it regardless.
+    /// hasn't heard about is still readable on any device holding the pointer, still
+    /// findable by any device that can walk this identity's scope, and republished by the
+    /// keep-alive loop regardless.
     pub published: bool,
     /// Whether the superseded object was reclaimed. Best-effort for the same reason a
     /// failed prune is survivable: the new snapshot is already pointed at, so what's
@@ -155,6 +156,11 @@ pub async fn snapshot_once(ctx: &SnapshotContext) -> Result<SnapshotOutcome, Str
     )
     .await;
 
+    // A FAST PATH to what was just uploaded, and no longer the way back to it. The tag
+    // above is what a device holding only the recovery phrase follows, by walking this
+    // identity's own scope — which costs what the account has ever done, where this costs
+    // one resolve. That difference is the whole reason it is still published; its lapsing
+    // is now a slower boot rather than an unreachable account.
     let seed = pin_derive::settings_locator_seed(&ctx.app_key);
     let records = pin_pkarr::chunk_txt(SETTINGS_POINTER_PREFIX, &uploaded.item_url);
     let published = pin_pkarr::publish(&seed, &records).await.is_ok();
