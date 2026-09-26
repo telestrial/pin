@@ -463,8 +463,10 @@ export function Home({
         // clears the locator pointer, and drops the channel from the feed. The
         // pkarr record expires by TTL once we stop republishing it.
         const { objectIDs, urls } = await retractChannel(owned, protectedIDs)
-        useAuthStore.getState().removeMyChannel(owned.channelID)
-        useAuthStore.getState().removeSubscription(owned.channelID)
+        // Channel, subscription and self-follow together — see `forgetOwnChannel`. A
+        // follow edge left behind is published into your directory, telling the graph you
+        // follow a channel whose locator no longer resolves.
+        useAuthStore.getState().forgetOwnChannel(owned.channelID)
         // The removal is durable once it reaches the PDS settings record.
         // Flush now (awaited) so the retract is durable when we report it done,
         // rather than relying on a background save a reload/close could lose.

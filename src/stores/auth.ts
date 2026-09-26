@@ -114,7 +114,14 @@ type AuthState = {
   ) => void
   setChannelAdvertised: (channelID: string, advertised: boolean) => void
   setChannelShowOnProfile: (channelID: string, showOnProfile: boolean) => void
-  removeMyChannel: (channelID: string) => void
+  /** Drop a channel you authored and everything local that names it.
+   *
+   *  One action rather than three calls, because the three have to happen together and
+   *  the caller forgetting one is invisible: a left-behind follow edge is PUBLISHED into
+   *  your directory, so the whole graph is told you follow a channel whose locator no
+   *  longer resolves, and nothing reconciles it away — nor should anything, since a pass
+   *  that rewrote follow edges would fight the unfollow. */
+  forgetOwnChannel: (channelID: string) => void
   addSubscription: (sub: SubscriptionRef) => void
   updateSubscriptionName: (channelID: string, name: string) => void
   removeSubscription: (channelID: string) => void
@@ -221,9 +228,16 @@ export const useAuthStore = create<AuthState>()(
             c.channelID === channelID ? { ...c, advertised } : c,
           ),
         })),
-      removeMyChannel: (channelID) =>
+      forgetOwnChannel: (channelID) =>
         set((s) => ({
           myChannels: s.myChannels.filter((c) => c.channelID !== channelID),
+          // The create wrote both: a subscription so your own voice is in your own feed,
+          // and — for a public channel — the self-follow that puts you among its
+          // followers. A retract is the inverse gesture and owns undoing them.
+          subscriptions: s.subscriptions.filter(
+            (x) => x.channelID !== channelID,
+          ),
+          follows: s.follows.filter((f) => f.channelID !== channelID),
         })),
       addSubscription: (sub) =>
         set((s) => {
