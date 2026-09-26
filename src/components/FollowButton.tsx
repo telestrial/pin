@@ -20,16 +20,26 @@ import { RelationButton } from './RelationButton'
 // fetch: Follow is public and gets you the channel; Watch is private, comes
 // from a link, and works for unlisted channels a directory never names.
 //
-// Renders for public channels whose manifest carries the author's did:dht (the
-// caller gates on that + on ownership — only mounted on non-owned channels).
+// Renders for public channels whose manifest carries the author's did:dht, on
+// somebody else's channel and on your own — see `owned`.
 export function FollowButton({
   authorDidDht,
   channelID,
   channelName,
+  owned = false,
 }: {
   authorDidDht: string
   channelID: string
   channelName: string
+  /** Your own channel, where the follow is the PUBLIC CLAIM and nothing else.
+   *
+   *  The watch half of a follow exists to acquire the read capability, and on your own
+   *  channel there is none to acquire: you hold K, and creating it subscribed you. Going
+   *  through the normal path would do two wrong things — resolve your OWN directory,
+   *  which is assembled from local state everywhere else and answers with what was last
+   *  PUBLISHED, so a channel made a minute ago is missing from it; and, on unfollow,
+   *  unwatch the channel, dropping your own voice out of your own feed. */
+  owned?: boolean
 }) {
   const following = useAuthStore((s) =>
     s.follows.some((f) => f.channelID === channelID),
@@ -45,18 +55,18 @@ export function FollowButton({
   async function handleClick() {
     if (following) {
       removeFollow(channelID)
-      await unwatchOneChannel(channelID).catch(() => false)
+      if (!owned) await unwatchOneChannel(channelID).catch(() => false)
       addToast(`Unfollowed “${channelName}”`)
     } else {
       addFollow({ didDht: authorDidDht, channelID, name: channelName })
       // A follow stands whether or not the watch lands: the edge is the public
       // statement, and a directory that would not resolve is a reason the
       // channel is not readable yet rather than a reason not to have followed.
-      const watched = await watchOneChannel(authorDidDht, channelID).catch(
-        () => false,
-      )
+      const added = owned
+        ? false
+        : await watchOneChannel(authorDidDht, channelID).catch(() => false)
       addToast(
-        watched
+        added
           ? `Following “${channelName}” · added to your feed`
           : `Following “${channelName}”`,
       )

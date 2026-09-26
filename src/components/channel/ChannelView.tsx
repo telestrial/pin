@@ -320,6 +320,21 @@ export function ChannelView({
                               onClaimedChange={setClaimed}
                             />
                           )}
+                          {/* Your own voice, as a claim you can take back. The create
+                              follows a public channel you author — which is what puts
+                              you among its followers — and this is the ONLY place that
+                              can be undone: the sidebar keeps owned channels out of
+                              Following, and `followsOfOthers` keeps a self-follow out of
+                              the profile's. So the page the claim is about is the page
+                              that changes it. */}
+                          {isOwnPublic && manifest?.authorDidDht && (
+                            <FollowButton
+                              authorDidDht={manifest.authorDidDht}
+                              channelID={channelID}
+                              channelName={channelName}
+                              owned
+                            />
+                          )}
                           {/* Channel pin icon — separate third element. You
                               authored this channel, so its bytes are pinned in
                               your storage → the icon renders activated (filled
