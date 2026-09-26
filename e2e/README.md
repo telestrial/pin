@@ -13,21 +13,18 @@ interrupted publish resuming from its checkpoint, granular file
 pinning), room for a couple more before they become a maintenance
 burden.
 
-**Two of those four are still `test.fixme`'d.** All three were disabled
+**All four run.** Three of them spent about two months `test.fixme`'d
 behind the browser-relay pkarr read-after-write lag: the public relays
 clamp a packet's TTL into a 300s floor before deciding whether to serve
 their cache, so a just-published record stays invisible for minutes and
 no client can shorten it. Running our own relay does
-(`scripts/relay-pkarr.toml`, a 1-5s window), which is why `upload-resume`
-came back on 2026-09-24.
+(`scripts/relay-pkarr.toml`, a 1-5s window), which is what let
+`upload-resume` come back on 2026-09-24 and `cross-account` /
+`granular-pin` on 2026-09-25.
 
-`cross-account` and `granular-pin` are still off, and no longer for that
-reason: both drive the old paste-a-URL-to-subscribe flow, which `fc6d1b7`
-replaced with opening a link and pressing Watch on the page it lands on.
-Their selectors need repairing before the fixme comes off. Until then,
-read a green run as covering connect, upload, the share URL round-trip,
-the manifest write and checkpoint resume, and nothing about
-cross-account custody or granular file pinning.
+Re-enabling those three turned up nine rots between them, and not one
+was the reason any had been switched off — a disabled spec decays rather
+than keeping. Keep them running.
 
 ## One-time setup
 

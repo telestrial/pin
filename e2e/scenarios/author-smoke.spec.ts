@@ -1,19 +1,19 @@
-// E2E author-side smoke — the single-account happy path that runs GREEN today,
-// on real Sia + the public Mainline DHT (pkarr), with no cross-user read.
+// E2E author-side smoke — the single-account happy path, on real Sia and the real
+// Mainline DHT reached through the pkarr relay on this machine, with no cross-user
+// read.
 //
-// Why this exists: the three cross-account specs are test.fixme'd behind the
-// browser pkarr read-after-write lag (a relay-cache boundary the browser can't
-// beat — see CLAUDE.md 2026-07-23). That left the whole e2e tier green-but-hollow.
-// This restores REAL coverage of the parts that DON'T depend on a fresh cross-user
-// resolve: onboarding (did:dht from the seeded Sia AppKey), channel creation (a
-// real Sia manifest upload + pkarr locator publish), the composer + upload runner
+// Why it exists alongside the cross-account specs: it is the only scenario whose
+// failure is unambiguously the AUTHOR side. Everything it touches is one session and
+// one identity — onboarding (did:dht from the seeded Sia AppKey), channel creation
+// (a real Sia manifest upload + pkarr locator publish), the composer + upload runner
 // / action journal, the author's own feed render (local state, no DHT read), and
-// channel retract (the drain path). Single session — no reload, since a reload
-// would re-resolve the locator off the lagging relays and reintroduce the boundary.
+// channel retract (the drain path). So when a cross-account spec fails, this one
+// passing says the break is in the read, the resolve, or the other account, and this
+// one failing says not to look there at all. That is what isolated bob's expired
+// settings locator on 2026-09-25.
 //
-// Deliberately does NOT assert any cross-account or post-reload visibility; those
-// stay covered against fakes in the integration tier and fixme'd in e2e until an
-// always-on node / iroh-docs live-sync is in the loop.
+// Single session, no reload, and deliberately no cross-account or post-reload
+// assertion — those belong to cross-account.spec.ts and granular-pin.spec.ts.
 
 import { expect, type Page, test } from '@playwright/test'
 import {
