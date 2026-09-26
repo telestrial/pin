@@ -234,7 +234,10 @@ describe('integration: loading settings from the doc', () => {
     // than declared. A `settingsDirty` flag used to answer this and was set by one
     // mutation out of a dozen, so it said "mirrored" for a channel that had reached
     // nothing.
-    localStorage.setItem(FINGERPRINT_KEY, fingerprintOf(useAuthStore.getState()))
+    localStorage.setItem(
+      FINGERPRINT_KEY,
+      fingerprintOf(useAuthStore.getState()),
+    )
     useAuthStore.setState({ myChannels: [channel] })
     docState.record = await published({ myChannels: [] })
     useCuratorStore.getState().set({ docRestore: 'ready' })

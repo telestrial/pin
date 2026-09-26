@@ -6,8 +6,8 @@ import { useCuratorStore } from '../../stores/curator'
 import { getRecord, openDocs } from '../docs'
 import {
   flushSettingsMirror,
-  localIsAheadOfMirror,
   lastMirroredAt,
+  localIsAheadOfMirror,
 } from './useSettingsDocsMirror'
 
 // The durable settings write is the Sia snapshot (useSettingsDocsMirror) now —

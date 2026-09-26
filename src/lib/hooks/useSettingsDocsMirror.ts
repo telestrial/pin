@@ -364,12 +364,7 @@ export function useSettingsDocsMirror() {
         // The guarded decision (mirror-clean / version / differs) lives in a pure,
         // unit-tested function. A differing value ⟹ (by LWW-newest) a newer peer write.
         const s = useAuthStore.getState()
-        const next = decidePeerSettings(
-          peer,
-          s,
-          !needsMirroring(),
-          s.theme,
-        )
+        const next = decidePeerSettings(peer, s, !needsMirroring(), s.theme)
         if (!next || cancelled) return
         useAuthStore
           .getState()
