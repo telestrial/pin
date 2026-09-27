@@ -1858,8 +1858,10 @@ async fn curator_loop(
     diag.lock().unwrap().rpc_serving = true;
     log::info!("curator serving (alpn pin-keeper/0: /hey; iroh-docs when up)");
 
-    // One-shot self-test: a throwaway client dials us and sends a /hey knock. The
-    // knock is synthetic, so clear the inbox afterward — real knocks start from zero.
+    // One-shot self-test: a throwaway client dials us and sends a /hey knock. It
+    // withdraws its own synthetic frame afterwards — see `pin_rpc::remove`, and note the
+    // inbox is NOT emptied: this router has been accepting since it spawned, so anything
+    // else parked by now came from outside and was acknowledged.
     match crate::rpc::self_test(endpoint.addr(), &inbox, &relays).await {
         Ok(msg) => {
             log::info!("curator hey self-test: {msg}");
@@ -1870,7 +1872,6 @@ async fn curator_loop(
             diag.lock().unwrap().rpc_selftest = Some(format!("failed: {e}"));
         }
     }
-    crate::rpc::clear(&inbox);
     // Held past here for the poll loop (inbox depth) and shutdown (router).
     let hey_inbox = Some(inbox);
     let router = Some(r);

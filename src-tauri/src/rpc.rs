@@ -11,8 +11,8 @@ use std::time::Duration;
 
 use iroh::{Endpoint, EndpointAddr};
 
-pub use pin_rpc::{clear, new_inbox, queued, HeyHandler, HeyInbox, ALPN};
 use pin_rpc::{hey_request, MAX_FRAME};
+pub use pin_rpc::{new_inbox, queued, HeyHandler, HeyInbox, ALPN};
 
 /// How long to wait for a sent knock to show up in the inbox.
 ///
@@ -37,8 +37,13 @@ pub async fn self_test(
     let client = Endpoint::bind(relays)
         .await
         .map_err(|e| format!("client bind: {e}"))?;
-    let result = run_self_test(&client, server_addr, inbox).await;
+    let record = synthetic_record();
+    let result = run_self_test(&client, server_addr, inbox, &record).await;
     client.close().await;
+    // Take back exactly what this put in, on every path once the frame could have been
+    // written — a test that fails partway can still have landed its knock. Anything else
+    // parked here arrived from outside and was ACKNOWLEDGED, which means custody.
+    pin_rpc::remove(inbox, &record);
     result
 }
 
@@ -46,6 +51,7 @@ async fn run_self_test(
     client: &Endpoint,
     server_addr: EndpointAddr,
     inbox: &HeyInbox,
+    record: &serde_json::Value,
 ) -> Result<String, String> {
     let before = queued(inbox);
 
@@ -55,7 +61,7 @@ async fn run_self_test(
         .map_err(|e| format!("connect: {e}"))?;
 
     let (mut send, mut recv) = conn.open_bi().await.map_err(|e| format!("open_bi: {e}"))?;
-    send.write_all(&hey_request(&synthetic_record()))
+    send.write_all(&hey_request(record))
         .await
         .map_err(|e| format!("write: {e}"))?;
     send.finish().map_err(|e| format!("finish: {e}"))?;

@@ -161,11 +161,29 @@ pub fn drain(inbox: &HeyInbox) -> Vec<Knock> {
         .unwrap_or_default()
 }
 
-/// Drop every parked knock. Used after a synthetic self-test knock so real knocks
-/// start counting from zero.
-pub fn clear(inbox: &HeyInbox) {
-    if let Ok(mut i) = inbox.parked.lock() {
-        i.clear();
+/// Take ONE specific knock back out, and report whether it was there.
+///
+/// By VALUE, because this crate does not interpret a record and must not start: the caller
+/// hands back the exact bytes it put in and this compares two opaque values. That is what
+/// lets the self-test inject into the live inbox and then withdraw only its own frame.
+///
+/// Emptying the inbox instead would be a data loss with a promise attached. The router
+/// accepts from the moment it spawns, so a stranger's knock can be parked beside the
+/// synthetic one — and the handler ACKNOWLEDGED it, which under `6d39526` means custody:
+/// the sender writes a delivery mark and never comes back, and out-of-graph engagement has
+/// no second route.
+///
+/// Removes the FIRST match only, so an identical record knocked by somebody else survives.
+pub fn remove(inbox: &HeyInbox, record: &serde_json::Value) -> bool {
+    let Ok(mut parked) = inbox.parked.lock() else {
+        return false;
+    };
+    match parked.iter().position(|k| &k.record == record) {
+        Some(i) => {
+            parked.remove(i);
+            true
+        }
+        None => false,
     }
 }
 
@@ -441,12 +459,56 @@ mod tests {
         assert_eq!(queued(&inbox), 0);
     }
 
+    /// A record nobody in these tests is the author of, for standing beside the one under
+    /// removal.
+    fn other_record() -> serde_json::Value {
+        let mut r = record();
+        r["actor"] = serde_json::json!("did:dht:somebody-else");
+        r
+    }
+
     #[test]
-    fn clear_empties_the_inbox() {
+    fn remove_takes_back_one_knock_and_leaves_the_rest() {
+        // The whole point: the self-test injects into the LIVE inbox, and the router has
+        // been accepting since it spawned. A stranger's knock parked in that window was
+        // acknowledged, so it is held in custody and must survive.
+        let inbox = new_inbox();
+        let handler = HeyHandler::new(inbox.clone());
+        handler.accept_knock(&hey_request(&other_record()));
+        handler.accept_knock(&hey_request(&record()));
+
+        assert!(remove(&inbox, &record()));
+
+        assert_eq!(queued(&inbox), 1);
+        assert_eq!(inbox.parked.lock().unwrap()[0].record, other_record());
+    }
+
+    #[test]
+    fn remove_is_a_no_op_when_the_knock_has_already_been_drained() {
+        // The ordinary case on a live node: the engagement pass usually wins the race to
+        // the synthetic knock, so by the time the self-test withdraws it there is nothing
+        // there. Reported rather than silent, but not an error.
         let inbox = new_inbox();
         let handler = HeyHandler::new(inbox.clone());
         handler.accept_knock(&hey_request(&record()));
-        clear(&inbox);
+        drain(&inbox);
+
+        assert!(!remove(&inbox, &record()));
         assert_eq!(queued(&inbox), 0);
+    }
+
+    #[test]
+    fn remove_takes_only_one_of_two_identical_records() {
+        // Two parties cannot in practice send byte-identical signed records, but the rule
+        // is what keeps this a withdrawal of what YOU put in rather than a filter: take
+        // one, leave one.
+        let inbox = new_inbox();
+        let handler = HeyHandler::new(inbox.clone());
+        handler.accept_knock(&hey_request(&record()));
+        handler.accept_knock(&hey_request(&record()));
+
+        assert!(remove(&inbox, &record()));
+
+        assert_eq!(queued(&inbox), 1);
     }
 }
