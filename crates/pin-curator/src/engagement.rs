@@ -128,6 +128,18 @@ pub struct EngagementOutcome {
     pub knocks_rejected: usize,
     /// Knocks about a subject this identity doesn't publish.
     pub knocks_not_ours: usize,
+    /// Knocks turned away before this pass saw them, because the inbox was FULL.
+    ///
+    /// The only outcome here that is not about a record — it is about this instance not
+    /// keeping up. Nothing is lost by a refusal: the sender writes no delivery mark and
+    /// re-knocks on its own cadence forever. What it costs is DELAY, one sender's retry
+    /// period per refusal, and the reason it is counted is that the state it signals was
+    /// otherwise indistinguishable from nobody knocking at all.
+    ///
+    /// A number that climbs means arrivals are outrunning the drain, which is a different
+    /// problem from any of the fields above and wants a different answer: those are about
+    /// what a record says, this is about throughput.
+    pub knocks_refused: usize,
     /// Held records removed because their actor said so. The out-of-graph half of a
     /// withdrawal: `withdrawn` covers a record gone from a directory we READ, which never
     /// happens for an actor whose directory this identity has no reason to read.
@@ -687,6 +699,10 @@ pub async fn engagement_once<N: crate::net::Network>(
         .into_iter()
         .map(|k| k.record)
         .partition(crate::comments::is_comment);
+    // Taken with the drain, so the refusals reported cover the same window as the knocks
+    // taken. These arrived while the inbox was full and were never parked, so there is
+    // nothing here to process — only to report.
+    outcome.knocks_refused = pin_rpc::take_refused(&ctx.inbox);
 
     if subjects.is_empty() {
         // Nothing published, so nothing can be endorsed — including by knock. Not a

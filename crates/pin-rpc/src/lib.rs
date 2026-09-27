@@ -54,6 +54,7 @@
 
 pub mod relays;
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use iroh::endpoint::{Connection, VarInt};
@@ -111,6 +112,19 @@ pub struct Knock {
 #[derive(Debug, Clone)]
 pub struct HeyInbox {
     parked: Arc<Mutex<Vec<Knock>>>,
+    /// Knocks turned away for a full inbox since the last drain.
+    ///
+    /// Counted because a refusal is otherwise INVISIBLE from both ends. The sender sees a
+    /// failed stream, which is what it sees for an offline node or a bad network, and
+    /// retries on its own cadence forever. This side recorded nothing at all — so an
+    /// instance whose drain cannot keep up with arrivals reads exactly like one nobody is
+    /// knocking, which are the two states anybody looking at a log is trying to separate.
+    ///
+    /// For OUR log and never for a reply. A refusal count in a response frame would be the
+    /// inbox-depth oracle the no-reply rule exists to deny — it would tell a flooder
+    /// precisely how well the flood is working. Local, this is the opposite: it tells the
+    /// person running the node something the protocol deliberately tells nobody else.
+    refused: Arc<AtomicUsize>,
     /// Capacity one, and sent with `try_send`. The drain takes everything at once, so one
     /// pending signal says exactly as much as a hundred would; a full channel means a
     /// wake is already owed and dropping the extra loses nothing.
@@ -123,6 +137,7 @@ pub fn new_inbox() -> HeyInbox {
     let (tell, told) = async_channel::bounded(1);
     HeyInbox {
         parked: Arc::new(Mutex::new(Vec::new())),
+        refused: Arc::new(AtomicUsize::new(0)),
         tell,
         told,
     }
@@ -159,6 +174,17 @@ pub fn drain(inbox: &HeyInbox) -> Vec<Knock> {
         .lock()
         .map(|mut i| std::mem::take(&mut *i))
         .unwrap_or_default()
+}
+
+/// How many knocks were turned away for a full inbox, and reset the count.
+///
+/// Taken beside {@link drain} rather than read cumulatively, so the number a pass reports
+/// covers the same window as the knocks it took. It shares the drain's loss window too: a
+/// pass that dies before it reports loses this count as well as its knocks, which is the
+/// honest pairing — the alternative is a total that keeps climbing and says nothing
+/// about when.
+pub fn take_refused(inbox: &HeyInbox) -> usize {
+    inbox.refused.swap(0, Ordering::Relaxed)
 }
 
 /// Take ONE specific knock back out, and report whether it was there.
@@ -217,6 +243,11 @@ impl HeyHandler {
             return false;
         };
         if parked.len() >= MAX_INBOX {
+            // Only the full case is counted. The other refusals above are an unreadable
+            // frame, a verb we do not serve, or a request carrying no record — none of
+            // which is a knock we would have taken, so folding them in would make the
+            // number say "we are overloaded" when it means "somebody sent junk".
+            self.inbox.refused.fetch_add(1, Ordering::Relaxed);
             return false;
         }
         parked.push(Knock { record });
@@ -431,6 +462,43 @@ mod tests {
         }
         assert!(!handler.accept_knock(&frame));
         assert_eq!(queued(&inbox), MAX_INBOX);
+    }
+
+    #[test]
+    fn a_refusal_is_counted_and_the_count_is_taken_not_read() {
+        // The whole point of the counter: a refused knock was otherwise invisible from both
+        // ends. Taken rather than read, so a pass reports the window it drained rather than
+        // a total that climbs forever and says nothing about when.
+        let inbox = new_inbox();
+        let handler = HeyHandler::new(inbox.clone());
+        let frame = hey_request(&record());
+        for _ in 0..MAX_INBOX {
+            handler.accept_knock(&frame);
+        }
+        assert_eq!(take_refused(&inbox), 0, "a parked knock is not a refusal");
+
+        handler.accept_knock(&frame);
+        handler.accept_knock(&frame);
+        assert_eq!(take_refused(&inbox), 2);
+        assert_eq!(take_refused(&inbox), 0, "taking it leaves nothing behind");
+    }
+
+    #[test]
+    fn junk_is_not_counted_as_a_refusal() {
+        // The other ways `accept_knock` answers false are an unreadable frame, a verb we do
+        // not serve, and a request carrying no record. None is a knock that would have been
+        // taken, so counting them would make the number read "we are overloaded" when it
+        // means "somebody sent garbage" — and those want opposite responses.
+        let inbox = new_inbox();
+        let handler = HeyHandler::new(inbox.clone());
+
+        assert!(!handler.accept_knock(b"not json at all"));
+        assert!(!handler.accept_knock(&hey_request(&record())[..4]));
+        assert!(!handler.accept_knock(br#"{"verb":"audit","record":{}}"#));
+        assert!(!handler.accept_knock(br#"{"verb":"hey"}"#));
+
+        assert_eq!(take_refused(&inbox), 0);
+        assert_eq!(queued(&inbox), 0, "and none of it was parked either");
     }
 
     #[test]

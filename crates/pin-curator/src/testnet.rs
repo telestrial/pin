@@ -1249,6 +1249,50 @@ mod visibility {
         assert!(b.held(&c.did).await.is_some());
     }
 
+    /// A FULL INBOX IS REPORTED, where it used to be silent on both sides.
+    ///
+    /// A refusal loses nothing: the sender writes no delivery mark and re-knocks on its own
+    /// cadence forever, with no attempt cap anywhere. What it costs is one retry period of
+    /// delay per refusal — and, until this counted, an instance whose drain could not keep
+    /// up with arrivals read exactly like one nobody was knocking. The sender sees a failed
+    /// stream, which is also what an offline node looks like; this side recorded nothing.
+    ///
+    /// Asserted from the LURKER path deliberately. The count is taken beside the drain, which
+    /// is above the early return for having published nothing — so the instance least able
+    /// to account for itself still reports that it turned people away, rather than returning
+    /// a bare `not_ours` that says the knocks were somebody else's problem.
+    #[tokio::test]
+    async fn a_refused_knock_is_counted_rather_than_silent() {
+        let world = World::new();
+        let john = Identity::new(&world, 1).await;
+        // A settings record and nothing else: he publishes nothing, which is the path under
+        // test. Without one the pass errors above the drain and never reaches the count.
+        john.follows(&[]).await;
+        let ctx = john.engagement_ctx();
+
+        // Through the real handler, so what fills the inbox is what a knock does.
+        let handler = pin_rpc::HeyHandler::new(ctx.inbox.clone());
+        let frame = pin_rpc::hey_request(&serde_json::json!({ "kind": "like" }));
+        for _ in 0..pin_rpc::MAX_INBOX {
+            assert!(handler.accept_knock(&frame), "the inbox takes these");
+        }
+        assert!(
+            !handler.accept_knock(&frame),
+            "and turns this one away, which is the thing being counted",
+        );
+
+        let folded = crate::engagement_once(
+            &ctx,
+            &john.did,
+            "2026-09-12T00:00:00.000Z".to_string(),
+            true,
+        )
+        .await
+        .expect("engagement pass");
+
+        assert_eq!(folded.knocks_refused, 1, "the refusal reaches the outcome");
+    }
+
     /// PUBLISHING NOTHING MEANS DISCOVERING NOBODY — a fact about the shipped loops,
     /// recorded rather than endorsed.
     ///

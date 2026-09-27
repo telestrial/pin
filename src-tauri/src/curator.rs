@@ -1223,7 +1223,8 @@ pub async fn curator_start_engagement(
                     // Any knock at all is reported, whatever became of it. A knock was
                     // aimed at us on purpose, so one that arrives and is discarded is the
                     // most interesting thing a pass can do — and the quietest.
-                    let knocks = o.knocked
+                    let knocks = o.knocks_refused
+                        + o.knocked
                         + o.knocks_rejected
                         + o.knocks_not_ours
                         + o.stale_knocks;
@@ -1285,11 +1286,12 @@ pub async fn curator_start_engagement(
                         || comment_withdrawals > 0
                     {
                         log::info!(
-                            "curator engagement: reached {} unreachable {} added {} withdrawn {} tallies {} cleared {} rejected {} not-ours {} published {} publish-failed {} | knocks: accepted {} rejected {} not-ours {} stale {} | withdrawals: applied {} rejected {} not-ours {} ignored {}{}{}",
+                            "curator engagement: reached {} unreachable {} added {} withdrawn {} tallies {} cleared {} rejected {} not-ours {} published {} publish-failed {} | knocks: accepted {} rejected {} not-ours {} stale {} refused {} | withdrawals: applied {} rejected {} not-ours {} ignored {}{}{}",
                             o.reached, o.unreachable, o.added, o.withdrawn, o.tallies,
                             o.cleared, o.rejected, o.not_ours, o.published,
                             o.publish_failed, o.knocked, o.knocks_rejected,
-                            o.knocks_not_ours, o.stale_knocks, o.retractions_applied,
+                            o.knocks_not_ours, o.stale_knocks, o.knocks_refused,
+                            o.retractions_applied,
                             o.retractions_rejected, o.retractions_not_ours,
                             o.retractions_ignored, comment_section,
                             comment_withdrawal_section

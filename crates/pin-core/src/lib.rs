@@ -774,6 +774,7 @@ pub async fn start_engagement_loop(
                         "knocksRejected": o.knocks_rejected,
                         "knocksNotOurs": o.knocks_not_ours,
                         "staleKnocks": o.stale_knocks,
+                        "knocksRefused": o.knocks_refused,
                         "retractionsApplied": o.retractions_applied,
                         "retractionsRejected": o.retractions_rejected,
                         "retractionsNotOurs": o.retractions_not_ours,
