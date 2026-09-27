@@ -2466,3 +2466,129 @@ mod tests {
         assert_eq!(serde_json::from_str::<Endorsement>(&wire).unwrap(), e);
     }
 }
+
+/// WHAT THE FOLD COSTS AS A SET GROWS — measured, so the number is not a guess.
+///
+/// `fold` is the whole of how a count is produced: it sorts the backing set, hashes every
+/// record into a leaf, and builds one Merkle root. That makes it O(n log n) in the size of
+/// the set rather than in what arrived, so a subject with a large set pays the full price
+/// on every pass that touches it, however little moved.
+///
+/// The two halves are timed apart on purpose. The SORT is what makes the root deterministic
+/// across a person's own devices — two instances ordering differently would publish two
+/// roots for one set — and it is also what stops the root being extended incrementally,
+/// because a late arrival can land in the middle. The ROOT is the half that could be made
+/// incremental if the set were append-ordered instead. Knowing which of the two dominates
+/// is what says whether that trade is worth making.
+#[cfg(test)]
+mod cost {
+    use super::*;
+    use std::time::Instant;
+
+    /// Sizes the ordinary suite runs. Small enough that a debug build stays quick; the
+    /// shape is what matters here, and `the_fold_at_scale` covers the sizes that hurt.
+    const SIZES: &[usize] = &[1_000, 10_000];
+
+    /// Sizes that answer the question, behind `--ignored` because a debug build is slow
+    /// and these are minutes rather than seconds.
+    const BIG_SIZES: &[usize] = &[100_000, 1_000_000];
+
+    /// One record per distinct actor on ONE subject — the viral shape, and the expensive
+    /// one: the sort has n distinct keys to order rather than a handful.
+    ///
+    /// Not signed. `fold` never verifies — verification happens at intake, in
+    /// `knock_verdict` and the crawl — so signing here would measure key derivation
+    /// rather than folding, and would take longer than the thing under test.
+    fn record(i: usize) -> Endorsement {
+        Endorsement {
+            kind: "like".to_string(),
+            // Padded to the width a real did:dht occupies, since the sort compares these
+            // and a short key would make the comparison cheaper than the real one.
+            actor: format!("did:dht:{i:0>52}"),
+            subject: "f4xlljzqxtqpv7ul6ngkyeafusdwqrirpmhochqyjz2hgz3djo6a".to_string(),
+            version: "bafkreiaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            created_at: "2026-08-11T12:00:00.000Z".to_string(),
+            // Valid base64 of 64 bytes, because `leaf()` decodes it.
+            sig: pin_crypto::b64_encode(&[7u8; 64]),
+            reference: None,
+            body: None,
+            body_url: None,
+            attachments: Vec::new(),
+            facets: Vec::new(),
+        }
+    }
+
+    /// Time one fold and one bare root over the same set, and report both.
+    ///
+    /// Returns the fold's duration so a caller can assert on it. Printing rather than only
+    /// asserting because the useful output is the CURVE — a single pass/fail says nothing
+    /// about where the cost starts to bite.
+    fn measure(n: usize) -> std::time::Duration {
+        let records: Vec<Endorsement> = (0..n).map(record).collect();
+
+        let t0 = Instant::now();
+        let agg = fold(&records, None, "2026-09-26T00:00:00.000Z".to_string()).expect("fold");
+        let folded = t0.elapsed();
+
+        // The root alone, over leaves already computed, so this is the tree build and
+        // nothing else.
+        let leaves: Vec<[u8; 32]> = records.iter().map(|r| r.leaf().expect("leaf")).collect();
+        let t1 = Instant::now();
+        let root = merkle_root(&leaves);
+        let rooted = t1.elapsed();
+
+        // The gate that says this measured something. A timing test whose work can be
+        // elided, or whose input the function ignores, reports a fast number for the wrong
+        // reason — so the count and the root are checked before the duration is used.
+        let tally = agg.kinds.get("like").expect("a like tally");
+        assert_eq!(tally.count, n, "every record is in the tally");
+        assert_eq!(
+            tally.set_root,
+            hex(&root),
+            "and the fold's root is this set's root"
+        );
+        assert_ne!(
+            root, [0u8; 32],
+            "a root over a real set is not the empty one"
+        );
+
+        println!(
+            "  n={n:>9}  fold={:>10.1?}  root_only={:>10.1?}  sort_and_leaves={:>10.1?}",
+            folded,
+            rooted,
+            folded.saturating_sub(rooted),
+        );
+        folded
+    }
+
+    fn header() {
+        println!(
+            "\nfold cost, one subject, n distinct actors — {}",
+            if cfg!(debug_assertions) {
+                "DEBUG BUILD: read the shape, not the absolute numbers"
+            } else {
+                "RELEASE BUILD"
+            },
+        );
+    }
+
+    #[test]
+    fn the_fold_is_measured() {
+        header();
+        for &n in SIZES {
+            measure(n);
+        }
+    }
+
+    /// The sizes the question is actually about. `cargo test -p pin-engagement --release
+    /// -- --ignored --nocapture cost::` — release, because a debug number here is off by
+    /// an order of magnitude and would be recorded as a cost it is not.
+    #[test]
+    #[ignore = "minutes; run deliberately with --release --nocapture"]
+    fn the_fold_at_scale() {
+        header();
+        for &n in BIG_SIZES {
+            measure(n);
+        }
+    }
+}

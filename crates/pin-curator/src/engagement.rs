@@ -397,7 +397,7 @@ fn folds_into(rkey: &str, subject: &str) -> bool {
 /// A scan of the log, which is keyed subject-first for exactly this. Unreadable entries
 /// are skipped rather than failing the fold: one bad record must not take a whole count
 /// with it.
-async fn log_records_for<N: crate::net::Network>(
+pub(crate) async fn log_records_for<N: crate::net::Network>(
     ctx: &EngagementContext<N>,
     subject: &str,
 ) -> Vec<Endorsement> {

@@ -1876,3 +1876,115 @@ mod visibility {
         );
     }
 }
+
+/// WHAT A PASS PAYS TO READ ITS OWN LOG — measured, because the shape is not obvious from
+/// the call site and the recorded guess about it was wrong.
+///
+/// `log_records_for` is called ONCE PER TOUCHED SUBJECT, and each call opens with
+/// `list_rkeys`, which is `Query::all()` over the whole doc with the prefix stripped in
+/// Rust. So the scan is not paid once a pass — it is paid once per subject, and again by
+/// `held_for` on the comments lane beside it. Two whole-doc scans per touched subject.
+///
+/// That is a different cost from the fold's arithmetic, which `pin-engagement`'s own cost
+/// module measures at well under two seconds for a million records. This is the half that
+/// grows with what the doc HOLDS rather than with what the pass folds, and it is the one
+/// worth knowing a number for before anything is redesigned around it.
+#[cfg(test)]
+mod cost {
+    use super::*;
+    use std::time::Instant;
+
+    const SIZES: &[usize] = &[200, 1_000];
+    const BIG_SIZES: &[usize] = &[10_000, 50_000];
+
+    /// A subject every seeded record folds into, so a gather has to read all of them — the
+    /// viral shape, and the expensive one.
+    const HOT: &str = "f4xlljzqxtqpv7ul6ngkyeafusdwqrirpmhochqyjz2hgz3djo6a";
+
+    /// Fill the engagement log with `n` records on one subject, written the way the pass
+    /// writes them so the keys a scan strips are the real ones.
+    async fn seed_log(who: &Identity, n: usize) {
+        for i in 0..n {
+            let actor = format!("did:dht:{i:0>52}");
+            let rkey = pin_derive::engagement_log_rkey(HOT, "like", &actor);
+            let record = serde_json::json!({
+                "kind": "like",
+                "actor": actor,
+                "subject": HOT,
+                "version": "bafkreiaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "createdAt": "2026-08-11T12:00:00.000Z",
+                "sig": pin_crypto::b64_encode(&[7u8; 64]),
+            });
+            crate::write_record(
+                &who.doc,
+                who.author_id,
+                pin_derive::ENGAGEMENT_LOG_COLLECTION,
+                &rkey,
+                serde_json::to_vec(&record).expect("encode"),
+            )
+            .await
+            .expect("seed");
+        }
+    }
+
+    async fn measure(n: usize) {
+        let world = World::new();
+        let who = Identity::new(&world, 1).await;
+        seed_log(&who, n).await;
+        let ctx = who.engagement_ctx();
+
+        let t0 = Instant::now();
+        let rkeys = crate::list_rkeys(
+            &who.doc,
+            who.author_id,
+            pin_derive::ENGAGEMENT_LOG_COLLECTION,
+        )
+        .await
+        .expect("scan");
+        let scan = t0.elapsed();
+
+        let t1 = Instant::now();
+        let records = crate::engagement::log_records_for(&ctx, HOT).await;
+        let gather = t1.elapsed();
+
+        // The gate that says this measured something rather than scanning an empty doc or
+        // gathering nothing. Without it a broken seed reports an encouragingly small
+        // number for the wrong reason.
+        assert_eq!(rkeys.len(), n, "the scan sees every seeded record");
+        assert_eq!(records.len(), n, "and the gather reads every one of them");
+
+        println!(
+            "  n={n:>7}  scan={:>9.1?}  gather={:>9.1?}  (a pass pays 2 gathers per touched subject)",
+            scan, gather,
+        );
+    }
+
+    fn header() {
+        println!(
+            "\nengagement-log read cost, n records on one subject — {}",
+            if cfg!(debug_assertions) {
+                "DEBUG BUILD: read the shape, not the absolute numbers"
+            } else {
+                "RELEASE BUILD"
+            },
+        );
+    }
+
+    #[tokio::test]
+    async fn the_log_read_is_measured() {
+        header();
+        for &n in SIZES {
+            measure(n).await;
+        }
+    }
+
+    /// `cargo test -p pin-curator --release -- --ignored --nocapture cost::`
+    #[tokio::test]
+    #[ignore = "slow to seed; run deliberately with --release --nocapture"]
+    async fn the_log_read_at_scale() {
+        header();
+        for &n in BIG_SIZES {
+            measure(n).await;
+        }
+    }
+}
