@@ -17,17 +17,13 @@ import {
 import { readDirectory, request } from '../lib/directories'
 import { formatBytes } from '../lib/format'
 import { usePersonFollowers } from '../lib/hooks/useFollowerCount'
-import {
-  useIdentityName,
-  useIdentityProfile,
-} from '../lib/hooks/useIdentityName'
 import { useItemBlobURL } from '../lib/hooks/useItemBytes'
 import { resolveIdentityDoc } from '../lib/identityDoc'
 import { useAuthStore } from '../stores/auth'
 import { ChannelHeroCard } from './channel/ChannelHeroCard'
 import { FollowHandleButton } from './FollowHandleButton'
 import { FeedRow } from './HomeFeed'
-import { IdentityAvatar } from './IdentityAvatar'
+import { PersonRow } from './PersonRow'
 import { Stat } from './ui/Stat'
 
 type ChannelEntry = {
@@ -652,7 +648,7 @@ function LoadedDirectory({
               what the row says, since taking only someone's techno channel and not their
               cat photos is a real thing to be able to read. */}
           {followed.map((p) => (
-            <PersonFollowRow
+            <PersonRow
               key={p.didDht}
               didDht={p.didDht}
               via={followedVia(p)}
@@ -668,7 +664,7 @@ function LoadedDirectory({
               voices each follower takes, or everything. Among the identities this device
               has read, like the count: graph-scoped, honest, and incomplete. */}
           {followers.map((f) => (
-            <PersonFollowRow
+            <PersonRow
               key={f.didDht}
               didDht={f.didDht}
               via={followerVia(f, channelNames)}
@@ -918,12 +914,6 @@ function channelContentBytes(manifest: ChannelManifest): number {
 // row — clicking navigates to the author's directory (viewing the channel
 // directly needs K, which a follow edge doesn't carry), where the channel
 // resolves properly from the advertised list.
-/** One person this identity follows.
- *
- *  The channel row's sibling, and deliberately the same shape: a mark, a name, and it
- *  opens their directory. What differs is only where the name comes from — a channel
- *  follow carries a cached one, and a person is named by their own published profile,
- *  which `useIdentityName` reads out of the crawl's index before the network. */
 /** How somebody follows this person, in words for a row. */
 function followerVia(f: Follower, names: Map<string, string>): string {
   // Wholesale already includes every channel, so naming any alongside it would suggest
@@ -938,36 +928,4 @@ function followedVia(p: FollowedPerson): string {
   // alongside it is already included and naming it would suggest otherwise.
   if (p.wholesale) return 'Everything'
   return p.channels.map((c) => c.name || 'A channel').join(' · ')
-}
-
-function PersonFollowRow({
-  didDht,
-  via,
-  onHandleClick,
-}: {
-  didDht: string
-  via: string
-  onHandleClick: (handle: string) => void
-}) {
-  const name = useIdentityName(didDht)
-  const profile = useIdentityProfile(didDht)
-  return (
-    <button
-      type="button"
-      onClick={() => onHandleClick(didDht)}
-      className="w-full p-3 flex gap-3 items-center text-left hover:bg-neutral-50 cursor-pointer transition-colors"
-    >
-      <IdentityAvatar
-        didDht={didDht}
-        name={name}
-        avatarURL={profile?.avatarURL ?? undefined}
-      />
-      <div className="flex-1 min-w-0">
-        <div className="text-sm font-semibold text-neutral-900 truncate">
-          @{name}
-        </div>
-        <div className="text-xs text-neutral-500 truncate">{via}</div>
-      </div>
-    </button>
-  )
 }
