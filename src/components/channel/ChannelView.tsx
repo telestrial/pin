@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { buildSubscribeURL } from '../../core/channels'
 import {
   contributingChannelOf,
   entriesForChannel,
@@ -15,6 +16,7 @@ import { useItemBlobURL } from '../../lib/hooks/useItemBytes'
 import { renderMarkdown } from '../../lib/markdown'
 import { useAuthStore } from '../../stores/auth'
 import { renderable, useFeedStore } from '../../stores/feed'
+import { useToastStore } from '../../stores/toast'
 import { FollowButton } from '../FollowButton'
 import { FeedRow } from '../HomeFeed'
 import { ChannelPinButton } from '../pin/ChannelPinButton'
@@ -105,6 +107,13 @@ export function ChannelView({
     s.myChannels.find((c) => c.channelID === channelID),
   )
   const isOwned = owned !== undefined
+  // The link that lets somebody open this channel. On the page of a channel you own
+  // because that is where you go to share it — and for an unlisted channel it is the
+  // only way anybody gets in, since no directory names it.
+  const myDidDht = useAuthStore((s) => s.myDidDht)
+  const addToast = useToastStore((s) => s.addToast)
+  const shareLink =
+    owned && myDidDht ? buildSubscribeURL(myDidDht, owned.channelKey) : null
   const entries = useFeedStore((s) => s.entries)
   const portals = useFeedStore((s) => s.portals)
   const feedLoading = useFeedStore((s) => s.loading)
@@ -308,6 +317,18 @@ export function ChannelView({
                               className="px-3 py-1.5 text-xs font-medium text-neutral-700 hover:text-neutral-900 bg-neutral-100 hover:bg-neutral-200 rounded-md transition-colors cursor-pointer"
                             >
                               Edit channel
+                            </button>
+                          )}
+                          {shareLink && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                navigator.clipboard.writeText(shareLink)
+                                addToast('Link copied')
+                              }}
+                              className="px-3 py-1.5 text-xs font-medium text-neutral-700 hover:text-neutral-900 bg-neutral-100 hover:bg-neutral-200 rounded-md transition-colors cursor-pointer"
+                            >
+                              Copy link
                             </button>
                           )}
                           {/* Context menu — only the claim toggle, so it
