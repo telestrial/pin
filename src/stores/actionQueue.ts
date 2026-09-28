@@ -221,6 +221,12 @@ export type ChannelCreateLedger = {
   cover?: ChannelImage
 }
 
+// The stages a create reports, named for the person watching its sidebar row, which
+// tells the upload (a real percentage) from the publish (one call that uploads the
+// manifest and announces its locator, with nothing to count).
+export const CREATE_PHASE_UPLOADING = 'Uploading images'
+export const CREATE_PHASE_PUBLISHING = 'Publishing to the network'
+
 export type ChannelCreateAction = ActionBase & {
   kind: 'channel-create'
   intent: ChannelCreateIntent

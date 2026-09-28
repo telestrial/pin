@@ -24,10 +24,16 @@ vi.mock('../lib/channelLocatorNative', async () =>
 )
 
 import { ChannelView } from '../components/channel/ChannelView'
+import { PinSidebar } from '../components/pin/PinSidebar'
 import { Sidebar } from '../components/Sidebar'
 import { buildSubscribeURL } from '../core/channels'
 import type { ChannelManifest, ChannelVisibility } from '../core/types'
-import { type ChannelCreateAction, useActionStore } from '../stores/actionQueue'
+import {
+  type ChannelCreateAction,
+  CREATE_PHASE_PUBLISHING,
+  CREATE_PHASE_UPLOADING,
+  useActionStore,
+} from '../stores/actionQueue'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
 import { fakeDocStore as docStore } from './fakeModules'
@@ -101,19 +107,62 @@ describe('integration: a channel being set up', () => {
 
     const list = yourChannels()
     expect(list.getByText('Fresh voice')).toBeInTheDocument()
-    expect(list.getByText('Setting up…')).toBeInTheDocument()
+    expect(list.getByText('Starting…')).toBeInTheDocument()
     expect(list.queryByRole('button', { name: /Retry setting up/ })).toBeNull()
+  })
+
+  it('says it is waiting when another action holds the runner', () => {
+    // The journal runs one action at a time, so a create queued behind a post still
+    // uploading has not started — and a row that said "Starting…" for a minute would
+    // read as stuck.
+    const post = { ...creating('running'), id: 'act-post', kind: 'publish' }
+    useActionStore.setState({
+      actions: [post as never, creating('pending')],
+    })
+
+    sidebar()
+
+    expect(
+      yourChannels().getByText('Waiting for another upload…'),
+    ).toBeInTheDocument()
+  })
+
+  it('reports the upload with its progress, then the publish', () => {
+    const uploading = {
+      ...creating('running'),
+      phase: CREATE_PHASE_UPLOADING,
+      progress: 41.6,
+    }
+    useActionStore.setState({ actions: [uploading] })
+    const { unmount } = sidebar()
+    expect(
+      yourChannels().getByText('Uploading images · 42%'),
+    ).toBeInTheDocument()
+    unmount()
+
+    useActionStore.setState({
+      actions: [{ ...uploading, phase: CREATE_PHASE_PUBLISHING, progress: 97 }],
+    })
+    sidebar()
+    expect(
+      yourChannels().getByText('Publishing to the network…'),
+    ).toBeInTheDocument()
   })
 
   it('offers a retry and a dismiss when setting up failed', async () => {
     // A journaled action can exhaust, and a spinner with no failure branch would spin
     // forever. The two gestures are the journal's own.
-    useActionStore.setState({ actions: [creating('failed')] })
+    useActionStore.setState({
+      actions: [{ ...creating('failed'), error: 'Sia is not connected' }],
+    })
 
     sidebar()
 
     const list = yourChannels()
-    expect(list.getByText("Couldn't set up")).toBeInTheDocument()
+    expect(list.getByText("Couldn't set up")).toHaveAttribute(
+      'title',
+      'Sia is not connected',
+    )
     await userEvent.click(
       list.getByRole('button', { name: 'Retry setting up Fresh voice' }),
     )
@@ -152,6 +201,37 @@ describe('integration: a channel being set up', () => {
     const list = yourChannels()
     expect(list.getAllByText('Fresh voice')).toHaveLength(1)
     expect(list.queryByText('Setting up…')).toBeNull()
+  })
+})
+
+describe('integration: the in-flight list leaves a create to the sidebar', () => {
+  beforeEach(() => {
+    resetAllStores()
+    docStore.clear()
+    mountAs(
+      createFakeApp().createAccount({ did: 'did:plc:me', handle: 'me.test' }),
+    )
+  })
+  afterEach(cleanup)
+
+  it('lists other actions and not a channel being created', () => {
+    // The channel's row in the Channels list is where it is shown, retry included;
+    // showing it in the right sidebar too would be the same fact twice.
+    const post = {
+      ...creating('pending', 'A post'),
+      id: 'act-post',
+      kind: 'publish',
+      title: 'A post in flight',
+    }
+    useActionStore.setState({
+      actions: [post as never, creating('pending', 'Fresh voice')],
+    })
+
+    render(<PinSidebar />)
+
+    const queue = within(screen.getByRole('list', { name: 'Upload queue' }))
+    expect(queue.getByText('A post in flight')).toBeInTheDocument()
+    expect(queue.queryByText('Fresh voice')).toBeNull()
   })
 })
 

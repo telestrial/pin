@@ -104,9 +104,11 @@ export function PinSidebar({
     return () => window.removeEventListener('keydown', onKey)
   }, [armedItem, disarm])
 
-  const inFlight = [...tasks].sort((a, b) =>
-    b.createdAt.localeCompare(a.createdAt),
-  )
+  // A channel being created is shown where the channel will be, in the left sidebar's
+  // Channels list, with its own retry — so it is left out here rather than shown twice.
+  const inFlight = tasks
+    .filter((t) => t.kind !== 'channel-create')
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
 
   const myChannelIDSet = useMemo(
     () => new Set(myChannels.map((c) => c.channelID)),

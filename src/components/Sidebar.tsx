@@ -1,10 +1,30 @@
 import { Plus, RotateCw, X } from 'lucide-react'
-import { type ChannelCreateAction, useActionStore } from '../stores/actionQueue'
+import {
+  type Action,
+  type ChannelCreateAction,
+  CREATE_PHASE_UPLOADING,
+  useActionStore,
+} from '../stores/actionQueue'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
 import { ChannelAvatar } from './channel/ChannelAvatar'
 
 const CAP = 10
+
+// What a channel being set up is doing, in words. The journal runs one action at a time,
+// so a create queued behind a post still uploading is WAITING, and saying so is the
+// difference between a row that reads as slow and one that reads as stuck.
+function settingUpStatus(a: ChannelCreateAction, actions: Action[]): string {
+  if (a.state === 'failed') return "Couldn't set up"
+  if (a.state === 'pending') {
+    const busy = actions.some((x) => x.state === 'running' && x.id !== a.id)
+    return busy ? 'Waiting for another upload…' : 'Starting…'
+  }
+  if (a.phase === CREATE_PHASE_UPLOADING) {
+    return `${CREATE_PHASE_UPLOADING} · ${Math.round(a.progress)}%`
+  }
+  return a.phase ? `${a.phase}…` : 'Setting up…'
+}
 
 // Section header in the muted uppercase style shared with the right sidebar's
 // "Recent pins" etc. The title itself links to the full management view
@@ -211,9 +231,12 @@ export function Sidebar({
                       {a.intent.name}
                     </span>
                     <span
+                      // The error in full on hover: the row has room for the fact of
+                      // the failure, and the message is for whoever wants the detail.
+                      title={failed ? a.error : undefined}
                       className={`block text-[10px] truncate ${failed ? 'text-red-600' : 'text-green-700 animate-pulse'}`}
                     >
-                      {failed ? "Couldn't set up" : 'Setting up…'}
+                      {settingUpStatus(a, actions)}
                     </span>
                   </span>
                   {failed && (

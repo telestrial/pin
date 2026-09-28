@@ -1,6 +1,10 @@
 import type { SiaClient } from '../../core/siaClient'
 import type { ChannelImage } from '../../core/types'
-import type { ChannelCreateAction } from '../../stores/actionQueue'
+import {
+  type ChannelCreateAction,
+  CREATE_PHASE_PUBLISHING,
+  CREATE_PHASE_UPLOADING,
+} from '../../stores/actionQueue'
 import { useAuthStore } from '../../stores/auth'
 import { createAndPublishChannel } from '../channelWrites'
 import { flushSettingsBestEffort } from '../hooks/useSettingsSync'
@@ -47,7 +51,7 @@ export async function runChannelCreate(
     }
 
     if (bytes.length > 0) {
-      setPhase('Uploading', 0)
+      setPhase(CREATE_PHASE_UPLOADING, 0)
       let shards = 0
       const expected = 30
       const uploaded = await client.uploadItemsPacked(bytes, () => {
@@ -71,7 +75,7 @@ export async function runChannelCreate(
     checkpoint({ avatar, cover })
   }
 
-  setPhase('Creating', 97)
+  setPhase(CREATE_PHASE_PUBLISHING, 97)
   const created = await createAndPublishChannel(client, {
     channelKey: intent.channelKey,
     name: intent.name,
