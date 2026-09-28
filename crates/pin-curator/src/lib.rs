@@ -723,6 +723,40 @@ pub(crate) async fn delete_record(
         .map_err(|e| format!("del {collection}/{rkey}: {e}"))
 }
 
+/// How many whole-doc scans have happened — test-only, and an instrument rather than a
+/// statistic.
+///
+/// `list_rkeys` costs the size of the WHOLE doc however small the collection, so "how many
+/// times did one pass do this" is a property worth asserting — and it is not one any output
+/// reveals: scanning once and scanning once per subject produce identical results and differ
+/// only in how long they take. A timing assertion is the alternative, and a flaky one.
+#[cfg(test)]
+pub(crate) mod scans {
+    use std::cell::Cell;
+
+    // Per THREAD, not global: the suite runs tests in parallel, and a shared counter would
+    // have each reading everyone else's scans. `#[tokio::test]` is a current-thread runtime,
+    // so one test's awaited work stays on one thread — and anything that did escape to
+    // another would go UNcounted rather than be miscounted, which a reader of this has to
+    // know, and is why every assertion on it also insists the count is non-zero.
+    thread_local! {
+        static COUNT: Cell<usize> = const { Cell::new(0) };
+    }
+
+    pub(crate) fn count() {
+        COUNT.with(|c| c.set(c.get() + 1));
+    }
+
+    /// Start counting from here.
+    pub(crate) fn reset() {
+        COUNT.with(|c| c.set(0));
+    }
+
+    pub(crate) fn taken() -> usize {
+        COUNT.with(|c| c.get())
+    }
+}
+
 /// The rkeys present in one collection.
 ///
 /// A full scan filtered by prefix, because that is what the store offers — fine at the
@@ -734,6 +768,9 @@ pub(crate) async fn list_rkeys(
     collection: &str,
 ) -> Result<Vec<String>, String> {
     use n0_future::StreamExt as _;
+
+    #[cfg(test)]
+    scans::count();
 
     let prefix = pin_derive::collection_prefix(collection);
     let stream = doc

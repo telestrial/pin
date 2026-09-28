@@ -755,12 +755,9 @@ fn folds_into(rkey: &str, subject: &str) -> bool {
 /// with it.
 pub(crate) async fn held_for<N: crate::net::Network>(
     ctx: &EngagementContext<N>,
+    rkeys: &[String],
     subject: &str,
 ) -> Vec<Endorsement> {
-    let rkeys = crate::list_rkeys(&ctx.doc, ctx.author_id, pin_derive::COMMENT_LOG_COLLECTION)
-        .await
-        .unwrap_or_default();
-
     let mut out = Vec::new();
     for rkey in rkeys.iter().filter(|k| folds_into(k, subject)) {
         let Ok(Some(raw)) = read_record(

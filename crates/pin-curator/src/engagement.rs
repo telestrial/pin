@@ -399,16 +399,9 @@ fn folds_into(rkey: &str, subject: &str) -> bool {
 /// with it.
 pub(crate) async fn log_records_for<N: crate::net::Network>(
     ctx: &EngagementContext<N>,
+    rkeys: &[String],
     subject: &str,
 ) -> Vec<Endorsement> {
-    let rkeys = crate::list_rkeys(
-        &ctx.doc,
-        ctx.author_id,
-        pin_derive::ENGAGEMENT_LOG_COLLECTION,
-    )
-    .await
-    .unwrap_or_default();
-
     let mut out = Vec::new();
     for rkey in rkeys.iter().filter(|k| folds_into(k, subject)) {
         let Ok(Some(raw)) = read_record(
@@ -986,6 +979,35 @@ pub async fn engagement_once<N: crate::net::Network>(
         outcome.added += 1;
     }
 
+    // ONE scan per lane for the whole loop, rather than one per subject.
+    //
+    // Both gathers below used to open with `list_rkeys`, which is `Query::all()` over the
+    // whole doc — so a pass paid two whole-doc scans PER TOUCHED SUBJECT, and `touched` is
+    // seeded from every subject in `found`, which includes this identity's own endorsements.
+    // An author's own auto-pin therefore keeps every post they have ever published in
+    // `touched` forever, so the multiplier is the number of posts rather than the number of
+    // things that moved.
+    //
+    // Taken HERE and not reused from the list at the top of the pass, which is the reason
+    // the gathers scanned for themselves: that one predates the write loop above, and a
+    // record written this pass has to be in the set it is folded from. Re-taken once, after
+    // every write and before any fold.
+    //
+    // A second thing falls out and is worth keeping: every subject in this loop now folds
+    // from the log AS OF ONE MOMENT. Scanning per subject meant two subjects in one pass
+    // could be folded against different states of the same log.
+    let log_rkeys = crate::list_rkeys(
+        &ctx.doc,
+        ctx.author_id,
+        pin_derive::ENGAGEMENT_LOG_COLLECTION,
+    )
+    .await
+    .unwrap_or_default();
+    let comment_rkeys =
+        crate::list_rkeys(&ctx.doc, ctx.author_id, pin_derive::COMMENT_LOG_COLLECTION)
+            .await
+            .unwrap_or_default();
+
     // Republish every tally that moved.
     for subject in &touched {
         let Some(channel_id) = subjects.get(subject) else {
@@ -1003,14 +1025,14 @@ pub async fn engagement_once<N: crate::net::Network>(
         // The log IS the backing set a count asserts, so it is what a count is folded from.
         // `found` keeps its job of deciding what the log should say; it just stops standing
         // in for the log afterwards.
-        let gestures = log_records_for(ctx, subject).await;
+        let gestures = log_records_for(ctx, &log_rkeys, subject).await;
         // Comments are counted by the same fold: `kind` drives it, so a `comment` tally
         // appears beside the others with its own set and its own root, and a row reads one
         // record for every number it shows.
         // Asked before the cap, so the same set answers both: what is published is what is
         // counted, and a tally claiming more than its conversation shows would be a number
         // whose backing set the holder had in part chosen not to produce.
-        let held = crate::comments::held_for(ctx, subject).await;
+        let held = crate::comments::held_for(ctx, &comment_rkeys, subject).await;
         let before = held.len();
         let allowed: Vec<Endorsement> = held
             .into_iter()

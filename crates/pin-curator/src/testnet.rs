@@ -314,8 +314,64 @@ impl Identity {
         .await;
     }
 
+    /// Endorse every one of this identity's own posts, as the app does when publishing
+    /// auto-pins what it just wrote.
+    ///
+    /// This is what puts a subject in `found`, and `touched` is seeded from `found` — so
+    /// without it a pass folds nothing however much has been published, and a test about
+    /// what folding costs would pass by doing none of it.
+    pub async fn endorses_own_posts(&self, posts: usize) {
+        let channel_id = pin_crypto::channel_id(&self.channel_key());
+        for i in 0..posts {
+            let subject = pin_crypto::engagement_subject(
+                &channel_id,
+                &format!("2026-09-12T00:00:{i:02}.000Z"),
+            );
+            // Really signed, with this identity's own key. A hand-built record with a
+            // plausible-looking signature is discarded as a forgery before it reaches the
+            // log, so a fake one would leave the fold with nothing and a test about folding
+            // measuring none of it.
+            let record = pin_engagement::Endorsement::sign(
+                &pin_derive::did_dht_seed(&self.app_key),
+                "pin",
+                &subject,
+                "bafkreiaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "2026-09-12T00:00:00.000Z",
+                None,
+            )
+            .expect("sign");
+            crate::write_record(
+                &self.doc,
+                self.author_id,
+                pin_derive::ENDORSE_COLLECTION,
+                &pin_derive::endorse_rkey("pin", &subject),
+                serde_json::to_vec(&record).expect("encode"),
+            )
+            .await
+            .expect("endorse");
+        }
+    }
+
+    /// Follow nobody, and publish a channel holding `posts` items.
+    ///
+    /// The item count decides how many SUBJECTS this identity owns, and a pass re-folds one
+    /// per subject — so this is the lever for a test about what a pass costs as an author's
+    /// back catalogue grows rather than as any one post gets popular.
+    pub async fn publishes_posts(&self, posts: usize) {
+        self.publishing_n(
+            serde_json::json!({ "follows": [], "handleFollows": [] }),
+            posts,
+        )
+        .await;
+    }
+
     /// Whatever graph these settings describe, plus a channel with one post in it.
-    async fn publishing(&self, mut settings: serde_json::Value) {
+    async fn publishing(&self, settings: serde_json::Value) {
+        self.publishing_n(settings, 1).await;
+    }
+
+    /// The same, with the post count as a lever.
+    async fn publishing_n(&self, mut settings: serde_json::Value, posts: usize) {
         let k = self.channel_key();
         let channel_id = pin_crypto::channel_id(&k);
         settings["myChannels"] = serde_json::json!([{
@@ -334,15 +390,21 @@ impl Identity {
             "description": "",
             "authorPubkey": "ed25519:testnet",
             "publishedAt": "2026-09-12T00:00:00.000Z",
-            "items": [{
-                "id": "item-1",
-                "itemURL": "sia://item-1",
-                "type": "text",
-                "title": "",
-                "publishedAt": "2026-09-12T00:00:00.000Z",
-                "mimeType": "text/markdown",
-                "byteSize": 32,
-            }],
+            "items": (0..posts)
+                .map(|i| {
+                    serde_json::json!({
+                        "id": format!("item-{i}"),
+                        "itemURL": format!("sia://item-{i}"),
+                        "type": "text",
+                        "title": "",
+                        // Distinct, because the engagement subject is f(channelID,
+                        // publishedAt) and two items sharing a stamp would be one subject.
+                        "publishedAt": format!("2026-09-12T00:00:{i:02}.000Z"),
+                        "mimeType": "text/markdown",
+                        "byteSize": 32,
+                    })
+                })
+                .collect::<Vec<_>>(),
         });
         let sealed = pin_crypto::encrypt(&k, &serde_json::to_vec(&manifest).expect("serialize"))
             .expect("seal manifest");
@@ -1249,6 +1311,70 @@ mod visibility {
         assert!(b.held(&c.did).await.is_some());
     }
 
+    /// WHAT A PASS SCANS DOES NOT GROW WITH AN AUTHOR'S BACK CATALOGUE.
+    ///
+    /// `list_rkeys` is `Query::all()` over the whole doc with the prefix stripped in Rust,
+    /// so it costs the size of the doc however small the collection. Both per-subject
+    /// gathers used to open with one — so a pass paid two WHOLE-DOC SCANS PER TOUCHED
+    /// SUBJECT, and `touched` is seeded from every subject in `found`, which includes this
+    /// identity's own endorsements. An author's own auto-pin keeps every post they have ever
+    /// published in `touched` forever, so the multiplier was the size of the back catalogue
+    /// rather than the number of things that moved.
+    ///
+    /// Asserted as an EQUALITY between two catalogue sizes rather than against a fixed
+    /// number, so it locks the property — scans are a function of the pass, not of the
+    /// subjects — and survives the pass gaining or losing a scan for unrelated reasons.
+    ///
+    /// The non-zero check is not decoration. This counter is thread-local and only sees work
+    /// that stayed on the test's own thread, and the scenario only folds anything because
+    /// `endorses_own_posts` put the subjects in `found` — either could silently make this
+    /// a comparison of two zeroes, which is the shape of a cost test that measures nothing.
+    #[tokio::test]
+    async fn scanning_does_not_scale_with_the_subjects_a_pass_folds() {
+        async fn scans_for(posts: usize, seed: u8) -> usize {
+            let world = World::new();
+            let who = Identity::new(&world, seed).await;
+            who.publishes_posts(posts).await;
+            who.endorses_own_posts(posts).await;
+
+            let ctx = who.engagement_ctx();
+            crate::scans::reset();
+            let folded = crate::engagement_once(
+                &ctx,
+                &who.did,
+                "2026-09-12T00:00:00.000Z".to_string(),
+                false,
+            )
+            .await
+            .expect("engagement pass");
+            let scanned = crate::scans::taken();
+
+            // `tallies` counts tallies PUBLISHED, and this context's Sia session is
+            // deliberately disconnected — so the gate is that every subject was folded and
+            // tried, which is the work the scans are being counted for.
+            // `tallies` is the per-SUBJECT counter — a tally written into the channel doc,
+            // which needs no Sia. (`published`/`publish_failed` are per CHANNEL and would
+            // read 1 however many posts there are, which is the wrong gate and was the
+            // first one tried.)
+            assert_eq!(
+                folded.tallies, posts,
+                "one tally per post, so every subject was folded and the scans counted                  below are the scans of doing that work",
+            );
+            assert_eq!(folded.cleared, 0, "and none of them folded to nothing");
+            scanned
+        }
+
+        let one = scans_for(1, 1).await;
+        let five = scans_for(5, 2).await;
+
+        assert!(one > 0, "the counter saw this pass at all");
+        assert_eq!(
+            one, five,
+            "five posts cost the same scans as one — the gathers take the list rather than \
+             each taking their own",
+        );
+    }
+
     /// A FULL INBOX IS REPORTED, where it used to be silent on both sides.
     ///
     /// A refusal loses nothing: the sender writes no delivery mark and re-knocks on its own
@@ -1943,8 +2069,10 @@ mod cost {
         .expect("scan");
         let scan = t0.elapsed();
 
+        // The scan is handed in, as the pass hands it in — so what is timed here is the
+        // gather alone, which is what the hoist left behind.
         let t1 = Instant::now();
-        let records = crate::engagement::log_records_for(&ctx, HOT).await;
+        let records = crate::engagement::log_records_for(&ctx, &rkeys, HOT).await;
         let gather = t1.elapsed();
 
         // The gate that says this measured something rather than scanning an empty doc or
