@@ -751,13 +751,16 @@ pub async fn engagement_once<N: crate::net::Network>(
         if did == own_did {
             continue;
         }
-        // A fold-only pass reads nobody. Their held records still count — dropping them
-        // would make every fast pass halve the numbers a crawl had established — but
-        // nobody is marked reached, so nothing can be withdrawn on the strength of a
-        // reading that didn't happen.
+        // A fold-only pass reads nobody, and loads nothing on their behalf either.
+        //
+        // Their held records still count, because a fold reads its set from the LOG and
+        // never from `found`. They were loaded here from before that was true, and since
+        // then only fed a comparison that always said unchanged — at one doc read per
+        // record, every pass. Worse, `found` is what the knock verdicts read as "taken from
+        // the actor's own directory this pass", so a graph actor's withdrawal was ignored
+        // as contradicted by a reading that never happened, and waited for the crawl.
+        // Nobody is marked reached, so nothing can be withdrawn by absence either.
         if !crawl {
-            let rkeys = held_by_actor.get(did.as_str()).cloned().unwrap_or_default();
-            all.push((did, held_endorsements(ctx, &rkeys).await));
             continue;
         }
         let resolved = match resolve_directory(&ctx.net, &did).await {

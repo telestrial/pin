@@ -680,6 +680,9 @@ pub(crate) async fn read_record(
     collection: &str,
     rkey: &str,
 ) -> Result<Option<Vec<u8>>, String> {
+    #[cfg(test)]
+    reads::count();
+
     let entry = doc
         .get_exact(author_id, record_key(collection, rkey), false)
         .await
@@ -739,6 +742,34 @@ pub(crate) mod scans {
     // so one test's awaited work stays on one thread — and anything that did escape to
     // another would go UNcounted rather than be miscounted, which a reader of this has to
     // know, and is why every assertion on it also insists the count is non-zero.
+    thread_local! {
+        static COUNT: Cell<usize> = const { Cell::new(0) };
+    }
+
+    pub(crate) fn count() {
+        COUNT.with(|c| c.set(c.get() + 1));
+    }
+
+    /// Start counting from here.
+    pub(crate) fn reset() {
+        COUNT.with(|c| c.set(0));
+    }
+
+    pub(crate) fn taken() -> usize {
+        COUNT.with(|c| c.get())
+    }
+}
+
+/// How many records have been read back one at a time — test-only, the same kind of
+/// instrument as `scans` and thread-local for the same reason.
+///
+/// A read is ~40 µs where a scan over tens of thousands of entries is ~25 ms, so at scale
+/// the reads are the cost; and like a scan, reading a record for nothing produces the same
+/// output as not reading it.
+#[cfg(test)]
+pub(crate) mod reads {
+    use std::cell::Cell;
+
     thread_local! {
         static COUNT: Cell<usize> = const { Cell::new(0) };
     }

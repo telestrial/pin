@@ -1474,6 +1474,128 @@ mod visibility {
         );
     }
 
+    /// A GRAPH ACTOR'S WITHDRAWAL KNOCK IS APPLIED ON A FOLD-ONLY PASS.
+    ///
+    /// Alice is in john's graph and john holds her like from an earlier crawl. She takes it
+    /// back, and her Curator knocks the signed withdrawal. The verdict treats a record in
+    /// `found` as "read from the actor's own directory this pass" and ignores a withdrawal
+    /// that the same pass read contradicted — right on a crawl, where `found` is what was
+    /// read. A fold-only pass reads nobody, so nothing it holds contradicts her, and her
+    /// withdrawal should land now rather than waiting for the next crawl.
+    #[tokio::test]
+    async fn a_graph_actors_withdrawal_lands_on_a_fold_only_pass() {
+        let world = World::new();
+        let john = Identity::new(&world, 1).await;
+        let alice = Identity::new(&world, 2).await;
+        john.follows_and_publishes(&[&alice.did]).await;
+
+        let subject = own_post_subject(&john);
+        let like = pin_engagement::Endorsement::sign(
+            &pin_derive::did_dht_seed(&alice.app_key),
+            pin_engagement::KIND_LIKE,
+            &subject,
+            "version-1",
+            "2026-09-12T00:00:01.000Z",
+            None,
+        )
+        .expect("sign like");
+        // Held, as an earlier crawl of her directory would have left it.
+        crate::write_record(
+            &john.doc,
+            john.author_id,
+            pin_derive::ENGAGEMENT_LOG_COLLECTION,
+            &pin_derive::engagement_log_rkey(&subject, pin_engagement::KIND_LIKE, &alice.did),
+            serde_json::to_vec(&like).expect("encode"),
+        )
+        .await
+        .expect("hold like");
+
+        let withdrawal = pin_engagement::Retraction::sign(
+            &pin_derive::did_dht_seed(&alice.app_key),
+            pin_engagement::KIND_LIKE,
+            &subject,
+            "2026-09-12T00:00:02.000Z",
+        )
+        .expect("sign withdrawal");
+        let ctx = john.engagement_ctx();
+        let handler = pin_rpc::HeyHandler::new(ctx.inbox.clone());
+        assert!(handler.accept_knock(&pin_rpc::hey_request(
+            &serde_json::to_value(&withdrawal).expect("encode")
+        )));
+
+        let folded = crate::engagement_once(
+            &ctx,
+            &john.did,
+            "2026-09-12T00:00:03.000Z".to_string(),
+            false,
+        )
+        .await
+        .expect("engagement pass");
+
+        assert_eq!(
+            (folded.retractions_applied, folded.retractions_ignored),
+            (1, 0),
+            "her withdrawal is applied, not ignored until the next crawl",
+        );
+    }
+
+    /// WHAT A FOLD-ONLY PASS READS DOES NOT GROW WITH WHAT THE GRAPH HAS ENDORSED.
+    ///
+    /// A fold reads its counts straight from the log, so the records held for graph actors
+    /// have no job on a pass that reads nobody. Asserted as an equality between one held
+    /// record and five, with the same non-zero gate as the scan test.
+    #[tokio::test]
+    async fn a_fold_only_pass_does_not_read_what_the_graph_endorsed() {
+        async fn reads_for(actors: usize, seed: u8) -> usize {
+            let world = World::new();
+            let john = Identity::new(&world, seed).await;
+            let dids: Vec<String> = (0..actors).map(|i| format!("did:dht:{i:0>52}")).collect();
+            let refs: Vec<&str> = dids.iter().map(String::as_str).collect();
+            john.follows_and_publishes(&refs).await;
+            let subject = own_post_subject(&john);
+            for did in &dids {
+                // Only read, never verified here, so a plain record is enough to count.
+                let record = serde_json::json!({
+                    "kind": "like",
+                    "actor": did,
+                    "subject": subject,
+                    "version": "version-1",
+                    "createdAt": "2026-09-12T00:00:01.000Z",
+                    "sig": pin_crypto::b64_encode(&[7u8; 64]),
+                });
+                crate::write_record(
+                    &john.doc,
+                    john.author_id,
+                    pin_derive::ENGAGEMENT_LOG_COLLECTION,
+                    &pin_derive::engagement_log_rkey(&subject, "like", did),
+                    serde_json::to_vec(&record).expect("encode"),
+                )
+                .await
+                .expect("hold");
+            }
+
+            let ctx = john.engagement_ctx();
+            crate::reads::reset();
+            crate::engagement_once(
+                &ctx,
+                &john.did,
+                "2026-09-12T00:00:02.000Z".to_string(),
+                false,
+            )
+            .await
+            .expect("engagement pass");
+            crate::reads::taken()
+        }
+
+        let one = reads_for(1, 1).await;
+        let five = reads_for(5, 2).await;
+        assert!(one > 0, "the counter saw this pass at all");
+        assert_eq!(
+            one, five,
+            "five actors' held records cost a fold-only pass the same reads as one",
+        );
+    }
+
     /// A FULL INBOX IS REPORTED, where it used to be silent on both sides.
     ///
     /// A refusal loses nothing: the sender writes no delivery mark and re-knocks on its own
