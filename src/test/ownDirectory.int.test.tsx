@@ -322,6 +322,42 @@ describe('integration: your own directory comes from local state', () => {
     })
   })
 
+  it('credits a person with the followers of their channels', async () => {
+    // The person is the unit and a channel is how somebody chooses to follow them, so a
+    // profile whose channels have followers does not read 0.
+    signedInWith([])
+    hold(THEM, 'them')
+    holdFollowing('did:dht:someone', {
+      follows: [{ didDht: THEM, channelID: 'their-techno' }],
+    })
+
+    render(directory(THEM))
+
+    await waitFor(() => {
+      expect(stat('Followers')).toBe('1')
+    })
+  })
+
+  it('lists and counts each person followed once, naming the channels taken', async () => {
+    // Two channels of one person is following that person once, and the row says which
+    // of their voices.
+    signedInWith([owned()])
+    useAuthStore.setState({
+      follows: [
+        { didDht: THEM, channelID: 'ch-techno', name: 'Techno' },
+        { didDht: THEM, channelID: 'ch-cats', name: 'Cats' },
+      ],
+    })
+    await inTheDoc('chan1', 'A channel')
+
+    render(directory(ME))
+
+    await waitFor(() => {
+      expect(screen.getByText('Techno · Cats')).toBeInTheDocument()
+    })
+    expect(stat('Following')).toBe('1')
+  })
+
   it('renders a held profile before the network has answered', async () => {
     // The landing costs a doc read rather than a DHT lookup and a Sia download, which is
     // the whole of what the crawl's index buys a page. Holding the resolve open is what

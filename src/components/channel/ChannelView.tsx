@@ -152,7 +152,13 @@ export function ChannelView({
   const isPublic = manifest?.visibility === 'public'
   const isOwnPublic = isOwned && isPublic
   const { claimed, setClaimed } = useChannelClaim(channelID, isOwnPublic)
-  const followerCount = useFollowerCount('channel', isPublic ? channelID : '')
+  // With the author, because following a person watches every public channel they
+  // advertise: their wholesale followers are this channel's audience too.
+  const followerCount = useFollowerCount(
+    'channel',
+    isPublic ? channelID : '',
+    manifest?.authorDidDht,
+  )
 
   // Backfill the manifest cache on cold-mount (e.g. empty channel that
   // contributed no feed entries to the initial refresh). Updates arrive on
@@ -345,7 +351,7 @@ export function ChannelView({
                               follows a public channel you author — which is what puts
                               you among its followers — and this is the ONLY place that
                               can be undone: the sidebar keeps owned channels out of
-                              Following, and `followsOfOthers` keeps a self-follow out of
+                              Following, and `followedPeople` keeps a self-follow out of
                               the profile's. So the page the claim is about is the page
                               that changes it. */}
                           {isOwnPublic && manifest?.authorDidDht && (

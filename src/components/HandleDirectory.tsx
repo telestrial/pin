@@ -2,7 +2,7 @@ import { Plus } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { advertisedChannels } from '../core/channels'
 import type { FeedEntry } from '../core/feed'
-import { followsOfOthers } from '../core/followers'
+import { type FollowedPerson, followedPeople } from '../core/followers'
 import { buildProfileFeed, includedOnProfile } from '../core/profileFeed'
 import type { ChannelManifest, FollowEdge } from '../core/types'
 import {
@@ -20,7 +20,6 @@ import {
 import { useItemBlobURL } from '../lib/hooks/useItemBytes'
 import { resolveIdentityDoc } from '../lib/identityDoc'
 import { useAuthStore } from '../stores/auth'
-import { ChannelAvatar } from './channel/ChannelAvatar'
 import { ChannelHeroCard } from './channel/ChannelHeroCard'
 import { FollowHandleButton } from './FollowHandleButton'
 import { FeedRow } from './HomeFeed'
@@ -504,16 +503,12 @@ function LoadedDirectory({
   onEditProfile?: () => void
   onCreate?: () => void
 }) {
-  // A follow of your own channel is authorship rather than attention — see
-  // `followsOfOthers`. Filtered once, so the count, the list and the empty check cannot
-  // end up with three readings of what "following" means.
-  const others = followsOfOthers(did, follows, handleFollows)
+  // People, one each, by either grain — see `followedPeople`. Built once, so the count,
+  // the list and the empty check cannot end up with three readings of what "following"
+  // means.
+  const followed = followedPeople(did, follows, handleFollows)
 
-  const isEmpty =
-    !profile &&
-    ownChannels.length === 0 &&
-    others.follows.length === 0 &&
-    others.handleFollows.length === 0
+  const isEmpty = !profile && ownChannels.length === 0 && followed.length === 0
 
   // Built from the manifests the cards above already hold, so the feed costs no network of
   // its own: a card needs a manifest and a manifest carries the items. Rebuilt whenever the
@@ -534,7 +529,7 @@ function LoadedDirectory({
         did={did}
         isSelf={isSelf}
         profile={profile}
-        followingCount={others.follows.length + others.handleFollows.length}
+        followingCount={followed.length}
         followerCount={followerCount}
         onBack={onBack}
         onEdit={onEditProfile}
@@ -639,24 +634,17 @@ function LoadedDirectory({
         </div>
       )}
 
-      {(others.handleFollows.length > 0 || others.follows.length > 0) && (
+      {followed.length > 0 && (
         <Section title="Following">
-          {/* People first, then channels. One section rather than two, because they are
-              one act at two grains — following a person, or following one of their
-              voices — and splitting them would ask a reader to hold a distinction the
-              gesture does not make. People lead because a person is the larger claim:
-              following someone takes everything they advertise. */}
-          {others.handleFollows.map((did) => (
+          {/* One row per PERSON. A channel is how somebody chooses to follow a person, so
+              following three of their voices is following them once — and which voices is
+              what the row says, since taking only someone's techno channel and not their
+              cat photos is a real thing to be able to read. */}
+          {followed.map((p) => (
             <PersonFollowRow
-              key={did}
-              didDht={did}
-              onHandleClick={onHandleClick}
-            />
-          ))}
-          {others.follows.map((f) => (
-            <FollowRow
-              key={`${f.didDht}:${f.channelID}`}
-              edge={f}
+              key={p.didDht}
+              didDht={p.didDht}
+              via={followedVia(p)}
               onHandleClick={onHandleClick}
             />
           ))}
@@ -909,11 +897,21 @@ function channelContentBytes(manifest: ChannelManifest): number {
  *  opens their directory. What differs is only where the name comes from — a channel
  *  follow carries a cached one, and a person is named by their own published profile,
  *  which `useIdentityName` reads out of the crawl's index before the network. */
+/** What of somebody's this identity follows, in words for a row. */
+function followedVia(p: FollowedPerson): string {
+  // Wholesale takes everything they advertise, now and later, so any channel followed
+  // alongside it is already included and naming it would suggest otherwise.
+  if (p.wholesale) return 'Everything'
+  return p.channels.map((c) => c.name || 'A channel').join(' · ')
+}
+
 function PersonFollowRow({
   didDht,
+  via,
   onHandleClick,
 }: {
   didDht: string
+  via: string
   onHandleClick: (handle: string) => void
 }) {
   const name = useIdentityName(didDht)
@@ -933,35 +931,7 @@ function PersonFollowRow({
         <div className="text-sm font-semibold text-neutral-900 truncate">
           @{name}
         </div>
-      </div>
-    </button>
-  )
-}
-
-function FollowRow({
-  edge,
-  onHandleClick,
-}: {
-  edge: FollowEdge
-  onHandleClick: (handle: string) => void
-}) {
-  const name = edge.name || 'Channel'
-  return (
-    <button
-      type="button"
-      onClick={() => onHandleClick(edge.didDht)}
-      className="w-full p-3 flex gap-3 items-center text-left hover:bg-neutral-50 cursor-pointer transition-colors"
-    >
-      <ChannelAvatar
-        channelID={edge.channelID}
-        channelName={name}
-        authorHandle=""
-        size="md"
-      />
-      <div className="flex-1 min-w-0">
-        <div className="text-sm font-semibold text-neutral-900 truncate">
-          {name}
-        </div>
+        <div className="text-xs text-neutral-500 truncate">{via}</div>
       </div>
     </button>
   )

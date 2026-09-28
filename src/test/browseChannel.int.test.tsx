@@ -179,6 +179,33 @@ describe('integration: browsing a channel you do not hold', () => {
     await waitFor(() => expect(stat('Followers')).toBe('2'))
   })
 
+  it('counts the wholesale followers of its author, who receive it', async () => {
+    // Following a person watches every public channel they advertise, so somebody who
+    // follows the author is in this channel's audience. The WIRING under test is the page
+    // handing the manifest's author to the count; the pure rule is tested beside it.
+    await published([post('a post', '2026-09-02T00:00:00.000Z')])
+    docStore.set(
+      `${directory_collection()}/did:dht:fan`,
+      new TextEncoder().encode(
+        JSON.stringify({
+          tier: 'full',
+          profile: { username: 'fan', displayName: 'fan' },
+          channels: [],
+          reach: [],
+          follows: [],
+          handleFollows: [THEM],
+          url: 'sia://held',
+          epoch: 1,
+          seenAt: '2026-09-01T12:00:00.000Z',
+        }),
+      ),
+    )
+
+    view(KEY)
+
+    await waitFor(() => expect(stat('Followers')).toBe('1'))
+  })
+
   it('offers no follower count on an unlisted channel', async () => {
     // Not zero — absent. A `FollowEdge` carries no K and resolves through the author's
     // directory, where an unlisted channel is absent by construction, so the scan is

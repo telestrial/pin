@@ -3,13 +3,17 @@
 // A follow lives in the FOLLOWER's directory and nothing writes into the followed
 // identity's scope, so a follower count can only ever be a reverse scan of the index.
 // These lock what that scan counts — and, as much, what it declines to.
+//
+// THE PERSON IS THE UNIT (John, 2026-09-28): a channel is how somebody chooses to follow a
+// person, so a person's followers include their channels' followers, Following counts
+// people, and every count is one per person.
 
 import { describe, expect, it } from 'vitest'
 import {
   type FollowerEdges,
+  followedPeople,
   followersOfChannel,
   followersOfPerson,
-  followsOfOthers,
   ownFollowerEdges,
 } from '../core/followers'
 
@@ -31,20 +35,41 @@ describe('followersOfPerson', () => {
     expect(followersOfPerson(held, 'did:target')).toEqual(['did:a', 'did:c'])
   })
 
-  it('does not count following a CHANNEL of theirs', () => {
-    // The two grains are different claims. Following one voice is not following the
-    // person, and merging them would leave a profile's number unable to say which it
-    // meant — the channel's own count is where that follower is reported.
+  it('counts following a CHANNEL of theirs', () => {
+    // The author gets the credit for all of it: somebody who follows only one of your
+    // voices is part of your audience.
     const held = [
       who('did:a', [], [{ didDht: 'did:target', channelID: 'ch1' }]),
     ]
-    expect(followersOfPerson(held, 'did:target')).toEqual([])
-    expect(followersOfChannel(held, 'ch1')).toEqual(['did:a'])
+    expect(followersOfPerson(held, 'did:target')).toEqual(['did:a'])
+  })
+
+  it('counts a person once however many of their channels they follow', () => {
+    // One per person, so the number moves when a person does and not when an author
+    // splits a channel in five.
+    const held = [
+      who(
+        'did:a',
+        ['did:target'],
+        [
+          { didDht: 'did:target', channelID: 'ch1' },
+          { didDht: 'did:target', channelID: 'ch2' },
+        ],
+      ),
+    ]
+    expect(followersOfPerson(held, 'did:target')).toEqual(['did:a'])
   })
 
   it('never counts somebody as their own follower', () => {
-    // A directory can name anybody, its own author included.
-    const held = [who('did:target', ['did:target'])]
+    // A directory can name anybody, its own author included — and every author of a
+    // public channel follows it, so that is the edge this is really about.
+    const held = [
+      who(
+        'did:target',
+        ['did:target'],
+        [{ didDht: 'did:target', channelID: 'mine' }],
+      ),
+    ]
     expect(followersOfPerson(held, 'did:target')).toEqual([])
   })
 
@@ -67,37 +92,88 @@ describe('followersOfChannel', () => {
     expect(followersOfChannel(held, 'ch1')).toEqual(['did:a', 'did:b'])
   })
 
+  it('counts the wholesale followers of its author, who receive it', () => {
+    // Following a person watches every public channel they advertise, now and later, so a
+    // wholesale follower is in this channel's audience as surely as a direct one.
+    const held = [
+      who('did:a', [], [{ didDht: 'did:author', channelID: 'ch1' }]),
+      who('did:b', ['did:author']),
+      who('did:c', ['did:someone-else']),
+    ]
+    expect(followersOfChannel(held, 'ch1', 'did:author')).toEqual([
+      'did:a',
+      'did:b',
+    ])
+  })
+
+  it('counts somebody who follows both ways once', () => {
+    const held = [
+      who(
+        'did:a',
+        ['did:author'],
+        [{ didDht: 'did:author', channelID: 'ch1' }],
+      ),
+    ]
+    expect(followersOfChannel(held, 'ch1', 'did:author')).toEqual(['did:a'])
+  })
+
+  it('without an author, counts only its own followers', () => {
+    const held = [who('did:b', ['did:author'])]
+    expect(followersOfChannel(held, 'ch1')).toEqual([])
+  })
+
   it('is empty for a channel nobody held has followed', () => {
     // Empty means the crawl has read nobody who follows it — never that nobody does.
     expect(followersOfChannel([who('did:a', ['did:x'])], 'ch1')).toEqual([])
   })
 })
 
-describe('followsOfOthers', () => {
-  it('drops a follow of your own channel', () => {
-    // Following your own channel counts toward the CHANNEL — it is what puts its author
-    // among its followers — and says nothing about who the author follows. Counting it
-    // would read a profile as following somebody when it follows nobody but itself.
-    const out = followsOfOthers(
+describe('followedPeople', () => {
+  it('is one entry per person, however they are followed', () => {
+    // Following three of somebody's channels is following them once; which channels is
+    // kept on the entry.
+    const out = followedPeople(
+      'did:me',
+      [
+        { didDht: 'did:bob', channelID: 'techno' },
+        { didDht: 'did:bob', channelID: 'cats' },
+        { didDht: 'did:ann', channelID: 'essays' },
+      ],
+      ['did:cy'],
+    )
+    expect(out.map((p) => p.didDht)).toEqual(['did:cy', 'did:bob', 'did:ann'])
+    expect(out[0]).toEqual({ didDht: 'did:cy', wholesale: true, channels: [] })
+    expect(out[1].channels.map((c) => c.channelID)).toEqual(['techno', 'cats'])
+    expect(out[1].wholesale).toBe(false)
+  })
+
+  it('merges a wholesale follow with channel follows of the same person', () => {
+    const out = followedPeople(
+      'did:me',
+      [{ didDht: 'did:bob', channelID: 'techno' }],
+      ['did:bob'],
+    )
+    expect(out).toHaveLength(1)
+    expect(out[0].wholesale).toBe(true)
+  })
+
+  it('never includes itself', () => {
+    // Following your own channel puts you among its audience; it is authorship rather
+    // than attention, and counted here would read a profile as following somebody when
+    // it follows nobody but itself.
+    const out = followedPeople(
       'did:me',
       [
         { didDht: 'did:me', channelID: 'mine' },
         { didDht: 'did:them', channelID: 'theirs' },
       ],
-      [],
+      ['did:me'],
     )
-    expect(out.follows).toEqual([{ didDht: 'did:them', channelID: 'theirs' }])
-  })
-
-  it('drops a wholesale follow of yourself', () => {
-    const out = followsOfOthers('did:me', [], ['did:me', 'did:them'])
-    expect(out.handleFollows).toEqual(['did:them'])
+    expect(out.map((p) => p.didDht)).toEqual(['did:them'])
   })
 
   it('is keyed on the subject, so it holds on any profile', () => {
-    // Not a fact about the viewer. Somebody else's profile excludes THEIR self-follows,
-    // by the same rule and in the same place.
-    const out = followsOfOthers(
+    const out = followedPeople(
       'did:them',
       [
         { didDht: 'did:them', channelID: 'theirs' },
@@ -105,8 +181,52 @@ describe('followsOfOthers', () => {
       ],
       ['did:them'],
     )
-    expect(out.follows).toEqual([{ didDht: 'did:me', channelID: 'mine' }])
-    expect(out.handleFollows).toEqual([])
+    expect(out.map((p) => p.didDht)).toEqual(['did:me'])
+  })
+})
+
+describe('the two directions agree', () => {
+  it('A is among the followers of B exactly when B is among the people A follows', () => {
+    // One relation, read from either end — which the grain-split counts were not: a
+    // profile could read "Following 3" meaning three channels of one person while
+    // somebody else read 0 over forty channel followers.
+    const edges: Record<
+      string,
+      {
+        follows: { didDht: string; channelID: string }[]
+        handleFollows: string[]
+      }
+    > = {
+      'did:a': {
+        follows: [
+          { didDht: 'did:b', channelID: 'b1' },
+          { didDht: 'did:b', channelID: 'b2' },
+        ],
+        handleFollows: [],
+      },
+      'did:b': {
+        follows: [{ didDht: 'did:b', channelID: 'b1' }],
+        handleFollows: ['did:c'],
+      },
+      'did:c': {
+        follows: [{ didDht: 'did:a', channelID: 'a1' }],
+        handleFollows: ['did:a'],
+      },
+    }
+    const held = Object.entries(edges).map(([did, e]) =>
+      who(did, e.handleFollows, e.follows),
+    )
+    const dids = Object.keys(edges)
+    for (const a of dids) {
+      for (const b of dids) {
+        const aFollowsB = followedPeople(
+          a,
+          edges[a].follows,
+          edges[a].handleFollows,
+        ).some((p) => p.didDht === b)
+        expect(followersOfPerson(held, b).includes(a)).toBe(aFollowsB)
+      }
+    }
   })
 })
 

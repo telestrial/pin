@@ -17,12 +17,11 @@ import {
 import { useAuthStore } from '../../stores/auth'
 import { followerEdges } from '../directories'
 
-/** Which grain is being counted.
+/** Which subject is being counted: a person (their whole audience, by either grain) or a
+ *  channel (its own followers plus its author's wholesale ones).
  *
- *  Two scalars rather than one discriminated object, which a caller would rebuild on
- *  every render and churn the effect it feeds. The grains are genuinely different claims
- *  — following a person takes everything they advertise, following a channel takes one
- *  voice — so one hook answers both and neither borrows the other's number. */
+ *  Scalars rather than one discriminated object, which a caller would rebuild on every
+ *  render and churn the effect it feeds. */
 export type FollowerGrain = 'person' | 'channel'
 
 /** Null until counted, which the `Stat` renders as a dash.
@@ -33,6 +32,8 @@ export type FollowerGrain = 'person' | 'channel'
 export function useFollowerCount(
   grain: FollowerGrain,
   id: string,
+  /** A channel's author, whose wholesale followers it reaches. Ignored for a person. */
+  authorDidDht?: string,
 ): number | null {
   const storedKeyHex = useAuthStore((s) => s.storedKeyHex)
   const myDidDht = useAuthStore((s) => s.myDidDht)
@@ -61,7 +62,7 @@ export function useFollowerCount(
         const count =
           grain === 'person'
             ? followersOfPerson(corpus, id).length
-            : followersOfChannel(corpus, id).length
+            : followersOfChannel(corpus, id, authorDidDht).length
         if (!cancelled) setCounted({ subject: `${grain}:${id}`, count })
       })
       // A crawl index that will not open is not an absence of followers.
@@ -69,7 +70,7 @@ export function useFollowerCount(
     return () => {
       cancelled = true
     }
-  }, [storedKeyHex, grain, id, myDidDht, follows, handleFollows])
+  }, [storedKeyHex, grain, id, authorDidDht, myDidDht, follows, handleFollows])
 
   return counted?.subject === `${grain}:${id}` ? counted.count : null
 }

@@ -111,7 +111,7 @@ export async function runChannelCreate(
   })
   // A public channel you author, followed by you. The claim is about the VOICE — it is
   // what puts an author among their own channel's followers, so its page reads 1 from the
-  // moment it exists rather than 0 until a stranger arrives. `followsOfOthers` keeps it
+  // moment it exists rather than 0 until a stranger arrives. `followedPeople` keeps it
   // out of your own Following, where it would read as attention rather than authorship.
   //
   // PUBLIC only: a `FollowEdge` carries no K and resolves through the author's directory,
