@@ -71,16 +71,14 @@ test('alice publishes a post; bob opens her link, watches, and sees it', async (
     await alice.getByPlaceholder(/e\.g\. John Williams/i).fill(channelName)
     await alice.getByRole('button', { name: /Create channel/i }).click()
 
-    // Generous: creating a channel now does two serial Sia uploads on the
-    // critical path (the manifest object + the settings snapshot) plus a pkarr
-    // publish, before the confirmation shows — vs the old atproto putRecord that
-    // did none of that. Sia uploads churn through QUIC-failing hosts, so this
-    // needs the same headroom the other Sia-touching waits have.
-    await expect(
-      alice.getByRole('heading', { name: /Channel created/i }),
-    ).toBeVisible({ timeout: 150_000 })
-    // The heading is the ENQUEUE, not the commit — see waitForChannelPublished.
+    // The create puts alice back where she was and shows the channel in the sidebar as
+    // it is set up. `myChannels` gaining it IS the commit — see waitForChannelPublished.
     await waitForChannelPublished(alice, channelName)
+    // The link lives on the page of a channel you own, so open it from the sidebar.
+    await alice
+      .getByRole('list', { name: 'Your channels' })
+      .getByRole('button', { name: channelName })
+      .click()
 
     // Clear the clipboard BEFORE the copy, then poll for a fresh value.
     // `readText()` immediately after the click can return the PREVIOUS run's URL,
@@ -100,7 +98,7 @@ test('alice publishes a post; bob opens her link, watches, and sees it', async (
       navigator.clipboard.readText(),
     )
 
-    await alice.getByRole('button', { name: /^Done$/ }).click()
+    await alice.getByRole('button', { name: 'Home', exact: true }).first().click()
 
     // -- Alice publishes a post --
 

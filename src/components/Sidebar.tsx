@@ -1,4 +1,5 @@
-import { Plus } from 'lucide-react'
+import { Plus, RotateCw, X } from 'lucide-react'
+import { type ChannelCreateAction, useActionStore } from '../stores/actionQueue'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
 import { ChannelAvatar } from './channel/ChannelAvatar'
@@ -82,7 +83,25 @@ export function Sidebar({
   const follows = useAuthStore((s) => s.follows)
   const manifests = useFeedStore((s) => s.manifests)
 
+  const actions = useActionStore((s) => s.actions)
+  const retryAction = useActionStore((s) => s.retry)
+  const removeAction = useActionStore((s) => s.remove)
+
   const ownedChannelIDs = new Set(myChannels.map((c) => c.channelID))
+  // Channels still being set up, drawn from the journal rather than from settings. A
+  // channel enters settings only once its manifest is published, because settings is
+  // what the identity loop advertises — so without this the sidebar would say nothing
+  // about a channel for as long as its images upload. Keyed by the channelID minted at
+  // enqueue, so the moment the commit lands the real entry takes the same slot and this
+  // one drops out.
+  const settingUp = actions
+    .filter(
+      (a): a is ChannelCreateAction =>
+        a.kind === 'channel-create' &&
+        a.state !== 'success' &&
+        !ownedChannelIDs.has(a.intent.channelID),
+    )
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
   const channelsToShow = [...myChannels]
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
     .slice(0, CAP)
@@ -162,8 +181,66 @@ export function Sidebar({
           onAdd={onCreate}
           onTitleClick={onSeeAll}
         />
-        {channelsToShow.length > 0 && (
+        {channelsToShow.length + settingUp.length > 0 && (
           <ul aria-label="Your channels">
+            {settingUp.map((a) => {
+              const failed = a.state === 'failed'
+              return (
+                <li
+                  key={a.intent.channelID}
+                  aria-busy={!failed}
+                  className="px-3 py-1.5 text-sm rounded flex items-center gap-2"
+                >
+                  {failed ? (
+                    <ChannelAvatar
+                      channelID={a.intent.channelID}
+                      channelName={a.intent.name}
+                      authorHandle=""
+                      size="xs"
+                    />
+                  ) : (
+                    <span
+                      aria-hidden="true"
+                      className="size-5 shrink-0 flex items-center justify-center"
+                    >
+                      <span className="block size-3.5 rounded-full border-2 border-neutral-300 border-t-green-600 animate-spin" />
+                    </span>
+                  )}
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-neutral-900">
+                      {a.intent.name}
+                    </span>
+                    <span
+                      className={`block text-[10px] truncate ${failed ? 'text-red-600' : 'text-green-700 animate-pulse'}`}
+                    >
+                      {failed ? "Couldn't set up" : 'Setting up…'}
+                    </span>
+                  </span>
+                  {failed && (
+                    <span className="flex items-center gap-0.5 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => retryAction(a.id)}
+                        title="Retry"
+                        aria-label={`Retry setting up ${a.intent.name}`}
+                        className="p-1 rounded text-neutral-400 hover:text-neutral-900 hover:bg-neutral-100 cursor-pointer"
+                      >
+                        <RotateCw className="size-3" aria-hidden="true" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => removeAction(a.id)}
+                        title="Dismiss"
+                        aria-label={`Dismiss ${a.intent.name}`}
+                        className="p-1 rounded text-neutral-400 hover:text-neutral-900 hover:bg-neutral-100 cursor-pointer"
+                      >
+                        <X className="size-3" aria-hidden="true" />
+                      </button>
+                    </span>
+                  )}
+                </li>
+              )
+            })}
             {channelsToShow.map((c) => {
               const active = c.channelID === activeChannelID
               return (

@@ -213,19 +213,17 @@ export async function signInAccount(
   return page
 }
 
-// The signal that a channel is LIVE — manifest on Sia, pkarr pointer published —
-// which the "Channel created" heading is NOT.
+// The signal that a channel is LIVE — manifest on Sia, pkarr pointer published.
 //
-// Creating a channel is a journaled action: K is minted at enqueue so the channelID
-// and the share link exist before any byte moves, and the heading appears then. The
+// Creating a channel is a journaled action: K is minted at enqueue, the form puts you
+// back where you were, and the sidebar shows the channel as it is set up. The
 // settings entry is written only once `createAndPublishChannel` returns, deliberately
 // — an entry in settings is one the identity loop advertises, and advertising a
 // channel whose locator resolves to nothing sends every reader to a dead end.
 //
 // So `myChannels` gaining the name IS the commit having landed, and it is what a spec
 // has to wait on before handing the link to anybody or expecting the channel to be
-// selectable as a voice. These specs were written when create was synchronous and
-// "Channel created" meant both legs were live; it no longer does.
+// selectable as a voice.
 export async function waitForChannelPublished(
   page: Page,
   channelName: string,

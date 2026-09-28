@@ -1,7 +1,15 @@
-// Where the link to a channel you own lives: on that channel's page, because that is
-// where you go to share it.
+// A channel being set up, and where its link lives once it is.
+//
+// Creating a channel is a journaled action: K and the channelID are minted at enqueue, and
+// the channel enters settings only once its manifest is published, because settings is
+// what the identity loop advertises. So the sidebar draws a channel still being set up
+// from the JOURNAL, under the channelID the finished entry will take — which is what lets
+// the create put you straight back where you were rather than holding you on a
+// confirmation screen.
+//
+// And with that screen gone, the share link lives on the page of a channel you own.
 
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -16,8 +24,10 @@ vi.mock('../lib/channelLocatorNative', async () =>
 )
 
 import { ChannelView } from '../components/channel/ChannelView'
+import { Sidebar } from '../components/Sidebar'
 import { buildSubscribeURL } from '../core/channels'
 import type { ChannelManifest, ChannelVisibility } from '../core/types'
+import { type ChannelCreateAction, useActionStore } from '../stores/actionQueue'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
 import { fakeDocStore as docStore } from './fakeModules'
@@ -26,6 +36,124 @@ import { createFakeApp, mountAs, resetAllStores } from './setupFakeApp'
 const ME = 'did:dht:me'
 const KEY = 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8='
 const CHANNEL = 'newchannel000001'
+
+function creating(
+  state: ChannelCreateAction['state'],
+  name = 'Fresh voice',
+): ChannelCreateAction {
+  return {
+    id: `act-${state}`,
+    kind: 'channel-create',
+    state,
+    progress: 0,
+    createdAt: '2026-09-28T00:00:00.000Z',
+    title: name,
+    successLabel: 'Created',
+    failLabel: 'Create',
+    intent: {
+      channelKey: KEY,
+      channelID: CHANNEL,
+      name,
+      description: '',
+      visibility: 'public',
+      showOnProfile: true,
+      authorDidDht: ME,
+    },
+    ledger: {},
+  }
+}
+
+function sidebar() {
+  return render(
+    <Sidebar
+      onHome={() => {}}
+      onCurate={() => {}}
+      onSettings={() => {}}
+      onCreate={() => {}}
+      onOpenLink={() => {}}
+      onSeeAll={() => {}}
+      onChannelClick={() => {}}
+    />,
+  )
+}
+
+function yourChannels() {
+  return within(screen.getByRole('list', { name: 'Your channels' }))
+}
+
+describe('integration: a channel being set up', () => {
+  beforeEach(() => {
+    resetAllStores()
+    docStore.clear()
+    mountAs(
+      createFakeApp().createAccount({ did: 'did:plc:me', handle: 'me.test' }),
+    )
+    useAuthStore.setState({ myChannels: [], subscriptions: [], follows: [] })
+  })
+  afterEach(cleanup)
+
+  it('appears in your channels the moment it is queued', () => {
+    // Before any byte moves and before settings knows about it: the journal holds the
+    // intent, and that is enough to show the channel as active.
+    useActionStore.setState({ actions: [creating('pending')] })
+
+    sidebar()
+
+    const list = yourChannels()
+    expect(list.getByText('Fresh voice')).toBeInTheDocument()
+    expect(list.getByText('Setting up…')).toBeInTheDocument()
+    expect(list.queryByRole('button', { name: /Retry setting up/ })).toBeNull()
+  })
+
+  it('offers a retry and a dismiss when setting up failed', async () => {
+    // A journaled action can exhaust, and a spinner with no failure branch would spin
+    // forever. The two gestures are the journal's own.
+    useActionStore.setState({ actions: [creating('failed')] })
+
+    sidebar()
+
+    const list = yourChannels()
+    expect(list.getByText("Couldn't set up")).toBeInTheDocument()
+    await userEvent.click(
+      list.getByRole('button', { name: 'Retry setting up Fresh voice' }),
+    )
+    expect(useActionStore.getState().actions[0].state).toBe('pending')
+  })
+
+  it('dismissing a failed set-up removes it', async () => {
+    useActionStore.setState({ actions: [creating('failed')] })
+
+    sidebar()
+
+    await userEvent.click(
+      yourChannels().getByRole('button', { name: 'Dismiss Fresh voice' }),
+    )
+    expect(useActionStore.getState().actions).toEqual([])
+  })
+
+  it('gives way to the real entry under the same channelID', () => {
+    // The commit writes the settings entry before the action reports success, so for a
+    // moment both exist. One row, and it is the real one.
+    useActionStore.setState({ actions: [creating('running')] })
+    useAuthStore.setState({
+      myChannels: [
+        {
+          channelID: CHANNEL,
+          channelKey: KEY,
+          name: 'Fresh voice',
+          createdAt: '2026-09-28T00:00:01.000Z',
+          visibility: 'public',
+        },
+      ],
+    })
+
+    sidebar()
+
+    const list = yourChannels()
+    expect(list.getAllByText('Fresh voice')).toHaveLength(1)
+    expect(list.queryByText('Setting up…')).toBeNull()
+  })
+})
 
 describe('integration: the link to a channel you own', () => {
   const writeText = vi.fn<(text: string) => Promise<void>>()

@@ -79,14 +79,14 @@ test('pin the file vs pin the post: independent cross-account custody', async ({
     const channelName = `e2e test ${Date.now()}`
     await alice.getByPlaceholder(/e\.g\. John Williams/i).fill(channelName)
     await alice.getByRole('button', { name: /Create channel/i }).click()
-    // Generous: create now does two serial Sia uploads (manifest + settings
-    // snapshot) + a pkarr publish before the confirmation, and Sia uploads churn
-    // through QUIC-failing hosts. See cross-account.spec.ts for the rationale.
-    await expect(
-      alice.getByRole('heading', { name: /Channel created/i }),
-    ).toBeVisible({ timeout: 150_000 })
-    // The heading is the ENQUEUE, not the commit — see waitForChannelPublished.
+    // The create puts alice back where she was and shows the channel in the sidebar as
+    // it is set up. `myChannels` gaining it IS the commit — see waitForChannelPublished.
     await waitForChannelPublished(alice, channelName)
+    // The link lives on the page of a channel you own, so open it from the sidebar.
+    await alice
+      .getByRole('list', { name: 'Your channels' })
+      .getByRole('button', { name: channelName })
+      .click()
     // Clear the clipboard BEFORE the copy, then poll for a fresh value.
     // `readText()` immediately after the click can return the PREVIOUS run's URL,
     // and matching /^pin:\/\// cannot tell a stale Pin link from a new one — so a
@@ -104,7 +104,7 @@ test('pin the file vs pin the post: independent cross-account custody', async ({
     const channelURL = await alice.evaluate(() =>
       navigator.clipboard.readText(),
     )
-    await alice.getByRole('button', { name: /^Done$/ }).click()
+    await alice.getByRole('button', { name: 'Home', exact: true }).first().click()
 
     // -- Alice publishes a post WITH a file attachment --
     // Fill the body first — that expands the composer (so the voice picker,

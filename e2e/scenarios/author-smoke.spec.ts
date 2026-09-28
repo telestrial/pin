@@ -21,6 +21,7 @@ import {
   drainE2EChannels,
   loadAccount,
   signInAccount,
+  waitForChannelPublished,
 } from '../authHelper'
 
 test('author: onboard, create a channel, publish a post, and see it', async ({
@@ -43,13 +44,9 @@ test('author: onboard, create a channel, publish a post, and see it', async ({
     channelName = `e2e test ${Date.now()}`
     await alice.getByPlaceholder(/e\.g\. John Williams/i).fill(channelName)
     await alice.getByRole('button', { name: /Create channel/i }).click()
-    // Create does two serial Sia uploads (manifest + settings snapshot) + a pkarr
-    // publish before the confirmation, and Sia uploads churn through QUIC-failing
-    // hosts — same generous budget the cross-account spec uses.
-    await expect(
-      alice.getByRole('heading', { name: /Channel created/i }),
-    ).toBeVisible({ timeout: 150_000 })
-    await alice.getByRole('button', { name: /^Done$/ }).click()
+    // The create puts alice straight back on Home, with the channel in the sidebar as
+    // it is set up. The composer can only pick it as a voice once it is published.
+    await waitForChannelPublished(alice, channelName)
 
     // -- Publish a post --
     const postBody = `Author smoke — ${Date.now()}`

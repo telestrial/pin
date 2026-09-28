@@ -64,8 +64,9 @@ function opened(entry: FeedEntry, returnTo: View): View {
 
 export type View =
   | { kind: 'idle' }
-  | { kind: 'creating' }
-  | { kind: 'created'; subscribeURL: string; name: string }
+  // returnTo: where you were when you pressed +, which is where a submit or a cancel
+  // puts you back. The new channel appears in the sidebar as it is set up.
+  | { kind: 'creating'; returnTo: View }
   | { kind: 'subscribing' }
   | { kind: 'channels' }
   | {
@@ -129,14 +130,13 @@ export function Home({
   const settingsLoaded = useAuthStore((s) => s.settingsLoaded)
   const addToast = useToastStore((s) => s.addToast)
 
-  function copyURL(url: string, label: string) {
-    navigator.clipboard.writeText(url)
-    addToast(label)
-  }
-
   function gotoCreating() {
     // Creating/publishing writes only to iroh/Sia now — no Bluesky session gate.
-    setView({ kind: 'creating' })
+    // Pressing + on the form itself keeps the original way back.
+    setView({
+      kind: 'creating',
+      returnTo: view.kind === 'creating' ? view.returnTo : view,
+    })
   }
 
   function renderSidebar(activeChannelID?: string, activeHome = false) {
@@ -306,50 +306,14 @@ export function Home({
   }
 
   if (view.kind === 'creating') {
+    const returnTo = view.returnTo
     return (
       <CreateChannel
-        onCancel={() => setView({ kind: 'idle' })}
-        onCreated={(subscribeURL, name) =>
-          setView({ kind: 'created', subscribeURL, name })
-        }
+        onCancel={() => setView(returnTo)}
+        onCreated={() => setView(returnTo)}
         sidebar={renderSidebar()}
         rightSidebar={renderPinSidebar()}
       />
-    )
-  }
-
-  if (view.kind === 'created') {
-    return (
-      <FormCard sidebar={renderSidebar()} rightSidebar={renderPinSidebar()}>
-        <div className="text-center space-y-5">
-          <div className="space-y-1">
-            <h1 className="text-xl font-semibold text-neutral-900">
-              Channel created
-            </h1>
-            <p className="text-neutral-500 text-sm">
-              Share this link so others can open{' '}
-              <span className="text-neutral-900">{view.name}</span> and decide
-              whether to follow or watch it.
-            </p>
-          </div>
-          <div className="flex flex-col sm:flex-row gap-2 sm:justify-center">
-            <button
-              type="button"
-              onClick={() => copyURL(view.subscribeURL, 'Link copied')}
-              className="px-4 py-2.5 bg-green-600 hover:bg-green-700 text-white text-sm font-medium rounded-lg transition-colors"
-            >
-              Copy link
-            </button>
-            <button
-              type="button"
-              onClick={() => setView({ kind: 'idle' })}
-              className="px-4 py-2.5 bg-neutral-100 hover:bg-neutral-200 text-neutral-900 text-sm font-medium rounded-lg transition-colors"
-            >
-              Done
-            </button>
-          </div>
-        </div>
-      </FormCard>
     )
   }
 

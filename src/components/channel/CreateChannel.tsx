@@ -1,5 +1,5 @@
 import { type ChangeEvent, useEffect, useState } from 'react'
-import { buildSubscribeURL, newChannelKey } from '../../core/channels'
+import { newChannelKey } from '../../core/channels'
 import { channelKeyFromBase64, deriveChannelID } from '../../core/crypto'
 import type { ChannelVisibility } from '../../core/types'
 import { deriveDidDht } from '../../lib/pkarr'
@@ -16,7 +16,7 @@ export function CreateChannel({
   rightSidebar,
 }: {
   onCancel: () => void
-  onCreated: (subscribeURL: string, name: string) => void
+  onCreated: () => void
   sidebar?: React.ReactNode
   rightSidebar?: React.ReactNode
 }) {
@@ -95,8 +95,8 @@ export function CreateChannel({
       // AND carried in the shareable capability link.
       const { did } = await deriveDidDht(Uint8Array.fromHex(storedKeyHex))
       // K, here rather than in the handler — see `ChannelCreateIntent`. The channel's
-      // address and its subscribe URL both fall out of it, so both exist before any byte
-      // moves and the confirmation screen has something real to hand over.
+      // address falls out of it, so the sidebar can show the channel being set up under
+      // the same channelID the finished entry will take.
       const channelKey = await newChannelKey()
       const channelID = await deriveChannelID(channelKeyFromBase64(channelKey))
 
@@ -111,7 +111,7 @@ export function CreateChannel({
         avatar: await toSource(avatarFile),
         cover: await toSource(coverFile),
       })
-      onCreated(buildSubscribeURL(did, channelKey), trimmedName)
+      onCreated()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to create channel')
       setSubmitting(false)

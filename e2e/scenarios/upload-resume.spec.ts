@@ -152,18 +152,12 @@ test('an interrupted publish resumes from its checkpoint on reload', async ({
     const channelName = `e2e test ${Date.now()}`
     await alice.getByPlaceholder(/e\.g\. John Williams/i).fill(channelName)
     await alice.getByRole('button', { name: /Create channel/i }).click()
-    // The heading is the ENQUEUE. K is minted before any byte moves so the share link
-    // exists immediately, which is why this is fast rather than generous.
-    await expect(
-      alice.getByRole('heading', { name: /Channel created/i }),
-    ).toBeVisible({ timeout: 30_000 })
-    // The COMMIT — see waitForChannelPublished. Load-bearing here beyond the usual
+    // The create puts alice straight back on Home. The COMMIT — see waitForChannelPublished. Load-bearing here beyond the usual
     // race: this spec goes on to hang every pkarr PUT, and the create's own locator
     // publish is a pkarr PUT. Reach the block with the create still in flight and it
     // hangs forever; the action runner is serial, so the publish under test never
     // starts and its checkpoint never lands.
     await waitForChannelPublished(alice, channelName)
-    await alice.getByRole('button', { name: /^Done$/ }).click()
 
     // Fill the body first — that expands the composer so the voice picker (if
     // any) renders and canSubmit is satisfied.
