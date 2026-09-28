@@ -317,9 +317,9 @@ impl Identity {
     /// Endorse every one of this identity's own posts, as the app does when publishing
     /// auto-pins what it just wrote.
     ///
-    /// This is what puts a subject in `found`, and `touched` is seeded from `found` — so
-    /// without it a pass folds nothing however much has been published, and a test about
-    /// what folding costs would pass by doing none of it.
+    /// This is what gives a subject a record in the log — written on the first pass, which
+    /// marks it touched — so without it a pass folds nothing however much has been
+    /// published, and a test about what folding costs would pass by doing none of it.
     pub async fn endorses_own_posts(&self, posts: usize) {
         let channel_id = pin_crypto::channel_id(&self.channel_key());
         for i in 0..posts {
@@ -1375,6 +1375,105 @@ mod visibility {
         );
     }
 
+    /// A FOLD-ONLY PASS FOLDS WHAT MOVED, AND A CRAWLING PASS FOLDS EVERYTHING HELD.
+    ///
+    /// `touched` used to be seeded from every subject in `found`, and `found` always holds
+    /// this identity's own endorsements — so an author's own auto-pin kept every post they
+    /// had ever published in `touched`, and a pass every 30 seconds read every record behind
+    /// every one of them to conclude nothing had changed. Now a subject is marked where it
+    /// moves, which is what the comment lane already did.
+    ///
+    /// The crawling half is the self-healing the old seeding gave for free, and the last
+    /// step is what it is for: a tally lost from the channel doc is invisible to a pass
+    /// that only folds what moved, because nothing moved. A crawling pass puts it back.
+    #[tokio::test]
+    async fn a_fold_only_pass_folds_what_moved_and_a_crawl_folds_everything() {
+        async fn fold(who: &Identity, crawl: bool) -> crate::EngagementOutcome {
+            crate::engagement_once(
+                &who.engagement_ctx(),
+                &who.did,
+                "2026-09-12T00:00:00.000Z".to_string(),
+                crawl,
+            )
+            .await
+            .expect("engagement pass")
+        }
+
+        let world = World::new();
+        let john = Identity::new(&world, 1).await;
+        john.publishes_posts(5).await;
+        john.endorses_own_posts(5).await;
+
+        let first = fold(&john, false).await;
+        assert_eq!(
+            first.folded, 5,
+            "every post's record is written, so every post moved"
+        );
+        assert_eq!(first.tallies, 5);
+
+        assert_eq!(
+            fold(&john, false).await.folded,
+            0,
+            "and on the next fold-only pass nothing moved, so nothing is folded — the back              catalogue is no longer re-read every 30 seconds",
+        );
+
+        // One new gesture on one post is one subject's worth of work.
+        let subject = own_post_subject(&john);
+        let like = pin_engagement::Endorsement::sign(
+            &pin_derive::did_dht_seed(&john.app_key),
+            pin_engagement::KIND_LIKE,
+            &subject,
+            "version-1",
+            "2026-09-12T00:00:02.000Z",
+            None,
+        )
+        .expect("sign");
+        crate::write_record(
+            &john.doc,
+            john.author_id,
+            pin_derive::ENDORSE_COLLECTION,
+            &pin_derive::endorse_rkey(pin_engagement::KIND_LIKE, &subject),
+            serde_json::to_vec(&like).expect("encode"),
+        )
+        .await
+        .expect("write endorsement");
+        let liked = fold(&john, false).await;
+        assert_eq!(
+            liked.folded, 1,
+            "the one post that moved, and only that one"
+        );
+        assert_eq!(liked.tallies, 1, "and its count reaches the channel");
+
+        // Lose one post's published tally, which is what a pass failing between writing a
+        // record and folding its subject leaves behind.
+        let ctx = john.engagement_ctx();
+        let channel_id = pin_crypto::channel_id(&john.channel_key());
+        let channel_doc = crate::engagement::open_channel_doc(&ctx, &channel_id)
+            .await
+            .expect("channel doc");
+        channel_doc
+            .del(john.author_id, crate::engagement::tally_key(&subject))
+            .await
+            .expect("drop the tally");
+
+        let blind = fold(&john, false).await;
+        assert_eq!(
+            (blind.folded, blind.tallies),
+            (0, 0),
+            "a fold-only pass cannot see it: nothing moved",
+        );
+
+        let crawled = fold(&john, true).await;
+        assert_eq!(
+            crawled.folded, 5,
+            "a crawling pass folds every post the log holds"
+        );
+        assert_eq!(
+            crawled.tallies, 1,
+            "and republishes only the one that was lost — the gate still holds for the rest",
+        );
+    }
+
     /// A FULL INBOX IS REPORTED, where it used to be silent on both sides.
     ///
     /// A refusal loses nothing: the sender writes no delivery mark and re-knocks on its own
@@ -1577,11 +1676,10 @@ mod visibility {
         // Alice comments on john's post and john holds it — the state after a knock was
         // taken, which is what the fold turns into a published conversation.
         //
-        // John's own pin goes in beside it, and not as scenery: `touched` is seeded from
-        // endorsements and knocks, so a comment merely HELD marks nothing and the subject
-        // loop never reaches it. A post carrying its author's pin is what keeps the
-        // subject in `touched` on every pass, which is exactly the idle account this is
-        // about.
+        // John's own pin goes in beside it, and not as scenery: it is the post an idle
+        // account carries, and these passes crawl — so each one folds every subject the
+        // log holds a record for, the comment's included, and the gate is all that stops
+        // a rewrite.
         let subject = own_post_subject(&john);
         let pin = pin_engagement::Endorsement::sign(
             &pin_derive::did_dht_seed(&john.app_key),

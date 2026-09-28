@@ -100,6 +100,10 @@ pub struct EngagementOutcome {
     pub added: usize,
     /// Records withdrawn — gone from an actor's directory that we DID read.
     pub withdrawn: usize,
+    /// Subjects re-folded this pass, whether or not their tally then moved. The work a pass
+    /// did, where `tallies` is what it changed: a fold-only pass folds what moved, and a
+    /// crawling pass folds everything this identity holds a record for.
+    pub folded: usize,
     /// Subjects whose tally was rewritten.
     pub tallies: usize,
     /// Subjects whose tally was removed because nothing endorses them any more.
@@ -922,7 +926,15 @@ pub async fn engagement_once<N: crate::net::Network>(
 
     // Reconcile the held log against what this pass saw. `held` was listed before the
     // crawl, and nothing has written to that collection since.
-    let mut touched: BTreeSet<String> = found.values().map(|r| r.subject.clone()).collect();
+    //
+    // `touched` is what MOVED, marked where the move happens — a write, a withdrawal, a
+    // retraction — and never seeded from `found`. `found` is everything this pass saw,
+    // which always includes this identity's own endorsements, and an author's own auto-pin
+    // is one of those for every post they have ever published: seeding from it re-folded
+    // the whole back catalogue on every pass, reading every record behind every post to
+    // conclude nothing had changed. The comment lane already marks at the write for the
+    // same reason. What stands in for the lost self-healing is the crawling pass below.
+    let mut touched: BTreeSet<String> = BTreeSet::new();
     // A subject somebody commented on is a subject whose published counts moved.
     touched.extend(commented_on);
     // A withdrawal moves a count the same way anything else does: only a re-fold brings it
@@ -976,17 +988,18 @@ pub async fn engagement_once<N: crate::net::Network>(
             bytes,
         )
         .await?;
+        // After the write rather than before it: a write that failed returns above with
+        // nothing marked, and the record not being held is what the next pass sees.
+        touched.insert(record.subject.clone());
         outcome.added += 1;
     }
 
     // ONE scan per lane for the whole loop, rather than one per subject.
     //
     // Both gathers below used to open with `list_rkeys`, which is `Query::all()` over the
-    // whole doc — so a pass paid two whole-doc scans PER TOUCHED SUBJECT, and `touched` is
-    // seeded from every subject in `found`, which includes this identity's own endorsements.
-    // An author's own auto-pin therefore keeps every post they have ever published in
-    // `touched` forever, so the multiplier is the number of posts rather than the number of
-    // things that moved.
+    // whole doc — so a pass paid two whole-doc scans PER TOUCHED SUBJECT. A crawling pass
+    // touches every subject this identity holds a record for, so that multiplier was the
+    // size of the back catalogue.
     //
     // Taken HERE and not reused from the list at the top of the pass, which is the reason
     // the gathers scanned for themselves: that one predates the write loop above, and a
@@ -1008,11 +1021,36 @@ pub async fn engagement_once<N: crate::net::Network>(
             .await
             .unwrap_or_default();
 
+    // A crawling pass folds EVERYTHING this identity holds a record for, in either lane.
+    //
+    // This is the self-healing that folding every seen subject on every pass used to give
+    // for free. A pass can fail between writing a record and folding its subject — the
+    // channel-doc write is a `?` — and the next pass finds that record unchanged and marks
+    // nothing, so without this the tally would wait for something unrelated to move. The
+    // crawl period bounds how long it waits. From the logs rather than from `found`, so a
+    // subject whose only records were knocked in by strangers — whom no crawl reads — is
+    // healed too, which the `found` seeding never did.
+    if crawl {
+        touched.extend(
+            log_rkeys
+                .iter()
+                .filter_map(|k| pin_derive::parse_engagement_log_rkey(k))
+                .map(|(subject, _, _)| subject.to_string()),
+        );
+        touched.extend(
+            comment_rkeys
+                .iter()
+                .filter_map(|k| pin_derive::parse_comment_log_rkey(k))
+                .map(|(subject, _, _)| subject.to_string()),
+        );
+    }
+
     // Republish every tally that moved.
     for subject in &touched {
         let Some(channel_id) = subjects.get(subject) else {
             continue;
         };
+        outcome.folded += 1;
         // From the LOG, not from what this pass happened to see.
         //
         // `found` is one pass's observations: this identity's own endorsements, the actors
@@ -1520,7 +1558,7 @@ pub(crate) fn conversation_key(subject: &str) -> Vec<u8> {
 
 /// Open one of this identity's channel docs. Idempotent, and the same derivation the
 /// channel-doc loop uses, so both reach the same replica.
-async fn open_channel_doc<N: crate::net::Network>(
+pub(crate) async fn open_channel_doc<N: crate::net::Network>(
     ctx: &EngagementContext<N>,
     channel_id: &str,
 ) -> Result<Doc, String> {

@@ -779,6 +779,7 @@ pub async fn start_engagement_loop(
                         "retractionsRejected": o.retractions_rejected,
                         "retractionsNotOurs": o.retractions_not_ours,
                         "retractionsIgnored": o.retractions_ignored,
+                        "folded": o.folded,
                         "tallies": o.tallies,
                         "cleared": o.cleared,
                         "rejected": o.rejected,
