@@ -111,34 +111,69 @@ export function followedPeople(
   return [...byDid.values()]
 }
 
-/** The did:dhts that follow this PERSON — wholesale, or through any of their channels.
+/** One person who follows somebody, and how.
+ *
+ *  The mirror of {@link FollowedPerson}, read from the other end: the list behind a
+ *  profile's Followers number, where which of your voices somebody takes is worth reading
+ *  even though it never changes the count. */
+export type Follower = {
+  didDht: string
+  /** Follows them wholesale: everything they advertise, now and later. */
+  wholesale: boolean
+  /** Which of their channels this follower follows one at a time. */
+  channelIDs: string[]
+}
+
+/** The people who follow this PERSON — wholesale, or through any of their channels — with
+ *  how each one does.
  *
  *  The author gets the credit for all of it: somebody who follows only one of your voices
  *  is part of your audience, and a profile reading 0 while its channels have forty
- *  followers says nothing true about the person. One per person however many of their
- *  channels they follow, so the number moves when a person does and not when an author
- *  splits or merges channels. Which voices each follower takes is a question for the list
- *  behind the number, not for the number.
+ *  followers says nothing true about the person. One entry per person however many of
+ *  their channels they follow, so the number moves when a person does and not when an
+ *  author splits or merges channels.
  *
- *  Sorted, so the same index answers the same way twice. */
-export function followersOfPerson(
+ *  Wholesale followers first, then by did, so the same index answers the same way twice. */
+export function followersOf(
   held: readonly FollowerEdges[],
   didDht: string,
-): string[] {
-  const out = new Set<string>()
+): Follower[] {
+  const out = new Map<string, Follower>()
   for (const h of held) {
     // Never count somebody as their own follower. A directory can name anybody, including
     // its own author — and every author of a public channel follows it — so a self-edge
     // would inflate a number nobody could explain.
     if (h.didDht === didDht) continue
-    if (
-      h.handleFollows.includes(didDht) ||
-      h.follows.some((f) => f.didDht === didDht)
-    ) {
-      out.add(h.didDht)
-    }
+    const wholesale = h.handleFollows.includes(didDht)
+    const channelIDs = h.follows
+      .filter((f) => f.didDht === didDht)
+      .map((f) => f.channelID)
+    if (!wholesale && channelIDs.length === 0) continue
+    // A held record is one per identity, but the corpus unions in the viewer's own edges,
+    // so merge rather than overwrite in case one identity appears twice.
+    const prev = out.get(h.didDht)
+    out.set(h.didDht, {
+      didDht: h.didDht,
+      wholesale: wholesale || (prev?.wholesale ?? false),
+      channelIDs: [...new Set([...(prev?.channelIDs ?? []), ...channelIDs])],
+    })
   }
-  return [...out].sort()
+  return [...out.values()].sort(
+    (a, b) =>
+      Number(b.wholesale) - Number(a.wholesale) ||
+      a.didDht.localeCompare(b.didDht),
+  )
+}
+
+/** The did:dhts that follow this PERSON, by either grain — {@link followersOf} without the
+ *  how, sorted by did. */
+export function followersOfPerson(
+  held: readonly FollowerEdges[],
+  didDht: string,
+): string[] {
+  return followersOf(held, didDht)
+    .map((f) => f.didDht)
+    .sort()
 }
 
 /** The did:dhts a CHANNEL reaches: its own followers, plus its author's wholesale ones.

@@ -2,7 +2,11 @@ import { Plus } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { advertisedChannels } from '../core/channels'
 import type { FeedEntry } from '../core/feed'
-import { type FollowedPerson, followedPeople } from '../core/followers'
+import {
+  type FollowedPerson,
+  type Follower,
+  followedPeople,
+} from '../core/followers'
 import { buildProfileFeed, includedOnProfile } from '../core/profileFeed'
 import type { ChannelManifest, FollowEdge } from '../core/types'
 import {
@@ -12,7 +16,7 @@ import {
 } from '../lib/channelLocator'
 import { readDirectory, request } from '../lib/directories'
 import { formatBytes } from '../lib/format'
-import { useFollowerCount } from '../lib/hooks/useFollowerCount'
+import { usePersonFollowers } from '../lib/hooks/useFollowerCount'
 import {
   useIdentityName,
   useIdentityProfile,
@@ -230,10 +234,11 @@ export function HandleDirectory({
 }) {
   const myDidDht = useAuthStore((s) => s.myDidDht)
   const [state, setState] = useState<State>({ kind: 'loading' })
-  // Counted off the crawl's index, for your own profile as much as anybody's: a follow
-  // lives in the follower's directory, so even your own followers are only knowable by
-  // having read the people who follow you.
-  const followerCount = useFollowerCount('person', rawHandle.replace(/^@+/, ''))
+  // Read off the crawl's index, for your own profile as much as anybody's: a follow lives
+  // in the follower's directory, so even your own followers are only knowable by having
+  // read the people who follow you. The list and the number are one read, so they cannot
+  // disagree.
+  const followers = usePersonFollowers(rawHandle.replace(/^@+/, ''))
 
   // Defensive normalize: callers should pass a bare handle, but a stray
   // leading `@` (from a paste, say) shouldn't break the lookup.
@@ -451,7 +456,7 @@ export function HandleDirectory({
               ownChannels={state.ownChannels}
               follows={state.follows}
               handleFollows={state.handleFollows}
-              followerCount={followerCount}
+              followers={followers}
               onBack={onBack}
               onItemClick={onItemClick}
               onChannelClick={onChannelClick}
@@ -475,7 +480,7 @@ function LoadedDirectory({
   ownChannels,
   follows,
   handleFollows,
-  followerCount,
+  followers,
   onBack,
   onItemClick,
   onChannelClick,
@@ -491,7 +496,7 @@ function LoadedDirectory({
   follows: FollowEdge[]
   handleFollows: string[]
   /** Null while the index is still being counted — blank rather than a claimed zero. */
-  followerCount: number | null
+  followers: Follower[] | null
   onBack?: () => void
   onItemClick: (entry: FeedEntry) => void
   onChannelClick: (
@@ -507,6 +512,12 @@ function LoadedDirectory({
   // the list and the empty check cannot end up with three readings of what "following"
   // means.
   const followed = followedPeople(did, follows, handleFollows)
+  // Names for the channels a follower takes, from the manifests the cards already hold. A
+  // channel this page does not show — unadvertised since, or never read — is still one of
+  // theirs, so it is named generically rather than dropped.
+  const channelNames = new Map(
+    ownChannels.map((c) => [c.channelID, c.manifest.name]),
+  )
 
   const isEmpty = !profile && ownChannels.length === 0 && followed.length === 0
 
@@ -530,7 +541,7 @@ function LoadedDirectory({
         isSelf={isSelf}
         profile={profile}
         followingCount={followed.length}
-        followerCount={followerCount}
+        followerCount={followers?.length ?? null}
         onBack={onBack}
         onEdit={onEditProfile}
       />
@@ -645,6 +656,22 @@ function LoadedDirectory({
               key={p.didDht}
               didDht={p.didDht}
               via={followedVia(p)}
+              onHandleClick={onHandleClick}
+            />
+          ))}
+        </Section>
+      )}
+
+      {followers && followers.length > 0 && (
+        <Section title="Followers">
+          {/* The list behind the number, one row per person — which of this person's
+              voices each follower takes, or everything. Among the identities this device
+              has read, like the count: graph-scoped, honest, and incomplete. */}
+          {followers.map((f) => (
+            <PersonFollowRow
+              key={f.didDht}
+              didDht={f.didDht}
+              via={followerVia(f, channelNames)}
               onHandleClick={onHandleClick}
             />
           ))}
@@ -897,6 +924,14 @@ function channelContentBytes(manifest: ChannelManifest): number {
  *  opens their directory. What differs is only where the name comes from — a channel
  *  follow carries a cached one, and a person is named by their own published profile,
  *  which `useIdentityName` reads out of the crawl's index before the network. */
+/** How somebody follows this person, in words for a row. */
+function followerVia(f: Follower, names: Map<string, string>): string {
+  // Wholesale already includes every channel, so naming any alongside it would suggest
+  // they take less than they do.
+  if (f.wholesale) return 'Everything'
+  return f.channelIDs.map((id) => names.get(id) || 'A channel').join(' · ')
+}
+
 /** What of somebody's this identity follows, in words for a row. */
 function followedVia(p: FollowedPerson): string {
   // Wholesale takes everything they advertise, now and later, so any channel followed

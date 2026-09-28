@@ -9,7 +9,7 @@
 // Somebody ELSE's still resolves, because for them there is no local answer — which is the
 // asymmetry this locks, in both directions.
 
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('../lib/docs', async () =>
@@ -336,6 +336,31 @@ describe('integration: your own directory comes from local state', () => {
     await waitFor(() => {
       expect(stat('Followers')).toBe('1')
     })
+  })
+
+  it('lists who follows them and how, and the count is that list', async () => {
+    // One follows a channel of theirs, one follows them wholesale. The rows name the
+    // channel from the manifest the card above already holds, and "Everything" for the
+    // wholesale follow; the number above is the length of the same list.
+    signedInWith([owned()])
+    await inTheDoc('chan1', 'A channel')
+    holdFollowing('did:dht:fan-of-one', {
+      follows: [{ didDht: ME, channelID: 'chan1' }],
+    })
+    holdFollowing('did:dht:fan-of-all', { handleFollows: [ME] })
+
+    render(directory(ME))
+
+    await waitFor(() => {
+      expect(screen.getByText('Everything')).toBeInTheDocument()
+    })
+    const followersHeading = screen.getByRole('heading', { name: 'Followers' })
+    const section = within(followersHeading.parentElement as HTMLElement)
+    expect(section.getByText('Everything')).toBeInTheDocument()
+    expect(
+      section.getByText('A channel', { selector: 'div' }),
+    ).toBeInTheDocument()
+    expect(stat('Followers')).toBe('2')
   })
 
   it('lists and counts each person followed once, naming the channels taken', async () => {

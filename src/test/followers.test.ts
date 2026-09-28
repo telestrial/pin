@@ -12,6 +12,7 @@ import { describe, expect, it } from 'vitest'
 import {
   type FollowerEdges,
   followedPeople,
+  followersOf,
   followersOfChannel,
   followersOfPerson,
   ownFollowerEdges,
@@ -76,6 +77,56 @@ describe('followersOfPerson', () => {
   it('answers the same way twice and counts one identity once', () => {
     const held = [who('did:c', ['did:target']), who('did:a', ['did:target'])]
     expect(followersOfPerson(held, 'did:target')).toEqual(['did:a', 'did:c'])
+  })
+})
+
+describe('followersOf', () => {
+  it('says how each follower follows, one entry per person', () => {
+    const held = [
+      who(
+        'did:b',
+        [],
+        [
+          { didDht: 'did:target', channelID: 'techno' },
+          { didDht: 'did:target', channelID: 'cats' },
+          { didDht: 'did:other', channelID: 'x' },
+        ],
+      ),
+      who('did:a', ['did:target']),
+    ]
+    expect(followersOf(held, 'did:target')).toEqual([
+      // Wholesale first: the larger claim leads, the same order Following uses.
+      { didDht: 'did:a', wholesale: true, channelIDs: [] },
+      { didDht: 'did:b', wholesale: false, channelIDs: ['techno', 'cats'] },
+    ])
+  })
+
+  it('merges one identity appearing twice in the corpus', () => {
+    // The corpus unions the viewer's own edges into the held records, so one identity
+    // can in principle arrive from both halves.
+    const held = [
+      who('did:a', [], [{ didDht: 'did:target', channelID: 'techno' }]),
+      who(
+        'did:a',
+        ['did:target'],
+        [{ didDht: 'did:target', channelID: 'techno' }],
+      ),
+    ]
+    expect(followersOf(held, 'did:target')).toEqual([
+      { didDht: 'did:a', wholesale: true, channelIDs: ['techno'] },
+    ])
+  })
+
+  it('leaves out the subject and anybody who does not follow them', () => {
+    const held = [
+      who(
+        'did:target',
+        ['did:target'],
+        [{ didDht: 'did:target', channelID: 'mine' }],
+      ),
+      who('did:c', ['did:someone-else']),
+    ]
+    expect(followersOf(held, 'did:target')).toEqual([])
   })
 })
 
