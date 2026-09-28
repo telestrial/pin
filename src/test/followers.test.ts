@@ -10,6 +10,7 @@
 
 import { describe, expect, it } from 'vitest'
 import {
+  channelFollowersOf,
   type FollowerEdges,
   followedPeople,
   followersOf,
@@ -166,6 +167,24 @@ describe('followersOfChannel', () => {
       ),
     ]
     expect(followersOfChannel(held, 'ch1', 'did:author')).toEqual(['did:a'])
+  })
+
+  it('says which followers follow the channel and which follow its author', () => {
+    const held = [
+      who('did:b', ['did:author']),
+      who('did:a', [], [{ didDht: 'did:author', channelID: 'ch1' }]),
+      who(
+        'did:c',
+        ['did:author'],
+        [{ didDht: 'did:author', channelID: 'ch1' }],
+      ),
+    ]
+    expect(channelFollowersOf(held, 'ch1', 'did:author')).toEqual([
+      // Direct first; somebody who follows both ways is a direct follower.
+      { didDht: 'did:a', direct: true },
+      { didDht: 'did:c', direct: true },
+      { didDht: 'did:b', direct: false },
+    ])
   })
 
   it('without an author, counts only its own followers', () => {

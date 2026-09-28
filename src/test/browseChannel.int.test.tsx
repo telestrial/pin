@@ -10,7 +10,13 @@
 // page grew — resolve with the key in hand — and the negative that says the key is doing
 // the work.
 
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import {
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('../lib/docs', async () =>
@@ -204,6 +210,40 @@ describe('integration: browsing a channel you do not hold', () => {
     view(KEY)
 
     await waitFor(() => expect(stat('Followers')).toBe('1'))
+  })
+
+  it('opens the list behind the number, saying how each person follows', async () => {
+    // Folded away until asked for, because the page body is the channel's feed. One row
+    // per person: a direct follower, and one who receives it by following the author.
+    await published([post('a post', '2026-09-02T00:00:00.000Z')])
+    holdFollower('did:dht:direct')
+    docStore.set(
+      `${directory_collection()}/did:dht:fan`,
+      new TextEncoder().encode(
+        JSON.stringify({
+          tier: 'full',
+          profile: { username: 'fan', displayName: 'fan' },
+          channels: [],
+          reach: [],
+          follows: [],
+          handleFollows: [THEM],
+          url: 'sia://held',
+          epoch: 1,
+          seenAt: '2026-09-01T12:00:00.000Z',
+        }),
+      ),
+    )
+
+    view(KEY)
+
+    await waitFor(() => expect(stat('Followers')).toBe('2'))
+    expect(screen.queryByRole('region', { name: 'Followers' })).toBeNull()
+
+    await userEvent.click(screen.getByRole('button', { name: /Followers/ }))
+
+    const list = within(screen.getByRole('region', { name: 'Followers' }))
+    expect(list.getByText('This channel')).toBeInTheDocument()
+    expect(list.getByText(/^Everything by @/)).toBeInTheDocument()
   })
 
   it('offers no follower count on an unlisted channel', async () => {

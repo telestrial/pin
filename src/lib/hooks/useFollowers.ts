@@ -1,4 +1,5 @@
-// How many identities follow a subject, out of what this device has read.
+// Who follows a subject and how, out of what this device has read — the lists behind
+// the Followers numbers, whose lengths ARE those numbers.
 //
 // A follow lives in the FOLLOWER's own directory and nothing writes into the followed
 // identity's scope, so there is no follower list to fetch and there could not be: the only
@@ -10,19 +11,15 @@
 
 import { useEffect, useRef, useState } from 'react'
 import {
+  type ChannelFollower,
+  channelFollowersOf,
   type Follower,
   type FollowerEdges,
   followersOf,
-  followersOfChannel,
-  followersOfPerson,
   ownFollowerEdges,
 } from '../../core/followers'
 import { useAuthStore } from '../../stores/auth'
 import { followerEdges } from '../directories'
-
-/** Which subject is being counted: a person (their whole audience, by either grain) or a
- *  channel (its own followers plus its author's wholesale ones). */
-export type FollowerGrain = 'person' | 'channel'
 
 /** One answer computed over the follower corpus — the held index plus your own edges —
  *  or null until it has been.
@@ -73,27 +70,22 @@ function useFollowerAnswer<T>(
   return counted?.subject === subject ? counted.value : null
 }
 
-/** How many identities follow a subject, out of what this device has read. Null until
- *  counted, which the `Stat` renders as a dash. */
-export function useFollowerCount(
-  grain: FollowerGrain,
-  id: string,
-  /** A channel's author, whose wholesale followers it reaches. Ignored for a person. */
-  authorDidDht?: string,
-): number | null {
-  return useFollowerAnswer(
-    id ? `${grain}:${id}:${authorDidDht ?? ''}` : '',
-    (corpus) =>
-      grain === 'person'
-        ? followersOfPerson(corpus, id).length
-        : followersOfChannel(corpus, id, authorDidDht).length,
-  )
-}
-
 /** The people who follow a person and how, out of what this device has read — the list
  *  behind a profile's Followers number, whose length IS that number. */
 export function usePersonFollowers(didDht: string): Follower[] | null {
-  return useFollowerAnswer(didDht ? `followers:${didDht}` : '', (corpus) =>
+  return useFollowerAnswer(didDht ? `person:${didDht}` : '', (corpus) =>
     followersOf(corpus, didDht),
+  )
+}
+
+/** The people a channel reaches and how — the list behind a channel's Followers number,
+ *  whose length IS that number. Pass the author, whose wholesale followers it reaches. */
+export function useChannelFollowers(
+  channelID: string,
+  authorDidDht: string | undefined,
+): ChannelFollower[] | null {
+  return useFollowerAnswer(
+    channelID ? `channel:${channelID}:${authorDidDht ?? ''}` : '',
+    (corpus) => channelFollowersOf(corpus, channelID, authorDidDht),
   )
 }

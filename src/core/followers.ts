@@ -176,33 +176,63 @@ export function followersOfPerson(
     .sort()
 }
 
-/** The did:dhts a CHANNEL reaches: its own followers, plus its author's wholesale ones.
+/** One person a channel reaches, and how.
  *
- *  Following a person watches every public channel they advertise, now and later, so a
- *  wholesale follower receives this channel as surely as somebody who followed it alone.
- *  The number is the channel's audience, one per person. Pass the author when it is known;
- *  without one the count is the channel's own followers only.
+ *  `direct` means they follow this channel; otherwise they follow its author wholesale,
+ *  which watches every public channel the author advertises, now and later. */
+export type ChannelFollower = {
+  didDht: string
+  direct: boolean
+}
+
+/** The people a CHANNEL reaches — its own followers, plus its author's wholesale ones —
+ *  with how each one does.
+ *
+ *  Following a person watches every public channel they advertise, so a wholesale
+ *  follower receives this channel as surely as somebody who followed it alone: the list is
+ *  the channel's audience, one per person. Pass the author when it is known; without one
+ *  it is the channel's own followers only.
  *
  *  Keyed by channelID rather than (author, channel) for the direct half: a channelID is
  *  `base32(sha256(K))`, so it already names one channel, and requiring the author would
  *  drop a follower whose record names the channel under a different author than the one
  *  asking. The author's own follow of their channel counts — it is what puts them among
- *  its audience. */
+ *  its audience.
+ *
+ *  Direct followers first, then by did. */
+export function channelFollowersOf(
+  held: readonly FollowerEdges[],
+  channelID: string,
+  authorDidDht?: string,
+): ChannelFollower[] {
+  const out = new Map<string, ChannelFollower>()
+  for (const h of held) {
+    const direct = h.follows.some((f) => f.channelID === channelID)
+    const viaAuthor =
+      !!authorDidDht &&
+      h.didDht !== authorDidDht &&
+      h.handleFollows.includes(authorDidDht)
+    if (!direct && !viaAuthor) continue
+    const prev = out.get(h.didDht)
+    out.set(h.didDht, {
+      didDht: h.didDht,
+      direct: direct || (prev?.direct ?? false),
+    })
+  }
+  return [...out.values()].sort(
+    (a, b) =>
+      Number(b.direct) - Number(a.direct) || a.didDht.localeCompare(b.didDht),
+  )
+}
+
+/** The did:dhts a CHANNEL reaches — {@link channelFollowersOf} without the how, sorted by
+ *  did. */
 export function followersOfChannel(
   held: readonly FollowerEdges[],
   channelID: string,
   authorDidDht?: string,
 ): string[] {
-  const out = new Set<string>()
-  for (const h of held) {
-    if (h.follows.some((f) => f.channelID === channelID)) out.add(h.didDht)
-    else if (
-      authorDidDht &&
-      h.didDht !== authorDidDht &&
-      h.handleFollows.includes(authorDidDht)
-    ) {
-      out.add(h.didDht)
-    }
-  }
-  return [...out].sort()
+  return channelFollowersOf(held, channelID, authorDidDht)
+    .map((f) => f.didDht)
+    .sort()
 }

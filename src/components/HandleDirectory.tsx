@@ -16,7 +16,7 @@ import {
 } from '../lib/channelLocator'
 import { readDirectory, request } from '../lib/directories'
 import { formatBytes } from '../lib/format'
-import { usePersonFollowers } from '../lib/hooks/useFollowerCount'
+import { usePersonFollowers } from '../lib/hooks/useFollowers'
 import { useItemBlobURL } from '../lib/hooks/useItemBytes'
 import { resolveIdentityDoc } from '../lib/identityDoc'
 import { useAuthStore } from '../stores/auth'

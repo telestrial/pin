@@ -10,7 +10,7 @@ import {
 import type { ChannelImage, ChannelManifest } from '../../core/types'
 import { resolveChannelViaLocator } from '../../lib/channelLocator'
 import { useChannelClaim } from '../../lib/hooks/useChannelClaim'
-import { useFollowerCount } from '../../lib/hooks/useFollowerCount'
+import { useChannelFollowers } from '../../lib/hooks/useFollowers'
 import { useIdentityName } from '../../lib/hooks/useIdentityName'
 import { useItemBlobURL } from '../../lib/hooks/useItemBytes'
 import { renderMarkdown } from '../../lib/markdown'
@@ -19,6 +19,7 @@ import { renderable, useFeedStore } from '../../stores/feed'
 import { useToastStore } from '../../stores/toast'
 import { FollowButton } from '../FollowButton'
 import { FeedRow } from '../HomeFeed'
+import { PersonRow } from '../PersonRow'
 import { ChannelPinButton } from '../pin/ChannelPinButton'
 import { PinIcon } from '../pin/PinIcon'
 import { Stat } from '../ui/Stat'
@@ -153,12 +154,17 @@ export function ChannelView({
   const isOwnPublic = isOwned && isPublic
   const { claimed, setClaimed } = useChannelClaim(channelID, isOwnPublic)
   // With the author, because following a person watches every public channel they
-  // advertise: their wholesale followers are this channel's audience too.
-  const followerCount = useFollowerCount(
-    'channel',
+  // advertise: their wholesale followers are this channel's audience too. The list and
+  // the number are one read, so they cannot disagree.
+  const followers = useChannelFollowers(
     isPublic ? channelID : '',
     manifest?.authorDidDht,
   )
+  const followerCount = followers?.length ?? null
+  // The list behind the number, opened from it. Folded away by default because this
+  // page's body is the channel's feed, and a standing list of people would push the posts
+  // down on every visit.
+  const [showFollowers, setShowFollowers] = useState(false)
 
   // Backfill the manifest cache on cold-mount (e.g. empty channel that
   // contributed no feed entries to the initial refresh). Updates arrive on
@@ -306,7 +312,16 @@ export function ChannelView({
                         )}
                     </div>
                     {isPublic && (
-                      <Stat value={followerCount} label="Followers" />
+                      <Stat
+                        value={followerCount}
+                        label="Followers"
+                        onClick={
+                          followers && followers.length > 0
+                            ? () => setShowFollowers((v) => !v)
+                            : undefined
+                        }
+                        expanded={showFollowers}
+                      />
                     )}
                   </div>
                   {/* Actions: below the cover, upper-right, even with the
@@ -439,6 +454,29 @@ export function ChannelView({
               </p>
             </div>
           </div>
+
+          {showFollowers && followers && followers.length > 0 && (
+            <section aria-label="Followers" className="space-y-2">
+              <h2 className="text-xs font-medium text-neutral-500 uppercase tracking-wide px-1">
+                Followers
+              </h2>
+              {/* The channel's audience, one row per person: those who follow this
+                  channel, then those who follow its author wholesale and so receive it.
+                  Among the identities this device has read, like the count. */}
+              <div className="bg-white border border-neutral-200 rounded-lg divide-y divide-neutral-100">
+                {followers.map((f) => (
+                  <PersonRow
+                    key={f.didDht}
+                    didDht={f.didDht}
+                    via={
+                      f.direct ? 'This channel' : `Everything by @${authorName}`
+                    }
+                    onHandleClick={onHandleClick}
+                  />
+                ))}
+              </div>
+            </section>
+          )}
 
           {composerSlot}
 
