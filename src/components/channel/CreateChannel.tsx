@@ -250,9 +250,10 @@ export function CreateChannel({
                 Include on your profile
               </span>
               <span className="block text-xs text-neutral-500">
-                Its posts appear in your profile's feed. Turn this off for a
-                channel you'd rather keep findable without it standing for you.
-                Changeable later.
+                Its posts appear in your profile's feed, which is what people
+                who follow you receive. Turn this off for a channel you'd rather
+                keep findable without it reaching your followers. Changeable
+                later.
               </span>
             </span>
           </label>

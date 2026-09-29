@@ -263,8 +263,9 @@ export function EditChannel({
               Include on your profile
             </span>
             <span className="block text-xs text-neutral-500">
-              Its posts appear in your profile's feed. Off keeps the channel
-              findable and followable without it standing for you.
+              Its posts appear in your profile's feed, which is what people who
+              follow you receive. Off keeps the channel findable and followable
+              on its own without it reaching your followers.
             </span>
           </span>
         </label>
