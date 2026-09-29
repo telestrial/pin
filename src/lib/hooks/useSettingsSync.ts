@@ -142,7 +142,6 @@ export function useSettingsSync() {
           .hydrateSettings(
             s.myChannels,
             s.subscriptions,
-            s.dismissedAutoWatch ?? [],
             s.theme ?? useAuthStore.getState().theme,
             s.follows ?? [],
             s.handleFollows ?? [],

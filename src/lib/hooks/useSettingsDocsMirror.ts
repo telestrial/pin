@@ -95,7 +95,6 @@ export async function flushSettingsMirror(): Promise<void> {
 export type SettingsFields = {
   myChannels: OwnedChannel[]
   subscriptions: SubscriptionRef[]
-  dismissedAutoWatch: string[]
   theme: ThemeMode
   follows: FollowEdge[]
   handleFollows: string[]
@@ -106,7 +105,6 @@ export function fingerprintOf(f: SettingsFields): string {
   return JSON.stringify({
     myChannels: f.myChannels,
     subscriptions: f.subscriptions,
-    dismissedAutoWatch: f.dismissedAutoWatch,
     theme: f.theme,
     follows: f.follows,
     handleFollows: f.handleFollows,
@@ -161,7 +159,6 @@ export function decidePeerSettings(
   const next: SettingsFields = {
     myChannels: peer.myChannels,
     subscriptions: peer.subscriptions,
-    dismissedAutoWatch: peer.dismissedAutoWatch ?? [],
     theme: peer.theme ?? defaultTheme,
     follows: peer.follows ?? [],
     handleFollows: peer.handleFollows ?? [],
@@ -260,7 +257,6 @@ export function useSettingsDocsMirror() {
           version: SETTINGS_VERSION,
           myChannels: state.myChannels,
           subscriptions: state.subscriptions,
-          dismissedAutoWatch: state.dismissedAutoWatch,
           theme: state.theme,
           follows: state.follows,
           handleFollows: state.handleFollows,
@@ -308,7 +304,6 @@ export function useSettingsDocsMirror() {
       if (
         s.myChannels === p.myChannels &&
         s.subscriptions === p.subscriptions &&
-        s.dismissedAutoWatch === p.dismissedAutoWatch &&
         s.theme === p.theme &&
         s.follows === p.follows &&
         s.handleFollows === p.handleFollows &&
@@ -371,7 +366,6 @@ export function useSettingsDocsMirror() {
           .hydrateSettings(
             next.myChannels,
             next.subscriptions,
-            next.dismissedAutoWatch,
             next.theme,
             next.follows,
             next.handleFollows,

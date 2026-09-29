@@ -1,18 +1,13 @@
 import { useState } from 'react'
-import {
-  reconcileOneHandle,
-  sweepHandleFollow,
-} from '../lib/hooks/useHandleFollowReconciliation'
+import { flushSettingsBestEffort } from '../lib/hooks/useSettingsSync'
 import { useAuthStore } from '../stores/auth'
 import { useToastStore } from '../stores/toast'
 
-// Follow the whole person (their did:dht), not a single channel. The follow
-// state is a synchronous local-store edge (handleFollows), mirrored into the
-// identity-doc — no atproto. Following auto-Watches every public channel they
-// currently advertise and tracks new ones across boots; unfollowing sweeps all
-// their feeds back out. Distinct from the per-channel FollowButton. Rendered on
-// another person's did:dht directory (never your own — you can't follow
-// yourself).
+// Follow the whole person (their did:dht), not a single channel. What that gets you is
+// their profile feed — the channels they show on their profile, as the crawl last read
+// them — so the gesture is the edge alone: nothing is copied into your watches, and an
+// unfollow has nothing to sweep. Distinct from the per-channel FollowButton. Rendered on
+// another person's did:dht directory (never your own — you can't follow yourself).
 export function FollowHandleButton({
   subjectDidDht,
   subjectHandle,
@@ -25,8 +20,7 @@ export function FollowHandleButton({
   const removeHandleFollow = useAuthStore((s) => s.removeHandleFollow)
   const addToast = useToastStore((s) => s.addToast)
 
-  // The follow edge toggles synchronously (local store); busy covers the async
-  // auto-Watch side-effect (resolve their identity-doc + add/sweep channels).
+  // The edge toggles synchronously; busy covers making it durable.
   const [busy, setBusy] = useState(false)
 
   async function handleClick() {
@@ -35,20 +29,12 @@ export function FollowHandleButton({
     try {
       if (following) {
         removeHandleFollow(subjectDidDht)
-        const removed = await sweepHandleFollow(subjectDidDht).catch(() => 0)
-        addToast(
-          removed > 0
-            ? `Unfollowed @${subjectHandle} · removed ${removed} ${removed === 1 ? 'channel' : 'channels'}`
-            : `Unfollowed @${subjectHandle}`,
-        )
+        await flushSettingsBestEffort()
+        addToast(`Unfollowed @${subjectHandle}`)
       } else {
         addHandleFollow(subjectDidDht)
-        const added = await reconcileOneHandle(subjectDidDht).catch(() => 0)
-        addToast(
-          added > 0
-            ? `Following @${subjectHandle} · added ${added} ${added === 1 ? 'channel' : 'channels'}`
-            : `Following @${subjectHandle}`,
-        )
+        await flushSettingsBestEffort()
+        addToast(`Following @${subjectHandle}`)
       }
     } finally {
       setBusy(false)

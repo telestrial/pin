@@ -117,7 +117,7 @@ describe('integration: what the settings mirror may write', () => {
       await vi.advanceTimersByTimeAsync(SETTINGS_MIRROR_DEBOUNCE_MS / 2)
       useAuthStore.setState({ theme: 'corners' })
       await vi.advanceTimersByTimeAsync(SETTINGS_MIRROR_DEBOUNCE_MS / 2)
-      useAuthStore.setState({ dismissedAutoWatch: ['ch1'] })
+      useAuthStore.setState({ handleFollows: ['did:dht:x'] })
     })
     await settleDebounce()
 

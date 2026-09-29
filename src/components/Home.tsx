@@ -391,8 +391,8 @@ export function Home({
             )
           )
             return
+          // The feed follows the read set, which may still hold this channel.
           useAuthStore.getState().removeSubscription(channelID)
-          useFeedStore.getState().removeChannel(channelID)
           await flushSettingsBestEffort()
           addToast(`Stopped watching "${name}"`)
         }}

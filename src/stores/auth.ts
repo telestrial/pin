@@ -49,13 +49,6 @@ type AuthState = {
   approvalURL: string | null
   myChannels: OwnedChannel[]
   subscriptions: SubscriptionRef[]
-  // channelIDs the user explicitly unsubscribed from and hasn't re-added.
-  // The handle-follow auto-Watch reconcile skips anything in here so an
-  // explicit unsubscribe survives repeated boots (otherwise a channel
-  // claimed by a person you follow would be re-added every reconcile).
-  // Driven uniformly by add/removeSubscription — no handle-follow
-  // special-casing; it's just "channels I deliberately dropped".
-  dismissedAutoWatch: string[]
   // Public follow graph (Phase D step 6). `follows` = channel-follows as
   // did:dht-native edges; `handleFollows` = handle-follows as target did:dhts.
   // Local source of truth (mirrored into the identity-doc + settings record),
@@ -125,9 +118,6 @@ type AuthState = {
   addSubscription: (sub: SubscriptionRef) => void
   updateSubscriptionName: (channelID: string, name: string) => void
   removeSubscription: (channelID: string) => void
-  // Clears tombstones for the given channelIDs (used on handle-unfollow,
-  // which sweeps a person's channels — a later re-follow then re-adds fresh).
-  clearDismissedAutoWatch: (channelIDs: string[]) => void
   addFollow: (edge: FollowEdge) => void
   removeFollow: (channelID: string) => void
   addHandleFollow: (didDht: string) => void
@@ -140,7 +130,6 @@ type AuthState = {
   hydrateSettings: (
     myChannels: OwnedChannel[],
     subscriptions: SubscriptionRef[],
-    dismissedAutoWatch: string[],
     theme: ThemeMode,
     follows: FollowEdge[],
     handleFollows: string[],
@@ -166,7 +155,6 @@ export const useAuthStore = create<AuthState>()(
       approvalURL: null,
       myChannels: [],
       subscriptions: [],
-      dismissedAutoWatch: [],
       follows: [],
       handleFollows: [],
       profile: null,
@@ -241,18 +229,12 @@ export const useAuthStore = create<AuthState>()(
         })),
       addSubscription: (sub) =>
         set((s) => {
-          // Re-adding clears any tombstone for this channel (you want it again).
-          const dismissedAutoWatch = s.dismissedAutoWatch.filter(
-            (id) => id !== sub.channelID,
-          )
           const already = s.subscriptions.some(
             (x) =>
               x.authorHandle === sub.authorHandle &&
               x.channelID === sub.channelID,
           )
-          return already
-            ? { dismissedAutoWatch }
-            : { subscriptions: [...s.subscriptions, sub], dismissedAutoWatch }
+          return already ? s : { subscriptions: [...s.subscriptions, sub] }
         }),
       updateSubscriptionName: (channelID, name) =>
         set((s) => ({
@@ -267,20 +249,7 @@ export const useAuthStore = create<AuthState>()(
           subscriptions: s.subscriptions.filter(
             (sub) => sub.channelID !== channelID,
           ),
-          // Tombstone it so the auto-Watch reconcile won't resurrect it.
-          dismissedAutoWatch: s.dismissedAutoWatch.includes(channelID)
-            ? s.dismissedAutoWatch
-            : [...s.dismissedAutoWatch, channelID],
         })),
-      clearDismissedAutoWatch: (channelIDs) =>
-        set((s) => {
-          const drop = new Set(channelIDs)
-          return {
-            dismissedAutoWatch: s.dismissedAutoWatch.filter(
-              (id) => !drop.has(id),
-            ),
-          }
-        }),
       addFollow: (edge) =>
         set((s) =>
           s.follows.some((f) => f.channelID === edge.channelID)
@@ -310,7 +279,6 @@ export const useAuthStore = create<AuthState>()(
       hydrateSettings: (
         myChannels,
         subscriptions,
-        dismissedAutoWatch,
         theme,
         follows,
         handleFollows,
@@ -319,7 +287,6 @@ export const useAuthStore = create<AuthState>()(
         set({
           myChannels,
           subscriptions,
-          dismissedAutoWatch,
           theme,
           follows,
           handleFollows,
@@ -341,7 +308,6 @@ export const useAuthStore = create<AuthState>()(
           approvalURL: null,
           myChannels: [],
           subscriptions: [],
-          dismissedAutoWatch: [],
           follows: [],
           handleFollows: [],
           profile: null,
@@ -362,7 +328,6 @@ export const useAuthStore = create<AuthState>()(
         customIrohRelays: state.customIrohRelays,
         myChannels: state.myChannels,
         subscriptions: state.subscriptions,
-        dismissedAutoWatch: state.dismissedAutoWatch,
         follows: state.follows,
         handleFollows: state.handleFollows,
         profile: state.profile,

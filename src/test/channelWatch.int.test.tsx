@@ -1,12 +1,18 @@
-// Handle-follow auto-Watch, driven through the production orchestration
-// (reconcileOneHandle / sweepHandleFollow) against the Phase 3 fakes + real
-// zustand stores. In the iroh model a followed person's public channels come
-// from their identity-doc (resolveIdentityDoc, mocked here) — each entry
-// carries K, so the reconcile builds functional Watches without a subscribe
-// URL. The test exercises the auto-Watch LOGIC (resolve → candidates →
-// additions / removals / tombstones), not the pkarr/Sia resolve itself.
+// Following a channel watches it; following a person watches nothing.
+//
+// A channel-follow resolves its K from the author's directory (resolveIdentityDoc, mocked
+// here) and keeps the one channel. A person-follow is the edge alone: their profile feed is
+// read out of the crawl's record of them (reading.int.test.tsx), so nothing is copied into
+// the watches and nothing has to be swept back out.
 
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('../lib/pkarr', async () =>
   (await import('./fakeModules')).fakePkarrModule(),
@@ -38,13 +44,9 @@ vi.mock('../lib/identityDoc', () => ({
   publishIdentityDoc: async () => ({ id: '', url: '' }),
 }))
 
+import { FollowHandleButton } from '../components/FollowHandleButton'
 import type { CreatedChannel } from '../core/channels'
-import {
-  reconcileOneHandle,
-  sweepHandleFollow,
-  unwatchOneChannel,
-  watchOneChannel,
-} from '../lib/hooks/useHandleFollowReconciliation'
+import { unwatchOneChannel, watchOneChannel } from '../lib/channelWatch'
 import { useAuthStore } from '../stores/auth'
 import {
   authorCreateChannel,
@@ -64,9 +66,8 @@ type Setup = {
   ch2: CreatedChannel
 }
 
-// bob publishes two public channels; alice (signed-in, no subs) follows bob's
-// identity. bob's channels are registered in the mock identity-doc under his
-// DID so reconcile/sweep resolve them (with K).
+// bob publishes two public channels, registered in the mock identity-doc under his DID
+// so a channel-follow can resolve its K; alice is signed in and watches nothing.
 async function setup(): Promise<Setup> {
   const app = createFakeApp()
   const alice = app.createAccount({ did: ALICE_DID, handle: 'alice.test' })
@@ -86,78 +87,10 @@ beforeEach(() => {
   for (const k of Object.keys(directory)) delete directory[k]
 })
 
-describe('handle-follow auto-Watch (integration)', () => {
-  it('following a person auto-Watches all their advertised public channels', async () => {
-    const { ch1, ch2 } = await setup()
-    useAuthStore.getState().addHandleFollow(BOB_DID)
-    const added = await reconcileOneHandle(BOB_DID)
+afterEach(cleanup)
 
-    expect(added).toBe(2)
-    const subs = useAuthStore.getState().subscriptions
-    expect(subs.map((s) => s.channelID).sort()).toEqual(
-      [ch1.channelID, ch2.channelID].sort(),
-    )
-    // Each Watch carries K (so it's functional) + the followed person's did:dht.
-    const s1 = subs.find((s) => s.channelID === ch1.channelID)
-    expect(s1?.channelKey).toBe(ch1.channelKey)
-    expect(s1?.didDht).toBe(BOB_DID)
-  })
-
-  it('reconcile is idempotent — re-running adds nothing new', async () => {
-    await setup()
-    useAuthStore.getState().addHandleFollow(BOB_DID)
-    await reconcileOneHandle(BOB_DID)
-    const addedAgain = await reconcileOneHandle(BOB_DID)
-
-    expect(addedAgain).toBe(0)
-    expect(useAuthStore.getState().subscriptions).toHaveLength(2)
-  })
-
-  it('a manual unsubscribe sticks even while still following the person', async () => {
-    const { ch1, ch2 } = await setup()
-    useAuthStore.getState().addHandleFollow(BOB_DID)
-    await reconcileOneHandle(BOB_DID)
-
-    // Drop one of bob's channels — it tombstones.
-    useAuthStore.getState().removeSubscription(ch1.channelID)
-    expect(useAuthStore.getState().dismissedAutoWatch).toContain(ch1.channelID)
-
-    // Reconciling again must NOT resurrect it; ch2 stays.
-    const added = await reconcileOneHandle(BOB_DID)
-    expect(added).toBe(0)
-    expect(
-      useAuthStore.getState().subscriptions.map((s) => s.channelID),
-    ).toEqual([ch2.channelID])
-  })
-
-  it('unfollowing sweeps all their feeds out and clears tombstones for a clean re-follow', async () => {
-    const { ch1 } = await setup()
-    useAuthStore.getState().addHandleFollow(BOB_DID)
-    await reconcileOneHandle(BOB_DID)
-
-    // Manually drop ch1 first (tombstone), so the sweep exercises both the
-    // held channel (ch2) and the already-dropped one (ch1).
-    useAuthStore.getState().removeSubscription(ch1.channelID)
-
-    useAuthStore.getState().removeHandleFollow(BOB_DID)
-    const removed = await sweepHandleFollow(BOB_DID)
-
-    // Only ch2 was still held, so 1 removed; both feeds now gone.
-    expect(removed).toBe(1)
-    expect(useAuthStore.getState().subscriptions).toHaveLength(0)
-    // Clean slate: neither channel is tombstoned, so re-following re-adds both.
-    const dismissed = useAuthStore.getState().dismissedAutoWatch
-    expect(dismissed).not.toContain(ch1.channelID)
-
-    useAuthStore.getState().addHandleFollow(BOB_DID)
-    const readded = await reconcileOneHandle(BOB_DID)
-    expect(readded).toBe(2)
-  })
-
+describe('channel watch', () => {
   it('following one channel watches that channel and no others', async () => {
-    // Following a channel used to be write-only — a public edge with no K, so the
-    // follower got nothing. K is in the author's directory, which is where the
-    // person-follow path already reads it, so the only difference is keeping one.
     const { ch1, ch2 } = await setup()
 
     const watched = await watchOneChannel(BOB_DID, ch1.channelID)
@@ -169,40 +102,29 @@ describe('handle-follow auto-Watch (integration)', () => {
     expect(subs.some((s) => s.channelID === ch2.channelID)).toBe(false)
   })
 
-  it('unfollowing one channel survives the person reconcile', async () => {
-    // The asymmetry with the person sweep, and it is deliberate. Dropping one channel
-    // of somebody you also follow wholesale has to outlast their next boot pass, or the
-    // reconcile puts it straight back and the gesture appears to do nothing.
-    const { ch1, ch2 } = await setup()
-    useAuthStore.getState().addHandleFollow(BOB_DID)
-    await reconcileOneHandle(BOB_DID)
-
-    await unwatchOneChannel(ch1.channelID)
-    expect(
-      useAuthStore.getState().subscriptions.map((s) => s.channelID),
-    ).toEqual([ch2.channelID])
-
-    const added = await reconcileOneHandle(BOB_DID)
-    expect(added).toBe(0)
-    expect(
-      useAuthStore.getState().subscriptions.map((s) => s.channelID),
-    ).toEqual([ch2.channelID])
-  })
-
-  it('following a channel back clears an earlier unwatch', async () => {
-    // The other half of that: leaving the tombstone standing would make an unwatched
-    // channel unfollowable forever, so an explicit follow clears it as the newer
-    // statement.
+  it('unfollowing a channel drops the watch, and following it again brings it back', async () => {
     const { ch1 } = await setup()
     await watchOneChannel(BOB_DID, ch1.channelID)
-    await unwatchOneChannel(ch1.channelID)
-    expect(useAuthStore.getState().dismissedAutoWatch).toContain(ch1.channelID)
 
-    const again = await watchOneChannel(BOB_DID, ch1.channelID)
+    expect(await unwatchOneChannel(ch1.channelID)).toBe(true)
+    expect(useAuthStore.getState().subscriptions).toEqual([])
 
-    expect(again).toBe(true)
+    expect(await watchOneChannel(BOB_DID, ch1.channelID)).toBe(true)
     expect(
       useAuthStore.getState().subscriptions.map((s) => s.channelID),
     ).toEqual([ch1.channelID])
+  })
+
+  it('following a person records the edge and watches nothing', async () => {
+    await setup()
+    render(<FollowHandleButton subjectDidDht={BOB_DID} subjectHandle="bob" />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Follow' }))
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Following' })).toBeEnabled(),
+    )
+
+    expect(useAuthStore.getState().handleFollows).toEqual([BOB_DID])
+    expect(useAuthStore.getState().subscriptions).toEqual([])
   })
 })

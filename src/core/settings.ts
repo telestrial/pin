@@ -16,12 +16,6 @@ export type DispatchSettings = {
   // Optional for back-compat with settings written before the field existed
   // (a missing value leaves the device's current theme untouched on load).
   theme?: ThemeMode
-  // channelIDs the user explicitly unsubscribed from (the handle-follow
-  // auto-Watch tombstone set). Synced so an unsubscribe sticks across
-  // devices — otherwise a second device's reconcile re-adds the channel
-  // and writes it back, resurrecting it everywhere. Optional for back-compat
-  // with settings written before the field existed (treated empty).
-  dismissedAutoWatch?: string[]
   // Public follow graph (Phase D step 6, atproto-free). `follows` = channel-follows
   // as did:dht-native edges (replacing dev.sia.pin.subscription records);
   // `handleFollows` = handle-follows as target did:dhts (replacing

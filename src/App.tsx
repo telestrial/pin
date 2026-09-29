@@ -16,7 +16,6 @@ import { useChannelReader } from './lib/hooks/useChannelReader'
 import { useCuratorAutostart } from './lib/hooks/useCuratorAutostart'
 import { useCuratorLoops } from './lib/hooks/useCuratorLoops'
 import { useDocRestore } from './lib/hooks/useDocRestore'
-import { useHandleFollowReconciliation } from './lib/hooks/useHandleFollowReconciliation'
 import { usePinDocsMirror } from './lib/hooks/usePinDocsMirror'
 import { usePortalResolution } from './lib/hooks/usePortalResolution'
 import { useReading } from './lib/hooks/useReading'
@@ -89,7 +88,6 @@ export default function App() {
   // Ladder rung 1 (live-sync): the author serves each owned channel as a doc and
   // keeps a read ticket published; the subscriber imports and is pushed updates.
   // Purely additive over the rungs above — if either goes quiet, reads fall back.
-  useHandleFollowReconciliation()
   useRendezvousSync()
 
   // While a pinned item is armed, mark the body so a global CSS rule

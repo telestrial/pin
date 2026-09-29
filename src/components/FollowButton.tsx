@@ -1,7 +1,4 @@
-import {
-  unwatchOneChannel,
-  watchOneChannel,
-} from '../lib/hooks/useHandleFollowReconciliation'
+import { unwatchOneChannel, watchOneChannel } from '../lib/channelWatch'
 import { useAuthStore } from '../stores/auth'
 import { useToastStore } from '../stores/toast'
 import { RelationButton } from './RelationButton'

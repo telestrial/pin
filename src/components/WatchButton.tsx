@@ -1,5 +1,5 @@
 import type { ChannelManifest } from '../core/types'
-import { unwatchOneChannel } from '../lib/hooks/useHandleFollowReconciliation'
+import { unwatchOneChannel } from '../lib/channelWatch'
 import { startWatching } from '../lib/watch'
 import { useAuthStore } from '../stores/auth'
 import { useToastStore } from '../stores/toast'

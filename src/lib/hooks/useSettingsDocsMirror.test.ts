@@ -17,7 +17,6 @@ const channel = (id: string): OwnedChannel => ({
 const EMPTY: SettingsFields = {
   myChannels: [],
   subscriptions: [],
-  dismissedAutoWatch: [],
   theme: 'rounded',
   follows: [],
   handleFollows: [],
@@ -71,12 +70,11 @@ describe('decidePeerSettings', () => {
 
   it('fills omitted back-compat fields with the same defaults hydrate uses', () => {
     // A peer record from before optional fields existed: only channels + version
-    // (peerFrom omits theme / dismissedAutoWatch / follows / handleFollows / profile).
+    // (peerFrom omits theme / follows / handleFollows / profile).
     const peer = peerFrom({ myChannels: [channel('a')] })
     const next = decidePeerSettings(peer, EMPTY, true, 'corners')
     expect(next).toMatchObject({
       theme: 'corners', // omitted → the passed default
-      dismissedAutoWatch: [],
       follows: [],
       handleFollows: [],
       profile: null,
