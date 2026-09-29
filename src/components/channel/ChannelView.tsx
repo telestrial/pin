@@ -157,10 +157,7 @@ export function ChannelView({
   // With the author, because following a person watches every public channel they
   // advertise: their wholesale followers are this channel's audience too. The list and
   // the number are one read, so they cannot disagree.
-  const followers = useChannelFollowers(
-    isPublic ? channelID : '',
-    manifest?.authorDidDht,
-  )
+  const followers = useChannelFollowers(isPublic ? channelID : '')
   const followerCount = followers?.length ?? null
   // The list behind the number, opened from it. Folded away by default because this
   // page's body is the channel's feed, and a standing list of people would push the posts
@@ -367,7 +364,7 @@ export function ChannelView({
                               follows a public channel you author — which is what puts
                               you among its followers — and this is the ONLY place that
                               can be undone: the sidebar keeps owned channels out of
-                              Following, and `followedPeople` keeps a self-follow out of
+                              Following, and `followsOfOthers` keeps a self-follow out of
                               the profile's. So the page the claim is about is the page
                               that changes it. */}
                           {isOwnPublic && manifest?.authorDidDht && (
@@ -461,17 +458,13 @@ export function ChannelView({
               <h2 className="text-xs font-medium text-neutral-500 uppercase tracking-wide px-1">
                 Followers
               </h2>
-              {/* The channel's audience, one row per person: those who follow this
-                  channel, then those who follow its author wholesale and so receive it.
-                  Among the identities this device has read, like the count. */}
+              {/* The people who follow this channel. Among the identities this device has
+                  read, like the count. */}
               <div className="bg-white border border-neutral-200 rounded-lg divide-y divide-neutral-100">
-                {followers.map((f) => (
+                {followers.map((did) => (
                   <PersonRow
-                    key={f.didDht}
-                    didDht={f.didDht}
-                    via={
-                      f.direct ? 'This channel' : `Everything by @${authorName}`
-                    }
+                    key={did}
+                    didDht={did}
                     onHandleClick={onHandleClick}
                   />
                 ))}

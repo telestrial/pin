@@ -11,11 +11,9 @@
 
 import { useEffect, useRef, useState } from 'react'
 import {
-  type ChannelFollower,
-  channelFollowersOf,
-  type Follower,
   type FollowerEdges,
-  followersOf,
+  followersOfChannel,
+  followersOfPerson,
   ownFollowerEdges,
 } from '../../core/followers'
 import { useAuthStore } from '../../stores/auth'
@@ -70,22 +68,18 @@ function useFollowerAnswer<T>(
   return counted?.subject === subject ? counted.value : null
 }
 
-/** The people who follow a person and how, out of what this device has read — the list
- *  behind a profile's Followers number, whose length IS that number. */
-export function usePersonFollowers(didDht: string): Follower[] | null {
+/** The people who follow a person, out of what this device has read — the list behind a
+ *  profile's Followers number, whose length IS that number. */
+export function usePersonFollowers(didDht: string): string[] | null {
   return useFollowerAnswer(didDht ? `person:${didDht}` : '', (corpus) =>
-    followersOf(corpus, didDht),
+    followersOfPerson(corpus, didDht),
   )
 }
 
-/** The people a channel reaches and how — the list behind a channel's Followers number,
- *  whose length IS that number. Pass the author, whose wholesale followers it reaches. */
-export function useChannelFollowers(
-  channelID: string,
-  authorDidDht: string | undefined,
-): ChannelFollower[] | null {
-  return useFollowerAnswer(
-    channelID ? `channel:${channelID}:${authorDidDht ?? ''}` : '',
-    (corpus) => channelFollowersOf(corpus, channelID, authorDidDht),
+/** The people who follow a channel — the list behind a channel's Followers number, whose
+ *  length IS that number. */
+export function useChannelFollowers(channelID: string): string[] | null {
+  return useFollowerAnswer(channelID ? `channel:${channelID}` : '', (corpus) =>
+    followersOfChannel(corpus, channelID),
   )
 }

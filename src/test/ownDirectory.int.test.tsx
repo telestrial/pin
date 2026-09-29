@@ -322,9 +322,9 @@ describe('integration: your own directory comes from local state', () => {
     })
   })
 
-  it('credits a person with the followers of their channels', async () => {
-    // The person is the unit and a channel is how somebody chooses to follow them, so a
-    // profile whose channels have followers does not read 0.
+  it('does not credit a person with the followers of their channels', async () => {
+    // One to one: somebody who followed one channel followed the channel, and counts on
+    // its page rather than on its author's.
     signedInWith([])
     hold(THEM, 'them')
     holdFollowing('did:dht:someone', {
@@ -334,14 +334,12 @@ describe('integration: your own directory comes from local state', () => {
     render(directory(THEM))
 
     await waitFor(() => {
-      expect(stat('Followers')).toBe('1')
+      expect(stat('Followers')).toBe('0')
     })
   })
 
-  it('lists who follows them and how, and the count is that list', async () => {
-    // One follows a channel of theirs, one follows them wholesale. The rows name the
-    // channel from the manifest the card above already holds, and "Everything" for the
-    // wholesale follow; the number above is the length of the same list.
+  it('lists who follows them, and the count is that list', async () => {
+    // A wholesale follower is listed; a follower of one channel is not.
     signedInWith([owned()])
     await inTheDoc('chan1', 'A channel')
     holdFollowing('did:dht:fan-of-one', {
@@ -351,36 +349,33 @@ describe('integration: your own directory comes from local state', () => {
 
     render(directory(ME))
 
-    await waitFor(() => {
-      expect(screen.getByText('Everything')).toBeInTheDocument()
+    const followersHeading = await screen.findByRole('heading', {
+      name: 'Followers',
     })
-    const followersHeading = screen.getByRole('heading', { name: 'Followers' })
     const section = within(followersHeading.parentElement as HTMLElement)
-    expect(section.getByText('Everything')).toBeInTheDocument()
-    expect(
-      section.getByText('A channel', { selector: 'div' }),
-    ).toBeInTheDocument()
-    expect(stat('Followers')).toBe('2')
+    expect(section.getAllByRole('button')).toHaveLength(1)
+    expect(stat('Followers')).toBe('1')
   })
 
-  it('lists and counts each person followed once, naming the channels taken', async () => {
-    // Two channels of one person is following that person once, and the row says which
-    // of their voices.
+  it('lists and counts each follow as what it is', async () => {
+    // Two channels of one person, and that person wholesale: three follows, three rows.
     signedInWith([owned()])
     useAuthStore.setState({
       follows: [
         { didDht: THEM, channelID: 'ch-techno', name: 'Techno' },
         { didDht: THEM, channelID: 'ch-cats', name: 'Cats' },
       ],
+      handleFollows: [THEM],
     })
     await inTheDoc('chan1', 'A channel')
 
     render(directory(ME))
 
     await waitFor(() => {
-      expect(screen.getByText('Techno · Cats')).toBeInTheDocument()
+      expect(screen.getByText('Techno')).toBeInTheDocument()
     })
-    expect(stat('Following')).toBe('1')
+    expect(screen.getByText('Cats')).toBeInTheDocument()
+    expect(stat('Following')).toBe('3')
   })
 
   it('renders a held profile before the network has answered', async () => {

@@ -185,10 +185,9 @@ describe('integration: browsing a channel you do not hold', () => {
     await waitFor(() => expect(stat('Followers')).toBe('2'))
   })
 
-  it('counts the wholesale followers of its author, who receive it', async () => {
-    // Following a person watches every public channel they advertise, so somebody who
-    // follows the author is in this channel's audience. The WIRING under test is the page
-    // handing the manifest's author to the count; the pure rule is tested beside it.
+  it('does not count the wholesale followers of its author', async () => {
+    // One to one: following a person is following the person, and counts on their profile.
+    // A channel's number is the people who followed the channel.
     await published([post('a post', '2026-09-02T00:00:00.000Z')])
     docStore.set(
       `${directory_collection()}/did:dht:fan`,
@@ -209,12 +208,12 @@ describe('integration: browsing a channel you do not hold', () => {
 
     view(KEY)
 
-    await waitFor(() => expect(stat('Followers')).toBe('1'))
+    await waitFor(() => expect(stat('Followers')).toBe('0'))
   })
 
-  it('opens the list behind the number, saying how each person follows', async () => {
-    // Folded away until asked for, because the page body is the channel's feed. One row
-    // per person: a direct follower, and one who receives it by following the author.
+  it('opens the list behind the number', async () => {
+    // Folded away until asked for, because the page body is the channel's feed. The
+    // channel's own followers only — somebody following its author is not among them.
     await published([post('a post', '2026-09-02T00:00:00.000Z')])
     holdFollower('did:dht:direct')
     docStore.set(
@@ -236,14 +235,13 @@ describe('integration: browsing a channel you do not hold', () => {
 
     view(KEY)
 
-    await waitFor(() => expect(stat('Followers')).toBe('2'))
+    await waitFor(() => expect(stat('Followers')).toBe('1'))
     expect(screen.queryByRole('region', { name: 'Followers' })).toBeNull()
 
     await userEvent.click(screen.getByRole('button', { name: /Followers/ }))
 
     const list = within(screen.getByRole('region', { name: 'Followers' }))
-    expect(list.getByText('This channel')).toBeInTheDocument()
-    expect(list.getByText(/^Everything by @/)).toBeInTheDocument()
+    expect(list.getAllByRole('button')).toHaveLength(1)
   })
 
   it('offers no follower count on an unlisted channel', async () => {

@@ -2,11 +2,7 @@ import { Plus } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { advertisedChannels } from '../core/channels'
 import type { FeedEntry } from '../core/feed'
-import {
-  type FollowedPerson,
-  type Follower,
-  followedPeople,
-} from '../core/followers'
+import { followsOfOthers } from '../core/followers'
 import { buildProfileFeed, includedOnProfile } from '../core/profileFeed'
 import type { ChannelManifest, FollowEdge } from '../core/types'
 import {
@@ -20,6 +16,7 @@ import { usePersonFollowers } from '../lib/hooks/useFollowers'
 import { useItemBlobURL } from '../lib/hooks/useItemBytes'
 import { resolveIdentityDoc } from '../lib/identityDoc'
 import { useAuthStore } from '../stores/auth'
+import { ChannelAvatar } from './channel/ChannelAvatar'
 import { ChannelHeroCard } from './channel/ChannelHeroCard'
 import { FollowHandleButton } from './FollowHandleButton'
 import { FeedRow } from './HomeFeed'
@@ -492,7 +489,7 @@ function LoadedDirectory({
   follows: FollowEdge[]
   handleFollows: string[]
   /** Null while the index is still being counted — blank rather than a claimed zero. */
-  followers: Follower[] | null
+  followers: string[] | null
   onBack?: () => void
   onItemClick: (entry: FeedEntry) => void
   onChannelClick: (
@@ -504,18 +501,13 @@ function LoadedDirectory({
   onEditProfile?: () => void
   onCreate?: () => void
 }) {
-  // People, one each, by either grain — see `followedPeople`. Built once, so the count,
-  // the list and the empty check cannot end up with three readings of what "following"
-  // means.
-  const followed = followedPeople(did, follows, handleFollows)
-  // Names for the channels a follower takes, from the manifests the cards already hold. A
-  // channel this page does not show — unadvertised since, or never read — is still one of
-  // theirs, so it is named generically rather than dropped.
-  const channelNames = new Map(
-    ownChannels.map((c) => [c.channelID, c.manifest.name]),
-  )
+  // A follow of your own channel is authorship rather than attention — see
+  // `followsOfOthers`. Filtered once, so the count, the list and the empty check cannot
+  // end up with three readings of what "following" means.
+  const others = followsOfOthers(did, follows, handleFollows)
+  const followingCount = others.follows.length + others.handleFollows.length
 
-  const isEmpty = !profile && ownChannels.length === 0 && followed.length === 0
+  const isEmpty = !profile && ownChannels.length === 0 && followingCount === 0
 
   // Built from the manifests the cards above already hold, so the feed costs no network of
   // its own: a card needs a manifest and a manifest carries the items. Rebuilt whenever the
@@ -536,7 +528,7 @@ function LoadedDirectory({
         did={did}
         isSelf={isSelf}
         profile={profile}
-        followingCount={followed.length}
+        followingCount={followingCount}
         followerCount={followers?.length ?? null}
         onBack={onBack}
         onEdit={onEditProfile}
@@ -641,17 +633,17 @@ function LoadedDirectory({
         </div>
       )}
 
-      {followed.length > 0 && (
+      {followingCount > 0 && (
         <Section title="Following">
-          {/* One row per PERSON. A channel is how somebody chooses to follow a person, so
-              following three of their voices is following them once — and which voices is
-              what the row says, since taking only someone's techno channel and not their
-              cat photos is a real thing to be able to read. */}
-          {followed.map((p) => (
-            <PersonRow
-              key={p.didDht}
-              didDht={p.didDht}
-              via={followedVia(p)}
+          {/* People, then channels — each one to one with the thing followed. A person
+              followed is their profile feed; a channel followed is that channel. */}
+          {others.handleFollows.map((d) => (
+            <PersonRow key={d} didDht={d} onHandleClick={onHandleClick} />
+          ))}
+          {others.follows.map((f) => (
+            <FollowRow
+              key={`${f.didDht}:${f.channelID}`}
+              edge={f}
               onHandleClick={onHandleClick}
             />
           ))}
@@ -660,16 +652,10 @@ function LoadedDirectory({
 
       {followers && followers.length > 0 && (
         <Section title="Followers">
-          {/* The list behind the number, one row per person — which of this person's
-              voices each follower takes, or everything. Among the identities this device
-              has read, like the count: graph-scoped, honest, and incomplete. */}
-          {followers.map((f) => (
-            <PersonRow
-              key={f.didDht}
-              didDht={f.didDht}
-              via={followerVia(f, channelNames)}
-              onHandleClick={onHandleClick}
-            />
+          {/* The people who follow this person. Among the identities this device has
+              read, like the count: graph-scoped, honest, and incomplete. */}
+          {followers.map((d) => (
+            <PersonRow key={d} didDht={d} onHandleClick={onHandleClick} />
           ))}
         </Section>
       )}
@@ -914,18 +900,31 @@ function channelContentBytes(manifest: ChannelManifest): number {
 // row — clicking navigates to the author's directory (viewing the channel
 // directly needs K, which a follow edge doesn't carry), where the channel
 // resolves properly from the advertised list.
-/** How somebody follows this person, in words for a row. */
-function followerVia(f: Follower, names: Map<string, string>): string {
-  // Wholesale already includes every channel, so naming any alongside it would suggest
-  // they take less than they do.
-  if (f.wholesale) return 'Everything'
-  return f.channelIDs.map((id) => names.get(id) || 'A channel').join(' · ')
-}
-
-/** What of somebody's this identity follows, in words for a row. */
-function followedVia(p: FollowedPerson): string {
-  // Wholesale takes everything they advertise, now and later, so any channel followed
-  // alongside it is already included and naming it would suggest otherwise.
-  if (p.wholesale) return 'Everything'
-  return p.channels.map((c) => c.name || 'A channel').join(' · ')
+function FollowRow({
+  edge,
+  onHandleClick,
+}: {
+  edge: FollowEdge
+  onHandleClick: (handle: string) => void
+}) {
+  const name = edge.name || 'Channel'
+  return (
+    <button
+      type="button"
+      onClick={() => onHandleClick(edge.didDht)}
+      className="w-full p-3 flex gap-3 items-center text-left hover:bg-neutral-50 cursor-pointer transition-colors"
+    >
+      <ChannelAvatar
+        channelID={edge.channelID}
+        channelName={name}
+        authorHandle=""
+        size="md"
+      />
+      <div className="flex-1 min-w-0">
+        <div className="text-sm font-semibold text-neutral-900 truncate">
+          {name}
+        </div>
+      </div>
+    </button>
+  )
 }

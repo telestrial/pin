@@ -4,11 +4,11 @@ import {
 } from '../lib/hooks/useIdentityName'
 import { IdentityAvatar } from './IdentityAvatar'
 
-/** One person in a list of people, and how they relate to whoever the list is about.
+/** One person in a list of people.
  *
- *  Shared by every list of people — who a profile follows, who follows it, who a channel
- *  reaches — so the three cannot drift into three different rows. A mark, a name, a line
- *  saying how, and it opens their directory. The person is named by their own published
+ *  Shared by every list of people — who a profile follows, who follows it, who follows a
+ *  channel — so the three cannot drift into three different rows. A mark, a name, an
+ *  optional second line, and it opens their directory. The person is named by their own published
  *  profile, which `useIdentityName` reads out of the crawl's index before the network. */
 export function PersonRow({
   didDht,
@@ -16,7 +16,7 @@ export function PersonRow({
   onHandleClick,
 }: {
   didDht: string
-  via: string
+  via?: string
   onHandleClick: (handle: string) => void
 }) {
   const name = useIdentityName(didDht)
@@ -36,7 +36,7 @@ export function PersonRow({
         <div className="text-sm font-semibold text-neutral-900 truncate">
           @{name}
         </div>
-        <div className="text-xs text-neutral-500 truncate">{via}</div>
+        {via && <div className="text-xs text-neutral-500 truncate">{via}</div>}
       </div>
     </button>
   )
