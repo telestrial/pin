@@ -11,6 +11,7 @@
 // the work.
 
 import {
+  act,
   cleanup,
   render,
   screen,
@@ -238,6 +239,38 @@ describe('integration: browsing a channel you do not hold', () => {
     await userEvent.click(screen.getByRole('button', { name: /Followers/ }))
     const list = within(screen.getByRole('region', { name: 'Followers' }))
     expect(list.getByText('The 1 you know of')).toBeInTheDocument()
+  })
+
+  it('recounts when the crawl records a follower after the page opened', async () => {
+    // Following somebody reads them a moment AFTER the press, so a count taken at the
+    // press has only what was held then. The record landing is what has to move it.
+    await published([post('a post', '2026-09-02T00:00:00.000Z')])
+    holdFollower('did:dht:first')
+
+    view(KEY)
+    await waitFor(() => expect(stat('Followers')).toBe('1'))
+
+    const { putRecord } = await import('../lib/docs')
+    await act(() =>
+      putRecord(
+        directory_collection(),
+        'did:dht:later',
+        new TextEncoder().encode(
+          JSON.stringify({
+            tier: 'full',
+            profile: null,
+            channels: [],
+            reach: [],
+            follows: [{ didDht: THEM, channelID: CHANNEL }],
+            handleFollows: [],
+            url: 'sia://held',
+            epoch: 1,
+            seenAt: '2026-09-01T12:00:00.000Z',
+          }),
+        ),
+      ),
+    )
+    await waitFor(() => expect(stat('Followers')).toBe('2'))
   })
 
   it('opens the list behind the number', async () => {

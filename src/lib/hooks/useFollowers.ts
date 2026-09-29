@@ -11,6 +11,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import {
+  directory_collection,
   endorse_collection,
   follow_rkey,
   person_tally_collection,
@@ -60,21 +61,57 @@ function useFollowerAnswer<T>(
   useEffect(() => {
     let cancelled = false
     if (!storedKeyHex || !subject) return
-    void followerEdges(storedKeyHex)
-      .then((held) => {
-        // Your own edges are never among the held records — see `ownFollowerEdges`.
-        // Unioned here rather than inside `followerEdges`, which reads the doc and has no
-        // business reaching into local state.
-        const corpus = myDidDht
-          ? [...held, ownFollowerEdges(myDidDht, follows, handleFollows)]
-          : held
-        const value = answerRef.current(corpus)
-        if (!cancelled) setCounted({ subject, value })
+    let running = false
+    let again = false
+
+    const count = async () => {
+      if (running) {
+        again = true
+        return
+      }
+      running = true
+      try {
+        do {
+          again = false
+          const held = await followerEdges(storedKeyHex)
+          // Your own edges are never among the held records — see `ownFollowerEdges`.
+          // Unioned here rather than inside `followerEdges`, which reads the doc and has
+          // no business reaching into local state.
+          const corpus = myDidDht
+            ? [...held, ownFollowerEdges(myDidDht, follows, handleFollows)]
+            : held
+          const value = answerRef.current(corpus)
+          if (!cancelled) setCounted({ subject, value })
+        } while (again && !cancelled)
+      } catch {
+        // A crawl index that will not open is not an absence of followers.
+      } finally {
+        running = false
+      }
+    }
+
+    // Recounted when the crawl records somebody, not only when this identity's own follows
+    // move. Following a person reads them a moment AFTER the press, so a count taken at the
+    // press would hold only your own edge and go on showing that. A crawl writes records in
+    // bursts, so writes landing mid-count coalesce into one more count rather than one each.
+    let unsub = () => {}
+    void (async () => {
+      try {
+        await openDocs(storedKeyHex)
+        await ensureWasm()
+      } catch {
+        return
+      }
+      if (cancelled) return
+      const directories = directory_collection()
+      unsub = subscribeDocChanges(({ collection }) => {
+        if (collection === directories) void count()
       })
-      // A crawl index that will not open is not an absence of followers.
-      .catch(() => {})
+    })()
+    void count()
     return () => {
       cancelled = true
+      unsub()
     }
   }, [storedKeyHex, subject, myDidDht, follows, handleFollows])
 
