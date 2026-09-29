@@ -62,7 +62,10 @@ impl Reading {
 /// take away a channel somebody chose on its own.
 ///
 /// `held` is the crawl's record for each followed person, where one is held.
-pub fn reading(settings: &SettingsView, held: &BTreeMap<String, DirectoryRecord>) -> Reading {
+pub(crate) fn reading(
+    settings: &SettingsView,
+    held: &BTreeMap<String, DirectoryRecord>,
+) -> Reading {
     let mut out = Reading::default();
     let mut seen: HashSet<String> = HashSet::new();
 

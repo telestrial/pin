@@ -105,7 +105,9 @@ pub use instance::{
 pub use keepalive::{
     keep_alive_once, run_keep_alive_loop, KeepAliveContext, KeepAliveOutcome, SettingsLocator,
 };
-pub use reading::{reading, reading_json, ReadChannel, Reading};
+#[cfg(test)]
+use reading::reading;
+pub use reading::{reading_json, ReadChannel, Reading};
 pub use rendezvous::{
     merge_directory, pick_peers, rendezvous_once, run_rendezvous_loop, Entry, RendezvousContext,
     RendezvousOutcome, ENTRY_TTL_SECS,
