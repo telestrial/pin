@@ -78,6 +78,7 @@ mod identity;
 mod instance;
 mod keepalive;
 pub mod net;
+mod reading;
 mod rendezvous;
 mod repack;
 mod snapshot;
@@ -104,6 +105,7 @@ pub use instance::{
 pub use keepalive::{
     keep_alive_once, run_keep_alive_loop, KeepAliveContext, KeepAliveOutcome, SettingsLocator,
 };
+pub use reading::{reading, reading_json, ReadChannel, Reading};
 pub use rendezvous::{
     merge_directory, pick_peers, rendezvous_once, run_rendezvous_loop, Entry, RendezvousContext,
     RendezvousOutcome, ENTRY_TTL_SECS,
@@ -851,22 +853,22 @@ pub(crate) async fn read_settings(
     serde_json::from_slice(&json).map_err(|e| format!("settings decode: {e}"))
 }
 
-/// Which channels a pass should keep cached: subscribed and not the user's own.
+/// Which channels a pass should keep cached: the ones this identity reads, less its own.
 ///
 /// Own channels are excluded because their freshest state is local — the app reflects a
 /// publish immediately — so a cached copy could only ever be the same or staler, and
 /// serving a staler one would make a just-published post disappear.
-fn wanted_channels(settings: &SettingsView) -> Vec<(&str, &str)> {
+fn wanted_channels<'a>(settings: &SettingsView, reading: &'a Reading) -> Vec<(&'a str, &'a str)> {
     let owned: std::collections::HashSet<&str> = settings
         .my_channels
         .iter()
         .map(|c| c.channel_id.as_str())
         .collect();
-    settings
-        .subscriptions
+    reading
+        .channels
         .iter()
-        .filter(|s| !owned.contains(s.channel_id.as_str()))
-        .map(|s| (s.channel_id.as_str(), s.channel_key.as_str()))
+        .filter(|c| !owned.contains(c.channel_id.as_str()))
+        .map(|c| (c.channel_id.as_str(), c.channel_key.as_str()))
         .collect()
 }
 
@@ -926,7 +928,8 @@ pub(crate) fn is_older_than_cached(
 pub async fn pull_once(ctx: &PullContext) -> Result<PullOutcome, String> {
     let settings = read_settings(&ctx.doc, &ctx.blobs, ctx.author_id, &ctx.app_key).await?;
 
-    let wanted = wanted_channels(&settings);
+    let reading = reading::read_now(&ctx.doc, &ctx.blobs, ctx.author_id, &settings).await;
+    let wanted = wanted_channels(&settings, &reading);
     let mut outcome = PullOutcome::default();
 
     for (channel_id, channel_key_b64) in &wanted {
@@ -1026,8 +1029,14 @@ pub async fn pull_once(ctx: &PullContext) -> Result<PullOutcome, String> {
         }
     }
 
-    outcome.dropped = drop_unsubscribed(ctx, &wanted).await;
-    drop_tallies_for_gone_channels(ctx, &settings, &wanted).await;
+    // Only on a complete set. A followed person nobody has read yet, or whose record has
+    // faded, is missing from `wanted` for want of a reading — dropping their cache on that
+    // would be deleting by absence. What waits is the cleanup, and it runs on the next pass
+    // that can say.
+    if reading.settled() {
+        outcome.dropped = drop_unsubscribed(ctx, &wanted).await;
+        drop_tallies_for_gone_channels(ctx, &settings, &wanted).await;
+    }
     Ok(outcome)
 }
 
@@ -1252,6 +1261,36 @@ mod tests {
         assert!(!is_older_than_cached(&k, r#"{"items":[]}"#, Some(&cached)));
     }
 
+    /// The cached set for settings with no followed person held — watches alone.
+    fn wanted(s: &SettingsView) -> Vec<(String, String)> {
+        let r = reading(s, &Default::default());
+        wanted_channels(s, &r)
+            .into_iter()
+            .map(|(a, b)| (a.to_string(), b.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn a_followed_persons_profile_channels_are_cached() {
+        // Following a person copies nothing into the subscription list, so this is the one
+        // route their channels have into the cache.
+        let s = settings(
+            r#"{
+              "subscriptions": [{"channelID": "w", "channelKey": "kw"}],
+              "handleFollows": ["did:dht:alice"]
+            }"#,
+        );
+        let held = std::collections::BTreeMap::from([(
+            "did:dht:alice".to_string(),
+            serde_json::from_str::<DirectoryRecord>(
+                r#"{"tier":"full","channels":[{"channelID":"a1","key":"k1","name":"One"}]}"#,
+            )
+            .unwrap(),
+        )]);
+        let r = reading(&s, &held);
+        assert_eq!(wanted_channels(&s, &r), vec![("w", "kw"), ("a1", "k1")]);
+    }
+
     #[test]
     fn wanted_channels_excludes_the_users_own() {
         // Owners auto-subscribe to their own channels, so the subscription list
@@ -1266,7 +1305,7 @@ mod tests {
               "myChannels": [{"channelID": "aaa"}]
             }"#,
         );
-        assert_eq!(wanted_channels(&s), vec![("bbb", "k2")]);
+        assert_eq!(wanted(&s), vec![("bbb".into(), "k2".into())]);
     }
 
     #[test]
@@ -1281,11 +1320,11 @@ mod tests {
               "subscriptions": [{"channelID": "aaa", "channelKey": "k1", "label": "x"}]
             }"#,
         );
-        assert_eq!(wanted_channels(&s), vec![("aaa", "k1")]);
+        assert_eq!(wanted(&s), vec![("aaa".into(), "k1".into())]);
 
         // And an absent list is an empty one, not a decode failure.
         let empty = settings(r#"{"version": 3}"#);
-        assert!(wanted_channels(&empty).is_empty());
+        assert!(wanted(&empty).is_empty());
     }
 
     // Channel-key decoding is pin-crypto's now, and tested there — one home for the
@@ -1422,7 +1461,8 @@ mod tests {
               "myChannels": [{"channelID": "aaa"}]
             }"#,
         );
-        let keep = tally_channels_to_keep(&s, &wanted_channels(&s));
+        let r = reading(&s, &Default::default());
+        let keep = tally_channels_to_keep(&s, &wanted_channels(&s, &r));
         assert!(keep.contains("aaa"));
         assert!(keep.contains("bbb"));
     }
@@ -1430,7 +1470,8 @@ mod tests {
     #[test]
     fn an_unsubscribed_channels_counts_are_dropped() {
         let s = settings(r#"{"subscriptions": [], "myChannels": []}"#);
-        assert!(!tally_channels_to_keep(&s, &wanted_channels(&s)).contains("gone"));
+        let r = reading(&s, &Default::default());
+        assert!(!tally_channels_to_keep(&s, &wanted_channels(&s, &r)).contains("gone"));
     }
 
     // --- the conversation cache -----------------------------------------------

@@ -104,14 +104,18 @@ async fn reconcile(
     events: &mut n0_future::MergeUnbounded<BoxStream<(String, LiveEvent)>>,
 ) -> Result<ChannelSyncOutcome, String> {
     let settings = read_settings(&ctx.doc, &ctx.blobs, ctx.author_id, &ctx.app_key).await?;
-    let wanted = crate::wanted_channels(&settings);
+    let reading = crate::reading::read_now(&ctx.doc, &ctx.blobs, ctx.author_id, &settings).await;
+    let wanted = crate::wanted_channels(&settings, &reading);
     let mut outcome = ChannelSyncOutcome::default();
 
-    // An unsubscribed channel stops being watched. Its stream is left in the merge to
+    // A channel no longer read stops being watched. Its stream is left in the merge to
     // end on its own — dropping the `Doc` is what stops the sync, and a stray event for
-    // a channel we no longer watch is ignored below.
-    let keep: std::collections::HashSet<&str> = wanted.iter().map(|(id, _)| *id).collect();
-    watched.retain(|id, _| keep.contains(id.as_str()));
+    // a channel we no longer watch is ignored below. Only on a complete set, for the reason
+    // the pull loop's drop waits: an unsettled follow is missing for want of a reading.
+    if reading.settled() {
+        let keep: std::collections::HashSet<&str> = wanted.iter().map(|(id, _)| *id).collect();
+        watched.retain(|id, _| keep.contains(id.as_str()));
+    }
 
     for (channel_id, channel_key_b64) in &wanted {
         if watched.contains_key(*channel_id) {

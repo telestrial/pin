@@ -1261,6 +1261,71 @@ mod visibility {
         assert!(a.held(&c.did).await.is_some());
     }
 
+    /// A FOLLOWED PERSON NOBODY HAS READ YET DROPS NOTHING FROM THE CACHE.
+    ///
+    /// Following a person reads their profile feed out of the crawl's record of them, so
+    /// until that record exists their channels are missing from the set the pull loop keeps
+    /// — for want of a reading, not because they are gone. The loop's cleanup deletes every
+    /// cached channel outside that set, and running it then would be deleting by absence.
+    /// Once a full record is held the set is complete again, and the same pass drops what
+    /// nothing reads.
+    ///
+    /// Every channel in play here is either unread or in nobody's set, so a pass makes no
+    /// network call at all: what is observed is the cleanup's decision alone.
+    #[tokio::test]
+    async fn an_unread_follow_holds_the_pull_cleanup_until_it_is_read() {
+        let world = World::new();
+        let me = Identity::new(&world, 1).await;
+        let alice = Identity::new(&world, 2).await;
+        me.follows(&[&alice.did]).await;
+
+        crate::write_record(
+            &me.doc,
+            me.author_id,
+            crate::SUB_COLLECTION,
+            "a1",
+            b"cached".to_vec(),
+        )
+        .await
+        .expect("seed a cached channel");
+        let ctx = crate::PullContext {
+            doc: me.doc.clone(),
+            blobs: me.blobs.clone(),
+            author_id: me.author_id,
+            sia: std::sync::Arc::new(pin_sia::Session::new()),
+            app_key: me.app_key,
+        };
+        let cached = || async {
+            crate::read_record(
+                &me.doc,
+                &me.blobs,
+                me.author_id,
+                crate::SUB_COLLECTION,
+                "a1",
+            )
+            .await
+            .expect("read")
+            .is_some()
+        };
+
+        let out = crate::pull_once(&ctx).await.expect("pass");
+        assert_eq!(out.dropped, 0);
+        assert!(cached().await, "kept while alice is unread");
+
+        me.hold_at(
+            &alice.did,
+            directory("alice", &[]),
+            "2026-09-12T00:00:00.000Z",
+        )
+        .await;
+        let out = crate::pull_once(&ctx).await.expect("pass");
+        assert_eq!(out.dropped, 1);
+        assert!(
+            !cached().await,
+            "dropped once the set is complete and nothing reads it"
+        );
+    }
+
     /// BEING FOLLOWED TELLS YOU NOTHING. The graph is directed, and reading it is
     /// something you do from your own end of the arrow.
     ///
