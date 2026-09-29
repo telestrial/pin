@@ -186,6 +186,15 @@ struct DirectoryDoc {
         skip_serializing_if = "Option::is_none"
     )]
     comments_url: Option<String>,
+    /// How many people follow this identity as a PERSON, as this identity folded it: the
+    /// tally, with its set root and a sample of who — the receipts a count is shown with.
+    ///
+    /// Here because the directory is the person's own public face, the way a channel's
+    /// follow tally sits in that channel's doc. Absent while nobody follows, and optional
+    /// so every reader that predates it goes on reading the blob unchanged. Opaque, like
+    /// the endorsements: the shape is pin-engagement's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    followers: Option<serde_json::Value>,
     #[serde(rename = "updatedAt")]
     updated_at: String,
 }
@@ -688,6 +697,9 @@ async fn assemble_directory(
         handle_follows: settings.handle_follows.clone(),
         endorsements: own_endorsements(ctx).await,
         comments_url,
+        followers: crate::engagement::read_person_tally(&ctx.doc, &ctx.blobs, ctx.author_id)
+            .await
+            .and_then(|t| serde_json::to_value(t).ok()),
         updated_at: now_iso,
     }
 }
@@ -705,6 +717,8 @@ fn has_anything(doc: &DirectoryDoc) -> bool {
         // only ever commented — an unpublished pointer is a comment no crawl can confirm.
         || !doc.endorsements.is_empty()
         || doc.comments_url.is_some()
+        // Being followed is something to say too: it is the one count about a person.
+        || doc.followers.is_some()
 }
 
 /// Which generation to reclaim, and which to keep alive, after publishing `current`.
@@ -925,6 +939,8 @@ fn directory_moved(event: &LiveEvent) -> bool {
         pin_derive::ENDORSE_COLLECTION,
         pin_derive::COMMENT_COLLECTION,
         pin_derive::COMMENT_SEAL_COLLECTION,
+        // Written by the engagement loop, gated on substance, so it converges.
+        pin_derive::PERSON_TALLY_COLLECTION,
     ]
     .iter()
     .any(|c| key.starts_with(&pin_derive::collection_prefix(c)))
@@ -1219,6 +1235,49 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn the_directory_carries_the_person_tally_when_somebody_follows() {
+        let world = crate::testnet::World::new();
+        let me = crate::testnet::Identity::new(&world, 1).await;
+        me.set_settings(serde_json::json!({ "handleFollows": ["did:dht:x"] }))
+            .await;
+        let ctx = ctx_over(&me);
+        let settings = read_settings(&ctx.doc, &ctx.blobs, ctx.author_id, &ctx.app_key)
+            .await
+            .expect("settings");
+
+        let nobody = assemble_directory(&ctx, &settings, None, "now".into()).await;
+        assert!(
+            serde_json::to_value(&nobody)
+                .unwrap()
+                .get("followers")
+                .is_none(),
+            "absent, not null, while nobody follows — so older readers see the same blob"
+        );
+
+        let tally = pin_engagement::fold(
+            &[
+                pin_engagement::Endorsement::sign_person_follow(&[9u8; 32], &me.did, "then")
+                    .unwrap(),
+            ],
+            None,
+            "then".into(),
+        )
+        .unwrap();
+        crate::write_record(
+            &me.doc,
+            me.author_id,
+            pin_derive::PERSON_TALLY_COLLECTION,
+            pin_derive::PERSON_TALLY_RKEY,
+            serde_json::to_vec(&tally).unwrap(),
+        )
+        .await
+        .unwrap();
+        let followed = assemble_directory(&ctx, &settings, None, "now".into()).await;
+        let v = serde_json::to_value(&followed).unwrap();
+        assert_eq!(v["followers"]["kinds"]["follow"]["count"], 1);
+    }
+
     async fn published_kinds(id: &crate::testnet::Identity) -> Vec<String> {
         let ctx = ctx_over(id);
         let settings = read_settings(&ctx.doc, &ctx.blobs, ctx.author_id, &ctx.app_key)
@@ -1287,6 +1346,7 @@ mod tests {
             channels,
             follows: Vec::new(),
             handle_follows: Vec::new(),
+            followers: None,
             endorsements: Vec::new(),
             comments_url: None,
             updated_at: "2026-08-06T12:00:00.000Z".into(),
@@ -1344,6 +1404,7 @@ mod tests {
             handle_follows: vec!["did:dht:ccc".into(), "did:dht:ddd".into()],
             endorsements: Vec::new(),
             comments_url: None,
+            followers: None,
             updated_at: "2026-08-06T12:00:00.000Z".into(),
         };
         // Compared as parsed values, not as bytes. A directory document is PARSED by

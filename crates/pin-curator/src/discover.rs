@@ -153,6 +153,11 @@ pub struct DirectoryRecord {
     /// The `did:dht`s they follow wholesale.
     #[serde(default, rename = "handleFollows")]
     pub handle_follows: Vec<String>,
+    /// Their person-follow tally as they publish it — how many follow them as a person, with
+    /// its receipts. Opaque, and faded with the profile: it describes them rather than
+    /// being an edge anybody walks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub followers: Option<serde_json::Value>,
     /// The directory pointer this was read from. Sia is content-addressed, so an unchanged
     /// URL proves the bytes are identical — which is what lets a later pass confirm this
     /// record without downloading anything.
@@ -268,6 +273,10 @@ pub(crate) fn parse_directory(
                     .collect()
             })
             .unwrap_or_default(),
+        followers: match blob.get("followers") {
+            None | Some(serde_json::Value::Null) => None,
+            Some(v) => Some(v.clone()),
+        },
         url: url.to_string(),
         epoch: DISCOVER_EPOCH,
         seen_at: now_iso.to_string(),
@@ -737,6 +746,7 @@ fn faded(record: &DirectoryRecord, tier: DirectoryTier) -> DirectoryRecord {
     if tier >= DirectoryTier::Reduced {
         out.profile = None;
         out.channels = Vec::new();
+        out.followers = None;
     }
     if tier >= DirectoryTier::Minimal {
         out.follows = Vec::new();
@@ -1142,6 +1152,7 @@ mod tests {
             }],
             follows: vec![serde_json::json!({"didDht": "did:dht:bob", "channelID": "c1"})],
             handle_follows: vec!["did:dht:carol".into()],
+            followers: None,
             url: "sia://one".into(),
             epoch: DISCOVER_EPOCH,
             seen_at: "2026-09-01T00:00:00.000Z".into(),
@@ -1247,6 +1258,12 @@ mod tests {
         let blob: serde_json::Value =
             serde_json::from_str(r#"{"version":3,"profile":null,"channels":[]}"#).unwrap();
         assert_eq!(parse_directory(&blob, &[], "sia://x", NOW).profile, None);
+        assert_eq!(parse_directory(&blob, &[], "sia://x", NOW).followers, None);
+        let followed = serde_json::json!({"followers": {"kinds": {"follow": {"count": 2}}}});
+        assert_eq!(
+            parse_directory(&followed, &[], "sia://x", NOW).followers,
+            Some(serde_json::json!({"kinds": {"follow": {"count": 2}}}))
+        );
 
         let absent: serde_json::Value = serde_json::from_str("{}").unwrap();
         assert_eq!(parse_directory(&absent, &[], "sia://x", NOW).profile, None);
@@ -1761,10 +1778,14 @@ mod tests {
         // outright, only what they looked like.
         let full = record();
 
+        let mut full = full;
+        full.followers = Some(serde_json::json!({"kinds": {"follow": {"count": 3}}}));
         let reduced = faded(&full, DirectoryTier::Reduced);
         assert_eq!(reduced.tier, DirectoryTier::Reduced);
         assert_eq!(reduced.profile, None);
         assert!(reduced.channels.is_empty());
+        // A count describes them, like the profile does, and goes with it.
+        assert_eq!(reduced.followers, None);
         // Edges survive a step, so distance still propagates and the horizon fades rather
         // than cutting.
         assert_eq!(reduced.follows, full.follows);
