@@ -281,6 +281,29 @@ pub(crate) fn graph_actors(settings: &SettingsView) -> BTreeSet<String> {
     actors
 }
 
+/// The people followed wholesale that this device holds no directory record for.
+///
+/// Following a person reads their profile feed out of that record, so until one is held
+/// they show nothing. A pass woken by this identity's own write reads them rather than
+/// leaving it to the next crawl, which could be ten minutes off. Once a record is held they
+/// drop out, so each new follow costs one read; somebody who could not be reached waits for
+/// the crawl rather than being retried on every wake.
+async fn unread_follows<N: crate::net::Network>(
+    ctx: &EngagementContext<N>,
+    settings: &SettingsView,
+) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    for did in &settings.handle_follows {
+        if crate::discover::read_directory(&ctx.doc, &ctx.blobs, ctx.author_id, did)
+            .await
+            .is_none()
+        {
+            out.insert(did.clone());
+        }
+    }
+    out
+}
+
 /// What the crawl last read to completion for one actor.
 ///
 /// Only ever written after a directory was downloaded AND parsed. Recording a pointer we
@@ -665,7 +688,9 @@ fn retraction_log_key(record: &Retraction) -> String {
 
 /// One pass: read the graph, take what was knocked through, hold what's verified and
 /// ours, withdraw what's gone, and republish every tally that moved.
-/// `crawl` says whether to go and read the graph's directories this pass.
+/// `crawl` says whether to go and read the graph's directories this pass. `newcomers`
+/// says whether to read the people followed wholesale that no record is held for yet, on a
+/// pass that is not crawling — see `unread_follows`.
 ///
 /// The loop does two jobs whose costs are nothing alike. FOLDING is local: this identity's
 /// own endorsements plus the records already held, turned into a tally. It touches no
@@ -681,10 +706,16 @@ pub async fn engagement_once<N: crate::net::Network>(
     own_did: &str,
     now_iso: String,
     crawl: bool,
+    newcomers: bool,
 ) -> Result<EngagementOutcome, String> {
     let settings = read_settings(&ctx.doc, &ctx.blobs, ctx.author_id, &ctx.app_key).await?;
     let subjects = own_subjects(ctx, &settings).await?;
     let mut outcome = EngagementOutcome::default();
+    let unread = if newcomers && !crawl {
+        unread_follows(ctx, &settings).await
+    } else {
+        BTreeSet::new()
+    };
 
     // Emptied whatever happens to them. A knock left parked would be re-examined every
     // pass forever, and the inbox has a ceiling it would eventually reach.
@@ -705,6 +736,32 @@ pub async fn engagement_once<N: crate::net::Network>(
         // Nothing published, so nothing can be endorsed — including by knock. Not a
         // failure, and not a reason to hold on to what was knocked.
         outcome.not_ours = knocks.len() + comment_knocks.len();
+
+        // But the people it follows are still read, because following a person means
+        // reading their profile feed out of the crawl's record of them — and this crawl is
+        // the only thing that writes a followed person's record. Directories only: with
+        // nothing published there is nothing to extract from them, so no crawl mark is
+        // written that would tell the next crawl otherwise.
+        let who: Vec<&String> = if crawl {
+            settings.handle_follows.iter().collect()
+        } else {
+            unread.iter().collect()
+        };
+        for did in who {
+            match crate::discover::read_identity(
+                &ctx.net,
+                &ctx.doc,
+                &ctx.blobs,
+                ctx.author_id,
+                did,
+                &now_iso,
+            )
+            .await
+            {
+                Ok(()) => outcome.reached += 1,
+                Err(_) => outcome.unreachable += 1,
+            }
+        }
         return Ok(outcome);
     }
 
@@ -760,7 +817,10 @@ pub async fn engagement_once<N: crate::net::Network>(
         // the actor's own directory this pass", so a graph actor's withdrawal was ignored
         // as contradicted by a reading that never happened, and waited for the crawl.
         // Nobody is marked reached, so nothing can be withdrawn by absence either.
-        if !crawl {
+        //
+        // Except somebody followed wholesale whom nothing has read yet: their profile feed is
+        // what following them shows, and it cannot be shown until their record is held.
+        if !crawl && !unread.contains(&did) {
             continue;
         }
         let resolved = match resolve_directory(&ctx.net, &did).await {
@@ -1601,7 +1661,7 @@ fn crawl_this_pass(ticks: u32, crawl_every: u32, out_of_band: bool) -> bool {
 ///
 /// An ALLOWLIST, and the same one `identity::directory_moved` is, for the same reason: a
 /// collection nobody listed costs one cadence of staleness, where a collection that the
-/// pass itself writes on every turn costs a spin. Two collections, both written by
+/// pass itself writes on every turn costs a spin. Three collections, all written by
 /// somebody other than this loop:
 ///
 /// - `endorse` is where this identity's own gestures land, written by the frontend. It is
@@ -1610,6 +1670,8 @@ fn crawl_this_pass(ticks: u32, crawl_every: u32, out_of_band: bool) -> bool {
 /// - `comment` is the same for words, and the identity loop already takes it despite
 ///   `mint_bodies` writing there, because that write converges — a body is minted once and
 ///   the next pass writes nothing.
+/// - `settings` is where a follow lands. A woken pass reads a newly followed person, whose
+///   profile feed is empty on screen until their record is held — see `unread_follows`.
 ///
 /// DELIBERATELY ABSENT: `engagement-log`, `crawl`, `tally` and `thread`, which this pass
 /// writes as a consequence of running. All four are gated on substance and so would settle
@@ -1629,6 +1691,7 @@ fn fold_input_moved(event: &LiveEvent) -> bool {
     [
         pin_derive::ENDORSE_COLLECTION,
         pin_derive::COMMENT_COLLECTION,
+        crate::SETTINGS_COLLECTION,
     ]
     .iter()
     .any(|c| key.starts_with(&pin_derive::collection_prefix(c)))
@@ -1675,7 +1738,7 @@ pub async fn run_engagement_loop<N: crate::net::Network>(
     let mut out_of_band = false;
     loop {
         let crawl = crawl_this_pass(ticks, crawl_every, out_of_band);
-        on_pass(engagement_once(&ctx, &own_did, now_iso(), crawl).await);
+        on_pass(engagement_once(&ctx, &own_did, now_iso(), crawl, out_of_band).await);
 
         let scheduled = async {
             n0_future::time::sleep(cadence).await;
@@ -2455,6 +2518,9 @@ mod tests {
         // else in this loop would hear about it and the cadence was there to poll for one.
         assert!(fold_input_moved(&wrote("endorse/like:abc")));
         assert!(fold_input_moved(&wrote("comment/abc:def")));
+        // A follow lands in settings, and a woken pass is what reads the person followed.
+        assert!(fold_input_moved(&wrote("settings/self")));
+        assert!(!fold_input_moved(&wrote("settings-pointer/x")));
 
         // Both directions of write. A remote one is another instance of this identity
         // syncing in a gesture it made while it was the one that happened to be up, and

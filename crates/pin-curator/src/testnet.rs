@@ -1126,6 +1126,7 @@ mod visibility {
             &who.did,
             "2026-09-12T00:00:00.000Z".to_string(),
             true,
+            false,
         )
         .await
         .expect("engagement pass")
@@ -1409,6 +1410,7 @@ mod visibility {
                 &who.did,
                 "2026-09-12T00:00:00.000Z".to_string(),
                 false,
+                false,
             )
             .await
             .expect("engagement pass");
@@ -1459,6 +1461,7 @@ mod visibility {
                 &who.did,
                 "2026-09-12T00:00:00.000Z".to_string(),
                 crawl,
+                false,
             )
             .await
             .expect("engagement pass")
@@ -1593,6 +1596,7 @@ mod visibility {
             &john.did,
             "2026-09-12T00:00:03.000Z".to_string(),
             false,
+            false,
         )
         .await
         .expect("engagement pass");
@@ -1646,6 +1650,7 @@ mod visibility {
                 &john.did,
                 "2026-09-12T00:00:02.000Z".to_string(),
                 false,
+                false,
             )
             .await
             .expect("engagement pass");
@@ -1698,6 +1703,7 @@ mod visibility {
             &john.did,
             "2026-09-12T00:00:00.000Z".to_string(),
             true,
+            false,
         )
         .await
         .expect("engagement pass");
@@ -1705,24 +1711,21 @@ mod visibility {
         assert_eq!(folded.knocks_refused, 1, "the refusal reaches the outcome");
     }
 
-    /// PUBLISHING NOTHING MEANS DISCOVERING NOBODY — a fact about the shipped loops,
-    /// recorded rather than endorsed.
+    /// A LURKER STILL READS THE PEOPLE IT FOLLOWS.
     ///
-    /// `engagement_once` returns before its crawl when this identity has no subjects:
-    /// nothing published means nothing that can be endorsed, so there is nothing to fold
-    /// and no reason to read anybody. That is right for ENGAGEMENT and it is not obviously
-    /// right for DISCOVERY, which inherits it — hop one is a byproduct of that crawl, and
-    /// the discovery frontier is derived from held records, so a reader who follows people
-    /// and has never posted holds nobody and reaches nobody, permanently. Not "slowly":
-    /// there is no other path to a first held record.
+    /// `engagement_once` has nothing to fold for an identity that has published nothing,
+    /// and used to return before its crawl — so a reader who followed people and never
+    /// posted held nobody, permanently, since hop one is this crawl's byproduct and the
+    /// discovery frontier is derived from held records. That stopped being tolerable once
+    /// following a person meant reading their profile feed out of their record: a lurker's
+    /// home would have stayed empty.
     ///
-    /// Two things follow. Any live verification of the chain has to have each account
-    /// publish something first, or it is testing this instead. And whether a lurker ought
-    /// to discover is a question about the loop boundary — today `covered_elsewhere` gives
-    /// the whole of your own graph to engagement, so when engagement declines to read it,
-    /// nothing else will.
+    /// So the people followed wholesale are read, directories only. No crawl mark is
+    /// written, because nothing was extracted — a mark would tell the first crawl after
+    /// this identity posts that it already has their endorsements. And the frontier then
+    /// works as it does for anybody.
     #[tokio::test]
-    async fn publishing_nothing_means_discovering_nobody() {
+    async fn a_lurker_still_reads_the_people_it_follows() {
         let world = World::new();
         let john = Identity::new(&world, 1).await;
         let alice = Identity::new(&world, 2).await;
@@ -1734,36 +1737,76 @@ mod visibility {
             directory("alice", &[&carol.did]),
         );
         world.publish(&carol.did, "sia://carol-dir", directory("carol", &[]));
-        // Exactly the scenario that works above, minus the publishing.
         john.follows(&[&alice.did]).await;
 
         let folded = engagement(&john).await;
-        assert_eq!(
-            folded.reached, 0,
-            "the pass returns before its crawl, so not even himself",
-        );
+        assert_eq!(folded.reached, 1, "alice, and nobody's endorsements");
+        assert!(john.held(&alice.did).await.is_some());
         assert!(
-            john.held(&alice.did).await.is_none(),
-            "so hop one never lands for the person he follows",
+            crate::list_rkeys(&john.doc, john.author_id, pin_derive::CRAWL_COLLECTION)
+                .await
+                .unwrap()
+                .is_empty(),
+            "a directory-only read is not a crawl, and must not say it was",
         );
 
-        // And discovery cannot make up the difference: its frontier is derived from held
-        // records, and there are none.
         let out = pass(&john).await;
-        assert_eq!(out.resolved, 0);
-        assert!(john.held(&carol.did).await.is_none(), "carol stays unseen");
-
-        // The threshold is a POST, not a channel — which is the part that would be got
-        // wrong setting this up by hand, because having made a channel feels like having
-        // published. `own_subjects` walks a manifest's items, so an empty one contributes
-        // nothing and this identity is still exactly the lurker above.
-        john.follows_with_an_empty_channel(&[&alice.did]).await;
-        assert_eq!(
-            engagement(&john).await.reached,
-            0,
-            "an empty channel is not a post"
+        assert_eq!(out.resolved, 1);
+        assert!(
+            john.held(&carol.did).await.is_some(),
+            "reached through alice"
         );
-        assert!(john.held(&alice.did).await.is_none());
+    }
+
+    /// A NEW FOLLOW IS READ ON THE NEXT WOKEN PASS, NOT THE NEXT CRAWL.
+    ///
+    /// Their profile feed is what following them shows, and it is empty until their record
+    /// is held — so a fold-only pass woken by this identity's own write reads anybody
+    /// followed wholesale who has no record, once. A scheduled fold reads nobody, so an
+    /// unreachable newcomer waits for the crawl rather than costing a resolve every pass.
+    #[tokio::test]
+    async fn a_new_follow_is_read_on_the_next_woken_pass() {
+        // Both shapes of the pass: a lurker takes the directory-only branch, an identity
+        // that has posted takes the crawl's own loop body.
+        for lurker in [true, false] {
+            let world = World::new();
+            let john = Identity::new(&world, 1).await;
+            let alice = Identity::new(&world, 2).await;
+            world.publish(&alice.did, "sia://alice-dir", directory("alice", &[]));
+            if lurker {
+                john.follows(&[&alice.did]).await;
+            } else {
+                john.follows_and_publishes(&[&alice.did]).await;
+            }
+            let fold = |newcomers| {
+                let ctx = john.engagement_ctx();
+                let did = john.did.clone();
+                async move {
+                    crate::engagement_once(
+                        &ctx,
+                        &did,
+                        "2026-09-12T00:00:00.000Z".to_string(),
+                        false,
+                        newcomers,
+                    )
+                    .await
+                    .expect("engagement pass")
+                }
+            };
+
+            fold(false).await;
+            assert!(
+                john.held(&alice.did).await.is_none(),
+                "a scheduled fold reads nobody (lurker={lurker})"
+            );
+
+            fold(true).await;
+            assert!(john.held(&alice.did).await.is_some(), "lurker={lurker}");
+
+            // Held now, so a second wake does not go and look.
+            world.make_unreachable(&alice.did);
+            assert_eq!(fold(true).await.unreachable, 0, "lurker={lurker}");
+        }
     }
 
     /// A SECOND PASS OVER UNCHANGED STATE PUBLISHES NOTHING.
