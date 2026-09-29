@@ -2020,7 +2020,7 @@ pub fn sign_endorsement(
     let reference = reference_did_dht.map(|did_dht| pin_engagement::SubjectRef {
         did_dht,
         channel_id: channel_id.to_string(),
-        published_at: published_at.to_string(),
+        published_at: Some(published_at.to_string()),
         attachment: attachment.clone(),
     });
     let record = pin_engagement::Endorsement::sign(
@@ -2116,7 +2116,7 @@ pub fn sign_comment(
     let reference = reference_did_dht.map(|did_dht| pin_engagement::SubjectRef {
         did_dht,
         channel_id: channel_id.to_string(),
-        published_at: published_at.to_string(),
+        published_at: Some(published_at.to_string()),
         attachment: attachment.clone(),
     });
     let carried: Vec<pin_engagement::CommentAttachment> = match carried_json.as_deref() {

@@ -816,7 +816,7 @@ mod tests {
             reference: reference.map(|did| pin_engagement::SubjectRef {
                 did_dht: did.into(),
                 channel_id: "chan".into(),
-                published_at: "2026-08-16T12:00:00.000Z".into(),
+                published_at: Some("2026-08-16T12:00:00.000Z".into()),
                 attachment: None,
             }),
             body: None,

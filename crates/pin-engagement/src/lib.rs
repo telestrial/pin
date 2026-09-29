@@ -47,6 +47,16 @@ pub const KIND_PIN: &str = "pin";
 /// others, so the figure is reposters rather than reposts.
 pub const KIND_REPOST: &str = "repost";
 
+/// A follow: of a CHANNEL, whose subject is its channelID, or of a PERSON, whose subject is
+/// their did.
+///
+/// One to one with the thing followed, so it tallies per subject exactly as a like does and
+/// needs no fold of its own. What makes it different is who it has to reach: a follow lives
+/// in the follower's directory and nothing writes into the followed identity's scope, so
+/// without a knock being followed is invisible to the person followed unless their crawl
+/// happens to reach the follower.
+pub const KIND_FOLLOW: &str = "follow";
+
 /// A comment: the one kind whose payload is the point rather than its existence.
 ///
 /// Post-shaped — text, plus attachments the commenter goes on carrying — addressed at a
@@ -136,8 +146,15 @@ pub struct SubjectRef {
     pub did_dht: String,
     #[serde(rename = "channelID")]
     pub channel_id: String,
-    #[serde(rename = "publishedAt")]
-    pub published_at: String,
+    /// The post, by its timestamp. Absent means the subject is the CHANNEL itself, which
+    /// only a follow names — see `KIND_FOLLOW`. Always present on anything written before
+    /// follows existed, so those serialize exactly as they did.
+    #[serde(
+        default,
+        rename = "publishedAt",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub published_at: Option<String>,
     /// Set when the subject is one ATTACHMENT of that post rather than the post: the
     /// attachment's content hash, which is what names it. Absent means the post itself.
     ///
@@ -462,6 +479,41 @@ impl Endorsement {
         )
     }
 
+    /// Build and sign a follow of one CHANNEL, by the author who publishes it.
+    ///
+    /// Carries the author's did in the clear because the channel is public by definition —
+    /// only an advertised channel can be followed — and the author is who has to be told.
+    pub fn sign_channel_follow(
+        did_dht_seed: &[u8],
+        author_did: &str,
+        channel_id: &str,
+        created_at: &str,
+    ) -> Result<Self, String> {
+        Self::sign(
+            did_dht_seed,
+            KIND_FOLLOW,
+            channel_id,
+            "",
+            created_at,
+            Some(SubjectRef {
+                did_dht: author_did.to_string(),
+                channel_id: channel_id.to_string(),
+                published_at: None,
+                attachment: None,
+            }),
+        )
+    }
+
+    /// Build and sign a follow of a PERSON. The subject is their did, which is also who to
+    /// tell, so there is nothing to carry beside it.
+    pub fn sign_person_follow(
+        did_dht_seed: &[u8],
+        did: &str,
+        created_at: &str,
+    ) -> Result<Self, String> {
+        Self::sign(did_dht_seed, KIND_FOLLOW, did, "", created_at, None)
+    }
+
     /// Build and sign a comment.
     ///
     /// Its own constructor rather than a `body: Option<&str>` on `sign`, because a comment
@@ -540,9 +592,12 @@ impl Endorsement {
         self.check_shape()?;
         pin_pkarr::verify_detached(&self.actor, &self.signing_bytes(), &self.sig)?;
         if let Some(r) = &self.reference {
-            let expected = match &r.attachment {
-                Some(hash) => pin_crypto::attachment_subject(&r.channel_id, &r.published_at, hash),
-                None => pin_crypto::engagement_subject(&r.channel_id, &r.published_at),
+            let expected = match (&r.published_at, &r.attachment) {
+                (Some(at), Some(hash)) => pin_crypto::attachment_subject(&r.channel_id, at, hash),
+                (Some(at), None) => pin_crypto::engagement_subject(&r.channel_id, at),
+                // A channel's coordinates alone: the subject IS the channel.
+                (None, None) => r.channel_id.clone(),
+                (None, Some(_)) => return Err("a reference names an attachment of no post".into()),
             };
             if expected != self.subject {
                 return Err("reference does not hash to the subject it claims".into());
@@ -587,18 +642,39 @@ impl Endorsement {
                 self.check_attachments()?;
                 self.check_facets()
             }
-            KIND_LIKE | KIND_PIN | KIND_REPOST if self.body.is_some() => {
+            KIND_LIKE | KIND_PIN | KIND_REPOST | KIND_FOLLOW if self.body.is_some() => {
                 Err(format!("a {} carries a body", self.kind))
             }
             // A gesture is its own existence and nothing else, so a file hanging off one is
             // either a mistake or an attempt to make a like carry a payload. Refused for the
             // reason a body on one is.
-            KIND_LIKE | KIND_PIN | KIND_REPOST if !self.attachments.is_empty() => {
+            KIND_LIKE | KIND_PIN | KIND_REPOST | KIND_FOLLOW if !self.attachments.is_empty() => {
                 Err(format!("a {} carries attachments", self.kind))
             }
             // A gesture has no body, so it has nothing for a facet to annotate.
-            KIND_LIKE | KIND_PIN | KIND_REPOST if !self.facets.is_empty() => {
+            KIND_LIKE | KIND_PIN | KIND_REPOST | KIND_FOLLOW if !self.facets.is_empty() => {
                 Err(format!("a {} carries facets", self.kind))
+            }
+            // A follow names a channel by its coordinates or a person by their did, and
+            // nothing else: a follow of a post is not a thing, and a person-follow carrying
+            // coordinates would be pointing its knock at somebody other than its subject.
+            KIND_FOLLOW => match &self.reference {
+                Some(r) if r.published_at.is_none() && r.attachment.is_none() => Ok(()),
+                Some(_) => Err("a follow names a post".into()),
+                None if self.subject.starts_with("did:dht:") => Ok(()),
+                None => Err("a follow names neither a channel nor a person".into()),
+            },
+            // Only a follow names a channel alone. On any other kind it would be a gesture at
+            // something that has no count to put it in.
+            _ if self
+                .reference
+                .as_ref()
+                .is_some_and(|r| r.published_at.is_none()) =>
+            {
+                Err(format!(
+                    "a {} names a channel rather than a post",
+                    self.kind
+                ))
             }
             _ => Ok(()),
         }
@@ -1941,7 +2017,7 @@ mod tests {
         let reference = SubjectRef {
             did_dht: "did:dht:someone".into(),
             channel_id: "chan-one".into(),
-            published_at: WHEN.into(),
+            published_at: Some(WHEN.into()),
             attachment: None,
         };
         let e =
@@ -1964,7 +2040,7 @@ mod tests {
         let reference = SubjectRef {
             did_dht: "did:dht:someone".into(),
             channel_id: "chan-one".into(),
-            published_at: WHEN.into(),
+            published_at: Some(WHEN.into()),
             attachment: Some(hash.into()),
         };
         let e = Endorsement::sign(&SEED, KIND_PIN, &subject, hash, WHEN, Some(reference)).unwrap();
@@ -1981,6 +2057,78 @@ mod tests {
         let mut other = e.clone();
         other.reference.as_mut().unwrap().attachment = Some("bafkreiother".into());
         assert!(other.verify().is_err());
+    }
+
+    #[test]
+    fn a_channel_follow_names_the_channel_and_its_author() {
+        let e =
+            Endorsement::sign_channel_follow(&SEED, "did:dht:author", "chan-one", WHEN).unwrap();
+        assert!(e.verify().is_ok());
+        assert_eq!(e.subject, "chan-one");
+
+        // The same self-check a post's reference gets: coordinates that do not name the
+        // subject are refused, so the unsigned ref cannot be pointed at another channel.
+        let mut swapped = e.clone();
+        swapped.reference.as_mut().unwrap().channel_id = "chan-two".into();
+        assert!(swapped.verify().is_err());
+
+        // On the wire the ref is the author and the channel, and nothing that would read as
+        // a post.
+        let v = serde_json::to_value(&e).unwrap();
+        let mut keys: Vec<&String> = v["ref"].as_object().unwrap().keys().collect();
+        keys.sort();
+        assert_eq!(keys, vec!["channelID", "didDht"]);
+    }
+
+    #[test]
+    fn a_person_follow_names_the_person_and_carries_nothing_else() {
+        let e = Endorsement::sign_person_follow(&SEED, "did:dht:someone", WHEN).unwrap();
+        assert!(e.verify().is_ok());
+        assert!(e.reference.is_none());
+
+        // A subject that is not a did has nobody to name.
+        let bad = Endorsement::sign(&SEED, KIND_FOLLOW, "chan-one", "", WHEN, None).unwrap();
+        assert!(bad.verify().is_err());
+    }
+
+    #[test]
+    fn a_follow_of_a_post_is_refused() {
+        let subject = pin_crypto::engagement_subject("chan-one", WHEN);
+        let reference = SubjectRef {
+            did_dht: "did:dht:someone".into(),
+            channel_id: "chan-one".into(),
+            published_at: Some(WHEN.into()),
+            attachment: None,
+        };
+        let e = Endorsement::sign(&SEED, KIND_FOLLOW, &subject, "", WHEN, Some(reference)).unwrap();
+        assert!(e.verify().is_err());
+    }
+
+    #[test]
+    fn only_a_follow_names_a_channel_alone() {
+        // A like of a channel has no count to go in, so a reference with no post on any
+        // other kind is refused rather than folded somewhere nobody reads.
+        let reference = SubjectRef {
+            did_dht: "did:dht:someone".into(),
+            channel_id: "chan-one".into(),
+            published_at: None,
+            attachment: None,
+        };
+        let e = Endorsement::sign(&SEED, KIND_LIKE, "chan-one", VERSION, WHEN, Some(reference))
+            .unwrap();
+        assert!(e.verify().is_err());
+    }
+
+    #[test]
+    fn a_post_reference_written_before_follows_reads_back_the_same() {
+        // `publishedAt` became optional; a record published before that must parse into the
+        // same value and serialize to the same bytes, or every directory already written
+        // would read as a different record.
+        let json =
+            r#"{"didDht":"did:dht:x","channelID":"c","publishedAt":"2026-08-11T12:00:00.000Z"}"#;
+        let r: SubjectRef = serde_json::from_str(json).unwrap();
+        assert_eq!(r.published_at.as_deref(), Some(WHEN));
+        assert_eq!(serde_json::to_string(&r).unwrap(), json);
     }
 
     #[test]
@@ -2018,7 +2166,7 @@ mod tests {
             Some(SubjectRef {
                 did_dht: "did:dht:someone".into(),
                 channel_id: "chan-one".into(),
-                published_at: WHEN.into(),
+                published_at: Some(WHEN.into()),
                 attachment: None,
             }),
         )
