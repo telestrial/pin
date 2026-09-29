@@ -201,7 +201,7 @@ describe('useReading', () => {
     await waitFor(() => expect(removeChannel).toHaveBeenCalledWith('a1'))
   })
 
-  it('takes nothing out of the feed while somebody followed is still unread', async () => {
+  it("keeps an unsettled author's channels, and only theirs", async () => {
     await hold(ALICE, directory([{ channelID: 'a1', key: 'K1', name: 'One' }]))
     useAuthStore.setState({ handleFollows: [ALICE, BOB] })
     renderHook(() => useReading())
@@ -211,10 +211,23 @@ describe('useReading', () => {
       ).toEqual(['a1']),
     )
 
-    // Alice's channel leaves the set, but bob has never been read — so the set cannot say
-    // what is gone, and the feed keeps what it has.
-    act(() => useAuthStore.setState({ handleFollows: [BOB] }))
+    // Alice's record fades: her channels are now missing for want of a reading, so the
+    // feed keeps what it has of hers.
+    await act(() => hold(ALICE, { ...directory([]), tier: 'reduced' }))
     await waitFor(() => expect(useReadingStore.getState().channels).toEqual([]))
     expect(removeChannel).not.toHaveBeenCalled()
+
+    // Bob being unread says nothing about somebody else's channel: a followed person shows
+    // only their own. Unfollowing alice takes hers out although bob is still unsettled.
+    await act(() =>
+      hold(ALICE, directory([{ channelID: 'a1', key: 'K1', name: 'One' }])),
+    )
+    await waitFor(() =>
+      expect(
+        useReadingStore.getState().channels?.map((c) => c.channelID),
+      ).toEqual(['a1']),
+    )
+    act(() => useAuthStore.setState({ handleFollows: [BOB] }))
+    await waitFor(() => expect(removeChannel).toHaveBeenCalledWith('a1'))
   })
 })

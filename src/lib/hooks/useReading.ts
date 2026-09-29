@@ -14,8 +14,10 @@ import { computeReading } from '../reading'
 // off their profile, reaches the feed without anybody here doing anything.
 //
 // A channel that joins the set is read into the feed and one that leaves is taken out,
-// which is what watching and unwatching do by hand. A channel missing only because its
-// author is unsettled is NOT taken out: that absence is nobody having looked yet.
+// which is the whole of what watching and unwatching do to the feed — neither touches it
+// directly, since a channel unwatched may still be one a followed author shows. A channel
+// missing only because its author is unsettled is NOT taken out: that absence is nobody
+// having looked yet.
 
 export function useReading() {
   const appKeyHex = useAuthStore((s) => s.storedKeyHex)
@@ -55,10 +57,16 @@ export function useReading() {
           for (const c of next.channels) {
             if (!before.has(c.channelID)) void feed.refreshChannel(c)
           }
-          if (next.unsettled.length === 0) {
-            for (const c of prev) {
-              if (!after.has(c.channelID)) feed.removeChannel(c.channelID)
-            }
+          // A followed person only ever shows their OWN channels, so a channel that left
+          // the set is gone unless its author is somebody unsettled — whose channels are
+          // missing for want of a reading. One with no author named could be anybody's.
+          const unsettled = new Set(next.unsettled)
+          for (const c of prev) {
+            if (after.has(c.channelID)) continue
+            const mayBeTheirs = c.didDht
+              ? unsettled.has(c.didDht)
+              : unsettled.size > 0
+            if (!mayBeTheirs) feed.removeChannel(c.channelID)
           }
         } while (again && !cancelled)
       } catch (e) {
