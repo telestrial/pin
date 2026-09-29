@@ -481,6 +481,17 @@ export function open(app_key_hex: string): Promise<string>;
 export function open_channel_doc(ns_seed_hex: string): Promise<string>;
 
 /**
+ * Where this identity's own person-follow tally lives in its main doc. From Rust because
+ * the engagement loop writes it and a profile page reads it.
+ */
+export function person_tally_collection(): string;
+
+/**
+ * The one record in `person_tally_collection`.
+ */
+export function person_tally_rkey(): string;
+
+/**
  * The collection holding what this identity keeps — one record per pin.
  */
 export function pinned_collection(): string;
@@ -1041,6 +1052,8 @@ export interface InitOutput {
     readonly max_comment_bytes: () => number;
     readonly open: (a: number, b: number) => any;
     readonly open_channel_doc: (a: number, b: number) => any;
+    readonly person_tally_collection: () => [number, number];
+    readonly person_tally_rkey: () => [number, number];
     readonly pinned_collection: () => [number, number];
     readonly pinned_rkey: (a: number, b: number, c: number, d: number) => [number, number];
     readonly pkarr_chunk_txt: (a: number, b: number, c: number, d: number) => [number, number, number, number];

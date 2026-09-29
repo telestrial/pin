@@ -16,6 +16,7 @@ import {
 } from '../../crates/pin-core/pkg/pin_core.js'
 import type { SearchablePerson } from '../core/directorySearch'
 import type { FollowerEdges } from '../core/followers'
+import type { PersonTally } from '../core/identityDoc'
 import { ensureWasm } from '../core/wasm'
 import { getRecord, listRecords, openDocs, putRecord } from './docs'
 
@@ -72,6 +73,8 @@ export type DirectoryRecord = {
   reach: DirectoryReach[]
   follows: { didDht: string; channelID: string; name?: string }[]
   handleFollows: string[]
+  /** Their published person-follow tally; dropped when the record fades. */
+  followers?: PersonTally
   url: string
   epoch: number
   seenAt: string

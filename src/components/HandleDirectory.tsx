@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { advertisedChannels } from '../core/channels'
 import type { FeedEntry } from '../core/feed'
 import { followsOfOthers } from '../core/followers'
+import type { PersonTally } from '../core/identityDoc'
 import { buildProfileFeed, includedOnProfile } from '../core/profileFeed'
 import type { ChannelManifest, FollowEdge } from '../core/types'
 import {
@@ -12,7 +13,10 @@ import {
 } from '../lib/channelLocator'
 import { readDirectory, request } from '../lib/directories'
 import { formatBytes } from '../lib/format'
-import { usePersonFollowers } from '../lib/hooks/useFollowers'
+import {
+  usePersonFollowerCount,
+  usePersonFollowers,
+} from '../lib/hooks/useFollowers'
 import { useItemBlobURL } from '../lib/hooks/useItemBytes'
 import { resolveIdentityDoc } from '../lib/identityDoc'
 import { useAuthStore } from '../stores/auth'
@@ -146,6 +150,9 @@ type State =
       // follow a person, or you follow one of their voices. Both are public, both put
       // their author on the crawl's frontier.
       handleFollows: string[]
+      /** Their published person-follow tally, where the directory carries one. Absent on
+       *  your own profile, whose tally is read locally as the engagement loop folds it. */
+      followersTally?: PersonTally | null
     }
   | { kind: 'error'; message: string }
 
@@ -309,6 +316,7 @@ export function HandleDirectory({
           ownChannels: fromIndex,
           follows: indexed.follows ?? [],
           handleFollows: indexed.handleFollows ?? [],
+          followersTally: indexed.followers ?? null,
         })
       } else if (storedKeyHex) {
         // The index could not answer, so this landing is paying the lookup. Asking is what
@@ -344,6 +352,7 @@ export function HandleDirectory({
           // The Rust parse is tolerant field by field for the same reason.
           follows: doc.follows ?? [],
           handleFollows: doc.handleFollows ?? [],
+          followersTally: doc.followers ?? null,
         })
       }
 
@@ -360,6 +369,7 @@ export function HandleDirectory({
           // The Rust parse is tolerant field by field for the same reason.
           follows: doc.follows ?? [],
           handleFollows: doc.handleFollows ?? [],
+          followersTally: doc.followers ?? null,
         })
       }
     }
@@ -450,6 +460,7 @@ export function HandleDirectory({
               follows={state.follows}
               handleFollows={state.handleFollows}
               followers={followers}
+              followersTally={state.followersTally ?? null}
               onBack={onBack}
               onItemClick={onItemClick}
               onChannelClick={onChannelClick}
@@ -474,6 +485,7 @@ function LoadedDirectory({
   follows,
   handleFollows,
   followers,
+  followersTally,
   onBack,
   onItemClick,
   onChannelClick,
@@ -490,6 +502,7 @@ function LoadedDirectory({
   handleFollows: string[]
   /** Null while the index is still being counted — blank rather than a claimed zero. */
   followers: string[] | null
+  followersTally: PersonTally | null
   onBack?: () => void
   onItemClick: (entry: FeedEntry) => void
   onChannelClick: (
@@ -505,6 +518,13 @@ function LoadedDirectory({
   // `followsOfOthers`. Filtered once, so the count, the list and the empty check cannot
   // end up with three readings of what "following" means.
   const others = followsOfOthers(did, follows, handleFollows)
+  // The person's published tally where there is one — strangers who followed by knock
+  // included — and never below the list this device can show.
+  const followerCount = usePersonFollowerCount(
+    did,
+    followersTally,
+    followers?.length ?? null,
+  )
   const followingCount = others.follows.length + others.handleFollows.length
 
   const isEmpty = !profile && ownChannels.length === 0 && followingCount === 0
@@ -529,7 +549,7 @@ function LoadedDirectory({
         isSelf={isSelf}
         profile={profile}
         followingCount={followingCount}
-        followerCount={followers?.length ?? null}
+        followerCount={followerCount}
         onBack={onBack}
         onEdit={onEditProfile}
       />
@@ -651,7 +671,14 @@ function LoadedDirectory({
       )}
 
       {followers && followers.length > 0 && (
-        <Section title="Followers">
+        <Section
+          title="Followers"
+          note={
+            followerCount !== null && followerCount > followers.length
+              ? `The ${followers.length} you know of`
+              : undefined
+          }
+        >
           {/* The people who follow this person. Among the identities this device has
               read, like the count: graph-scoped, honest, and incomplete. */}
           {followers.map((d) => (
@@ -868,9 +895,12 @@ function HandleMark({ handle }: { handle: string }) {
 
 function Section({
   title,
+  note,
   children,
 }: {
   title: string
+  /** A line under the title, for when the list is not the whole of what its title counts. */
+  note?: string
   children: React.ReactNode
 }) {
   return (
@@ -878,6 +908,7 @@ function Section({
       <h2 className="text-xs font-medium text-neutral-500 uppercase tracking-wide px-1">
         {title}
       </h2>
+      {note && <p className="text-xs text-neutral-500 px-1">{note}</p>}
       <div className="bg-white border border-neutral-200 rounded-lg divide-y divide-neutral-100">
         {children}
       </div>

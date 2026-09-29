@@ -32,6 +32,8 @@ vi.mock('../lib/identityDoc', () => ({
 
 import {
   directory_collection,
+  person_tally_collection,
+  person_tally_rkey,
   request_collection,
 } from '../../crates/pin-core/pkg/pin_core.js'
 import { HandleDirectory } from '../components/HandleDirectory'
@@ -355,6 +357,55 @@ describe('integration: your own directory comes from local state', () => {
     const section = within(followersHeading.parentElement as HTMLElement)
     expect(section.getAllByRole('button')).toHaveLength(1)
     expect(stat('Followers')).toBe('1')
+  })
+
+  it("shows a person's published follow tally, and says the list is what you know of", async () => {
+    // They hold follows from people this device has never read, which arrived by knock;
+    // the list is the one wholesale follower the crawl did read.
+    signedInWith([])
+    holdFollowing('did:dht:fan', { handleFollows: [THEM] })
+    docStore.set(
+      `${directory_collection()}/${THEM}`,
+      new TextEncoder().encode(
+        JSON.stringify({
+          tier: 'full',
+          profile: { username: 'them', displayName: 'them' },
+          channels: [],
+          reach: [],
+          follows: [],
+          handleFollows: [],
+          followers: {
+            kinds: { follow: { count: 7, sampleActors: ['did:dht:fan'] } },
+            updatedAt: '2026-09-28T00:00:00.000Z',
+          },
+          url: 'sia://held',
+          epoch: 1,
+          seenAt: '2026-09-01T12:00:00.000Z',
+        }),
+      ),
+    )
+
+    render(directory(THEM))
+
+    await waitFor(() => expect(stat('Followers')).toBe('7'))
+    expect(screen.getByText('The 1 you know of')).toBeInTheDocument()
+  })
+
+  it('shows your own person tally as the engagement loop folded it', async () => {
+    signedInWith([])
+    docStore.set(
+      `${person_tally_collection()}/${person_tally_rkey()}`,
+      new TextEncoder().encode(
+        JSON.stringify({
+          kinds: { follow: { count: 3, sampleActors: [] } },
+          updatedAt: '2026-09-28T00:00:00.000Z',
+        }),
+      ),
+    )
+
+    render(directory(ME))
+
+    await waitFor(() => expect(stat('Followers')).toBe('3'))
   })
 
   it('lists and counts each follow as what it is', async () => {

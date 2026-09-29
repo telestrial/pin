@@ -13,6 +13,8 @@ import { useEffect, useRef, useState } from 'react'
 import {
   endorse_collection,
   follow_rkey,
+  person_tally_collection,
+  person_tally_rkey,
   tally_collection,
 } from '../../../crates/pin-core/pkg/pin_core.js'
 import {
@@ -22,6 +24,7 @@ import {
   followersOfPerson,
   ownFollowerEdges,
 } from '../../core/followers'
+import type { PersonTally } from '../../core/identityDoc'
 import { ensureWasm } from '../../core/wasm'
 import { useAuthStore } from '../../stores/auth'
 import { readChannelTally, warmChannelTallies } from '../channelTallies'
@@ -94,35 +97,43 @@ export function useChannelFollowers(channelID: string): string[] | null {
   )
 }
 
-/** A channel's Followers number: the author's published tally where one is held, never
+/** A Followers number: the published follow tally for `subject` where one is held, never
  *  below `scan` — see `channelFollowerCount`.
  *
- *  Warms the tally when only browsing, because no loop keeps counts for a channel this
- *  identity neither owns nor reads; for one it does, the loops already land them here. */
-export function useChannelFollowerCount(
-  channelID: string,
-  channelKey: string | undefined,
-  browsing: boolean,
+ *  Shared by a channel page and a profile, which differ only in where the tally is read:
+ *  `read` answers it, and `readKey` names what `read` depends on so a change re-reads.
+ *  Adjusted for this viewer's own follow of the subject by the like row's rules, from the
+ *  follow record the Curator signed for it. */
+function useFollowTallyCount(
+  subject: string,
+  read: () => Promise<PersonTally | null>,
+  readKey: string,
   scan: number | null,
+  warm?: () => void,
 ): number | null {
   const storedKeyHex = useAuthStore((s) => s.storedKeyHex)
   const myDid = useAuthStore((s) => s.myDidDht)
   const [tally, setTally] = useState<{
-    channelID: string
+    key: string
     count: number
     added: boolean
     removed: boolean
   } | null>(null)
+  const readRef = useRef(read)
+  readRef.current = read
+  const warmRef = useRef(warm)
+  warmRef.current = warm
+  const key = `${subject}|${readKey}`
 
   useEffect(() => {
-    if (!storedKeyHex || !channelID) return
+    if (!storedKeyHex || !subject) return
     let cancelled = false
     let unsub = () => {}
 
     const refresh = async () => {
       const [aggregate, mine] = await Promise.all([
-        readChannelTally(storedKeyHex, channelID),
-        getRecord(endorse_collection(), follow_rkey(channelID)).catch(
+        readRef.current().catch(() => null),
+        getRecord(endorse_collection(), follow_rkey(subject)).catch(
           () => undefined,
         ),
       ])
@@ -140,7 +151,7 @@ export function useChannelFollowerCount(
       }
       const follow = aggregate.kinds?.follow
       setTally({
-        channelID,
+        key,
         count: follow?.count ?? 0,
         added: showsUncounted(heldAt, aggregate.updatedAt),
         removed: showsWithdrawn(myDid, heldAt, follow?.sampleActors),
@@ -155,28 +166,78 @@ export function useChannelFollowerCount(
         return
       }
       if (cancelled) return
-      const tallies = tally_collection()
-      const endorsements = endorse_collection()
+      const watched = new Set([
+        tally_collection(),
+        person_tally_collection(),
+        endorse_collection(),
+      ])
       // An unnamed event is content arriving without its key, so it re-reads rather than
       // being filtered away — the same rule the engagement row follows.
       unsub = subscribeDocChanges(({ collection }) => {
-        if (collection && collection !== tallies && collection !== endorsements)
-          return
+        if (collection && !watched.has(collection)) return
         void refresh()
       })
       void refresh()
-      if (browsing && channelKey) {
-        void warmChannelTallies(storedKeyHex, channelID, channelKey)
-      }
+      warmRef.current?.()
     })()
 
     return () => {
       cancelled = true
       unsub()
     }
-  }, [storedKeyHex, myDid, channelID, channelKey, browsing])
+  }, [storedKeyHex, myDid, subject, key])
 
-  const held = tally?.channelID === channelID ? tally : null
+  const held = tally?.key === key ? tally : null
   if (scan === null && !held) return null
   return channelFollowerCount(scan ?? 0, held)
+}
+
+/** A channel's Followers number, from the author's tally for the channel.
+ *
+ *  Warms the tally when only browsing, because no loop keeps counts for a channel this
+ *  identity neither owns nor reads; for one it does, the loops already land them here. */
+export function useChannelFollowerCount(
+  channelID: string,
+  channelKey: string | undefined,
+  browsing: boolean,
+  scan: number | null,
+): number | null {
+  const storedKeyHex = useAuthStore((s) => s.storedKeyHex)
+  return useFollowTallyCount(
+    channelID,
+    async () =>
+      storedKeyHex ? readChannelTally(storedKeyHex, channelID) : null,
+    `channel:${browsing}:${channelKey ?? ''}`,
+    scan,
+    browsing && channelKey && storedKeyHex
+      ? () => void warmChannelTallies(storedKeyHex, channelID, channelKey)
+      : undefined,
+  )
+}
+
+/** A person's Followers number, from their person tally: this identity's own as the
+ *  engagement loop folds it, or somebody else's as their directory publishes it. */
+export function usePersonFollowerCount(
+  didDht: string,
+  published: PersonTally | null,
+  scan: number | null,
+): number | null {
+  const storedKeyHex = useAuthStore((s) => s.storedKeyHex)
+  const self = useAuthStore((s) => s.myDidDht) === didDht
+  return useFollowTallyCount(
+    didDht,
+    async () => {
+      if (!self) return published
+      if (!storedKeyHex) return null
+      const raw = await getRecord(
+        person_tally_collection(),
+        person_tally_rkey(),
+      )
+      return raw
+        ? (JSON.parse(new TextDecoder().decode(raw)) as PersonTally)
+        : null
+    },
+    self ? 'self' : JSON.stringify(published ?? null),
+    scan,
+  )
 }

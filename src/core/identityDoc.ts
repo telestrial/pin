@@ -59,5 +59,15 @@ export type DirectoryDoc = {
   //
   // Absent while nothing has been commented, which is what keeps the extra read conditional.
   commentsURL?: string
+  // How many follow this identity as a PERSON, as it folded that — the tally with its
+  // receipts. Absent while nobody follows.
+  followers?: PersonTally
   updatedAt: string
+}
+
+/** A person's follow tally as their directory publishes it. Structurally the engagement
+ *  `Aggregate`, narrowed to what a Followers number reads. */
+export type PersonTally = {
+  kinds: Record<string, { count: number; sampleActors?: string[] }>
+  updatedAt?: string
 }

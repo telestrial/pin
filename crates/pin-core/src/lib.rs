@@ -2045,6 +2045,19 @@ pub fn follow_rkey(subject: &str) -> String {
     pin_derive::endorse_rkey(pin_engagement::KIND_FOLLOW, subject)
 }
 
+/// Where this identity's own person-follow tally lives in its main doc. From Rust because
+/// the engagement loop writes it and a profile page reads it.
+#[wasm_bindgen]
+pub fn person_tally_collection() -> String {
+    pin_derive::PERSON_TALLY_COLLECTION.to_string()
+}
+
+/// The one record in `person_tally_collection`.
+#[wasm_bindgen]
+pub fn person_tally_rkey() -> String {
+    pin_derive::PERSON_TALLY_RKEY.to_string()
+}
+
 /// Where one endorsement of a COMMENT lives.
 ///
 /// Its own entry point because a comment's subject comes from a different derivation: a
