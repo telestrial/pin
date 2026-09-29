@@ -419,7 +419,7 @@ impl Identity {
         .expect("write manifest");
     }
 
-    /// A channel with no posts in it, which is not the same as no channel.
+    /// An unlisted channel with no posts in it, which is not the same as no channel.
     ///
     /// Separated from `follows_and_publishes` because the threshold that matters is a
     /// POST: `own_subjects` walks a manifest's items, so an author who made a channel and
@@ -434,7 +434,9 @@ impl Identity {
                 "channelID": channel_id,
                 "channelKey": pin_crypto::channel_key_to_base64(&k),
                 "name": "A channel",
-                "visibility": "public",
+                // Unlisted, because a PUBLIC channel is a subject of its own — somebody can
+                // follow it — and this helper is about having nothing to count.
+                "visibility": "obscure",
             }],
         }))
         .await;
@@ -1711,6 +1713,71 @@ mod visibility {
         assert_eq!(folded.knocks_refused, 1, "the refusal reaches the outcome");
     }
 
+    /// A FOLLOW OF A CHANNEL IS COUNTED ON THE CHANNEL, one to one.
+    ///
+    /// A follow names the channel rather than any post in it, and a public channel is a
+    /// subject of its own, so the follow folds into that channel's tally exactly as a like
+    /// folds into a post's. The author's own follow of their channel counts, which is what
+    /// puts them among its followers from the moment it exists; a stranger's arrives by
+    /// knock, since nothing about being followed puts the follower in the author's graph.
+    #[tokio::test]
+    async fn a_knocked_channel_follow_is_counted_beside_the_authors_own() {
+        let world = World::new();
+        let alice = Identity::new(&world, 1).await;
+        let bob = Identity::new(&world, 2).await;
+        let channel_id = pin_crypto::channel_id(&alice.channel_key());
+        alice.publishing_n(serde_json::json!({}), 1).await;
+
+        let own = pin_engagement::Endorsement::sign_channel_follow(
+            &pin_derive::did_dht_seed(&alice.app_key),
+            &alice.did,
+            &channel_id,
+            "2026-09-12T00:00:00.000Z",
+        )
+        .expect("sign");
+        crate::write_record(
+            &alice.doc,
+            alice.author_id,
+            pin_derive::ENDORSE_COLLECTION,
+            &pin_derive::endorse_rkey(pin_engagement::KIND_FOLLOW, &channel_id),
+            serde_json::to_vec(&own).expect("encode"),
+        )
+        .await
+        .expect("write the author's own follow");
+
+        let ctx = alice.engagement_ctx();
+        let bobs = pin_engagement::Endorsement::sign_channel_follow(
+            &pin_derive::did_dht_seed(&bob.app_key),
+            &alice.did,
+            &channel_id,
+            "2026-09-12T00:00:01.000Z",
+        )
+        .expect("sign");
+        let handler = pin_rpc::HeyHandler::new(ctx.inbox.clone());
+        assert!(handler.accept_knock(&pin_rpc::hey_request(
+            &serde_json::to_value(&bobs).expect("encode")
+        )));
+
+        let folded = crate::engagement_once(
+            &ctx,
+            &alice.did,
+            "2026-09-12T00:00:02.000Z".to_string(),
+            false,
+            false,
+        )
+        .await
+        .expect("engagement pass");
+        assert_eq!(folded.knocked, 1, "bob's follow is hers to count");
+
+        let channel_doc = crate::engagement::open_channel_doc(&ctx, &channel_id)
+            .await
+            .expect("channel doc");
+        let tally = crate::engagement::read_tally(&ctx, &channel_doc, &channel_id)
+            .await
+            .expect("the channel has a tally of its own");
+        assert_eq!(tally.kinds[pin_engagement::KIND_FOLLOW].count, 2);
+    }
+
     /// A LURKER STILL READS THE PEOPLE IT FOLLOWS.
     ///
     /// `engagement_once` has nothing to fold for an identity that has published nothing,
@@ -1757,10 +1824,11 @@ mod visibility {
             "reached through alice"
         );
 
-        // The threshold is a POST, not a channel — which is the part that would be got
-        // wrong setting this up by hand, because having made a channel feels like having
-        // published. `own_subjects` walks a manifest's items, so an empty one contributes
-        // nothing and this identity still takes the lurker's directory-only read.
+        // The threshold is something to COUNT, not having made a channel — which is the part
+        // that would be got wrong setting this up by hand. An empty unlisted channel has no
+        // posts and cannot be followed, so it contributes no subject and this identity still
+        // takes the lurker's directory-only read. (An empty PUBLIC channel is a subject: it
+        // can be followed.)
         let world = World::new();
         let jane = Identity::new(&world, 4).await;
         let alice = Identity::new(&world, 2).await;

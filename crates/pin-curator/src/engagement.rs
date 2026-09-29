@@ -172,7 +172,8 @@ pub struct EngagementOutcome {
 /// Where a subject lives, so its tally reaches the right channel's doc.
 pub(crate) type SubjectTable = HashMap<String, String>;
 
-/// Every subject this identity publishes: one per post, one per attachment.
+/// Every subject this identity publishes: one per public channel, one per post, one per
+/// attachment.
 ///
 /// Built by opening each owned channel's manifest, which is what makes matching possible at
 /// all — a subject is a hash, so the only way to recognise one is to recompute it over
@@ -185,6 +186,15 @@ async fn own_subjects<N: crate::net::Network>(
 ) -> Result<SubjectTable, String> {
     let mut table = SubjectTable::new();
     for owned in &settings.my_channels {
+        // A public channel is a subject of its own, because it can be followed — and a
+        // follow names the channel, not any post in it, so its tally sits beside the posts'
+        // in the channel's doc. Public only: a follow resolves K through the author's
+        // directory, where no other channel can appear, and unknown visibility is not
+        // public. Before the manifest check, since a channel with no posts yet is still one
+        // somebody can follow.
+        if owned.visibility.as_deref() == Some("public") {
+            table.insert(owned.channel_id.clone(), owned.channel_id.clone());
+        }
         let Some(k) = pin_crypto::channel_key_from_base64(&owned.channel_key) else {
             continue;
         };
@@ -1315,7 +1325,7 @@ fn withdrawal(rkey: &str, found: &BTreeSet<String>, reached: &BTreeSet<String>) 
 ///
 /// Read author-agnostically, the way a subscriber reads a channel doc: only the author can
 /// write to that namespace, so any entry at this key is ours.
-async fn read_tally<N: crate::net::Network>(
+pub(crate) async fn read_tally<N: crate::net::Network>(
     ctx: &EngagementContext<N>,
     channel_doc: &Doc,
     subject: &str,
