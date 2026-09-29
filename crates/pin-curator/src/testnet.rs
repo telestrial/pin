@@ -1756,6 +1756,24 @@ mod visibility {
             john.held(&carol.did).await.is_some(),
             "reached through alice"
         );
+
+        // The threshold is a POST, not a channel — which is the part that would be got
+        // wrong setting this up by hand, because having made a channel feels like having
+        // published. `own_subjects` walks a manifest's items, so an empty one contributes
+        // nothing and this identity still takes the lurker's directory-only read.
+        let world = World::new();
+        let jane = Identity::new(&world, 4).await;
+        let alice = Identity::new(&world, 2).await;
+        world.publish(&alice.did, "sia://alice-dir", directory("alice", &[]));
+        jane.follows_with_an_empty_channel(&[&alice.did]).await;
+        assert_eq!(engagement(&jane).await.reached, 1);
+        assert!(
+            crate::list_rkeys(&jane.doc, jane.author_id, pin_derive::CRAWL_COLLECTION)
+                .await
+                .unwrap()
+                .is_empty(),
+            "an empty channel is not a post",
+        );
     }
 
     /// A NEW FOLLOW IS READ ON THE NEXT WOKEN PASS, NOT THE NEXT CRAWL.
