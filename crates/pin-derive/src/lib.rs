@@ -402,21 +402,26 @@ pub fn engagement_log_rkey(subject: &str, kind: &str, actor: &str) -> String {
 
 /// Split a held record's key back into its subject, kind and actor.
 ///
-/// Left to right at the first two separators: a subject is base32 and a kind is a bare
-/// word, so neither carries a colon, and everything after the second belongs to the actor.
-/// Here beside the builder so the two can't disagree — the crawl writes with one and
-/// decides what to withdraw with the other, and a mismatch would make it drop records it
-/// should keep.
+/// From the RIGHT, because two of the three fields can carry colons: the actor is always a
+/// `did:dht:<key>`, and a person-follow's subject is one too. So the actor is everything
+/// after the last `:did:`, the kind is the bare word before it, and the subject is what is
+/// left — which must be colon-free (a base32 hash, a channelID) or a whole did. Here beside
+/// the builder so the two can't disagree — the crawl writes with one and decides what to
+/// withdraw with the other, and a mismatch would make it drop records it should keep.
 ///
-/// The actor still has to look like a DID, because two fields here can absorb the wrong
-/// text without anything looking amiss: a key missing its kind reads as a kind of `did`
-/// and an actor of `dht:x`. That parse succeeds and is wrong, which is worse than one that
-/// fails — the crawl decides what to DELETE from this, so a plausible misreading is how a
-/// live record gets dropped.
+/// The subject rule is what stops a key missing its kind from reading as one that has it:
+/// `did:dht:x:did:dht:y` would otherwise parse as subject `did:dht`, kind `x`. That parse
+/// succeeds and is wrong, which is worse than one that fails — the crawl decides what to
+/// DELETE from this, so a plausible misreading is how a live record gets dropped.
 pub fn parse_engagement_log_rkey(rkey: &str) -> Option<(&str, &str, &str)> {
-    let (subject, rest) = rkey.split_once(':')?;
-    let (kind, actor) = rest.split_once(':')?;
-    if subject.is_empty() || kind.is_empty() || !actor.starts_with("did:") {
+    let cut = rkey.rfind(":did:")?;
+    let (head, actor) = (&rkey[..cut], &rkey[cut + 1..]);
+    let (subject, kind) = head.rsplit_once(':')?;
+    let whole_subject = !subject.contains(':')
+        || subject
+            .strip_prefix("did:dht:")
+            .is_some_and(|key| !key.is_empty() && !key.contains(':'));
+    if subject.is_empty() || kind.is_empty() || !whole_subject {
         return None;
     }
     Some((subject, kind, actor))
@@ -1043,6 +1048,25 @@ mod tests {
         assert_eq!(parse_engagement_log_rkey(&format!(":like:{actor}")), None);
         assert_eq!(
             parse_engagement_log_rkey(&format!("{subject}::{actor}")),
+            None
+        );
+    }
+
+    #[test]
+    fn an_engagement_log_key_round_trips_a_subject_that_is_a_did() {
+        // A person-follow's subject is the person, so the subject carries colons too.
+        let subject = "did:dht:uqaj3fcr9db6jg6o9pjs53iuftyj45r46aubogfaceqjbo6pp9sy";
+        let actor = "did:dht:iyypk375c71qwjem5isiramudutoogo1t9gogz8f587sfkt9db4o";
+        let rkey = engagement_log_rkey(subject, "follow", actor);
+        assert_eq!(
+            parse_engagement_log_rkey(&rkey),
+            Some((subject, "follow", actor))
+        );
+
+        // And the same key with its kind dropped must not read as a half-did subject with
+        // the subject's key for a kind.
+        assert_eq!(
+            parse_engagement_log_rkey(&format!("{subject}:{actor}")),
             None
         );
     }
