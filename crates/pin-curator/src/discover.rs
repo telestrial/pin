@@ -909,36 +909,6 @@ async fn read_new<N: crate::net::Network>(
     Some(fresh)
 }
 
-/// Read one identity's directory and record it: the packet, then the blob only when the
-/// pointer has moved since what is held.
-///
-/// For a caller that wants the RECORD and nothing the engagement crawl extracts from the
-/// same bytes — so it writes no crawl mark, which would tell the next crawl it already has
-/// this actor's endorsements when it has none. `Err` means we could not find out, and
-/// nothing was written.
-pub(crate) async fn read_identity<N: crate::net::Network>(
-    net: &N,
-    doc: &Doc,
-    blobs: &Store,
-    author_id: AuthorId,
-    did: &str,
-    now_iso: &str,
-) -> Result<(), String> {
-    let resolved = resolve_directory(net, did).await?;
-    let held = read_directory(doc, blobs, author_id, did).await;
-    let record = match held {
-        Some(held) if confirmed_by_pointer(&held, &resolved.url) => {
-            with_reach(&held, &resolved.txt, now_iso)
-        }
-        _ => {
-            let blob = download_directory_blob(net, did, &resolved.url).await?;
-            parse_directory(&blob, &resolved.txt, &resolved.url, now_iso)
-        }
-    };
-    record_directory(doc, blobs, author_id, did, record).await;
-    Ok(())
-}
-
 /// Go and read some of the identities this one knows about and has never looked at.
 ///
 /// The only part of discovery that spends anything. Everything else — hop one, and every

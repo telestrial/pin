@@ -385,6 +385,17 @@ pub fn parse_comment_rkey(rkey: &str) -> Option<(&str, &str)> {
 /// directory and can be re-read from there. Losing it costs a crawl, not a fact.
 pub const ENGAGEMENT_LOG_COLLECTION: &str = "engagement-log";
 
+/// Where this identity's own follow tally lives in its main doc — the count of people who
+/// follow it as a PERSON, one record.
+///
+/// Not in `tally`, which is keyed by channel and swept of anything whose channel is gone: a
+/// person is no channel, so a tally filed there would be deleted on the next pull. Published
+/// from here in the directory blob, which is the person's own public face.
+pub const PERSON_TALLY_COLLECTION: &str = "person-tally";
+
+/// The one record in `PERSON_TALLY_COLLECTION`.
+pub const PERSON_TALLY_RKEY: &str = "self";
+
 /// One held record: the subject, then the gesture, then who asserted it.
 ///
 /// Subject first so a prefix scan gathers everything about one item — which is how a

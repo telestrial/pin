@@ -287,10 +287,8 @@ impl Identity {
 
     /// Follow these identities wholesale AND publish one post.
     ///
-    /// Both, because the engagement pass returns early when nothing is published: nothing
-    /// can be endorsed, so there is nothing to crawl FOR. Hop one is a byproduct of that
-    /// crawl, so an identity that has published nothing reads nobody — correct, and the
-    /// reason a scenario about hop one cannot be built out of follows alone.
+    /// The post is a subject beyond the identity itself, which is what a scenario about
+    /// endorsements on posts needs something to count against.
     pub async fn follows_and_publishes(&self, dids: &[&str]) {
         self.publishing(serde_json::json!({ "handleFollows": dids }))
             .await;
@@ -405,48 +403,6 @@ impl Identity {
                     })
                 })
                 .collect::<Vec<_>>(),
-        });
-        let sealed = pin_crypto::encrypt(&k, &serde_json::to_vec(&manifest).expect("serialize"))
-            .expect("seal manifest");
-        crate::write_record(
-            &self.doc,
-            self.author_id,
-            "channel",
-            &channel_id,
-            sealed.into_bytes(),
-        )
-        .await
-        .expect("write manifest");
-    }
-
-    /// An unlisted channel with no posts in it, which is not the same as no channel.
-    ///
-    /// Separated from `follows_and_publishes` because the threshold that matters is a
-    /// POST: `own_subjects` walks a manifest's items, so an author who made a channel and
-    /// has not written in it yet has no subjects and is indistinguishable from one who
-    /// made nothing.
-    pub async fn follows_with_an_empty_channel(&self, dids: &[&str]) {
-        let k = self.channel_key();
-        let channel_id = pin_crypto::channel_id(&k);
-        self.set_settings(serde_json::json!({
-            "handleFollows": dids,
-            "myChannels": [{
-                "channelID": channel_id,
-                "channelKey": pin_crypto::channel_key_to_base64(&k),
-                "name": "A channel",
-                // Unlisted, because a PUBLIC channel is a subject of its own — somebody can
-                // follow it — and this helper is about having nothing to count.
-                "visibility": "obscure",
-            }],
-        }))
-        .await;
-        let manifest = serde_json::json!({
-            "version": 1,
-            "name": "A channel",
-            "description": "",
-            "authorPubkey": "ed25519:testnet",
-            "publishedAt": "2026-09-12T00:00:00.000Z",
-            "items": [],
         });
         let sealed = pin_crypto::encrypt(&k, &serde_json::to_vec(&manifest).expect("serialize"))
             .expect("seal manifest");
@@ -924,9 +880,7 @@ mod loops {
     ///
     /// Observable because the identity has a graph actor AND a post: a crawling pass reaches
     /// two where a folding one reaches one, and the difference is exactly the actor whose
-    /// directory was resolved. Both halves of the setup are needed — a pass with nothing
-    /// published returns before its crawl, so an identity that only follows somebody would
-    /// report the same number either way and prove nothing.
+    /// directory was resolved.
     #[tokio::test]
     async fn a_woken_pass_folds_without_crawling() {
         let world = World::new();
@@ -1676,16 +1630,15 @@ mod visibility {
     /// up with arrivals read exactly like one nobody was knocking. The sender sees a failed
     /// stream, which is also what an offline node looks like; this side recorded nothing.
     ///
-    /// Asserted from the LURKER path deliberately. The count is taken beside the drain, which
-    /// is above the early return for having published nothing — so the instance least able
-    /// to account for itself still reports that it turned people away, rather than returning
-    /// a bare `not_ours` that says the knocks were somebody else's problem.
+    /// Asserted from an identity that has published nothing, which is still one that can be
+    /// followed — so it drains, and reports that it turned people away rather than a bare
+    /// `not_ours` that says the knocks were somebody else's problem.
     #[tokio::test]
     async fn a_refused_knock_is_counted_rather_than_silent() {
         let world = World::new();
         let john = Identity::new(&world, 1).await;
-        // A settings record and nothing else: he publishes nothing, which is the path under
-        // test. Without one the pass errors above the drain and never reaches the count.
+        // A settings record and nothing else. Without one the pass errors above the drain and
+        // never reaches the count.
         john.follows(&[]).await;
         let ctx = john.engagement_ctx();
 
@@ -1778,21 +1731,81 @@ mod visibility {
         assert_eq!(tally.kinds[pin_engagement::KIND_FOLLOW].count, 2);
     }
 
-    /// A LURKER STILL READS THE PEOPLE IT FOLLOWS.
+    /// A FOLLOW OF A PERSON IS COUNTED ON THE PERSON, and a withdrawal takes it back out.
     ///
-    /// `engagement_once` has nothing to fold for an identity that has published nothing,
-    /// and used to return before its crawl — so a reader who followed people and never
-    /// posted held nobody, permanently, since hop one is this crawl's byproduct and the
-    /// discovery frontier is derived from held records. That stopped being tolerable once
-    /// following a person meant reading their profile feed out of their record: a lurker's
-    /// home would have stayed empty.
-    ///
-    /// So the people followed wholesale are read, directories only. No crawl mark is
-    /// written, because nothing was extracted — a mark would tell the first crawl after
-    /// this identity posts that it already has their endorsements. And the frontier then
-    /// works as it does for anybody.
+    /// The person is a subject of their own — even one who has published nothing — and the
+    /// fold files their follows in the person tally, since a person has no channel doc.
     #[tokio::test]
-    async fn a_lurker_still_reads_the_people_it_follows() {
+    async fn a_knocked_person_follow_is_counted_and_withdrawn() {
+        let world = World::new();
+        let alice = Identity::new(&world, 1).await;
+        let bob = Identity::new(&world, 2).await;
+        alice.follows(&[]).await;
+        let bob_seed = pin_derive::did_dht_seed(&bob.app_key);
+
+        let ctx = alice.engagement_ctx();
+        let handler = pin_rpc::HeyHandler::new(ctx.inbox.clone());
+        let pass = |at: &'static str| {
+            let ctx = &ctx;
+            let did = alice.did.clone();
+            async move {
+                crate::engagement_once(ctx, &did, at.to_string(), false, false)
+                    .await
+                    .expect("engagement pass")
+            }
+        };
+
+        let follow = pin_engagement::Endorsement::sign_person_follow(
+            &bob_seed,
+            &alice.did,
+            "2026-09-12T00:00:01.000Z",
+        )
+        .expect("sign");
+        assert!(handler.accept_knock(&pin_rpc::hey_request(
+            &serde_json::to_value(&follow).expect("encode")
+        )));
+        assert_eq!(pass("2026-09-12T00:00:02.000Z").await.knocked, 1);
+        let tally = crate::engagement::read_person_tally(&alice.doc, &alice.blobs, alice.author_id)
+            .await
+            .expect("a person tally");
+        assert_eq!(tally.kinds[pin_engagement::KIND_FOLLOW].count, 1);
+        assert_eq!(
+            tally.kinds[pin_engagement::KIND_FOLLOW].sample_actors,
+            vec![bob.did.clone()]
+        );
+
+        let unfollow = pin_engagement::Retraction::sign(
+            &bob_seed,
+            pin_engagement::KIND_FOLLOW,
+            &alice.did,
+            "2026-09-12T00:00:03.000Z",
+        )
+        .expect("sign");
+        assert!(handler.accept_knock(&pin_rpc::hey_request(
+            &serde_json::to_value(&unfollow).expect("encode")
+        )));
+        assert_eq!(
+            pass("2026-09-12T00:00:04.000Z").await.retractions_applied,
+            1
+        );
+        assert!(
+            crate::engagement::read_person_tally(&alice.doc, &alice.blobs, alice.author_id)
+                .await
+                .is_none(),
+            "nobody follows her now, so there is no tally rather than a zero"
+        );
+    }
+
+    /// AN IDENTITY THAT HAS PUBLISHED NOTHING STILL CRAWLS ITS GRAPH.
+    ///
+    /// It used to return before its crawl, having nothing to fold — so a reader who followed
+    /// people and never posted held nobody, permanently, since hop one is this crawl's
+    /// byproduct and the discovery frontier is derived from held records. Two things ended
+    /// that: following a person reads their profile feed out of their record, and every
+    /// identity is a subject of its own, because anyone can follow it. So there is always
+    /// something to count, and the pass is the ordinary one.
+    #[tokio::test]
+    async fn an_identity_that_has_published_nothing_still_crawls_its_graph() {
         let world = World::new();
         let john = Identity::new(&world, 1).await;
         let alice = Identity::new(&world, 2).await;
@@ -1807,40 +1820,14 @@ mod visibility {
         john.follows(&[&alice.did]).await;
 
         let folded = engagement(&john).await;
-        assert_eq!(folded.reached, 1, "alice, and nobody's endorsements");
+        assert_eq!(folded.reached, 2, "himself and alice");
         assert!(john.held(&alice.did).await.is_some());
-        assert!(
-            crate::list_rkeys(&john.doc, john.author_id, pin_derive::CRAWL_COLLECTION)
-                .await
-                .unwrap()
-                .is_empty(),
-            "a directory-only read is not a crawl, and must not say it was",
-        );
 
         let out = pass(&john).await;
         assert_eq!(out.resolved, 1);
         assert!(
             john.held(&carol.did).await.is_some(),
             "reached through alice"
-        );
-
-        // The threshold is something to COUNT, not having made a channel — which is the part
-        // that would be got wrong setting this up by hand. An empty unlisted channel has no
-        // posts and cannot be followed, so it contributes no subject and this identity still
-        // takes the lurker's directory-only read. (An empty PUBLIC channel is a subject: it
-        // can be followed.)
-        let world = World::new();
-        let jane = Identity::new(&world, 4).await;
-        let alice = Identity::new(&world, 2).await;
-        world.publish(&alice.did, "sia://alice-dir", directory("alice", &[]));
-        jane.follows_with_an_empty_channel(&[&alice.did]).await;
-        assert_eq!(engagement(&jane).await.reached, 1);
-        assert!(
-            crate::list_rkeys(&jane.doc, jane.author_id, pin_derive::CRAWL_COLLECTION)
-                .await
-                .unwrap()
-                .is_empty(),
-            "an empty channel is not a post",
         );
     }
 
@@ -1852,8 +1839,8 @@ mod visibility {
     /// unreachable newcomer waits for the crawl rather than costing a resolve every pass.
     #[tokio::test]
     async fn a_new_follow_is_read_on_the_next_woken_pass() {
-        // Both shapes of the pass: a lurker takes the directory-only branch, an identity
-        // that has posted takes the crawl's own loop body.
+        // Whether or not the identity has posted: both read a newcomer through the crawl's
+        // own loop body.
         for lurker in [true, false] {
             let world = World::new();
             let john = Identity::new(&world, 1).await;

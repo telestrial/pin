@@ -172,8 +172,8 @@ pub struct EngagementOutcome {
 /// Where a subject lives, so its tally reaches the right channel's doc.
 pub(crate) type SubjectTable = HashMap<String, String>;
 
-/// Every subject this identity publishes: one per public channel, one per post, one per
-/// attachment.
+/// Every subject this identity publishes: itself, one per public channel, one per post, one
+/// per attachment.
 ///
 /// Built by opening each owned channel's manifest, which is what makes matching possible at
 /// all — a subject is a hash, so the only way to recognise one is to recompute it over
@@ -183,8 +183,14 @@ pub(crate) type SubjectTable = HashMap<String, String>;
 async fn own_subjects<N: crate::net::Network>(
     ctx: &EngagementContext<N>,
     settings: &SettingsView,
+    own_did: &str,
 ) -> Result<SubjectTable, String> {
     let mut table = SubjectTable::new();
+    // This identity is a subject of its own, because it can be followed as a person. Filed
+    // under its own did, which the fold routes to the person tally rather than to any
+    // channel's doc. It also means no identity has nothing to count: a follow can be knocked
+    // at one that has never posted, and has to be taken rather than dropped as not ours.
+    table.insert(own_did.to_string(), own_did.to_string());
     for owned in &settings.my_channels {
         // A public channel is a subject of its own, because it can be followed — and a
         // follow names the channel, not any post in it, so its tally sits beside the posts'
@@ -249,6 +255,80 @@ async fn own_subjects<N: crate::net::Network>(
         table.insert(id, channel_id);
     }
     Ok(table)
+}
+
+/// Fold the people following this identity as a PERSON into its person tally.
+///
+/// Follows only: a subject that is a did has no post to like or pin, and anything else filed
+/// under it would be a count nobody reads. Written to the main doc rather than a channel's,
+/// since a person has no channel doc; the identity loop publishes it in the directory blob.
+/// Gated on substance like every tally — the fold stamps the time it ran, and the directory
+/// blob is re-uploaded whenever this record's bytes move.
+async fn fold_person<N: crate::net::Network>(
+    ctx: &EngagementContext<N>,
+    log_rkeys: &[String],
+    own_did: &str,
+    reached: &BTreeSet<String>,
+    now_iso: &str,
+    outcome: &mut EngagementOutcome,
+) -> Result<(), String> {
+    let follows: Vec<Endorsement> = log_records_for(ctx, log_rkeys, own_did)
+        .await
+        .into_iter()
+        .filter(|r| r.kind == pin_engagement::KIND_FOLLOW)
+        .collect();
+    let held = read_person_tally(&ctx.doc, &ctx.blobs, ctx.author_id).await;
+    if follows.is_empty() {
+        if held.is_some() {
+            let _ = crate::delete_record(
+                &ctx.doc,
+                ctx.author_id,
+                pin_derive::PERSON_TALLY_COLLECTION,
+                pin_derive::PERSON_TALLY_RKEY,
+            )
+            .await;
+            outcome.cleared += 1;
+        }
+        return Ok(());
+    }
+    let retention = if all_confirmed(&follows, reached, &[], &BTreeSet::new()) {
+        Some(now_iso.to_string())
+    } else {
+        retention_of(held.as_ref())
+    };
+    let aggregate = pin_engagement::fold(&follows, retention, now_iso.to_string())?;
+    if !crate::cache_is_current(held.as_ref(), &aggregate) {
+        let bytes = serde_json::to_vec(&aggregate).map_err(|e| format!("encode tally: {e}"))?;
+        crate::write_record(
+            &ctx.doc,
+            ctx.author_id,
+            pin_derive::PERSON_TALLY_COLLECTION,
+            pin_derive::PERSON_TALLY_RKEY,
+            bytes,
+        )
+        .await
+        .map_err(|e| format!("write person tally: {e}"))?;
+        outcome.tallies += 1;
+    }
+    Ok(())
+}
+
+/// This identity's person tally, as last folded.
+pub(crate) async fn read_person_tally(
+    doc: &Doc,
+    blobs: &iroh_blobs::api::Store,
+    author_id: iroh_docs::AuthorId,
+) -> Option<Aggregate> {
+    let raw = read_record(
+        doc,
+        blobs,
+        author_id,
+        pin_derive::PERSON_TALLY_COLLECTION,
+        pin_derive::PERSON_TALLY_RKEY,
+    )
+    .await
+    .ok()??;
+    serde_json::from_slice(&raw).ok()
 }
 
 /// The main doc's collection of owned channels' manifests.
@@ -719,7 +799,7 @@ pub async fn engagement_once<N: crate::net::Network>(
     newcomers: bool,
 ) -> Result<EngagementOutcome, String> {
     let settings = read_settings(&ctx.doc, &ctx.blobs, ctx.author_id, &ctx.app_key).await?;
-    let subjects = own_subjects(ctx, &settings).await?;
+    let subjects = own_subjects(ctx, &settings, own_did).await?;
     let mut outcome = EngagementOutcome::default();
     let unread = if newcomers && !crawl {
         unread_follows(ctx, &settings).await
@@ -741,39 +821,6 @@ pub async fn engagement_once<N: crate::net::Network>(
     // taken. These arrived while the inbox was full and were never parked, so there is
     // nothing here to process — only to report.
     outcome.knocks_refused = pin_rpc::take_refused(&ctx.inbox);
-
-    if subjects.is_empty() {
-        // Nothing published, so nothing can be endorsed — including by knock. Not a
-        // failure, and not a reason to hold on to what was knocked.
-        outcome.not_ours = knocks.len() + comment_knocks.len();
-
-        // But the people it follows are still read, because following a person means
-        // reading their profile feed out of the crawl's record of them — and this crawl is
-        // the only thing that writes a followed person's record. Directories only: with
-        // nothing published there is nothing to extract from them, so no crawl mark is
-        // written that would tell the next crawl otherwise.
-        let who: Vec<&String> = if crawl {
-            settings.handle_follows.iter().collect()
-        } else {
-            unread.iter().collect()
-        };
-        for did in who {
-            match crate::discover::read_identity(
-                &ctx.net,
-                &ctx.doc,
-                &ctx.blobs,
-                ctx.author_id,
-                did,
-                &now_iso,
-            )
-            .await
-            {
-                Ok(()) => outcome.reached += 1,
-                Err(_) => outcome.unreachable += 1,
-            }
-        }
-        return Ok(outcome);
-    }
 
     // What we found, keyed BY the log's own key rather than by something built to match
     // it. The two agreeing is then a property of the code instead of a thing to remember:
@@ -1120,6 +1167,11 @@ pub async fn engagement_once<N: crate::net::Network>(
 
     // Republish every tally that moved.
     for subject in &touched {
+        if subject == own_did {
+            outcome.folded += 1;
+            fold_person(ctx, &log_rkeys, own_did, &reached, &now_iso, &mut outcome).await?;
+            continue;
+        }
         let Some(channel_id) = subjects.get(subject) else {
             continue;
         };
