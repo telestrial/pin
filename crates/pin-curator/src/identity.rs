@@ -127,6 +127,9 @@ pub struct IdentityOutcome {
     /// exists to withhold. The cost is that the host's next crawl reads the comment as taken
     /// down, which is recoverable — it comes back the moment the key does.
     pub comments_unsealable: usize,
+    /// Follows signed into records this pass, and withdrawn — see `reconcile_follows`.
+    pub follows_written: usize,
+    pub follows_withdrawn: usize,
 }
 
 /// One advertised public channel: enough for a resolver to read it — the channelID
@@ -216,6 +219,112 @@ fn advertised_channels(settings: &SettingsView) -> Vec<DirectoryChannel> {
             },
         })
         .collect()
+}
+
+/// Keep one signed `follow` record per public follow, derived from settings.
+///
+/// A follow lives in the FOLLOWER's settings and nothing writes into the followed identity's
+/// scope, so without a record that can be knocked, being followed is invisible to the person
+/// followed unless their crawl happens to reach the follower. The record is what delivery
+/// knocks and what the followed person folds into a count, one to one with the thing
+/// followed: a channel-follow names the channel, a person-follow names the person.
+///
+/// THE ONLY WRITER of `follow:` records, which is what lets it delete as well as fill: a
+/// derived record with one authority can be reconciled against its truth, and settings is
+/// read whole or not at all. Watches are private and never become one. A deletion is picked
+/// up by delivery as a withdrawal to knock, and runs here because this loop waits on the
+/// doc restore — so a tab never withdraws a follow its restore had yet to put back.
+///
+/// A record already held is left alone rather than re-signed, so `createdAt` stays when the
+/// follow was made and nothing rewrites itself every pass.
+async fn reconcile_follows(
+    ctx: &IdentityContext,
+    settings: &SettingsView,
+    now_iso: &str,
+) -> (usize, usize) {
+    use pin_engagement::{Endorsement, KIND_FOLLOW};
+    use std::collections::{BTreeMap, BTreeSet};
+
+    enum Follow<'a> {
+        Channel { author: &'a str, channel: &'a str },
+        Person(&'a str),
+    }
+
+    let mut wanted: BTreeMap<String, Follow> = BTreeMap::new();
+    for f in &settings.follows {
+        let (Some(author), Some(channel)) = (
+            f.get("didDht").and_then(|v| v.as_str()),
+            f.get("channelID").and_then(|v| v.as_str()),
+        ) else {
+            continue;
+        };
+        wanted.insert(
+            pin_derive::endorse_rkey(KIND_FOLLOW, channel),
+            Follow::Channel { author, channel },
+        );
+    }
+    for did in &settings.handle_follows {
+        wanted.insert(
+            pin_derive::endorse_rkey(KIND_FOLLOW, did),
+            Follow::Person(did),
+        );
+    }
+
+    let Ok(held) = crate::list_rkeys(&ctx.doc, ctx.author_id, pin_derive::ENDORSE_COLLECTION).await
+    else {
+        // A listing that fails says nothing about what is held, so nothing is written or
+        // withdrawn on it.
+        return (0, 0);
+    };
+    let held: BTreeSet<String> = held
+        .into_iter()
+        .filter(|r| pin_derive::parse_endorse_rkey(r).is_some_and(|(k, _)| k == KIND_FOLLOW))
+        .collect();
+
+    let seed = pin_derive::did_dht_seed(&ctx.app_key);
+    let mut written = 0;
+    for (rkey, follow) in &wanted {
+        if held.contains(rkey) {
+            continue;
+        }
+        let signed = match follow {
+            Follow::Channel { author, channel } => {
+                Endorsement::sign_channel_follow(&seed, author, channel, now_iso)
+            }
+            Follow::Person(did) => Endorsement::sign_person_follow(&seed, did, now_iso),
+        };
+        let Ok(record) = signed else { continue };
+        let Ok(bytes) = serde_json::to_vec(&record) else {
+            continue;
+        };
+        if crate::write_record(
+            &ctx.doc,
+            ctx.author_id,
+            pin_derive::ENDORSE_COLLECTION,
+            rkey,
+            bytes,
+        )
+        .await
+        .is_ok()
+        {
+            written += 1;
+        }
+    }
+    let mut withdrawn = 0;
+    for rkey in held.iter().filter(|r| !wanted.contains_key(*r)) {
+        if crate::delete_record(
+            &ctx.doc,
+            ctx.author_id,
+            pin_derive::ENDORSE_COLLECTION,
+            rkey,
+        )
+        .await
+        .is_ok()
+        {
+            withdrawn += 1;
+        }
+    }
+    (written, withdrawn)
 }
 
 /// This identity's own endorsement records, as published.
@@ -637,6 +746,10 @@ pub async fn publish_identity_once(
     let published_key = pin_derive::published_key(&ctx.app_key);
 
     let mut outcome = IdentityOutcome::default();
+    // Before the directory is assembled, so a follow made since the last pass is in the blob
+    // this pass publishes rather than the next one's.
+    (outcome.follows_written, outcome.follows_withdrawn) =
+        reconcile_follows(ctx, &settings, &now_iso).await;
     // Bodies get their objects before the blob that carries them is assembled, so a comment
     // reaches a reader already pinnable rather than becoming so a pass later.
     outcome.bodies =
@@ -996,6 +1109,114 @@ mod tests {
         )
         .await
         .expect("write endorsement");
+    }
+
+    /// The follow records held, as `(rkey, record)`.
+    async fn follow_records(
+        id: &crate::testnet::Identity,
+    ) -> Vec<(String, pin_engagement::Endorsement)> {
+        let mut out = Vec::new();
+        for rkey in crate::list_rkeys(&id.doc, id.author_id, pin_derive::ENDORSE_COLLECTION)
+            .await
+            .unwrap()
+        {
+            if !rkey.starts_with("follow:") {
+                continue;
+            }
+            let raw = read_record(
+                &id.doc,
+                &id.blobs,
+                id.author_id,
+                pin_derive::ENDORSE_COLLECTION,
+                &rkey,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            out.push((rkey, serde_json::from_slice(&raw).unwrap()));
+        }
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        out
+    }
+
+    async fn reconcile(id: &crate::testnet::Identity, at: &str) -> (usize, usize) {
+        let ctx = ctx_over(id);
+        let settings = read_settings(&ctx.doc, &ctx.blobs, ctx.author_id, &ctx.app_key)
+            .await
+            .expect("settings");
+        reconcile_follows(&ctx, &settings, at).await
+    }
+
+    #[tokio::test]
+    async fn every_public_follow_becomes_a_signed_record_and_nothing_else_does() {
+        let world = crate::testnet::World::new();
+        let me = crate::testnet::Identity::new(&world, 1).await;
+        me.set_settings(serde_json::json!({
+            "follows": [{"didDht": "did:dht:author", "channelID": "chan1", "name": "One"}],
+            "handleFollows": ["did:dht:person"],
+            // A watch is private, and never tells anybody anything.
+            "subscriptions": [{"channelID": "watched", "channelKey": "K", "didDht": "did:dht:w"}],
+        }))
+        .await;
+
+        assert_eq!(reconcile(&me, "2026-09-28T10:00:00.000Z").await, (2, 0));
+        let held = follow_records(&me).await;
+        assert_eq!(
+            held.iter().map(|(r, _)| r.as_str()).collect::<Vec<_>>(),
+            vec!["follow:chan1", "follow:did:dht:person"]
+        );
+        for (_, record) in &held {
+            assert!(record.verify().is_ok());
+            assert_eq!(record.actor, me.did);
+        }
+        assert_eq!(
+            held[0].1.reference.as_ref().map(|r| r.did_dht.as_str()),
+            Some("did:dht:author"),
+            "a channel-follow says whose channel it is, which is who delivery tells"
+        );
+
+        // Converges: a second pass writes nothing, and a held record keeps when the follow
+        // was made rather than being re-signed on every pass.
+        assert_eq!(reconcile(&me, "2026-09-28T11:00:00.000Z").await, (0, 0));
+        assert_eq!(
+            follow_records(&me).await[0].1.created_at,
+            "2026-09-28T10:00:00.000Z"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unfollow_withdraws_its_record_and_leaves_other_gestures_alone() {
+        let world = crate::testnet::World::new();
+        let me = crate::testnet::Identity::new(&world, 1).await;
+        me.set_settings(serde_json::json!({ "handleFollows": ["did:dht:a", "did:dht:b"] }))
+            .await;
+        reconcile(&me, "2026-09-28T10:00:00.000Z").await;
+        record_gesture(&me, pin_engagement::KIND_LIKE, "some-post").await;
+
+        me.set_settings(serde_json::json!({ "handleFollows": ["did:dht:b"] }))
+            .await;
+        assert_eq!(reconcile(&me, "2026-09-28T11:00:00.000Z").await, (0, 1));
+        assert_eq!(
+            follow_records(&me)
+                .await
+                .iter()
+                .map(|(r, _)| r.as_str())
+                .collect::<Vec<_>>(),
+            vec!["follow:did:dht:b"]
+        );
+        assert!(
+            crate::read_record(
+                &me.doc,
+                &me.blobs,
+                me.author_id,
+                pin_derive::ENDORSE_COLLECTION,
+                &pin_derive::endorse_rkey(pin_engagement::KIND_LIKE, "some-post"),
+            )
+            .await
+            .unwrap()
+            .is_some(),
+            "a like is somebody else's record to manage"
+        );
     }
 
     async fn published_kinds(id: &crate::testnet::Identity) -> Vec<String> {
@@ -1561,6 +1782,8 @@ mod tests {
             comments_uploaded: false,
             bodies: Default::default(),
             comments_unsealable: 0,
+            follows_written: 0,
+            follows_withdrawn: 0,
         })
     }
 

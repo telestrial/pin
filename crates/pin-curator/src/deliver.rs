@@ -204,12 +204,17 @@ fn needs_delivery(held: Option<&DeliverMark>, sig: &str) -> bool {
 ///
 /// The record's own coordinates first — a public subject carries the author's did:dht, and
 /// it has been checked against the subject hash by then, so it cannot name someone else's
-/// channel. Otherwise the subject is looked up among the channels this identity holds keys
+/// channel. Then a person-follow, whose subject is the person. Otherwise the subject is looked up among the channels this identity holds keys
 /// for, which is how an unlisted channel's author is found: their record carries no
 /// coordinates by design, but we can recompute the subject ourselves.
 fn target_for(record: &Endorsement, subjects: &HashMap<String, String>) -> Option<String> {
     if let Some(r) = &record.reference {
         return Some(r.did_dht.clone());
+    }
+    // A person-follow names who it is about by naming them: its subject IS their did, and
+    // `verify` refuses a follow with no reference whose subject is not one.
+    if record.kind == pin_engagement::KIND_FOLLOW && record.subject.starts_with("did:dht:") {
+        return Some(record.subject.clone());
     }
     subjects.get(&record.subject).cloned()
 }
@@ -947,6 +952,22 @@ mod tests {
             target_for(&record("s", None), &table),
             Some("did:dht:author".to_string())
         );
+    }
+
+    #[test]
+    fn a_person_follow_names_the_person_as_its_target() {
+        let follow =
+            Endorsement::sign_person_follow(&[7u8; 32], "did:dht:them", "2026-09-28").unwrap();
+        assert_eq!(
+            target_for(&follow, &HashMap::new()),
+            Some("did:dht:them".to_string())
+        );
+
+        // Only a follow: a like with no reference whose subject happens to look like a did
+        // is not a message to that did.
+        let mut like = record("s", None);
+        like.subject = "did:dht:them".into();
+        assert_eq!(target_for(&like, &HashMap::new()), None);
     }
 
     #[test]
