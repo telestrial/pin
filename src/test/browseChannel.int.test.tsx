@@ -30,7 +30,11 @@ vi.mock('../lib/channelLocatorNative', async () =>
 )
 
 import userEvent from '@testing-library/user-event'
-import { directory_collection } from '../../crates/pin-core/pkg/pin_core.js'
+import {
+  directory_collection,
+  tally_collection,
+  tally_rkey,
+} from '../../crates/pin-core/pkg/pin_core.js'
 import { ChannelView } from '../components/channel/ChannelView'
 import { channelKeyFromBase64 } from '../core/crypto'
 import type { ChannelManifest, ItemRef } from '../core/types'
@@ -209,6 +213,31 @@ describe('integration: browsing a channel you do not hold', () => {
     view(KEY)
 
     await waitFor(() => expect(stat('Followers')).toBe('0'))
+  })
+
+  it("shows the author's published count, and says the list is what you know of", async () => {
+    // The author holds follows from people this device has never read — they arrived by
+    // knock — so the number is their tally and the list is the part of it visible here.
+    await published([post('a post', '2026-09-02T00:00:00.000Z')])
+    holdFollower('did:dht:direct')
+    docStore.set(
+      `${tally_collection()}/${tally_rkey(CHANNEL, CHANNEL)}`,
+      new TextEncoder().encode(
+        JSON.stringify({
+          kinds: {
+            follow: { count: 5, setRoot: 'root', sampleActors: [THEM] },
+          },
+          updatedAt: '2026-09-28T00:00:00.000Z',
+        }),
+      ),
+    )
+
+    view(KEY)
+
+    await waitFor(() => expect(stat('Followers')).toBe('5'))
+    await userEvent.click(screen.getByRole('button', { name: /Followers/ }))
+    const list = within(screen.getByRole('region', { name: 'Followers' }))
+    expect(list.getByText('The 1 you know of')).toBeInTheDocument()
   })
 
   it('opens the list behind the number', async () => {

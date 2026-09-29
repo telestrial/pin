@@ -45,6 +45,7 @@ export const endorse_comment_rkey: (a: number, b: number, c: number, d: number, 
 export const endorse_rkey: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number];
 export const endorsement_verify: (a: number, b: number) => [number, number];
 export const engagement_subject: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];
+export const follow_rkey: (a: number, b: number) => [number, number];
 export const get_channel_record: (a: number, b: number, c: number, d: number, e: number, f: number) => any;
 export const get_record: (a: number, b: number, c: number, d: number) => any;
 export const import_channel_doc: (a: number, b: number, c: any) => any;

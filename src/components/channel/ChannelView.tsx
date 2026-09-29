@@ -10,7 +10,10 @@ import {
 import type { ChannelImage, ChannelManifest } from '../../core/types'
 import { resolveChannelViaLocator } from '../../lib/channelLocator'
 import { useChannelClaim } from '../../lib/hooks/useChannelClaim'
-import { useChannelFollowers } from '../../lib/hooks/useFollowers'
+import {
+  useChannelFollowerCount,
+  useChannelFollowers,
+} from '../../lib/hooks/useFollowers'
 import { useIdentityName } from '../../lib/hooks/useIdentityName'
 import { useItemBlobURL } from '../../lib/hooks/useItemBytes'
 import { renderMarkdown } from '../../lib/markdown'
@@ -154,11 +157,16 @@ export function ChannelView({
   const isPublic = manifest?.visibility === 'public'
   const isOwnPublic = isOwned && isPublic
   const { claimed, setClaimed } = useChannelClaim(channelID, isOwnPublic)
-  // With the author, because following a person watches every public channel they
-  // advertise: their wholesale followers are this channel's audience too. The list and
-  // the number are one read, so they cannot disagree.
+  // The list is who this device knows of; the number is the author's published tally
+  // where one is held, which reaches past that — strangers who followed by knock — and
+  // never reads below the list.
   const followers = useChannelFollowers(isPublic ? channelID : '')
-  const followerCount = followers?.length ?? null
+  const followerCount = useChannelFollowerCount(
+    isPublic ? channelID : '',
+    watchKey,
+    browsing,
+    followers?.length ?? null,
+  )
   // The list behind the number, opened from it. Folded away by default because this
   // page's body is the channel's feed, and a standing list of people would push the posts
   // down on every visit.
@@ -458,8 +466,15 @@ export function ChannelView({
               <h2 className="text-xs font-medium text-neutral-500 uppercase tracking-wide px-1">
                 Followers
               </h2>
-              {/* The people who follow this channel. Among the identities this device has
-                  read, like the count. */}
+              {/* The people who follow this channel, among the identities this device has
+                  read. The number above can be larger — it is the author's own tally,
+                  which counts followers nobody here has read — and the list says so
+                  rather than looking like the whole of it. */}
+              {followerCount !== null && followerCount > followers.length && (
+                <p className="text-xs text-neutral-500 px-1">
+                  The {followers.length} you know of
+                </p>
+              )}
               <div className="bg-white border border-neutral-200 rounded-lg divide-y divide-neutral-100">
                 {followers.map((did) => (
                   <PersonRow

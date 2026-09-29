@@ -2035,6 +2035,16 @@ pub fn sign_endorsement(
     out(&record)
 }
 
+/// Where this identity's follow of one subject lives — a channelID or a did.
+///
+/// From Rust because the Curator is the only writer of these records and the frontend only
+/// reads one, to tell whether a published count can have seen it yet; a second spelling of
+/// the key would have it looking where nothing is ever written.
+#[wasm_bindgen]
+pub fn follow_rkey(subject: &str) -> String {
+    pin_derive::endorse_rkey(pin_engagement::KIND_FOLLOW, subject)
+}
+
 /// Where one endorsement of a COMMENT lives.
 ///
 /// Its own entry point because a comment's subject comes from a different derivation: a

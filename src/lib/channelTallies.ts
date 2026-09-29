@@ -87,6 +87,27 @@ export async function readTally(
   }
 }
 
+/** A channel's own counts — what is folded about the CHANNEL rather than any post in it,
+ *  which is its follows. Filed under the channel's own ID as the subject. Null when nothing
+ *  is cached, exactly as {@link readTally}. */
+export async function readChannelTally(
+  appKeyHex: string,
+  channelID: string,
+): Promise<Aggregate | null> {
+  try {
+    await openDocs(appKeyHex)
+    await ensureWasm()
+    const stored = await getRecord(
+      tally_collection(),
+      tally_rkey(channelID, channelID),
+    )
+    if (!stored) return null
+    return JSON.parse(new TextDecoder().decode(stored)) as Aggregate
+  } catch {
+    return null
+  }
+}
+
 /** Read one channel's published counts and cache them, for a channel no pass has covered
  *  yet — a just-pasted subscribe URL, or a tab whose loop hasn't come round.
  *

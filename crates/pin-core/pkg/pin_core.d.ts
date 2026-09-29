@@ -323,6 +323,15 @@ export function endorsement_verify(record_json: string): void;
 export function engagement_subject(channel_id: string, published_at: string, attachment?: string | null): string;
 
 /**
+ * Where this identity's follow of one subject lives — a channelID or a did.
+ *
+ * From Rust because the Curator is the only writer of these records and the frontend only
+ * reads one, to tell whether a published count can have seen it yet; a second spelling of
+ * the key would have it looking where nothing is ever written.
+ */
+export function follow_rkey(subject: string): string;
+
+/**
  * Read a record from a channel doc, or `undefined` if absent.
  *
  * Author-AGNOSTIC (`single_latest_per_key`, no author filter) — deliberately. On the
@@ -1011,6 +1020,7 @@ export interface InitOutput {
     readonly endorse_rkey: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number];
     readonly endorsement_verify: (a: number, b: number) => [number, number];
     readonly engagement_subject: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];
+    readonly follow_rkey: (a: number, b: number) => [number, number];
     readonly get_channel_record: (a: number, b: number, c: number, d: number, e: number, f: number) => any;
     readonly get_record: (a: number, b: number, c: number, d: number) => any;
     readonly import_channel_doc: (a: number, b: number, c: any) => any;

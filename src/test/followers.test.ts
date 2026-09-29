@@ -6,6 +6,7 @@
 
 import { describe, expect, it } from 'vitest'
 import {
+  channelFollowerCount,
   type FollowerEdges,
   followersOfChannel,
   followersOfPerson,
@@ -157,5 +158,32 @@ describe('ownFollowerEdges', () => {
       [],
     )
     expect(edges.follows).toEqual([{ didDht: 'did:them', channelID: 'ch1' }])
+  })
+})
+
+describe('channelFollowerCount', () => {
+  const tally = (count: number, added = false, removed = false) => ({
+    count,
+    added,
+    removed,
+  })
+
+  it('is the scan when no tally is held', () => {
+    expect(channelFollowerCount(3, null)).toBe(3)
+  })
+
+  it("is the author's tally when it counts more than the scan found", () => {
+    expect(channelFollowerCount(1, tally(5))).toBe(5)
+  })
+
+  it('never reads below a list the viewer can see', () => {
+    // An author reached only in a tab cannot be knocked, so their tally can be short.
+    expect(channelFollowerCount(4, tally(2))).toBe(4)
+  })
+
+  it("adjusts the tally for this viewer's own follow, as the like row does", () => {
+    expect(channelFollowerCount(0, tally(5, true))).toBe(6)
+    expect(channelFollowerCount(0, tally(5, false, true))).toBe(4)
+    expect(channelFollowerCount(0, tally(0, false, true))).toBe(0)
   })
 })

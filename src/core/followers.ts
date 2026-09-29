@@ -122,3 +122,27 @@ export function followersOfChannel(
   }
   return [...out].sort()
 }
+
+/** A channel's Followers number, out of the author's published tally and the viewer's own
+ *  scan.
+ *
+ *  The tally is what the author holds — strangers who knocked included, each a signed
+ *  receipt — so it is the number when there is one, adjusted for this viewer's own follow
+ *  the way the like row is (`showsUncounted` / `showsWithdrawn`), since the author folds a
+ *  pass behind it.
+ *
+ *  Never below the scan. An author reached only in a browser tab cannot be knocked, so
+ *  their tally holds just the followers their own crawl found, and a list a viewer can see
+ *  is its own backing set. Either number is one somebody can check; the larger is the one
+ *  nothing on screen disproves. Without a tally the scan is all there is. */
+export function channelFollowerCount(
+  scan: number,
+  tally: { count: number; added: boolean; removed: boolean } | null,
+): number {
+  if (!tally) return scan
+  const counted = Math.max(
+    0,
+    tally.count + (tally.added ? 1 : 0) - (tally.removed ? 1 : 0),
+  )
+  return Math.max(counted, scan)
+}
