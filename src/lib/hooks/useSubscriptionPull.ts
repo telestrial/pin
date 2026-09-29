@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import { useAuthStore } from '../../stores/auth'
+import { readChannels } from '../../stores/reading'
 import { applyCachedChannel } from '../channelRevalidate'
 import { openDocs, startPullLoop, subscribeDocChanges } from '../docs'
 
@@ -35,9 +36,7 @@ export function useSubscriptionPull() {
     let cancelled = false
 
     const applyCached = (channelID: string) => {
-      const sub = useAuthStore
-        .getState()
-        .subscriptions.find((s) => s.channelID === channelID)
+      const sub = readChannels().find((s) => s.channelID === channelID)
       // A record for a channel we no longer subscribe to: the loop's own cleanup will
       // drop it, and we have no key to read it with anyway.
       if (!sub || cancelled) return
@@ -46,7 +45,7 @@ export function useSubscriptionPull() {
 
     const applyAllCached = () => {
       if (cancelled) return
-      for (const sub of useAuthStore.getState().subscriptions) {
+      for (const sub of readChannels()) {
         void applyCachedChannel(sub)
       }
     }

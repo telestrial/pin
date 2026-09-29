@@ -77,6 +77,7 @@ export const published_collection: () => [number, number];
 export const published_settings_rkey: () => [number, number];
 export const put_channel_record: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => any;
 export const put_record: (a: number, b: number, c: number, d: number, e: number, f: number) => any;
+export const reading_channels: (a: number, b: number, c: number, d: number) => [number, number, number, number];
 export const request_collection: () => [number, number];
 export const settings_pad_size: () => number;
 export const settings_pointer_prefix: () => [number, number];

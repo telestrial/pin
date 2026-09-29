@@ -16,6 +16,7 @@ import { useItemBlobURL } from '../../lib/hooks/useItemBytes'
 import { renderMarkdown } from '../../lib/markdown'
 import { useAuthStore } from '../../stores/auth'
 import { renderable, useFeedStore } from '../../stores/feed'
+import { useReadChannels } from '../../stores/reading'
 import { useToastStore } from '../../stores/toast'
 import { FollowButton } from '../FollowButton'
 import { FeedRow } from '../HomeFeed'
@@ -95,9 +96,9 @@ export function ChannelView({
 }) {
   // channelID (derived from K) uniquely identifies a subscription — match on it
   // alone (authorHandle is empty for did:dht subs, so it's not a usable key).
-  const sub = useAuthStore((s) =>
-    s.subscriptions.find((x) => x.channelID === channelID),
-  )
+  // Watched, or shown by somebody followed — either way this identity reads it, and the
+  // pull loop keeps it cached.
+  const sub = useReadChannels().find((x) => x.channelID === channelID)
   const sortOrder = useAuthStore((s) => s.feedSortOrder)
   const setSortOrder = useAuthStore((s) => s.setFeedSortOrder)
   // The owned channel itself, not just whether it is owned: removing a dead portal is a

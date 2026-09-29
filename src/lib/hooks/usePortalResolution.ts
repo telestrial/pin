@@ -19,6 +19,7 @@ import { useEffect, useRef } from 'react'
 import { portalsIn } from '../../core/feed'
 import { useAuthStore } from '../../stores/auth'
 import { useFeedStore } from '../../stores/feed'
+import { readChannels } from '../../stores/reading'
 import {
   readConversation,
   warmChannelConversations,
@@ -38,7 +39,7 @@ function heldChannels(): HeldChannels {
   const manifests = useFeedStore.getState().manifests
   return ({ channelID }) => {
     const key =
-      auth.subscriptions.find((s) => s.channelID === channelID)?.channelKey ??
+      readChannels().find((s) => s.channelID === channelID)?.channelKey ??
       auth.myChannels.find((c) => c.channelID === channelID)?.channelKey
     if (!key) return null
     return { channelKey: key, manifest: manifests[channelID] }
@@ -104,7 +105,7 @@ export function usePortalResolution() {
               return held?.comments ?? null
             },
           )
-          const subs = useAuthStore.getState().subscriptions
+          const subs = readChannels()
           await useFeedStore.getState().resolvePortals(resolver, subs)
         } while (again.current && !cancelled)
       } catch (e) {

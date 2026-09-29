@@ -19,6 +19,7 @@ import { useDocRestore } from './lib/hooks/useDocRestore'
 import { useHandleFollowReconciliation } from './lib/hooks/useHandleFollowReconciliation'
 import { usePinDocsMirror } from './lib/hooks/usePinDocsMirror'
 import { usePortalResolution } from './lib/hooks/usePortalResolution'
+import { useReading } from './lib/hooks/useReading'
 import { useRendezvousSync } from './lib/hooks/useRendezvousSync'
 import { useSettingsDocsMirror } from './lib/hooks/useSettingsDocsMirror'
 import { useSettingsSync } from './lib/hooks/useSettingsSync'
@@ -80,6 +81,7 @@ export default function App() {
   useSettingsDocsMirror()
   usePinDocsMirror()
   useSnapshotPointer()
+  useReading()
   useChannelReader()
   usePortalResolution()
   useSubscriptionPull()

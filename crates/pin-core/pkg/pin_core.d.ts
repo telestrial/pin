@@ -542,6 +542,16 @@ export function put_channel_record(ns_id: string, collection: string, rkey: stri
 export function put_record(collection: string, rkey: string, value: Uint8Array): Promise<void>;
 
 /**
+ * The channels this identity reads: its watches, plus each followed person's profile feed.
+ *
+ * The real function the pull loop and the channel-doc sync run, so the feed cannot come to
+ * disagree with what the Curator keeps cached. `settings_json` is the frontend's settings
+ * shape; `held_json` is `{did: DirectoryRecord}` for the followed people a record is held
+ * for, and anyone missing from it comes back in `unsettled`.
+ */
+export function reading_channels(settings_json: string, held_json: string): string;
+
+/**
  * The collection naming identities a screen reached for and could not answer from what
  * is held.
  */
@@ -1033,6 +1043,7 @@ export interface InitOutput {
     readonly published_settings_rkey: () => [number, number];
     readonly put_channel_record: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => any;
     readonly put_record: (a: number, b: number, c: number, d: number, e: number, f: number) => any;
+    readonly reading_channels: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly request_collection: () => [number, number];
     readonly settings_pad_size: () => number;
     readonly settings_pointer_prefix: () => [number, number];

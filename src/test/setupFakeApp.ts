@@ -22,6 +22,7 @@ import { useAuthStore } from '../stores/auth'
 import { useComposeStore } from '../stores/compose'
 import { useFeedStore } from '../stores/feed'
 import { usePinStore } from '../stores/pin'
+import { useReadingStore } from '../stores/reading'
 import { useToastStore } from '../stores/toast'
 import { setCurrentWorld } from './fakeModules'
 import { createFakeWorld, FakeSiaClient, type FakeWorld } from './fakeSia'
@@ -72,6 +73,7 @@ export function resetAllStores(): void {
   useActionStore.getState().reset()
   useComposeStore.getState().disarm()
   useToastStore.setState({ toasts: [] })
+  useReadingStore.setState({ channels: null })
   // The persist middleware re-reads localStorage on rehydrate; nuke it
   // so the next test starts genuinely clean.
   localStorage.clear()

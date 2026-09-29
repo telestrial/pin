@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { useAuthStore } from '../../stores/auth'
 import { notReady, useFeedStore } from '../../stores/feed'
+import { readChannels } from '../../stores/reading'
 import { makeCachingLocatorReader, makeLocatorReader } from '../channelLocator'
 
 // Channel reads are locator-only (Phase D step 6): when the sdk is present,
@@ -50,7 +51,7 @@ export function useChannelReader() {
     // re-run the load so those reads resolve, rather than sitting on the
     // boot-race error until a manual refresh. Fresh onboarding has no
     // subscriptions, so the guard skips the extra load there.
-    const subs = useAuthStore.getState().subscriptions
+    const subs = readChannels()
     if (subs.length > 0) feed.refresh(subs)
     return () => useFeedStore.getState().setChannelReader(notReady)
   }, [client, appKeyHex, ownedKey])

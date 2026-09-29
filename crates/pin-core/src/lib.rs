@@ -1854,6 +1854,17 @@ pub fn discovery_frontier(
     serde_json::to_string(&candidates).map_err(|e| JsValue::from_str(&e.to_string()))
 }
 
+/// The channels this identity reads: its watches, plus each followed person's profile feed.
+///
+/// The real function the pull loop and the channel-doc sync run, so the feed cannot come to
+/// disagree with what the Curator keeps cached. `settings_json` is the frontend's settings
+/// shape; `held_json` is `{did: DirectoryRecord}` for the followed people a record is held
+/// for, and anyone missing from it comes back in `unsettled`.
+#[wasm_bindgen]
+pub fn reading_channels(settings_json: &str, held_json: &str) -> Result<String, JsValue> {
+    pin_curator::reading_json(settings_json, held_json).map_err(|e| JsValue::from_str(&e))
+}
+
 /// How many identities one discovery pass will read. Exported so a simulation reports
 /// against the value that actually ships rather than one written down beside it.
 #[wasm_bindgen]

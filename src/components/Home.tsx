@@ -8,6 +8,7 @@ import { useActionStore } from '../stores/actionQueue'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
 import { objectIDsReferencedBy, usePinStore } from '../stores/pin'
+import { useReadChannels } from '../stores/reading'
 import { useToastStore } from '../stores/toast'
 import { CommentPage } from './CommentPage'
 import { Compose } from './Compose'
@@ -125,6 +126,7 @@ export function Home({
   setView: (view: View) => void
 }) {
   const subscriptions = useAuthStore((s) => s.subscriptions)
+  const reading = useReadChannels()
   const myChannels = useAuthStore((s) => s.myChannels)
   const myDidDht = useAuthStore((s) => s.myDidDht)
   const settingsLoaded = useAuthStore((s) => s.settingsLoaded)
@@ -666,7 +668,7 @@ export function Home({
     )
   }
 
-  if (subscriptions.length === 0) {
+  if (reading.length === 0) {
     return (
       <FormCard
         sidebar={renderSidebar(undefined, true)}

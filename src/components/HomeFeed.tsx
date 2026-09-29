@@ -5,6 +5,7 @@ import type { ItemRef } from '../core/types'
 import { useIdentityName } from '../lib/hooks/useIdentityName'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
+import { useReadChannels } from '../stores/reading'
 import { AttachmentGrid } from './AttachmentMedia'
 import { CommentBody, ReplyingTo } from './engagement/CommentBody'
 import { EngagementRow } from './engagement/EngagementRow'
@@ -23,7 +24,7 @@ export function HomeFeed({
   onHandleClick: (handle: string) => void
   onErrorClick?: () => void
 }) {
-  const subscriptions = useAuthStore((s) => s.subscriptions)
+  const subscriptions = useReadChannels()
   const sortOrder = useAuthStore((s) => s.feedSortOrder)
   const setSortOrder = useAuthStore((s) => s.setFeedSortOrder)
   const entries = useFeedStore((s) => s.entries)
