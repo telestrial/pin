@@ -409,13 +409,16 @@ struct OwnComment {
 
 /// Which channel a comment is sealed under, and with what.
 ///
-/// The channelID and the epoch travel beside the key so the fingerprint can name them.
-/// Without the channelID, a channel turning from public into sealed would fingerprint
-/// identically and the blob would go on serving the plaintext generation; without the epoch,
-/// a channel whose content key moved would go on serving a seal its new members cannot open.
+/// The channelID travels beside the key so the fingerprint can name it. Without that, a
+/// channel turning from public into sealed would fingerprint identically and the blob would
+/// go on serving the plaintext generation.
+///
+/// The epoch deliberately does NOT: a comment stays sealed under the epoch it was written
+/// in. The only reader of a sealed comment is the channel's author, who derives every
+/// epoch's key from their AppKey, so re-sealing on a rotation would buy nothing — and would
+/// make every commenter on a channel re-upload their blob each time anyone was removed.
 struct Seal {
     channel_id: String,
-    epoch: u32,
     key: [u8; 32],
 }
 
@@ -502,7 +505,6 @@ async fn seal_for(ctx: &IdentityContext, settings: &SettingsView, rkey: &str) ->
     {
         Some(content) => SealFor::Under(Seal {
             channel_id,
-            epoch: content.epoch,
             key: content.key,
         }),
         None => SealFor::NoKey,
@@ -561,12 +563,7 @@ async fn own_comments(ctx: &IdentityContext, settings: &SettingsView) -> (Vec<Ow
 fn comments_fingerprint(entries: &[OwnComment]) -> String {
     let parts: Vec<serde_json::Value> = entries
         .iter()
-        .map(|e| {
-            serde_json::json!([
-                e.record,
-                e.seal.as_ref().map(|s| (s.channel_id.as_str(), s.epoch))
-            ])
-        })
+        .map(|e| serde_json::json!([e.record, e.seal.as_ref().map(|s| s.channel_id.as_str())]))
         .collect();
     serde_json::Value::Array(parts).to_string()
 }
@@ -1571,7 +1568,6 @@ mod tests {
             record: serde_json::json!({"kind": "comment", "body": body}),
             seal: Some(Seal {
                 channel_id: channel_id.into(),
-                epoch: 0,
                 key: SEAL_KEY,
             }),
         }
@@ -1692,18 +1688,6 @@ mod tests {
         assert_ne!(
             comments_fingerprint(&[under("a", "chan-one")]),
             comments_fingerprint(&[under("a", "chan-two")])
-        );
-    }
-
-    #[test]
-    fn a_seal_is_fingerprinted_by_its_epoch() {
-        // A content key that moved has to re-seal, or members admitted under the new epoch
-        // cannot open what the blob goes on serving under the old one.
-        let mut later = under("a", "chan-one");
-        later.seal.as_mut().unwrap().epoch = 1;
-        assert_ne!(
-            comments_fingerprint(&[under("a", "chan-one")]),
-            comments_fingerprint(&[later])
         );
     }
 

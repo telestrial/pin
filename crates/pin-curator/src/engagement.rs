@@ -351,6 +351,10 @@ fn owned_channel_key(settings: &SettingsView, channel_id: &str) -> Option<[u8; 3
 /// sealed under that channel's content key in the commenter's own world-readable blob, so
 /// reading it back means holding the key the post was read with. Own channels only — a
 /// comment on anyone else's has no subject of ours to match, so opening it would buy nothing.
+///
+/// Every channel is at its first epoch today. Once a content key can rotate this has to
+/// answer every epoch's key, not only the current one: a comment stays sealed under the
+/// epoch it was written in, and the author is the one reader who can derive them all.
 fn own_channel_keys(app_key: &[u8; 32], settings: &SettingsView) -> Vec<[u8; 32]> {
     settings
         .my_channels
