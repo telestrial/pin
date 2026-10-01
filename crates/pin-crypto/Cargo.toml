@@ -31,3 +31,11 @@ base64 = "0.23"
 # (see scripts/build-wasm.sh) — deliberately NOT getrandom 0.2, which aes-gcm would
 # have brought along.
 getrandom = { version = "0.4", features = ["wasm_js"] }
+# The sealed box's key agreement. 3.0 is the version sia_mux already pulls in, so this adds
+# no second copy. `default-features = false` drops the precomputed basepoint tables, which
+# cost wasm size for a few key agreements per pass; `static_secrets` is what lets a key be
+# built from a derived seed rather than drawn from an RNG this crate does not hold.
+x25519-dalek = { version = "3", default-features = false, features = ["static_secrets", "zeroize"] }
+# The sealed box's key derivation from the shared secret. Already in the tree via
+# pin-derive.
+hkdf = "0.12"

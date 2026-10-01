@@ -73,6 +73,11 @@ pub const PUBLISHED_KEY_INFO: &[u8] = b"pin:published:v1";
 pub const PINNED_KEY_INFO: &[u8] = b"pin:pinned:v1";
 /// HKDF `info` for the identity's did:dht ed25519 seed (AppKey-derived).
 pub const DID_DHT_INFO: &[u8] = b"pin:did-dht:v1";
+/// HKDF `info` for the identity's X25519 encryption seed (AppKey-derived) — what a box
+/// sealed to this identity opens with. Its own domain rather than the did:dht key mapped
+/// across, because one key that both signs and decrypts is the reuse that has gone wrong
+/// for every protocol that tried it.
+pub const ENC_KEY_INFO: &[u8] = b"pin:enc:v1";
 /// HKDF `info` for a channel's pkarr locator key — derived from K, not the AppKey,
 /// because a subscriber holding only K must reach the same key.
 pub const CHANNEL_LOCATOR_INFO: &[u8] = b"pin:channel-locator:v1";
@@ -163,6 +168,11 @@ pub fn pinned_key(app_key: &[u8]) -> [u8; 32] {
 /// The identity's did:dht ed25519 seed.
 pub fn did_dht_seed(app_key: &[u8]) -> [u8; 32] {
     hkdf32(app_key, DID_DHT_INFO)
+}
+
+/// The identity's X25519 encryption seed.
+pub fn enc_key_seed(app_key: &[u8]) -> [u8; 32] {
+    hkdf32(app_key, ENC_KEY_INFO)
 }
 
 /// A channel's pkarr locator seed, from its channel key K.
@@ -1391,6 +1401,15 @@ mod tests {
     }
 
     #[test]
+    fn enc_key_seed_matches_the_locked_vector() {
+        // A drift would leave every box ever sealed to an identity unopenable by it.
+        assert_eq!(
+            hex(&enc_key_seed(&[0u8; 32])),
+            "00eb8eeb8414398eb8f5e269378d2c7f2c86b0297597cdcacec166f9584744a3"
+        );
+    }
+
+    #[test]
     fn channel_content_key_matches_the_locked_vector() {
         // Every device of one author must derive the same C, and a drift would leave an
         // author unable to read their own channel.
@@ -1419,6 +1438,7 @@ mod tests {
             published_key(&ikm),
             pinned_key(&ikm),
             did_dht_seed(&ikm),
+            enc_key_seed(&ikm),
             channel_locator_seed(&ikm),
             channel_doc_seed(&ikm, "chan", 0),
             channel_content_key(&ikm, "chan", 0),

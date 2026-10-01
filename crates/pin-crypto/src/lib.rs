@@ -351,6 +351,81 @@ pub fn decrypt_settings(key: &[u8; KEY_BYTES], blob_b64: &str) -> Result<Vec<u8>
     Ok(padded[SETTINGS_LENGTH_HEADER_BYTES..end].to_vec())
 }
 
+// --- sealed boxes: sealing to an identity's encryption key ----------------------
+//
+// An identity's encryption key is X25519, derived from its AppKey under its own domain and
+// published beside its did:dht. It is never the signing key mapped across: one key doing
+// both jobs is the reuse every protocol that has tried it has come to regret, and a second
+// derivation costs nothing.
+//
+// A sealed box is anonymous: it names neither sender nor recipient. Layout, unencoded:
+//
+//     ephemeral public key (32) | nonce | ciphertext-with-tag
+//
+// The ephemeral key is fresh per box, and the box key is HKDF over the shared secret with
+// both public keys in the `info`, so a box is bound to the recipient it was made for and
+// cannot be re-pointed at another.
+
+/// HKDF `info` prefix for a sealed box's key; the ephemeral and recipient public keys follow.
+const SEALED_BOX_INFO: &[u8] = b"pin:sealed-box:v1";
+const ENC_PUBLIC_BYTES: usize = 32;
+
+/// An identity's X25519 public key, from the 32-byte seed its AppKey derives.
+pub fn enc_public(seed: &[u8; 32]) -> [u8; ENC_PUBLIC_BYTES] {
+    let secret = x25519_dalek::StaticSecret::from(*seed);
+    *x25519_dalek::PublicKey::from(&secret).as_bytes()
+}
+
+fn box_key(shared: &[u8; 32], ephemeral: &[u8; 32], recipient: &[u8; 32]) -> [u8; KEY_BYTES] {
+    let mut info = Vec::with_capacity(SEALED_BOX_INFO.len() + 64);
+    info.extend_from_slice(SEALED_BOX_INFO);
+    info.extend_from_slice(ephemeral);
+    info.extend_from_slice(recipient);
+    let mut key = [0u8; KEY_BYTES];
+    hkdf::Hkdf::<Sha256>::new(None, shared)
+        .expand(&info, &mut key)
+        .expect("HKDF-SHA256 expand of 32 bytes is always valid");
+    key
+}
+
+/// Seal bytes so that only the holder of `recipient`'s secret can open them.
+///
+/// Refuses a recipient key that would make the shared secret predictable — a low-order
+/// point, the all-zero key among them — since a box sealed to one is readable by anyone.
+pub fn seal_to(recipient: &[u8; ENC_PUBLIC_BYTES], plaintext: &[u8]) -> Result<Vec<u8>, String> {
+    let mut seed = [0u8; 32];
+    getrandom::fill(&mut seed).map_err(|e| format!("ephemeral key: {e}"))?;
+    let ephemeral = x25519_dalek::StaticSecret::from(seed);
+    let ephemeral_public = *x25519_dalek::PublicKey::from(&ephemeral).as_bytes();
+    let shared = ephemeral.diffie_hellman(&x25519_dalek::PublicKey::from(*recipient));
+    if !shared.was_contributory() {
+        return Err("recipient key is not a usable encryption key".into());
+    }
+
+    let key = box_key(shared.as_bytes(), &ephemeral_public, recipient);
+    let sealed = seal_raw(&key, plaintext)?;
+    let mut out = Vec::with_capacity(ENC_PUBLIC_BYTES + sealed.len());
+    out.extend_from_slice(&ephemeral_public);
+    out.extend_from_slice(&sealed);
+    Ok(out)
+}
+
+/// Open a sealed box with the seed of the identity it was sealed to.
+pub fn open_sealed(seed: &[u8; 32], sealed: &[u8]) -> Result<Vec<u8>, String> {
+    let (ephemeral, rest) = sealed
+        .split_at_checked(ENC_PUBLIC_BYTES)
+        .ok_or("sealed box too short to hold its ephemeral key")?;
+    // Infallible: `split_at_checked` gave exactly ENC_PUBLIC_BYTES.
+    let ephemeral: [u8; ENC_PUBLIC_BYTES] = ephemeral.try_into().unwrap();
+    let secret = x25519_dalek::StaticSecret::from(*seed);
+    let recipient = *x25519_dalek::PublicKey::from(&secret).as_bytes();
+    let shared = secret.diffie_hellman(&x25519_dalek::PublicKey::from(ephemeral));
+    if !shared.was_contributory() {
+        return Err("sealed box carries an unusable ephemeral key".into());
+    }
+    open_raw(&box_key(shared.as_bytes(), &ephemeral, &recipient), rest)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -661,5 +736,67 @@ mod tests {
     fn settings_overflow_is_an_error_rather_than_a_truncation() {
         let err = encrypt_settings(&vector_key(), &vec![b'x'; SETTINGS_PAD_SIZE]).unwrap_err();
         assert!(err.contains("exceeds"), "{err}");
+    }
+}
+
+#[cfg(test)]
+mod sealed_box_tests {
+    use super::*;
+
+    fn hex(bytes: &[u8]) -> String {
+        bytes.iter().map(|b| format!("{b:02x}")).collect()
+    }
+
+    #[test]
+    fn the_public_key_is_standard_x25519() {
+        // RFC 7748 section 6.1, Alice. Pins that the published key is the curve's own
+        // derivation, so any X25519 implementation can seal to it.
+        let seed: [u8; 32] = [
+            0x77, 0x07, 0x6d, 0x0a, 0x73, 0x18, 0xa5, 0x7d, 0x3c, 0x16, 0xc1, 0x72, 0x51, 0xb2,
+            0x66, 0x45, 0xdf, 0x4c, 0x2f, 0x87, 0xeb, 0xc0, 0x99, 0x2a, 0xb1, 0x77, 0xfb, 0xa5,
+            0x1d, 0xb9, 0x2c, 0x2a,
+        ];
+        assert_eq!(
+            hex(&enc_public(&seed)),
+            "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a"
+        );
+    }
+
+    #[test]
+    fn a_box_opens_for_its_recipient_and_nobody_else() {
+        let alice = [1u8; 32];
+        let bob = [2u8; 32];
+        let sealed = seal_to(&enc_public(&alice), b"hello").unwrap();
+        assert_eq!(open_sealed(&alice, &sealed).unwrap(), b"hello");
+        assert!(open_sealed(&bob, &sealed).is_err());
+    }
+
+    #[test]
+    fn two_boxes_of_the_same_bytes_differ() {
+        // A fresh ephemeral key per box, so two boxes cannot be matched to one another.
+        let alice = enc_public(&[1u8; 32]);
+        let a = seal_to(&alice, b"hello").unwrap();
+        let b = seal_to(&alice, b"hello").unwrap();
+        assert_ne!(a[..32], b[..32]);
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn a_tampered_box_does_not_open() {
+        let alice = [1u8; 32];
+        let sealed = seal_to(&enc_public(&alice), b"hello").unwrap();
+        for i in [0, 31, 32, sealed.len() - 1] {
+            let mut bad = sealed.clone();
+            bad[i] ^= 1;
+            assert!(open_sealed(&alice, &bad).is_err(), "flip at {i}");
+        }
+        assert!(open_sealed(&alice, &sealed[..20]).is_err());
+    }
+
+    #[test]
+    fn a_low_order_recipient_key_is_refused() {
+        // The all-zero key makes every shared secret zero, so a box sealed to it would
+        // open for anyone at all.
+        assert!(seal_to(&[0u8; 32], b"hello").is_err());
     }
 }
