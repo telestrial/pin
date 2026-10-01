@@ -1191,10 +1191,15 @@ mod tests {
         format!(r#"{{"version":1,"publishedAt":"{iso}","items":[]}}"#)
     }
 
+    /// A manifest sealed as its author would seal it. Any AppKey will do: a reader takes the
+    /// content key from the head.
     fn sealed(k: &[u8; 32], iso: &str) -> Vec<u8> {
-        pin_crypto::encrypt(k, published(iso).as_bytes())
-            .unwrap()
-            .into_bytes()
+        pin_channel::seal(
+            &pin_channel::author_sealing(&[1u8; 32], k),
+            published(iso).as_bytes(),
+        )
+        .unwrap()
+        .into_bytes()
     }
 
     #[test]

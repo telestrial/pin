@@ -21,7 +21,7 @@ vi.mock('../lib/docs', async () =>
 )
 
 import { createChannel, newChannelKey } from '../core/channels'
-import { channelKeyFromBase64, encryptForChannel } from '../core/crypto'
+import { channelKeyFromBase64 } from '../core/crypto'
 import type { ChannelManifest, ItemRef, SubscriptionRef } from '../core/types'
 import {
   commitChannelManifest,
@@ -31,7 +31,7 @@ import {
 import { resolveLocator } from '../lib/channelLocatorNative'
 import { applyCachedChannel, applyIfChanged } from '../lib/channelRevalidate'
 import { useFeedStore } from '../stores/feed'
-import { fakeDocStore as docStore } from './fakeModules'
+import { fakeDocStore as docStore, sealAsAuthor } from './fakeModules'
 import { createFakeApp, FAKE_APP_KEY_HEX, resetAllStores } from './setupFakeApp'
 
 describe('integration: caching locator reader seeds sub/<id>', () => {
@@ -158,7 +158,7 @@ describe('integration: caching locator reader seeds sub/<id>', () => {
     // Seed the cache with a DIFFERENT manifest so we can tell cache-read from
     // fresh-resolve.
     const kBytes = channelKeyFromBase64(created.channelKey)
-    const cachedCiphertext = await encryptForChannel(
+    const cachedCiphertext = sealAsAuthor(
       kBytes,
       JSON.stringify({ ...created.manifest, name: 'Cached' }),
     )
@@ -199,7 +199,7 @@ describe('integration: caching locator reader seeds sub/<id>', () => {
     docStore.set(
       `sub/${created.channelID}`,
       new TextEncoder().encode(
-        await encryptForChannel(
+        sealAsAuthor(
           kBytes,
           JSON.stringify({ ...created.manifest, name: 'Stale' }),
         ),
@@ -246,7 +246,7 @@ describe('integration: caching locator reader seeds sub/<id>', () => {
     docStore.set(
       `sub/${created.channelID}`,
       new TextEncoder().encode(
-        await encryptForChannel(
+        sealAsAuthor(
           kBytes,
           JSON.stringify({ ...created.manifest, name: 'Cached' }),
         ),
@@ -434,7 +434,7 @@ describe('integration: revalidate fills the feed in out of band', () => {
     docStore.set(
       `sub/${created.channelID}`,
       new TextEncoder().encode(
-        await encryptForChannel(
+        sealAsAuthor(
           channelKeyFromBase64(created.channelKey),
           JSON.stringify(v2),
         ),
@@ -487,7 +487,7 @@ describe('integration: revalidate fills the feed in out of band', () => {
     docStore.set(
       `channel/${created.channelID}`,
       new TextEncoder().encode(
-        await encryptForChannel(
+        sealAsAuthor(
           channelKeyFromBase64(created.channelKey),
           JSON.stringify(rewritten),
         ),

@@ -37,10 +37,10 @@ import {
   request_collection,
 } from '../../crates/pin-core/pkg/pin_core.js'
 import { HandleDirectory } from '../components/HandleDirectory'
-import { channelKeyFromBase64, encryptForChannel } from '../core/crypto'
+import { channelKeyFromBase64 } from '../core/crypto'
 import type { ChannelManifest, ItemRef, OwnedChannel } from '../core/types'
 import { useAuthStore } from '../stores/auth'
-import { fakeDocStore as docStore } from './fakeModules'
+import { fakeDocStore as docStore, sealAsAuthor } from './fakeModules'
 import { createFakeApp, mountAs, resetAllStores } from './setupFakeApp'
 
 /** The AppKey their channel is sealed under — anything; a reader takes the content key
@@ -89,7 +89,7 @@ async function inTheDoc(
   items: ItemRef[] = [],
   key = KEY,
 ) {
-  const sealed = await encryptForChannel(
+  const sealed = sealAsAuthor(
     channelKeyFromBase64(key),
     JSON.stringify(manifest(name, items)),
   )
@@ -104,7 +104,7 @@ async function inTheCache(
   items: ItemRef[] = [],
   key = KEY,
 ) {
-  const sealed = await encryptForChannel(
+  const sealed = sealAsAuthor(
     channelKeyFromBase64(key),
     JSON.stringify(manifest(name, items)),
   )

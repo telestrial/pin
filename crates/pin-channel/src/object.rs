@@ -21,18 +21,12 @@
 //! One format for all three artifacts a channel publishes — the manifest, the tallies and
 //! the conversations — so a reader who can open one can open the others, and there is one
 //! place a head is read.
-//!
-//! ALSO READS VERSION 1 for now: the whole payload sealed under K as one
-//! `pin_crypto::encrypt` envelope, which is what every object published before this format
-//! is. Its content key IS K, and that is what it reports, so a caller handed one seals
-//! nothing differently from what the object it read was sealed under.
 
 use serde::{Deserialize, Serialize};
 
-/// The leading byte of an object in this format.
+/// The leading byte of an object in this format. Version 1 was the whole payload sealed
+/// under K as one `pin_crypto::encrypt` envelope, and is not read.
 const OBJECT_VERSION: u8 = 2;
-/// The leading byte of a single `pin_crypto::encrypt` envelope — the format before this.
-const LEGACY_VERSION: u8 = 1;
 const HEAD_LEN_BYTES: usize = 4;
 
 /// A channel's content key at one epoch.
@@ -109,10 +103,6 @@ pub fn open(channel_key: &[u8; 32], blob: &str) -> Result<Opened, String> {
                 content,
             })
         }
-        Some(&LEGACY_VERSION) => Ok(Opened {
-            payload: pin_crypto::decrypt(channel_key, blob)?,
-            content: legacy_content(channel_key),
-        }),
         Some(v) => Err(format!("unsupported object version {v}")),
         None => Err("object is empty".into()),
     }
@@ -127,22 +117,26 @@ pub fn content_key(channel_key: &[u8; 32], blob: &str) -> Result<ContentKey, Str
     let bytes = pin_crypto::b64_decode(blob).ok_or("object is not base64")?;
     match bytes.first() {
         Some(&OBJECT_VERSION) => read_head(channel_key, &bytes[1..]).map(|(content, _)| content),
-        // Opened to be sure K is its key, so the answer is as true as the one `open` gives.
-        Some(&LEGACY_VERSION) => {
-            pin_crypto::decrypt(channel_key, blob)?;
-            Ok(legacy_content(channel_key))
-        }
         Some(v) => Err(format!("unsupported object version {v}")),
         None => Err("object is empty".into()),
     }
 }
 
-/// A version-1 envelope's content key, which is K itself.
-fn legacy_content(channel_key: &[u8; 32]) -> ContentKey {
-    ContentKey {
-        epoch: pin_derive::INITIAL_EPOCH,
-        key: *channel_key,
-    }
+/// A fingerprint of what an object would hold: its substance, and how it is sealed.
+///
+/// For a publisher that skips an upload when nothing moved. A seal draws a fresh nonce, so
+/// the sealed bytes differ every time and cannot be compared; the substance alone is not
+/// enough either, because an object whose sealing changed has to be published again with
+/// nothing in it having moved — a new format, a new epoch, or a read key taken out of the
+/// head when a channel stops being readable by whoever holds K.
+pub fn fingerprint(sealing: &Sealing, substance: &str) -> String {
+    pin_crypto::content_hash(
+        format!(
+            "{OBJECT_VERSION}|{}|{}|{substance}",
+            sealing.content.epoch, sealing.publish_read_key as u8
+        )
+        .as_bytes(),
+    )
 }
 
 /// Open the head of a layered object and work out its content key, answering with the
@@ -247,17 +241,23 @@ mod tests {
     }
 
     #[test]
-    fn a_legacy_envelope_opens_and_reports_k_as_its_content_key() {
+    fn a_version_1_envelope_is_refused() {
         let blob = pin_crypto::encrypt(&K, b"payload").unwrap();
-        let opened = open(&K, &blob).unwrap();
-        assert_eq!(opened.payload, b"payload");
-        assert_eq!(
-            opened.content,
-            ContentKey {
-                epoch: pin_derive::INITIAL_EPOCH,
-                key: K,
-            }
-        );
+        assert!(open(&K, &blob).is_err());
+        assert!(content_key(&K, &blob).is_err());
+    }
+
+    #[test]
+    fn a_fingerprint_moves_with_the_sealing_and_not_with_the_nonce() {
+        let base = fingerprint(&sealing(true), "s");
+        assert_eq!(base, fingerprint(&sealing(true), "s"));
+        assert_ne!(base, fingerprint(&sealing(true), "t"));
+        assert_ne!(base, fingerprint(&sealing(false), "s"));
+        let later = Sealing {
+            content: ContentKey { epoch: 4, ..C },
+            ..sealing(true)
+        };
+        assert_ne!(base, fingerprint(&later, "s"));
     }
 
     #[test]

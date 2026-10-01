@@ -336,21 +336,18 @@ pub(crate) async fn read_person_tally(
 /// The main doc's collection of owned channels' manifests.
 const OWN_CHANNEL_COLLECTION: &str = "channel";
 
-/// The keys that open what is sealed for the channels this identity publishes.
+/// The content keys of the channels this identity publishes.
 ///
 /// What opens a comment somebody left on a channel of ours that isn't public: its record is
 /// sealed under that channel's content key in the commenter's own world-readable blob, so
 /// reading it back means holding the key the post was read with. Own channels only — a
 /// comment on anyone else's has no subject of ours to match, so opening it would buy nothing.
-///
-/// K as well, for now: a comment sealed before the content key existed was sealed under K,
-/// and stays that way until its commenter's blob is next re-sealed.
 fn own_channel_keys(app_key: &[u8; 32], settings: &SettingsView) -> Vec<[u8; 32]> {
     settings
         .my_channels
         .iter()
         .filter_map(|c| pin_crypto::channel_key_from_base64(&c.channel_key))
-        .flat_map(|k| [pin_channel::author_sealing(app_key, &k).content.key, k])
+        .map(|k| pin_channel::author_sealing(app_key, &k).content.key)
         .collect()
 }
 
@@ -1537,18 +1534,14 @@ pub async fn publish_channel_conversations<N: crate::net::Network>(
         return Ok(false);
     }
 
-    let fingerprint = conversation_substance(&map)?;
+    let sealing = pin_channel::author_sealing(&ctx.app_key, channel_key);
+    let fingerprint = pin_channel::fingerprint(&sealing, &conversation_substance(&map)?);
     if previous.as_ref().and_then(|p| p.fp.as_deref()) == Some(fingerprint.as_str()) {
         return Ok(false);
     }
 
     let json = serde_json::to_string(&map).map_err(|e| format!("encode conversations: {e}"))?;
-    let published = pin_channel::publish_conversations(
-        &ctx.sia,
-        &pin_channel::author_sealing(&ctx.app_key, channel_key),
-        &json,
-    )
-    .await?;
+    let published = pin_channel::publish_conversations(&ctx.sia, &sealing, &json).await?;
 
     crate::write_published(
         &ctx.doc,
@@ -1615,18 +1608,14 @@ pub async fn publish_channel_tallies<N: crate::net::Network>(
         return Ok(false);
     }
 
-    let fingerprint = substance(&map)?;
+    let sealing = pin_channel::author_sealing(&ctx.app_key, channel_key);
+    let fingerprint = pin_channel::fingerprint(&sealing, &substance(&map)?);
     if previous.as_ref().and_then(|p| p.fp.as_deref()) == Some(fingerprint.as_str()) {
         return Ok(false);
     }
 
     let json = serde_json::to_string(&map).map_err(|e| format!("encode tallies: {e}"))?;
-    let published = pin_channel::publish_tallies(
-        &ctx.sia,
-        &pin_channel::author_sealing(&ctx.app_key, channel_key),
-        &json,
-    )
-    .await?;
+    let published = pin_channel::publish_tallies(&ctx.sia, &sealing, &json).await?;
 
     // Record before reclaiming, and keep the generation just superseded alive: a pointer
     // takes seconds to propagate, so a reader can still be resolving the object it
@@ -2645,10 +2634,9 @@ mod tests {
 #[cfg(test)]
 mod own_keys {
     #[test]
-    fn a_sealed_comment_on_an_own_channel_opens_under_its_content_key_or_k() {
-        // The content key is what opens a comment sealed from now on, and K is what opens
-        // one sealed before the content key existed, which stays sealed that way until its
-        // commenter's blob is next re-sealed.
+    fn a_sealed_comment_on_an_own_channel_opens_under_its_content_key() {
+        // Never under K: a comment sealed under K would open for anybody who can find the
+        // channel.
         let app_key = [1u8; 32];
         let k = [7u8; 32];
         let settings: crate::SettingsView = serde_json::from_value(serde_json::json!({
@@ -2660,6 +2648,6 @@ mod own_keys {
         .unwrap();
         let keys = super::own_channel_keys(&app_key, &settings);
         let c = pin_channel::author_sealing(&app_key, &k).content.key;
-        assert_eq!(keys, vec![c, k]);
+        assert_eq!(keys, vec![c]);
     }
 }

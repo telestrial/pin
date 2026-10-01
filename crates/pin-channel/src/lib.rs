@@ -25,7 +25,7 @@
 
 mod object;
 
-pub use object::{content_key, open, seal, ContentKey, Opened, Sealing};
+pub use object::{content_key, fingerprint, open, seal, ContentKey, Opened, Sealing};
 
 /// How an author seals their own channel: C derived from the AppKey at the initial epoch,
 /// and carried in the head.
@@ -508,13 +508,5 @@ mod tests {
         // And what it seals opens with K alone, through the head.
         let blob = seal(&sealing, b"{}").unwrap();
         assert_eq!(open_payload(&k, &blob).unwrap().1, sealing.content);
-    }
-
-    #[test]
-    fn open_blob_reads_a_legacy_envelope() {
-        let key = [7u8; 32];
-        let manifest = r#"{"version":1,"name":"Test","items":[]}"#;
-        let sealed = pin_crypto::encrypt(&key, manifest.as_bytes()).unwrap();
-        assert_eq!(open_blob(&key, &sealed).unwrap(), manifest);
     }
 }

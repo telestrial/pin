@@ -170,6 +170,12 @@ export function fakeChannelLocatorNativeModule() {
  *  author's. Any key will do: a reader takes the content key from the object's head. */
 const FAKE_AUTHOR_APP_KEY = '11'.repeat(32)
 
+/** Seal a payload as a channel's author would — the real object format, so a test that
+ *  plants a manifest in the doc plants what a publish would have left there. */
+export function sealAsAuthor(channelKey: Uint8Array, payload: string): string {
+  return channel_seal(FAKE_AUTHOR_APP_KEY, channelKey, payload)
+}
+
 /** Publish a channel's conversations the way its author's Curator would. Sealed for real,
  *  like the counts — only Sia and pkarr are faked. */
 export function publishFakeConversations(
