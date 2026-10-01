@@ -2333,11 +2333,11 @@ pub fn derive_channel_locator_seed(channel_key: &[u8]) -> Vec<u8> {
     pin_derive::channel_locator_seed(channel_key).to_vec()
 }
 
-/// A channel's iroh-docs namespace seed at one epoch (AppKey-derived — the write
-/// capability stays with the author).
+/// A channel's iroh-docs namespace seed (AppKey-derived — the write capability stays
+/// with the author).
 #[wasm_bindgen]
-pub fn derive_channel_doc_seed(app_key: &[u8], channel_id: &str, epoch: u32) -> Vec<u8> {
-    pin_derive::channel_doc_seed(app_key, channel_id, epoch).to_vec()
+pub fn derive_channel_doc_seed(app_key: &[u8], channel_id: &str) -> Vec<u8> {
+    pin_derive::channel_doc_seed(app_key, channel_id).to_vec()
 }
 
 /// The pkarr seed for a channel's read-DocTicket record, from its content key C.

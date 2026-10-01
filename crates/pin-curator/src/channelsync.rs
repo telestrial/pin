@@ -347,6 +347,7 @@ async fn push_conversation(
     ctx: &ChannelSyncContext,
     channel_id: &str,
     watched: &Watched,
+    content: &pin_channel::ContentKey,
     subject: &str,
 ) -> TallyPush {
     let Ok(Some(entry)) = watched
@@ -359,7 +360,9 @@ async fn push_conversation(
     let Ok(bytes) = ctx.blobs.get_bytes(entry.content_hash()).await else {
         return TallyPush::NotReady;
     };
-    let Ok(conversation) = serde_json::from_slice::<pin_engagement::Conversation>(&bytes) else {
+    let Some(conversation) =
+        crate::open_doc_value::<pin_engagement::Conversation>(&watched.key, content, &bytes)
+    else {
         return TallyPush::Nothing;
     };
     if crate::cache_thread(
@@ -382,6 +385,7 @@ async fn push_tally(
     ctx: &ChannelSyncContext,
     channel_id: &str,
     watched: &Watched,
+    content: &pin_channel::ContentKey,
     subject: &str,
 ) -> TallyPush {
     let Ok(Some(entry)) = watched
@@ -396,7 +400,7 @@ async fn push_tally(
     let Ok(bytes) = ctx.blobs.get_bytes(entry.content_hash()).await else {
         return TallyPush::NotReady;
     };
-    let Ok(aggregate) = serde_json::from_slice::<Aggregate>(&bytes) else {
+    let Some(aggregate) = crate::open_doc_value::<Aggregate>(&watched.key, content, &bytes) else {
         return TallyPush::Nothing;
     };
     if cache_tally(
@@ -421,9 +425,37 @@ enum TallyPush {
     Nothing,
 }
 
+/// The content key a watched channel's values are sealed under, asked afresh.
+///
+/// Asked rather than held, because the doc stays put across a rotation while the key moves,
+/// so a key captured at import would go stale at exactly the moment it matters. Two local
+/// reads; never the network.
+async fn content_for(
+    ctx: &ChannelSyncContext,
+    channel_id: &str,
+    watched: &Watched,
+) -> Option<pin_channel::ContentKey> {
+    let settings = read_settings(&ctx.doc, &ctx.blobs, ctx.author_id, &ctx.app_key)
+        .await
+        .ok()?;
+    crate::held_content_key(
+        &ctx.doc,
+        &ctx.blobs,
+        ctx.author_id,
+        &ctx.app_key,
+        &settings,
+        channel_id,
+        &watched.key,
+    )
+    .await
+}
+
 /// Cache every tally a watched replica currently holds. Used at import, where there is no
 /// event to route from.
 async fn scan_tallies(ctx: &ChannelSyncContext, channel_id: &str, watched: &Watched) -> usize {
+    let Some(content) = content_for(ctx, channel_id, watched).await else {
+        return 0;
+    };
     let Ok(subjects) = crate::list_rkeys(
         &watched.doc,
         ctx.author_id,
@@ -437,7 +469,7 @@ async fn scan_tallies(ctx: &ChannelSyncContext, channel_id: &str, watched: &Watc
     for subject in subjects {
         // A value that hasn't downloaded yet is left to the event that says it has.
         if matches!(
-            push_tally(ctx, channel_id, watched, &subject).await,
+            push_tally(ctx, channel_id, watched, &content, &subject).await,
             TallyPush::Cached
         ) {
             cached += 1;
@@ -511,11 +543,19 @@ pub async fn run_channel_sync_loop(
                     continue;
                 };
                 let key = arrival_key(&event);
+                // Not known yet means no manifest is cached to read it from, so nothing sealed
+                // under it can be opened: a named value waits as pending, like one whose
+                // content has not downloaded, and the manifest arm below still runs.
+                let content = content_for(&ctx, &channel_id, w).await;
                 match key.as_deref().and_then(named) {
                     // A count landed and the event named it, so nothing else is re-read.
                     Some(Named::Tally(subject)) => {
                         let subject = subject.to_string();
-                        match push_tally(&ctx, &channel_id, w, &subject).await {
+                        let pushed = match &content {
+                            Some(c) => push_tally(&ctx, &channel_id, w, c, &subject).await,
+                            None => TallyPush::NotReady,
+                        };
+                        match pushed {
                             TallyPush::Cached => tallies += 1,
                             TallyPush::NotReady => {
                                 pending
@@ -528,7 +568,11 @@ pub async fn run_channel_sync_loop(
                     }
                     Some(Named::Conversation(subject)) => {
                         let subject = subject.to_string();
-                        match push_conversation(&ctx, &channel_id, w, &subject).await {
+                        let pushed = match &content {
+                            Some(c) => push_conversation(&ctx, &channel_id, w, c, &subject).await,
+                            None => TallyPush::NotReady,
+                        };
+                        match pushed {
                             TallyPush::Cached => threads += 1,
                             TallyPush::NotReady => {
                                 pending
@@ -548,28 +592,38 @@ pub async fn run_channel_sync_loop(
                             Push::Stale => stale += 1,
                             Push::Nothing => {}
                         }
+                        // A manifest that just landed may be the first that tells us the key.
+                        let content = match content {
+                            Some(c) => Some(c),
+                            None => content_for(&ctx, &channel_id, w).await,
+                        };
+                        let Some(content) = content else {
+                            continue;
+                        };
                         for subject in pending.get(&channel_id).cloned().unwrap_or_default() {
                             // Both, because a pending subject records that SOMETHING for it
                             // wasn't downloadable yet and not which. Each retry is a local
                             // lookup that answers Nothing when there is nothing there.
-                            let mut settled = match push_tally(&ctx, &channel_id, w, &subject).await
-                            {
-                                TallyPush::Cached => {
-                                    tallies += 1;
-                                    true
-                                }
-                                TallyPush::Nothing => true,
-                                TallyPush::NotReady => false,
-                            };
-                            settled &= match push_conversation(&ctx, &channel_id, w, &subject).await
-                            {
-                                TallyPush::Cached => {
-                                    threads += 1;
-                                    true
-                                }
-                                TallyPush::Nothing => true,
-                                TallyPush::NotReady => false,
-                            };
+                            let mut settled =
+                                match push_tally(&ctx, &channel_id, w, &content, &subject).await {
+                                    TallyPush::Cached => {
+                                        tallies += 1;
+                                        true
+                                    }
+                                    TallyPush::Nothing => true,
+                                    TallyPush::NotReady => false,
+                                };
+                            settled &=
+                                match push_conversation(&ctx, &channel_id, w, &content, &subject)
+                                    .await
+                                {
+                                    TallyPush::Cached => {
+                                        threads += 1;
+                                        true
+                                    }
+                                    TallyPush::Nothing => true,
+                                    TallyPush::NotReady => false,
+                                };
                             if settled {
                                 if let Some(set) = pending.get_mut(&channel_id) {
                                     set.remove(&subject);

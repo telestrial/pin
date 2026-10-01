@@ -25,7 +25,7 @@
 
 mod object;
 
-pub use object::{content_key, fingerprint, open, seal, ContentKey, Opened, Sealing};
+pub use object::{content_key, fingerprint, open, open_with, seal, ContentKey, Opened, Sealing};
 
 /// How an author seals their own channel: C derived from the AppKey at the initial epoch,
 /// and carried in the head.

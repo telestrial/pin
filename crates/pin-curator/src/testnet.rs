@@ -1728,10 +1728,37 @@ mod visibility {
         let channel_doc = crate::engagement::open_channel_doc(&ctx, &channel_id)
             .await
             .expect("channel doc");
-        let tally = crate::engagement::read_tally(&ctx, &channel_doc, &channel_id)
+        let k = alice.channel_key();
+        let sealing = crate::doc_sealing(&alice.app_key, &k);
+        let tally = crate::engagement::read_tally(&ctx, &channel_doc, &sealing, &channel_id)
             .await
             .expect("the channel has a tally of its own");
         assert_eq!(tally.kinds[pin_engagement::KIND_FOLLOW].count, 2);
+
+        // And what sits in the doc is sealed under the content key. The doc stays put
+        // across a rotation, so a value readable as it stands — or with K, which every
+        // removed member keeps — would be readable by everyone the rotation removed.
+        let entry = channel_doc
+            .get_one(
+                iroh_docs::store::Query::single_latest_per_key()
+                    .key_exact(crate::engagement::tally_key(&channel_id)),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let raw = alice.blobs.get_bytes(entry.content_hash()).await.unwrap();
+        assert!(serde_json::from_slice::<serde_json::Value>(&raw).is_err());
+        let blob = std::str::from_utf8(&raw).unwrap();
+        assert!(
+            pin_channel::open(&k, blob).is_err(),
+            "no read key in the head"
+        );
+        let with_k = pin_channel::ContentKey {
+            epoch: sealing.content.epoch,
+            key: k,
+        };
+        assert!(pin_channel::open_with(&k, blob, &with_k).is_err());
+        assert!(pin_channel::open_with(&k, blob, &sealing.content).is_ok());
     }
 
     /// A FOLLOW OF A PERSON IS COUNTED ON THE PERSON, and a withdrawal takes it back out.

@@ -734,6 +734,45 @@ pub(crate) async fn held_content_key(
     pin_channel::content_key(channel_key, &blob).ok()
 }
 
+/// How this identity seals a value it writes into one of its own channel docs: under the
+/// channel's content key, with no read key in the head.
+///
+/// No read key because the doc is reached only through a ticket found under that key, so
+/// anyone reading a value already holds it. Sealed at all because the doc stays put across
+/// a rotation: a removed member who kept the namespace id from a ticket they once held
+/// syncs on, and what they sync is sealed under a key they no longer have.
+pub(crate) fn doc_sealing<'a>(
+    app_key: &[u8; 32],
+    channel_key: &'a [u8; 32],
+) -> pin_channel::Sealing<'a> {
+    pin_channel::Sealing {
+        publish_read_key: false,
+        ..pin_channel::author_sealing(app_key, channel_key)
+    }
+}
+
+/// A channel-doc value, sealed for writing.
+pub(crate) fn seal_doc_value<T: serde::Serialize>(
+    sealing: &pin_channel::Sealing,
+    value: &T,
+) -> Result<Vec<u8>, String> {
+    let json = serde_json::to_vec(value).map_err(|e| format!("encode: {e}"))?;
+    pin_channel::seal(sealing, &json).map(String::into_bytes)
+}
+
+/// A channel-doc value, opened with the content key the reader holds. `None` for anything
+/// that will not open or parse — a value sealed at another epoch among them, which is the
+/// reader's cue that its key is out of date rather than that the value is absent.
+pub(crate) fn open_doc_value<T: serde::de::DeserializeOwned>(
+    channel_key: &[u8; 32],
+    content: &pin_channel::ContentKey,
+    bytes: &[u8],
+) -> Option<T> {
+    let blob = std::str::from_utf8(bytes).ok()?;
+    let json = pin_channel::open_with(channel_key, blob, content).ok()?;
+    serde_json::from_slice(&json).ok()
+}
+
 /// Write a record into this identity's doc.
 pub(crate) async fn write_record(
     doc: &Doc,

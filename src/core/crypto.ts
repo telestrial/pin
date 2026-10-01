@@ -168,21 +168,13 @@ export async function deriveChannelLocatorSeed(
 // DocTicket instead. Two devices of one author derive the SAME seed (same AppKey), so
 // both can serve the channel — which is what makes this compose with multi-instance
 // parity rather than fight it.
-//
-// The epoch is in it so a rotated content key moves the doc too.
 export async function deriveChannelDocSeed(
   appKeyBytes: Uint8Array,
   channelID: string,
-  epoch: number,
 ): Promise<Uint8Array> {
   await ensureWasm()
-  return derive_channel_doc_seed(appKeyBytes, channelID, epoch)
+  return derive_channel_doc_seed(appKeyBytes, channelID)
 }
-
-// The epoch every channel starts at — pin_derive::INITIAL_EPOCH. Spelled twice, and the
-// seed's pinned vector below is the same one pin-derive pins, which is what holds the two
-// together.
-export const INITIAL_EPOCH = 0
 
 // The 32-byte ed25519 seed for the pkarr key where a channel's read DocTicket is
 // published — derived from the content key C, so finding the ticket takes what reading

@@ -81,13 +81,14 @@ pub const ENC_KEY_INFO: &[u8] = b"pin:enc:v1";
 /// HKDF `info` for a channel's pkarr locator key — derived from K, not the AppKey,
 /// because a subscriber holding only K must reach the same key.
 pub const CHANNEL_LOCATOR_INFO: &[u8] = b"pin:channel-locator:v1";
-/// HKDF `info` PREFIX for a channel's iroh-docs namespace seed; the channelID and the
-/// epoch are appended. AppKey-derived on purpose — a namespace secret IS the write
-/// capability, so deriving it from K would hand every subscriber the ability to write.
+/// HKDF `info` PREFIX for a channel's iroh-docs namespace seed; the channelID is appended.
+/// AppKey-derived on purpose — a namespace secret IS the write capability, so deriving it
+/// from K would hand every subscriber the ability to write.
 ///
-/// The epoch is in it so that rotating a channel's content key moves its doc as well: a
-/// removed member keeps the old namespace id from the ticket they once held, and a new
-/// namespace is one they have no way to learn.
+/// No epoch in it, so the doc stays put when the content key rotates. Moving it would make
+/// every member re-import and re-sync the whole doc on every removal, and a removal is what
+/// rotates the key; what keeps a removed member out instead is that the doc's values are
+/// sealed under the content key, which they no longer hold.
 pub const CHANNEL_DOC_NS_INFO_PREFIX: &str = "pin:channel-doc-ns:v1:";
 /// HKDF `info` PREFIX for a channel's content key C; the channelID and the epoch are
 /// appended.
@@ -180,11 +181,11 @@ pub fn channel_locator_seed(channel_key: &[u8]) -> [u8; 32] {
     hkdf32(channel_key, CHANNEL_LOCATOR_INFO)
 }
 
-/// A channel's iroh-docs namespace seed, from the AppKey plus the channelID and epoch.
-pub fn channel_doc_seed(app_key: &[u8], channel_id: &str, epoch: u32) -> [u8; 32] {
+/// A channel's iroh-docs namespace seed, from the AppKey plus the channelID.
+pub fn channel_doc_seed(app_key: &[u8], channel_id: &str) -> [u8; 32] {
     hkdf32(
         app_key,
-        format!("{CHANNEL_DOC_NS_INFO_PREFIX}{channel_id}:{epoch}").as_bytes(),
+        format!("{CHANNEL_DOC_NS_INFO_PREFIX}{channel_id}").as_bytes(),
     )
 }
 
@@ -1388,15 +1389,11 @@ mod tests {
     #[test]
     fn per_epoch_derivations_vary_by_epoch() {
         // A rotation that derived the same key would be no rotation: a removed member
-        // would go on reading, and would go on finding the doc.
+        // would go on reading.
         let ikm = [3u8; 32];
         assert_ne!(
             channel_content_key(&ikm, "chan", 0),
             channel_content_key(&ikm, "chan", 1)
-        );
-        assert_ne!(
-            channel_doc_seed(&ikm, "chan", 0),
-            channel_doc_seed(&ikm, "chan", 1)
         );
     }
 
@@ -1422,8 +1419,8 @@ mod tests {
     #[test]
     fn channel_doc_seed_matches_the_locked_vector() {
         assert_eq!(
-            hex(&channel_doc_seed(&[0u8; 32], "chan1", INITIAL_EPOCH)),
-            "d8931773e14f8cb43f050ca34cb2eab5a717f351e5b95df1de7b68e13b067c2f"
+            hex(&channel_doc_seed(&[0u8; 32], "chan1")),
+            "8b7ef12a1bfb3e697bf2f4a7fb60226b788a61dc1a9b6f9c2685b546a0230875"
         );
     }
 
@@ -1440,7 +1437,7 @@ mod tests {
             did_dht_seed(&ikm),
             enc_key_seed(&ikm),
             channel_locator_seed(&ikm),
-            channel_doc_seed(&ikm, "chan", 0),
+            channel_doc_seed(&ikm, "chan"),
             channel_content_key(&ikm, "chan", 0),
             channel_doc_ticket_seed(&ikm),
             engagement_locator_seed(&ikm),
@@ -1459,10 +1456,7 @@ mod tests {
     #[test]
     fn per_id_derivations_vary_by_id() {
         let ikm = [3u8; 32];
-        assert_ne!(
-            channel_doc_seed(&ikm, "a", 0),
-            channel_doc_seed(&ikm, "b", 0)
-        );
+        assert_ne!(channel_doc_seed(&ikm, "a"), channel_doc_seed(&ikm, "b"));
         assert_ne!(
             channel_content_key(&ikm, "a", 0),
             channel_content_key(&ikm, "b", 0)

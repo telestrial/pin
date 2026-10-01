@@ -336,6 +336,15 @@ pub(crate) async fn read_person_tally(
 /// The main doc's collection of owned channels' manifests.
 const OWN_CHANNEL_COLLECTION: &str = "channel";
 
+/// The key of one channel this identity publishes, from its settings.
+fn owned_channel_key(settings: &SettingsView, channel_id: &str) -> Option<[u8; 32]> {
+    settings
+        .my_channels
+        .iter()
+        .find(|c| c.channel_id == channel_id)
+        .and_then(|c| pin_crypto::channel_key_from_base64(&c.channel_key))
+}
+
 /// The content keys of the channels this identity publishes.
 ///
 /// What opens a comment somebody left on a channel of ours that isn't public: its record is
@@ -1210,6 +1219,10 @@ pub async fn engagement_once<N: crate::net::Network>(
         outcome.comments.dropped += dropped;
 
         let channel_doc = open_channel_doc(ctx, channel_id).await?;
+        let Some(k) = owned_channel_key(&settings, channel_id) else {
+            continue;
+        };
+        let sealing = crate::doc_sealing(&ctx.app_key, &k);
         if gestures.is_empty() && commented.is_empty() {
             // Nothing endorses it any more. The tally goes rather than sitting at zero:
             // a reader treats an absent tally and a zero one the same, and one fewer
@@ -1235,7 +1248,7 @@ pub async fn engagement_once<N: crate::net::Network>(
         // What this channel already publishes for the subject. Read once and used
         // twice — for the stamp to carry forward, and below for whether publishing again
         // would say anything new.
-        let published_tally = read_tally(ctx, &channel_doc, subject).await;
+        let published_tally = read_tally(ctx, &channel_doc, &sealing, subject).await;
         let all_reached = all_confirmed(&gestures, &reached, &commented, &comments_reached);
         let retention = if all_reached {
             Some(now_iso.clone())
@@ -1257,7 +1270,8 @@ pub async fn engagement_once<N: crate::net::Network>(
         // where a record has two feeders arriving at different distances from the source;
         // this IS the source.
         if !crate::cache_is_current(published_tally.as_ref(), &aggregate) {
-            let bytes = serde_json::to_vec(&aggregate).map_err(|e| format!("encode tally: {e}"))?;
+            let bytes = crate::seal_doc_value(&sealing, &aggregate)
+                .map_err(|e| format!("encode tally: {e}"))?;
             channel_doc
                 .set_bytes(ctx.author_id, tally_key(subject), bytes)
                 .await
@@ -1295,9 +1309,9 @@ pub async fn engagement_once<N: crate::net::Network>(
             // the bytes move whether the conversation did or not. The comments are signed
             // records, so comparing them IS the set comparison — a conversation still
             // carries its set where a tally has folded one down to a number.
-            let published = read_conversation(ctx, &channel_doc, subject).await;
+            let published = read_conversation(ctx, &channel_doc, &sealing, subject).await;
             if !crate::thread_is_current(published.as_ref(), &conversation) {
-                let bytes = serde_json::to_vec(&conversation)
+                let bytes = crate::seal_doc_value(&sealing, &conversation)
                     .map_err(|e| format!("encode conversation: {e}"))?;
                 channel_doc
                     .set_bytes(ctx.author_id, conversation_key(subject), bytes)
@@ -1383,6 +1397,7 @@ fn withdrawal(rkey: &str, found: &BTreeSet<String>, reached: &BTreeSet<String>) 
 pub(crate) async fn read_tally<N: crate::net::Network>(
     ctx: &EngagementContext<N>,
     channel_doc: &Doc,
+    sealing: &pin_channel::Sealing<'_>,
     subject: &str,
 ) -> Option<Aggregate> {
     let entry = channel_doc
@@ -1390,7 +1405,7 @@ pub(crate) async fn read_tally<N: crate::net::Network>(
         .await
         .ok()??;
     let bytes = ctx.blobs.get_bytes(entry.content_hash()).await.ok()?;
-    serde_json::from_slice(&bytes).ok()
+    crate::open_doc_value(sealing.channel_key, &sealing.content, &bytes)
 }
 
 /// The retention time a published tally claims, if any.
@@ -1411,6 +1426,7 @@ fn retention_of(held: Option<&Aggregate>) -> Option<String> {
 async fn read_conversation<N: crate::net::Network>(
     ctx: &EngagementContext<N>,
     channel_doc: &Doc,
+    sealing: &pin_channel::Sealing<'_>,
     subject: &str,
 ) -> Option<pin_engagement::Conversation> {
     let entry = channel_doc
@@ -1420,7 +1436,7 @@ async fn read_conversation<N: crate::net::Network>(
         .await
         .ok()??;
     let bytes = ctx.blobs.get_bytes(entry.content_hash()).await.ok()?;
-    serde_json::from_slice(&bytes).ok()
+    crate::open_doc_value(sealing.channel_key, &sealing.content, &bytes)
 }
 
 // --- the floor rung ---------------------------------------------------------------
@@ -1436,6 +1452,7 @@ async fn read_conversation<N: crate::net::Network>(
 async fn read_tallies<N: crate::net::Network>(
     ctx: &EngagementContext<N>,
     channel_doc: &Doc,
+    sealing: &pin_channel::Sealing<'_>,
 ) -> Result<BTreeMap<String, Aggregate>, String> {
     let subjects = crate::list_rkeys(
         channel_doc,
@@ -1445,7 +1462,7 @@ async fn read_tallies<N: crate::net::Network>(
     .await?;
     let mut map = BTreeMap::new();
     for subject in subjects {
-        if let Some(tally) = read_tally(ctx, channel_doc, &subject).await {
+        if let Some(tally) = read_tally(ctx, channel_doc, sealing, &subject).await {
             map.insert(subject, tally);
         }
     }
@@ -1460,6 +1477,7 @@ async fn read_tallies<N: crate::net::Network>(
 async fn read_conversations<N: crate::net::Network>(
     ctx: &EngagementContext<N>,
     channel_doc: &Doc,
+    sealing: &pin_channel::Sealing<'_>,
 ) -> Result<BTreeMap<String, pin_engagement::Conversation>, String> {
     let subjects = crate::list_rkeys(
         channel_doc,
@@ -1481,7 +1499,11 @@ async fn read_conversations<N: crate::net::Network>(
         let Ok(bytes) = ctx.blobs.get_bytes(entry.content_hash()).await else {
             continue;
         };
-        if let Ok(conversation) = serde_json::from_slice::<pin_engagement::Conversation>(&bytes) {
+        if let Some(conversation) = crate::open_doc_value::<pin_engagement::Conversation>(
+            sealing.channel_key,
+            &sealing.content,
+            &bytes,
+        ) {
             map.insert(subject, conversation);
         }
     }
@@ -1524,7 +1546,12 @@ pub async fn publish_channel_conversations<N: crate::net::Network>(
     channel_key: &[u8; 32],
 ) -> Result<bool, String> {
     let channel_doc = open_channel_doc(ctx, channel_id).await?;
-    let map = read_conversations(ctx, &channel_doc).await?;
+    let map = read_conversations(
+        ctx,
+        &channel_doc,
+        &crate::doc_sealing(&ctx.app_key, channel_key),
+    )
+    .await?;
 
     let rkey = pin_derive::published_conversation_rkey(channel_id);
     let published_key = pin_derive::published_key(&ctx.app_key);
@@ -1598,7 +1625,12 @@ pub async fn publish_channel_tallies<N: crate::net::Network>(
     channel_key: &[u8; 32],
 ) -> Result<bool, String> {
     let channel_doc = open_channel_doc(ctx, channel_id).await?;
-    let map = read_tallies(ctx, &channel_doc).await?;
+    let map = read_tallies(
+        ctx,
+        &channel_doc,
+        &crate::doc_sealing(&ctx.app_key, channel_key),
+    )
+    .await?;
 
     let rkey = pin_derive::published_engagement_rkey(channel_id);
     let published_key = pin_derive::published_key(&ctx.app_key);
@@ -1692,7 +1724,7 @@ pub(crate) async fn open_channel_doc<N: crate::net::Network>(
     ctx: &EngagementContext<N>,
     channel_id: &str,
 ) -> Result<Doc, String> {
-    let seed = pin_derive::channel_doc_seed(&ctx.app_key, channel_id, pin_derive::INITIAL_EPOCH);
+    let seed = pin_derive::channel_doc_seed(&ctx.app_key, channel_id);
     ctx.docs
         .import_namespace(Capability::Write(NamespaceSecret::from_bytes(&seed)))
         .await

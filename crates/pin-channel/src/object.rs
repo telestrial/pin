@@ -139,20 +139,39 @@ pub fn fingerprint(sealing: &Sealing, substance: &str) -> String {
     )
 }
 
-/// Open the head of a layered object and work out its content key, answering with the
-/// still-sealed body beside it.
-fn read_head<'b>(channel_key: &[u8; 32], rest: &'b [u8]) -> Result<(ContentKey, &'b [u8]), String> {
-    let (len, rest) = rest
-        .split_at_checked(HEAD_LEN_BYTES)
-        .ok_or("object too short to hold a head length")?;
-    // Infallible: `split_at_checked` gave exactly HEAD_LEN_BYTES.
-    let len = u32::from_be_bytes(len.try_into().unwrap()) as usize;
-    let (head, body) = rest
-        .split_at_checked(len)
-        .ok_or("object shorter than its head")?;
+/// Open an object whose head carries no read key, with a content key the caller holds.
+///
+/// The path for a reader who learned C some other way — the author, who derives it, or a
+/// member, who unwrapped it — and for what is sealed only for C-holders in the first place.
+/// Refuses a key for another epoch rather than trying it: an object sealed after a rotation
+/// is one a key from before it must not be reported as failing to open for some other
+/// reason.
+pub fn open_with(
+    channel_key: &[u8; 32],
+    blob: &str,
+    content: &ContentKey,
+) -> Result<Vec<u8>, String> {
+    let bytes = pin_crypto::b64_decode(blob).ok_or("object is not base64")?;
+    match bytes.first() {
+        Some(&OBJECT_VERSION) => {
+            let (head, body) = split_head(channel_key, &bytes[1..])?;
+            if head.epoch != content.epoch {
+                return Err(format!(
+                    "sealed at epoch {}, key is for epoch {}",
+                    head.epoch, content.epoch
+                ));
+            }
+            pin_crypto::open_raw(&content.key, body)
+        }
+        Some(v) => Err(format!("unsupported object version {v}")),
+        None => Err("object is empty".into()),
+    }
+}
 
-    let head = pin_crypto::open_raw(channel_key, head)?;
-    let head: Head = serde_json::from_slice(&head).map_err(|e| format!("head: {e}"))?;
+/// Open the head of a layered object and work out its content key from it, answering with
+/// the still-sealed body beside it.
+fn read_head<'b>(channel_key: &[u8; 32], rest: &'b [u8]) -> Result<(ContentKey, &'b [u8]), String> {
+    let (head, body) = split_head(channel_key, rest)?;
     let key = head
         .read_key
         .as_deref()
@@ -165,6 +184,21 @@ fn read_head<'b>(channel_key: &[u8; 32], rest: &'b [u8]) -> Result<(ContentKey, 
         },
         body,
     ))
+}
+
+/// Open a layered object's head, answering with it and the still-sealed body.
+fn split_head<'b>(channel_key: &[u8; 32], rest: &'b [u8]) -> Result<(Head, &'b [u8]), String> {
+    let (len, rest) = rest
+        .split_at_checked(HEAD_LEN_BYTES)
+        .ok_or("object too short to hold a head length")?;
+    // Infallible: `split_at_checked` gave exactly HEAD_LEN_BYTES.
+    let len = u32::from_be_bytes(len.try_into().unwrap()) as usize;
+    let (head, body) = rest
+        .split_at_checked(len)
+        .ok_or("object shorter than its head")?;
+    let head = pin_crypto::open_raw(channel_key, head)?;
+    let head: Head = serde_json::from_slice(&head).map_err(|e| format!("head: {e}"))?;
+    Ok((head, body))
 }
 
 #[cfg(test)]
@@ -238,6 +272,22 @@ mod tests {
         wrong[0] ^= 1;
         assert!(content_key(&wrong, &blob).is_err());
         assert!(content_key(&K, &seal(&sealing(false), b"payload").unwrap()).is_err());
+    }
+
+    #[test]
+    fn an_object_with_no_read_key_opens_with_a_held_content_key() {
+        let blob = seal(&sealing(false), b"payload").unwrap();
+        assert_eq!(open_with(&K, &blob, &C).unwrap(), b"payload");
+        // A key for another epoch is refused by its epoch, before the body is tried.
+        let other = ContentKey { epoch: 4, ..C };
+        let err = open_with(&K, &blob, &other).unwrap_err();
+        assert!(err.contains("sealed at epoch 3"), "{err}");
+        // And the right epoch with the wrong key does not open.
+        let wrong = ContentKey {
+            key: [1u8; 32],
+            ..C
+        };
+        assert!(open_with(&K, &blob, &wrong).is_err());
     }
 
     #[test]
