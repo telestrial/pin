@@ -219,10 +219,12 @@ async fn own_subjects<N: crate::net::Network>(
         let Ok(blob) = String::from_utf8(sealed) else {
             continue;
         };
-        let Ok(json) = pin_crypto::decrypt(&k, &blob) else {
+        // Through the channel's own open, which reads the head, and never a raw decrypt: the
+        // record is the published object, and only `pin_channel` knows its layout.
+        let Ok(json) = pin_channel::open_blob(&k, &blob) else {
             continue;
         };
-        let Ok(manifest) = serde_json::from_slice::<pin_manifest::ChannelManifest>(&json) else {
+        let Ok(manifest) = serde_json::from_str::<pin_manifest::ChannelManifest>(&json) else {
             continue;
         };
 

@@ -380,8 +380,8 @@ impl Identity {
         }]);
         self.set_settings(settings).await;
 
-        // Where the commit that publishes a channel puts its manifest, sealed under K, so
-        // `own_subjects` opens it exactly as it opens the app's own.
+        // Where the commit that publishes a channel puts its manifest, sealed as its author
+        // seals it, so `own_subjects` opens it exactly as it opens the app's own.
         let manifest = serde_json::json!({
             "version": 1,
             "name": "A channel",
@@ -404,8 +404,11 @@ impl Identity {
                 })
                 .collect::<Vec<_>>(),
         });
-        let sealed = pin_crypto::encrypt(&k, &serde_json::to_vec(&manifest).expect("serialize"))
-            .expect("seal manifest");
+        let sealed = pin_channel::seal(
+            &pin_channel::author_sealing(&self.app_key, &k),
+            &serde_json::to_vec(&manifest).expect("serialize"),
+        )
+        .expect("seal manifest");
         crate::write_record(
             &self.doc,
             self.author_id,
