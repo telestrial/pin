@@ -2340,10 +2340,10 @@ pub fn derive_channel_doc_seed(app_key: &[u8], channel_id: &str, epoch: u32) -> 
     pin_derive::channel_doc_seed(app_key, channel_id, epoch).to_vec()
 }
 
-/// The pkarr seed for a channel's read-DocTicket record, from its channel key K.
+/// The pkarr seed for a channel's read-DocTicket record, from its content key C.
 #[wasm_bindgen]
-pub fn derive_channel_doc_ticket_seed(channel_key: &[u8]) -> Vec<u8> {
-    pin_derive::channel_doc_ticket_seed(channel_key).to_vec()
+pub fn derive_channel_doc_ticket_seed(content_key: &[u8]) -> Vec<u8> {
+    pin_derive::channel_doc_ticket_seed(content_key).to_vec()
 }
 
 /// The pkarr seed for your settings-snapshot pointer.

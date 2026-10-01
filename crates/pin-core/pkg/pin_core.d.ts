@@ -187,9 +187,9 @@ export function delete_record(collection: string, rkey: string): Promise<void>;
 export function derive_channel_doc_seed(app_key: Uint8Array, channel_id: string, epoch: number): Uint8Array;
 
 /**
- * The pkarr seed for a channel's read-DocTicket record, from its channel key K.
+ * The pkarr seed for a channel's read-DocTicket record, from its content key C.
  */
-export function derive_channel_doc_ticket_seed(channel_key: Uint8Array): Uint8Array;
+export function derive_channel_doc_ticket_seed(content_key: Uint8Array): Uint8Array;
 
 /**
  * A channel's pkarr locator seed, from its channel key K.

@@ -70,7 +70,8 @@ pub struct ChannelSyncOutcome {
     pub imported: usize,
     /// Channels currently being live-synced, including the ones imported this pass.
     pub watching: usize,
-    /// Subscribed channels whose author publishes no resolvable ticket. Ordinary: they
+    /// Subscribed channels whose author publishes no resolvable ticket, or whose manifest is
+    /// not cached yet, so the key the ticket is found under is not known. Ordinary: they
     /// keep being served by the polling rung.
     pub unavailable: usize,
     /// Channels that failed to import. The next pass retries.
@@ -125,7 +126,24 @@ async fn reconcile(
             outcome.failed += 1;
             continue;
         };
-        match import_channel(ctx, channel_id, &k).await {
+        // The ticket is found under the content key, and that comes from the manifest the
+        // pull loop caches. None yet means that has not landed, so there is no ticket to
+        // look for; the next pass tries again.
+        let Some(content) = crate::held_content_key(
+            &ctx.doc,
+            &ctx.blobs,
+            ctx.author_id,
+            &ctx.app_key,
+            &settings,
+            channel_id,
+            &k,
+        )
+        .await
+        else {
+            outcome.unavailable += 1;
+            continue;
+        };
+        match import_channel(ctx, channel_id, &content.key).await {
             Ok(Some((doc, stream))) => {
                 events.push(stream);
                 let w = Watched { key: k, doc };
@@ -156,9 +174,9 @@ async fn reconcile(
 async fn import_channel(
     ctx: &ChannelSyncContext,
     channel_id: &str,
-    channel_key: &[u8; 32],
+    content_key: &[u8; 32],
 ) -> Result<Option<(Doc, BoxStream<(String, LiveEvent)>)>, String> {
-    let seed = pin_derive::channel_doc_ticket_seed(channel_key);
+    let seed = pin_derive::channel_doc_ticket_seed(content_key);
     let public_key = pin_pkarr::public_key_from_seed(&seed)?;
     let records = match pin_pkarr::resolve(&public_key).await {
         Ok(r) => r,

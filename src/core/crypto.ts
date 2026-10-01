@@ -185,8 +185,8 @@ export async function deriveChannelDocSeed(
 export const INITIAL_EPOCH = 0
 
 // The 32-byte ed25519 seed for the pkarr key where a channel's read DocTicket is
-// published — K-derived, so a subscriber holding K (from the subscribe URL) can find
-// it, exactly like the channel locator.
+// published — derived from the content key C, so finding the ticket takes what reading
+// the channel takes.
 //
 // A SEPARATE record from the locator on purpose. The two rungs have independent
 // lifetimes: the locator names a durable Sia object and changes only when the author
@@ -194,10 +194,10 @@ export const INITIAL_EPOCH = 0
 // those change. Keeping them apart means a stale ticket can never disturb the durable
 // pointer, and a reader that finds no ticket simply falls to the locator rung.
 export async function deriveChannelDocTicketSeed(
-  channelKeyBytes: Uint8Array,
+  contentKeyBytes: Uint8Array,
 ): Promise<Uint8Array> {
   await ensureWasm()
-  return derive_channel_doc_ticket_seed(channelKeyBytes)
+  return derive_channel_doc_ticket_seed(contentKeyBytes)
 }
 
 // The 32-byte ed25519 seed for your SETTINGS pkarr LOCATOR key — the mutable

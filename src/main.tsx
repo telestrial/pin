@@ -49,6 +49,7 @@ if (import.meta.env.DEV || inTauri()) {
         channelID: string,
         channelKey: string,
         hexOverride?: string,
+        cachedHead?: string,
       ) => Promise<string>
     }
     __pinSync?: {
@@ -102,8 +103,9 @@ if (import.meta.env.DEV || inTauri()) {
     },
   }
   // Ladder rung 1 end to end: an author serves a channel through the Curator's real
-  // channel-doc loop, and a subscriber resolves the ticket from K alone (nothing handed
-  // over out of band) and live-syncs the manifest into its feed. `channelKey` is fresh
+  // channel-doc loop, and a subscriber resolves the ticket from the content key a cached
+  // head gives it (no ticket handed over out of band) and live-syncs the manifest into
+  // its feed. `channelKey` is fresh
   // per run so the pkarr read is a first read, not an overwrite — public relays lag on
   // overwrites (see CLAUDE.md 2026-07-23).
   //
@@ -120,7 +122,6 @@ if (import.meta.env.DEV || inTauri()) {
         generateChannelKey,
         channelKeyToBase64,
         deriveChannelID,
-        encryptForChannel,
         encryptSettings,
         deriveSettingsKey,
         deriveChannelDocSeed,
@@ -131,6 +132,11 @@ if (import.meta.env.DEV || inTauri()) {
       type Manifest = import('./core/types').ChannelManifest
       const { openDocs, openChannelDoc, putRecord, startChannelDocLoop } =
         await import('./lib/docs')
+      const { ensureWasm } = await import('./core/wasm')
+      await ensureWasm()
+      const { channel_seal } = await import(
+        '../crates/pin-core/pkg/pin_core.js'
+      )
 
       const k = await generateChannelKey()
       const channelKey = channelKeyToBase64(k)
@@ -148,11 +154,25 @@ if (import.meta.env.DEV || inTauri()) {
       const appKey = Uint8Array.fromHex(hex)
       const enc = new TextEncoder()
 
-      // What a commit leaves behind: the manifest sealed under K, under the channel's id.
+      // What a commit leaves behind: the manifest sealed as its author seals it, under the
+      // channel's id.
       await putRecord(
         'channel',
         channelID,
-        enc.encode(await encryptForChannel(k, JSON.stringify(manifest))),
+        enc.encode(channel_seal(hex, k, JSON.stringify(manifest))),
+      )
+      // And an older copy of the same channel, for the subscriber to hold as the pull loop
+      // would leave it after a read from Sia. A subscriber finds the live doc under the
+      // content key, which only a head it has opened can tell it — and the copy is older,
+      // so the manifest it then has to be PUSHED is the one that proves the live rung.
+      const cachedHead = channel_seal(
+        hex,
+        k,
+        JSON.stringify({
+          ...manifest,
+          name: `${name} (before the push)`,
+          publishedAt: new Date(Date.now() - 60_000).toISOString(),
+        }),
       )
       // And what tells the loop this channel is ours to serve.
       const settings = {
@@ -205,12 +225,13 @@ if (import.meta.env.DEV || inTauri()) {
         if (advertised) break
         await new Promise((r) => setTimeout(r, 250))
       }
-      return JSON.stringify({ channelID, channelKey, nsId, passes })
+      return JSON.stringify({ channelID, channelKey, nsId, passes, cachedHead })
     },
     subscribe: async (
       channelID: string,
       channelKey: string,
       hexOverride?: string,
+      cachedHead?: string,
     ) => {
       const hex = hexOverride ?? (await session()).hex
       if (!hex) return 'not signed in'
@@ -249,6 +270,13 @@ if (import.meta.env.DEV || inTauri()) {
           ),
         ),
       )
+
+      // What the pull loop leaves behind after reading the channel from Sia, which is
+      // where the content key the ticket is found under comes from. Only once: a poll
+      // that re-seeded it would bury a manifest already pushed.
+      if (cachedHead && !(await getRecord('sub', channelID))) {
+        await putRecord('sub', channelID, new TextEncoder().encode(cachedHead))
+      }
 
       const passes: string[] = []
       await startChannelSyncLoop(hex, (report) => passes.push(report))

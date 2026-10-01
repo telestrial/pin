@@ -589,12 +589,12 @@ export function derive_channel_doc_seed(app_key, channel_id, epoch) {
 }
 
 /**
- * The pkarr seed for a channel's read-DocTicket record, from its channel key K.
- * @param {Uint8Array} channel_key
+ * The pkarr seed for a channel's read-DocTicket record, from its content key C.
+ * @param {Uint8Array} content_key
  * @returns {Uint8Array}
  */
-export function derive_channel_doc_ticket_seed(channel_key) {
-    const ptr0 = passArray8ToWasm0(channel_key, wasm.__wbindgen_malloc);
+export function derive_channel_doc_ticket_seed(content_key) {
+    const ptr0 = passArray8ToWasm0(content_key, wasm.__wbindgen_malloc);
     const len0 = WASM_VECTOR_LEN;
     const ret = wasm.derive_channel_doc_ticket_seed(ptr0, len0);
     var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();

@@ -249,7 +249,7 @@ impl Identity {
     }
 
     /// This channel's K, derived from the seed so the same identity is the same channel.
-    fn channel_key(&self) -> [u8; 32] {
+    pub(crate) fn channel_key(&self) -> [u8; 32] {
         pin_derive::hkdf32(&self.app_key, b"pin:testnet-channel:v1")
     }
 
@@ -2518,5 +2518,115 @@ mod cost {
         for &n in BIG_SIZES {
             measure(n).await;
         }
+    }
+}
+
+/// Where a held channel's content key comes from, against a real doc.
+#[cfg(test)]
+mod content_keys {
+    use super::*;
+
+    async fn settings_of(who: &Identity) -> crate::SettingsView {
+        crate::read_settings(&who.doc, &who.blobs, who.author_id, &who.app_key)
+            .await
+            .expect("settings")
+    }
+
+    async fn held(
+        who: &Identity,
+        channel_id: &str,
+        k: &[u8; 32],
+    ) -> Option<pin_channel::ContentKey> {
+        let settings = settings_of(who).await;
+        crate::held_content_key(
+            &who.doc,
+            &who.blobs,
+            who.author_id,
+            &who.app_key,
+            &settings,
+            channel_id,
+            k,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn an_owned_channel_s_content_key_is_derived() {
+        let world = World::new();
+        let john = Identity::new(&world, 1).await;
+        john.follows_and_publishes(&[]).await;
+        let k = john.channel_key();
+        let channel_id = pin_crypto::channel_id(&k);
+
+        assert_eq!(
+            held(&john, &channel_id, &k).await,
+            Some(pin_channel::author_sealing(&john.app_key, &k).content)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_subscribed_channel_s_content_key_comes_from_the_cached_head() {
+        let world = World::new();
+        let john = Identity::new(&world, 1).await;
+        let theirs = [5u8; 32];
+        let channel_id = pin_crypto::channel_id(&theirs);
+        john.set_settings(serde_json::json!({
+            "subscriptions": [{
+                "channelID": channel_id,
+                "channelKey": pin_crypto::channel_key_to_base64(&theirs),
+            }],
+        }))
+        .await;
+
+        // Subscribed with nothing cached yet: not known, and never a guess.
+        assert_eq!(held(&john, &channel_id, &theirs).await, None);
+
+        // Sealed by somebody else's AppKey, so a derivation from John's could not match.
+        let their_sealing = pin_channel::author_sealing(&[9u8; 32], &theirs);
+        let blob = pin_channel::seal(&their_sealing, b"{}").expect("seal");
+        crate::write_record(
+            &john.doc,
+            john.author_id,
+            crate::SUB_COLLECTION,
+            &channel_id,
+            blob.into_bytes(),
+        )
+        .await
+        .expect("cache");
+        assert_eq!(
+            held(&john, &channel_id, &theirs).await,
+            Some(their_sealing.content)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_cached_head_with_no_read_key_yields_none() {
+        let world = World::new();
+        let john = Identity::new(&world, 1).await;
+        let theirs = [5u8; 32];
+        let channel_id = pin_crypto::channel_id(&theirs);
+        john.set_settings(serde_json::json!({
+            "subscriptions": [{
+                "channelID": channel_id,
+                "channelKey": pin_crypto::channel_key_to_base64(&theirs),
+            }],
+        }))
+        .await;
+        let members_only = pin_channel::Sealing {
+            publish_read_key: false,
+            ..pin_channel::author_sealing(&[9u8; 32], &theirs)
+        };
+        crate::write_record(
+            &john.doc,
+            john.author_id,
+            crate::SUB_COLLECTION,
+            &channel_id,
+            pin_channel::seal(&members_only, b"{}")
+                .expect("seal")
+                .into_bytes(),
+        )
+        .await
+        .expect("cache");
+        assert_eq!(held(&john, &channel_id, &theirs).await, None);
     }
 }

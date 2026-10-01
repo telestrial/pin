@@ -336,17 +336,21 @@ pub(crate) async fn read_person_tally(
 /// The main doc's collection of owned channels' manifests.
 const OWN_CHANNEL_COLLECTION: &str = "channel";
 
-/// The keys of the channels this identity publishes.
+/// The keys that open what is sealed for the channels this identity publishes.
 ///
 /// What opens a comment somebody left on a channel of ours that isn't public: its record is
-/// sealed under that channel's K in the commenter's own world-readable blob, so reading it
-/// back means holding the key the post was read with. Own channels only — a comment on
-/// anyone else's has no subject of ours to match, so opening it would buy nothing.
-fn own_channel_keys(settings: &SettingsView) -> Vec<[u8; 32]> {
+/// sealed under that channel's content key in the commenter's own world-readable blob, so
+/// reading it back means holding the key the post was read with. Own channels only — a
+/// comment on anyone else's has no subject of ours to match, so opening it would buy nothing.
+///
+/// K as well, for now: a comment sealed before the content key existed was sealed under K,
+/// and stays that way until its commenter's blob is next re-sealed.
+fn own_channel_keys(app_key: &[u8; 32], settings: &SettingsView) -> Vec<[u8; 32]> {
     settings
         .my_channels
         .iter()
         .filter_map(|c| pin_crypto::channel_key_from_base64(&c.channel_key))
+        .flat_map(|k| [pin_channel::author_sealing(app_key, &k).content.key, k])
         .collect()
 }
 
@@ -1041,7 +1045,7 @@ pub async fn engagement_once<N: crate::net::Network>(
         &subjects,
         comment_knocks,
         &comments_at,
-        &own_channel_keys(&settings),
+        &own_channel_keys(&ctx.app_key, &settings),
     )
     .await;
     outcome.comments = comments;
@@ -2635,5 +2639,27 @@ mod tests {
         }
         // And the one that does.
         assert!(fold_input_moved(&wrote("comment/abc:def")));
+    }
+}
+
+#[cfg(test)]
+mod own_keys {
+    #[test]
+    fn a_sealed_comment_on_an_own_channel_opens_under_its_content_key_or_k() {
+        // The content key is what opens a comment sealed from now on, and K is what opens
+        // one sealed before the content key existed, which stays sealed that way until its
+        // commenter's blob is next re-sealed.
+        let app_key = [1u8; 32];
+        let k = [7u8; 32];
+        let settings: crate::SettingsView = serde_json::from_value(serde_json::json!({
+            "myChannels": [{
+                "channelID": pin_crypto::channel_id(&k),
+                "channelKey": pin_crypto::channel_key_to_base64(&k),
+            }],
+        }))
+        .unwrap();
+        let keys = super::own_channel_keys(&app_key, &settings);
+        let c = pin_channel::author_sealing(&app_key, &k).content.key;
+        assert_eq!(keys, vec![c, k]);
     }
 }

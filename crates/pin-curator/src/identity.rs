@@ -399,11 +399,13 @@ struct OwnComment {
 
 /// Which channel a comment is sealed under, and with what.
 ///
-/// The channelID travels beside the key so the fingerprint can name it. Without that, a
-/// channel turning from public into sealed would fingerprint identically and the blob would
-/// go on serving the plaintext generation.
+/// The channelID and the epoch travel beside the key so the fingerprint can name them.
+/// Without the channelID, a channel turning from public into sealed would fingerprint
+/// identically and the blob would go on serving the plaintext generation; without the epoch,
+/// a channel whose content key moved would go on serving a seal its new members cannot open.
 struct Seal {
     channel_id: String,
+    epoch: u32,
     key: [u8; 32],
 }
 
@@ -436,7 +438,8 @@ enum SealFor {
     Clear,
     /// Marked, and the key is held.
     Under(Seal),
-    /// Marked, and no key for that channel is held here.
+    /// Marked, and no key for that channel is held here, or its content key is not known
+    /// yet because no manifest for it is cached.
     NoKey,
 }
 
@@ -470,8 +473,28 @@ async fn seal_for(ctx: &IdentityContext, settings: &SettingsView, rkey: &str) ->
         // still is not published. An unreadable instruction is not an absent one.
         return SealFor::NoKey;
     };
-    match held_channel_key(settings, &channel_id) {
-        Some(key) => SealFor::Under(Seal { channel_id, key }),
+    let Some(k) = held_channel_key(settings, &channel_id) else {
+        return SealFor::NoKey;
+    };
+    // Under the channel's content key, which is what its readers open its posts with. Not
+    // yet known means no manifest is cached for it, and the comment waits rather than going
+    // out under a key the post's readers may not hold.
+    match crate::held_content_key(
+        &ctx.doc,
+        &ctx.blobs,
+        ctx.author_id,
+        &ctx.app_key,
+        settings,
+        &channel_id,
+        &k,
+    )
+    .await
+    {
+        Some(content) => SealFor::Under(Seal {
+            channel_id,
+            epoch: content.epoch,
+            key: content.key,
+        }),
         None => SealFor::NoKey,
     }
 }
@@ -528,7 +551,12 @@ async fn own_comments(ctx: &IdentityContext, settings: &SettingsView) -> (Vec<Ow
 fn comments_fingerprint(entries: &[OwnComment]) -> String {
     let parts: Vec<serde_json::Value> = entries
         .iter()
-        .map(|e| serde_json::json!([e.record, e.seal.as_ref().map(|s| s.channel_id.as_str())]))
+        .map(|e| {
+            serde_json::json!([
+                e.record,
+                e.seal.as_ref().map(|s| (s.channel_id.as_str(), s.epoch))
+            ])
+        })
         .collect();
     serde_json::Value::Array(parts).to_string()
 }
@@ -1485,6 +1513,7 @@ mod tests {
             record: serde_json::json!({"kind": "comment", "body": body}),
             seal: Some(Seal {
                 channel_id: channel_id.into(),
+                epoch: 0,
                 key: SEAL_KEY,
             }),
         }
@@ -1605,6 +1634,18 @@ mod tests {
         assert_ne!(
             comments_fingerprint(&[under("a", "chan-one")]),
             comments_fingerprint(&[under("a", "chan-two")])
+        );
+    }
+
+    #[test]
+    fn a_seal_is_fingerprinted_by_its_epoch() {
+        // A content key that moved has to re-seal, or members admitted under the new epoch
+        // cannot open what the blob goes on serving under the old one.
+        let mut later = under("a", "chan-one");
+        later.seal.as_mut().unwrap().epoch = 1;
+        assert_ne!(
+            comments_fingerprint(&[under("a", "chan-one")]),
+            comments_fingerprint(&[later])
         );
     }
 
@@ -1931,5 +1972,56 @@ mod tests {
 
         let c = doc(Some(serde_json::json!({"username": "jane"})), Vec::new());
         assert_ne!(fingerprint(&a), fingerprint(&c));
+    }
+}
+
+/// What a sealed comment goes into the blob under, against a real doc.
+#[cfg(test)]
+mod comment_seals {
+    use super::*;
+    use crate::testnet::{Identity, World};
+
+    #[tokio::test]
+    async fn a_comment_on_an_owned_channel_is_sealed_under_its_content_key() {
+        // Under the key the channel's readers open its posts with, which is no longer K: a
+        // seal under K would open for anybody who can find the channel, and for a channel
+        // only members may read that is everybody it was meant to exclude.
+        let world = World::new();
+        let john = Identity::new(&world, 1).await;
+        john.follows_and_publishes(&[]).await;
+        let k = john.channel_key();
+        let channel_id = pin_crypto::channel_id(&k);
+        let rkey = pin_derive::comment_rkey("subject", "comment-1");
+        crate::write_record(
+            &john.doc,
+            john.author_id,
+            pin_derive::COMMENT_COLLECTION,
+            &rkey,
+            serde_json::to_vec(&serde_json::json!({"kind": "comment", "body": "hi"})).unwrap(),
+        )
+        .await
+        .unwrap();
+        crate::write_record(
+            &john.doc,
+            john.author_id,
+            pin_derive::COMMENT_SEAL_COLLECTION,
+            &rkey,
+            serde_json::to_vec(&serde_json::json!({"channelID": channel_id})).unwrap(),
+        )
+        .await
+        .unwrap();
+
+        let ctx = john.identity_ctx();
+        let settings = crate::read_settings(&ctx.doc, &ctx.blobs, ctx.author_id, &ctx.app_key)
+            .await
+            .unwrap();
+        let (comments, unsealable) = own_comments(&ctx, &settings).await;
+        assert_eq!((comments.len(), unsealable), (1, 0));
+
+        let entries = comment_entries(&comments).unwrap();
+        let blob = entries[0][crate::comments::SEALED_FIELD].as_str().unwrap();
+        let c = pin_channel::author_sealing(&john.app_key, &k).content.key;
+        assert!(pin_crypto::decrypt(&c, blob).is_ok());
+        assert!(pin_crypto::decrypt(&k, blob).is_err());
     }
 }

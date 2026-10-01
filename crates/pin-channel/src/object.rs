@@ -102,20 +102,52 @@ pub fn seal(sealing: &Sealing, payload: &[u8]) -> Result<String, String> {
 pub fn open(channel_key: &[u8; 32], blob: &str) -> Result<Opened, String> {
     let bytes = pin_crypto::b64_decode(blob).ok_or("object is not base64")?;
     match bytes.first() {
-        Some(&OBJECT_VERSION) => open_layered(channel_key, &bytes[1..]),
+        Some(&OBJECT_VERSION) => {
+            let (content, body) = read_head(channel_key, &bytes[1..])?;
+            Ok(Opened {
+                payload: pin_crypto::open_raw(&content.key, body)?,
+                content,
+            })
+        }
         Some(&LEGACY_VERSION) => Ok(Opened {
             payload: pin_crypto::decrypt(channel_key, blob)?,
-            content: ContentKey {
-                epoch: pin_derive::INITIAL_EPOCH,
-                key: *channel_key,
-            },
+            content: legacy_content(channel_key),
         }),
         Some(v) => Err(format!("unsupported object version {v}")),
         None => Err("object is empty".into()),
     }
 }
 
-fn open_layered(channel_key: &[u8; 32], rest: &[u8]) -> Result<Opened, String> {
+/// The content key an object was sealed under, read from its head alone.
+///
+/// For a caller that holds an object only to learn how to open the channel's other
+/// artifacts: a cached manifest, read for the key to its doc's ticket or to a comment's
+/// seal. The body is left sealed, so asking costs a head rather than a manifest.
+pub fn content_key(channel_key: &[u8; 32], blob: &str) -> Result<ContentKey, String> {
+    let bytes = pin_crypto::b64_decode(blob).ok_or("object is not base64")?;
+    match bytes.first() {
+        Some(&OBJECT_VERSION) => read_head(channel_key, &bytes[1..]).map(|(content, _)| content),
+        // Opened to be sure K is its key, so the answer is as true as the one `open` gives.
+        Some(&LEGACY_VERSION) => {
+            pin_crypto::decrypt(channel_key, blob)?;
+            Ok(legacy_content(channel_key))
+        }
+        Some(v) => Err(format!("unsupported object version {v}")),
+        None => Err("object is empty".into()),
+    }
+}
+
+/// A version-1 envelope's content key, which is K itself.
+fn legacy_content(channel_key: &[u8; 32]) -> ContentKey {
+    ContentKey {
+        epoch: pin_derive::INITIAL_EPOCH,
+        key: *channel_key,
+    }
+}
+
+/// Open the head of a layered object and work out its content key, answering with the
+/// still-sealed body beside it.
+fn read_head<'b>(channel_key: &[u8; 32], rest: &'b [u8]) -> Result<(ContentKey, &'b [u8]), String> {
     let (len, rest) = rest
         .split_at_checked(HEAD_LEN_BYTES)
         .ok_or("object too short to hold a head length")?;
@@ -132,14 +164,13 @@ fn open_layered(channel_key: &[u8; 32], rest: &[u8]) -> Result<Opened, String> {
         .as_deref()
         .ok_or_else(|| format!("no read key for epoch {}", head.epoch))?;
     let key = pin_crypto::channel_key_from_base64(key).ok_or("head read key is malformed")?;
-
-    Ok(Opened {
-        payload: pin_crypto::open_raw(&key, body)?,
-        content: ContentKey {
+    Ok((
+        ContentKey {
             epoch: head.epoch,
             key,
         },
-    })
+        body,
+    ))
 }
 
 #[cfg(test)]
@@ -194,6 +225,25 @@ mod tests {
         let mut wrong = K;
         wrong[0] ^= 1;
         assert!(open(&wrong, &blob).is_err());
+    }
+
+    #[test]
+    fn the_content_key_is_read_from_the_head_alone() {
+        let blob = seal(&sealing(true), b"payload").unwrap();
+        assert_eq!(content_key(&K, &blob).unwrap(), C);
+        // A body nothing could open still yields its key, which is what lets the head be
+        // read without paying for the body.
+        let mut bytes = pin_crypto::b64_decode(&blob).unwrap();
+        let last = bytes.len() - 1;
+        bytes[last] ^= 1;
+        let damaged = pin_crypto::b64_encode(&bytes);
+        assert!(open(&K, &damaged).is_err());
+        assert_eq!(content_key(&K, &damaged).unwrap(), C);
+
+        let mut wrong = K;
+        wrong[0] ^= 1;
+        assert!(content_key(&wrong, &blob).is_err());
+        assert!(content_key(&K, &seal(&sealing(false), b"payload").unwrap()).is_err());
     }
 
     #[test]

@@ -96,9 +96,10 @@ pub const CHANNEL_CONTENT_INFO_PREFIX: &str = "pin:channel-content:v1:";
 /// The epoch every channel starts at. Nothing rotates a content key yet, so every channel
 /// is still at this one.
 pub const INITIAL_EPOCH: u32 = 0;
-/// HKDF `info` for the pkarr key carrying a channel's read DocTicket (K-derived, so a
-/// subscriber can find it — kept separate from the locator so a stale ticket can never
-/// disturb the durable pointer).
+/// HKDF `info` for the pkarr key carrying a channel's read DocTicket. Derived from the
+/// content key C rather than from K: the ticket reads the whole doc, so finding it has to
+/// take what reading the channel takes. Kept separate from the locator so a stale ticket
+/// can never disturb the durable pointer.
 pub const CHANNEL_DOC_TICKET_INFO: &[u8] = b"pin:channel-doc:v1";
 /// HKDF `info` for the pkarr key carrying a channel's published tallies (K-derived,
 /// like the locator, so the audience for a count is exactly the audience for the
@@ -188,9 +189,9 @@ pub fn channel_content_key(app_key: &[u8], channel_id: &str, epoch: u32) -> [u8;
     )
 }
 
-/// The pkarr seed for a channel's read-DocTicket record, from its channel key K.
-pub fn channel_doc_ticket_seed(channel_key: &[u8]) -> [u8; 32] {
-    hkdf32(channel_key, CHANNEL_DOC_TICKET_INFO)
+/// The pkarr seed for a channel's read-DocTicket record, from its content key C.
+pub fn channel_doc_ticket_seed(content_key: &[u8]) -> [u8; 32] {
+    hkdf32(content_key, CHANNEL_DOC_TICKET_INFO)
 }
 
 /// The pkarr seed for a channel's published tallies, from its channel key K.

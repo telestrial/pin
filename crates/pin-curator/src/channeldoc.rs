@@ -15,10 +15,11 @@
 //!     no Sia object and no manifest rewrite.
 //!
 //! COPIES BYTES, NEVER CONTENT. The manifest already sits in the main doc as
-//! `channel/<id>`, sealed under K — byte-identical to what Sia holds and to what the
+//! `channel/<id>`, as the sealed object — byte-identical to what Sia holds and to what the
 //! channel doc wants. So a pass moves that blob across verbatim: no decrypt, no
 //! re-encrypt, no manifest parsed. The loop is a courier here in the same sense the pull
-//! loop is, and it never needs K for the content (only to derive the ticket's key).
+//! loop is, and it never opens the content (it needs the content key only to derive the
+//! ticket's key).
 //!
 //! That also makes the skip-check exact. The frontend version re-encrypted from the
 //! decrypted manifest it found in a UI store, so it had to fingerprint the plaintext;
@@ -202,7 +203,10 @@ async fn serve_channel(
         .share(ShareMode::Read, AddrInfoOptions::RelayAndAddresses)
         .await
         .map_err(|e| format!("channel doc {channel_id}: share: {e}"))?;
-    let seed = pin_derive::channel_doc_ticket_seed(channel_key);
+    // Under C rather than K: the ticket is a read capability for the whole doc, so finding
+    // it has to take what reading the channel takes.
+    let content = pin_channel::author_sealing(&ctx.app_key, channel_key).content;
+    let seed = pin_derive::channel_doc_ticket_seed(&content.key);
     pin_pkarr::publish(
         &seed,
         &pin_pkarr::chunk_txt(TICKET_PREFIX, &ticket.to_string()),

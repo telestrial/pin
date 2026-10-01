@@ -703,6 +703,37 @@ pub(crate) async fn read_record(
     }
 }
 
+/// The content key a channel this identity reads is sealed under, from what it already
+/// holds: derived for a channel it owns, read from the head of the cached manifest for any
+/// other.
+///
+/// `None` when no manifest is cached yet, which is the ordinary state of a channel
+/// subscribed to moments ago and is settled by the pull loop's next pass. A caller treats it
+/// as "not yet", never as a key it may do without.
+pub(crate) async fn held_content_key(
+    doc: &Doc,
+    blobs: &Store,
+    author_id: AuthorId,
+    app_key: &[u8; 32],
+    settings: &SettingsView,
+    channel_id: &str,
+    channel_key: &[u8; 32],
+) -> Option<pin_channel::ContentKey> {
+    if settings
+        .my_channels
+        .iter()
+        .any(|c| c.channel_id == channel_id)
+    {
+        return Some(pin_channel::author_sealing(app_key, channel_key).content);
+    }
+    let raw = read_record(doc, blobs, author_id, SUB_COLLECTION, channel_id)
+        .await
+        .ok()
+        .flatten()?;
+    let blob = String::from_utf8(raw).ok()?;
+    pin_channel::content_key(channel_key, &blob).ok()
+}
+
 /// Write a record into this identity's doc.
 pub(crate) async fn write_record(
     doc: &Doc,
