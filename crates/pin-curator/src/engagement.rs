@@ -1687,7 +1687,7 @@ pub(crate) async fn open_channel_doc<N: crate::net::Network>(
     ctx: &EngagementContext<N>,
     channel_id: &str,
 ) -> Result<Doc, String> {
-    let seed = pin_derive::channel_doc_seed(&ctx.app_key, channel_id);
+    let seed = pin_derive::channel_doc_seed(&ctx.app_key, channel_id, pin_derive::INITIAL_EPOCH);
     ctx.docs
         .import_namespace(Capability::Write(NamespaceSecret::from_bytes(&seed)))
         .await

@@ -124,6 +124,7 @@ if (import.meta.env.DEV || inTauri()) {
         encryptSettings,
         deriveSettingsKey,
         deriveChannelDocSeed,
+        INITIAL_EPOCH,
       } = await import('./core/crypto')
       const { CHANNEL_MANIFEST_VERSION } = await import('./core/types')
       const { SETTINGS_VERSION } = await import('./core/settings')
@@ -182,7 +183,7 @@ if (import.meta.env.DEV || inTauri()) {
       // The namespace the loop will serve this channel under, so the subscriber's
       // import can be checked against it. Opening is idempotent — the loop imports the
       // same namespace from the same derived seed.
-      const seed = await deriveChannelDocSeed(appKey, channelID)
+      const seed = await deriveChannelDocSeed(appKey, channelID, INITIAL_EPOCH)
       const nsId = await openChannelDoc(
         Array.from(seed)
           .map((b) => b.toString(16).padStart(2, '0'))

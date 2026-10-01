@@ -532,18 +532,19 @@ export function delete_record(collection, rkey) {
 }
 
 /**
- * A channel's iroh-docs namespace seed (AppKey-derived — the write capability stays
- * with the author).
+ * A channel's iroh-docs namespace seed at one epoch (AppKey-derived — the write
+ * capability stays with the author).
  * @param {Uint8Array} app_key
  * @param {string} channel_id
+ * @param {number} epoch
  * @returns {Uint8Array}
  */
-export function derive_channel_doc_seed(app_key, channel_id) {
+export function derive_channel_doc_seed(app_key, channel_id, epoch) {
     const ptr0 = passArray8ToWasm0(app_key, wasm.__wbindgen_malloc);
     const len0 = WASM_VECTOR_LEN;
     const ptr1 = passStringToWasm0(channel_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
     const len1 = WASM_VECTOR_LEN;
-    const ret = wasm.derive_channel_doc_seed(ptr0, len0, ptr1, len1);
+    const ret = wasm.derive_channel_doc_seed(ptr0, len0, ptr1, len1, epoch);
     var v3 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
     wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
     return v3;

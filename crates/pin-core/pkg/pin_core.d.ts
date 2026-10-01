@@ -173,10 +173,10 @@ export function delete_channel_record(ns_id: string, collection: string, rkey: s
 export function delete_record(collection: string, rkey: string): Promise<void>;
 
 /**
- * A channel's iroh-docs namespace seed (AppKey-derived — the write capability stays
- * with the author).
+ * A channel's iroh-docs namespace seed at one epoch (AppKey-derived — the write
+ * capability stays with the author).
  */
-export function derive_channel_doc_seed(app_key: Uint8Array, channel_id: string): Uint8Array;
+export function derive_channel_doc_seed(app_key: Uint8Array, channel_id: string, epoch: number): Uint8Array;
 
 /**
  * The pkarr seed for a channel's read-DocTicket record, from its channel key K.
@@ -1008,7 +1008,7 @@ export interface InitOutput {
     readonly decrypt_settings: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly delete_channel_record: (a: number, b: number, c: number, d: number, e: number, f: number) => any;
     readonly delete_record: (a: number, b: number, c: number, d: number) => any;
-    readonly derive_channel_doc_seed: (a: number, b: number, c: number, d: number) => [number, number];
+    readonly derive_channel_doc_seed: (a: number, b: number, c: number, d: number, e: number) => [number, number];
     readonly derive_channel_doc_ticket_seed: (a: number, b: number) => [number, number];
     readonly derive_channel_locator_seed: (a: number, b: number) => [number, number];
     readonly derive_did_dht_seed: (a: number, b: number) => [number, number];

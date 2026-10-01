@@ -14,6 +14,7 @@ import {
   encryptForChannel,
   encryptSettings,
   generateChannelKey,
+  INITIAL_EPOCH,
   settingsPadSize,
 } from './crypto'
 
@@ -356,29 +357,41 @@ function bytesToBase64(bytes: Uint8Array): string {
 
 describe('deriveChannelDocSeed', () => {
   it('produces a 32-byte namespace seed', async () => {
-    const seed = await deriveChannelDocSeed(new Uint8Array(32), 'chan1')
+    const seed = await deriveChannelDocSeed(
+      new Uint8Array(32),
+      'chan1',
+      INITIAL_EPOCH,
+    )
     expect(seed.length).toBe(32)
   })
 
   it('is deterministic for the same AppKey + channelID', async () => {
     const appKey = new Uint8Array(32).fill(9)
-    expect(await deriveChannelDocSeed(appKey, 'chan1')).toEqual(
-      await deriveChannelDocSeed(appKey, 'chan1'),
+    expect(await deriveChannelDocSeed(appKey, 'chan1', INITIAL_EPOCH)).toEqual(
+      await deriveChannelDocSeed(appKey, 'chan1', INITIAL_EPOCH),
     )
   })
 
   it('differs per channelID, so an authors channels are separate docs', async () => {
     const appKey = new Uint8Array(32).fill(9)
-    expect(await deriveChannelDocSeed(appKey, 'chan1')).not.toEqual(
-      await deriveChannelDocSeed(appKey, 'chan2'),
-    )
+    expect(
+      await deriveChannelDocSeed(appKey, 'chan1', INITIAL_EPOCH),
+    ).not.toEqual(await deriveChannelDocSeed(appKey, 'chan2', INITIAL_EPOCH))
   })
 
   it('differs per AppKey, so two authors never collide on a namespace', async () => {
     expect(
-      await deriveChannelDocSeed(new Uint8Array(32).fill(1), 'chan1'),
+      await deriveChannelDocSeed(
+        new Uint8Array(32).fill(1),
+        'chan1',
+        INITIAL_EPOCH,
+      ),
     ).not.toEqual(
-      await deriveChannelDocSeed(new Uint8Array(32).fill(2), 'chan1'),
+      await deriveChannelDocSeed(
+        new Uint8Array(32).fill(2),
+        'chan1',
+        INITIAL_EPOCH,
+      ),
     )
   })
 
@@ -388,17 +401,29 @@ describe('deriveChannelDocSeed', () => {
     // author's channel doc. Deriving from the AppKey is what prevents that, so a
     // K-derived seed must never equal it.
     const k = await generateChannelKey()
-    expect(await deriveChannelDocSeed(k, 'chan1')).not.toEqual(
+    expect(await deriveChannelDocSeed(k, 'chan1', INITIAL_EPOCH)).not.toEqual(
       await deriveChannelLocatorSeed(k),
     )
   })
 
+  it('differs per epoch, so a rotation moves the doc', async () => {
+    const appKey = new Uint8Array(32).fill(9)
+    expect(await deriveChannelDocSeed(appKey, 'chan1', 0)).not.toEqual(
+      await deriveChannelDocSeed(appKey, 'chan1', 1),
+    )
+  })
+
   it('matches a fixed value for the all-zeros AppKey (regression lock)', async () => {
-    // Locks salt='' + info='pin:channel-doc-ns:v1:' + channelID + SHA-256. Both
-    // engines open the same channel doc from this seed, so it can't drift.
-    const seed = await deriveChannelDocSeed(new Uint8Array(32), 'chan1')
+    // Locks salt='' + info='pin:channel-doc-ns:v1:' + channelID + ':' + epoch + SHA-256.
+    // Both engines open the same channel doc from this seed, so it can't drift — and it
+    // is the vector pin-derive pins, so INITIAL_EPOCH can't drift from its Rust twin.
+    const seed = await deriveChannelDocSeed(
+      new Uint8Array(32),
+      'chan1',
+      INITIAL_EPOCH,
+    )
     expect(toHex(seed)).toBe(
-      '8b7ef12a1bfb3e697bf2f4a7fb60226b788a61dc1a9b6f9c2685b546a0230875',
+      'd8931773e14f8cb43f050ca34cb2eab5a717f351e5b95df1de7b68e13b067c2f',
     )
   })
 })

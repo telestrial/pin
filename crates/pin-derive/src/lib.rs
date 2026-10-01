@@ -76,10 +76,26 @@ pub const DID_DHT_INFO: &[u8] = b"pin:did-dht:v1";
 /// HKDF `info` for a channel's pkarr locator key — derived from K, not the AppKey,
 /// because a subscriber holding only K must reach the same key.
 pub const CHANNEL_LOCATOR_INFO: &[u8] = b"pin:channel-locator:v1";
-/// HKDF `info` PREFIX for a channel's iroh-docs namespace seed; the channelID is
-/// appended. AppKey-derived on purpose — a namespace secret IS the write capability,
-/// so deriving it from K would hand every subscriber the ability to write.
+/// HKDF `info` PREFIX for a channel's iroh-docs namespace seed; the channelID and the
+/// epoch are appended. AppKey-derived on purpose — a namespace secret IS the write
+/// capability, so deriving it from K would hand every subscriber the ability to write.
+///
+/// The epoch is in it so that rotating a channel's content key moves its doc as well: a
+/// removed member keeps the old namespace id from the ticket they once held, and a new
+/// namespace is one they have no way to learn.
 pub const CHANNEL_DOC_NS_INFO_PREFIX: &str = "pin:channel-doc-ns:v1:";
+/// HKDF `info` PREFIX for a channel's content key C; the channelID and the epoch are
+/// appended.
+///
+/// C is what decrypts a channel, and K is only what locates it. Splitting the two is what
+/// lets reading be granted and withdrawn without renaming the channel: K, and so the
+/// channelID and every pointer, stays put while C moves to a new epoch. AppKey-derived so
+/// the author never has to store it — every device holding the recovery phrase derives
+/// the same C, and nobody without the AppKey can derive the next one.
+pub const CHANNEL_CONTENT_INFO_PREFIX: &str = "pin:channel-content:v1:";
+/// The epoch every channel starts at. Nothing rotates a content key yet, so every channel
+/// is still at this one.
+pub const INITIAL_EPOCH: u32 = 0;
 /// HKDF `info` for the pkarr key carrying a channel's read DocTicket (K-derived, so a
 /// subscriber can find it — kept separate from the locator so a stale ticket can never
 /// disturb the durable pointer).
@@ -153,11 +169,22 @@ pub fn channel_locator_seed(channel_key: &[u8]) -> [u8; 32] {
     hkdf32(channel_key, CHANNEL_LOCATOR_INFO)
 }
 
-/// A channel's iroh-docs namespace seed, from the AppKey plus the channelID.
-pub fn channel_doc_seed(app_key: &[u8], channel_id: &str) -> [u8; 32] {
+/// A channel's iroh-docs namespace seed, from the AppKey plus the channelID and epoch.
+pub fn channel_doc_seed(app_key: &[u8], channel_id: &str, epoch: u32) -> [u8; 32] {
     hkdf32(
         app_key,
-        format!("{CHANNEL_DOC_NS_INFO_PREFIX}{channel_id}").as_bytes(),
+        format!("{CHANNEL_DOC_NS_INFO_PREFIX}{channel_id}:{epoch}").as_bytes(),
+    )
+}
+
+/// A channel's content key C at one epoch, from the AppKey plus the channelID.
+///
+/// A channelID is base32, so it never contains the `:` that separates it from the epoch
+/// and no two (channel, epoch) pairs spell the same `info`.
+pub fn channel_content_key(app_key: &[u8], channel_id: &str, epoch: u32) -> [u8; 32] {
+    hkdf32(
+        app_key,
+        format!("{CHANNEL_CONTENT_INFO_PREFIX}{channel_id}:{epoch}").as_bytes(),
     )
 }
 
@@ -1348,6 +1375,39 @@ mod tests {
     }
 
     #[test]
+    fn per_epoch_derivations_vary_by_epoch() {
+        // A rotation that derived the same key would be no rotation: a removed member
+        // would go on reading, and would go on finding the doc.
+        let ikm = [3u8; 32];
+        assert_ne!(
+            channel_content_key(&ikm, "chan", 0),
+            channel_content_key(&ikm, "chan", 1)
+        );
+        assert_ne!(
+            channel_doc_seed(&ikm, "chan", 0),
+            channel_doc_seed(&ikm, "chan", 1)
+        );
+    }
+
+    #[test]
+    fn channel_content_key_matches_the_locked_vector() {
+        // Every device of one author must derive the same C, and a drift would leave an
+        // author unable to read their own channel.
+        assert_eq!(
+            hex(&channel_content_key(&[0u8; 32], "chan1", INITIAL_EPOCH)),
+            "a348623b4bafba8f05e543839ae22a2173df927756b728bc56e2ae081ff35968"
+        );
+    }
+
+    #[test]
+    fn channel_doc_seed_matches_the_locked_vector() {
+        assert_eq!(
+            hex(&channel_doc_seed(&[0u8; 32], "chan1", INITIAL_EPOCH)),
+            "d8931773e14f8cb43f050ca34cb2eab5a717f351e5b95df1de7b68e13b067c2f"
+        );
+    }
+
+    #[test]
     fn every_derivation_is_domain_separated() {
         // Same IKM through each derivation must give a different key; a collision
         // would mean one secret's compromise leaked another's.
@@ -1359,7 +1419,8 @@ mod tests {
             pinned_key(&ikm),
             did_dht_seed(&ikm),
             channel_locator_seed(&ikm),
-            channel_doc_seed(&ikm, "chan"),
+            channel_doc_seed(&ikm, "chan", 0),
+            channel_content_key(&ikm, "chan", 0),
             channel_doc_ticket_seed(&ikm),
             engagement_locator_seed(&ikm),
             conversation_locator_seed(&ikm),
@@ -1377,7 +1438,14 @@ mod tests {
     #[test]
     fn per_id_derivations_vary_by_id() {
         let ikm = [3u8; 32];
-        assert_ne!(channel_doc_seed(&ikm, "a"), channel_doc_seed(&ikm, "b"));
+        assert_ne!(
+            channel_doc_seed(&ikm, "a", 0),
+            channel_doc_seed(&ikm, "b", 0)
+        );
+        assert_ne!(
+            channel_content_key(&ikm, "a", 0),
+            channel_content_key(&ikm, "b", 0)
+        );
         assert_ne!(
             rendezvous_instance_seed(&ikm, "a"),
             rendezvous_instance_seed(&ikm, "b")
