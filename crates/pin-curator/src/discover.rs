@@ -158,6 +158,11 @@ pub struct DirectoryRecord {
     /// being an edge anybody walks.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub followers: Option<serde_json::Value>,
+    /// Their X25519 encryption key, base64, as their directory publishes it — what an
+    /// invitation to them is sealed to, held so sealing one costs no resolve. Never faded:
+    /// like `reach` it is how to get back to them, not what they looked like.
+    #[serde(rename = "encKey", default, skip_serializing_if = "Option::is_none")]
+    pub enc_key: Option<String>,
     /// The directory pointer this was read from. Sia is content-addressed, so an unchanged
     /// URL proves the bytes are identical — which is what lets a later pass confirm this
     /// record without downloading anything.
@@ -277,6 +282,13 @@ pub(crate) fn parse_directory(
             None | Some(serde_json::Value::Null) => None,
             Some(v) => Some(v.clone()),
         },
+        // Kept only when it is a key at all: 32 bytes of base64. A malformed one held here
+        // would fail later, at the seal, further from the thing that was wrong.
+        enc_key: blob
+            .get("encKey")
+            .and_then(|v| v.as_str())
+            .filter(|k| pin_crypto::b64_decode(k).is_some_and(|b| b.len() == 32))
+            .map(str::to_string),
         url: url.to_string(),
         epoch: DISCOVER_EPOCH,
         seen_at: now_iso.to_string(),
@@ -1153,6 +1165,7 @@ mod tests {
             follows: vec![serde_json::json!({"didDht": "did:dht:bob", "channelID": "c1"})],
             handle_follows: vec!["did:dht:carol".into()],
             followers: None,
+            enc_key: None,
             url: "sia://one".into(),
             epoch: DISCOVER_EPOCH,
             seen_at: "2026-09-01T00:00:00.000Z".into(),
@@ -1247,6 +1260,26 @@ mod tests {
         assert_eq!(r.url, "sia://their-directory");
         assert_eq!(r.epoch, DISCOVER_EPOCH);
         assert_eq!(r.seen_at, NOW);
+    }
+
+    #[test]
+    fn a_directory_s_encryption_key_is_held_only_when_it_is_one() {
+        // Held only when it is a key at all: 32 bytes of base64.
+        let none = serde_json::json!({});
+        assert_eq!(parse_directory(&none, &[], "sia://x", NOW).enc_key, None);
+        let key = pin_crypto::b64_encode(&[7u8; 32]);
+        let keyed = serde_json::json!({ "encKey": key });
+        assert_eq!(
+            parse_directory(&keyed, &[], "sia://x", NOW).enc_key,
+            Some(key)
+        );
+        for bad in [
+            serde_json::json!({ "encKey": pin_crypto::b64_encode(&[7u8; 31]) }),
+            serde_json::json!({ "encKey": "not base64!" }),
+            serde_json::json!({ "encKey": 7 }),
+        ] {
+            assert_eq!(parse_directory(&bad, &[], "sia://x", NOW).enc_key, None);
+        }
     }
 
     #[test]
@@ -1780,6 +1813,7 @@ mod tests {
 
         let mut full = full;
         full.followers = Some(serde_json::json!({"kinds": {"follow": {"count": 3}}}));
+        full.enc_key = Some(pin_crypto::b64_encode(&[7u8; 32]));
         let reduced = faded(&full, DirectoryTier::Reduced);
         assert_eq!(reduced.tier, DirectoryTier::Reduced);
         assert_eq!(reduced.profile, None);
@@ -1796,6 +1830,9 @@ mod tests {
         assert!(minimal.follows.is_empty());
         assert!(minimal.handle_follows.is_empty());
         assert_eq!(minimal.reach, full.reach);
+        // The key to seal to them is kept with the way to reach them: what is lost by fading
+        // is what they looked like, never how to get back to them.
+        assert_eq!(minimal.enc_key, full.enc_key);
         assert_eq!(minimal.url, full.url);
     }
 
@@ -1921,6 +1958,12 @@ mod tests {
                         name: "Second".into(),
                         show_on_profile: None,
                     })
+                }),
+            ),
+            (
+                "encryption key",
+                Box::new(|r: &mut DirectoryRecord| {
+                    r.enc_key = Some(pin_crypto::b64_encode(&[8u8; 32]))
                 }),
             ),
             (

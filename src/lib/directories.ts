@@ -75,6 +75,9 @@ export type DirectoryRecord = {
   handleFollows: string[]
   /** Their published person-follow tally; dropped when the record fades. */
   followers?: PersonTally
+  /** Their X25519 encryption key, base64 — what an invitation to them is sealed to. Kept at
+   *  every tier, like `reach`: it is how to get back to them. */
+  encKey?: string
   url: string
   epoch: number
   seenAt: string

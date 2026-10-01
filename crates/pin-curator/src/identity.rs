@@ -195,6 +195,16 @@ struct DirectoryDoc {
     /// the endorsements: the shape is pin-engagement's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     followers: Option<serde_json::Value>,
+    /// This identity's X25519 encryption key, base64: what a box meant for it is sealed to —
+    /// an invitation to a channel only its members may read, an answer to a request to join
+    /// one.
+    ///
+    /// Derived from the AppKey, so every device publishes the same one. Optional so every
+    /// reader that predates it goes on reading the blob unchanged, and NOT something to say
+    /// on its own (see `has_anything`): an identity that has published nothing does not
+    /// announce itself merely to be sealed to.
+    #[serde(rename = "encKey", default, skip_serializing_if = "Option::is_none")]
+    enc_key: Option<String>,
     #[serde(rename = "updatedAt")]
     updated_at: String,
 }
@@ -728,6 +738,9 @@ async fn assemble_directory(
         followers: crate::engagement::read_person_tally(&ctx.doc, &ctx.blobs, ctx.author_id)
             .await
             .and_then(|t| serde_json::to_value(t).ok()),
+        enc_key: Some(pin_crypto::b64_encode(&pin_crypto::enc_public(
+            &pin_derive::enc_key_seed(&ctx.app_key),
+        ))),
         updated_at: now_iso,
     }
 }
@@ -1264,6 +1277,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_directory_carries_a_key_this_identity_can_open_a_box_sealed_to() {
+        // Asserted by sealing to what was published and opening with what the AppKey
+        // derives, rather than by comparing to a recomputation: the claim is that the key
+        // works for the identity it names.
+        let world = crate::testnet::World::new();
+        let me = crate::testnet::Identity::new(&world, 1).await;
+        me.set_settings(serde_json::json!({ "handleFollows": ["did:dht:x"] }))
+            .await;
+        let ctx = ctx_over(&me);
+        let settings = read_settings(&ctx.doc, &ctx.blobs, ctx.author_id, &ctx.app_key)
+            .await
+            .expect("settings");
+
+        let doc = assemble_directory(&ctx, &settings, None, "now".into()).await;
+        let v = serde_json::to_value(&doc).unwrap();
+        let published: [u8; 32] = pin_crypto::b64_decode(v["encKey"].as_str().unwrap())
+            .unwrap()
+            .try_into()
+            .unwrap();
+        let sealed = pin_crypto::seal_to(&published, b"invited").unwrap();
+        assert_eq!(
+            pin_crypto::open_sealed(&pin_derive::enc_key_seed(&me.app_key), &sealed).unwrap(),
+            b"invited"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_encryption_key_alone_is_not_something_to_say() {
+        // An identity that has published nothing stays unannounced; carrying a key does not
+        // change that.
+        let world = crate::testnet::World::new();
+        let me = crate::testnet::Identity::new(&world, 1).await;
+        me.set_settings(serde_json::json!({})).await;
+        let ctx = ctx_over(&me);
+        let settings = read_settings(&ctx.doc, &ctx.blobs, ctx.author_id, &ctx.app_key)
+            .await
+            .expect("settings");
+        let doc = assemble_directory(&ctx, &settings, None, "now".into()).await;
+        assert!(doc.enc_key.is_some());
+        assert!(!has_anything(&doc));
+    }
+
+    #[tokio::test]
     async fn the_directory_carries_the_person_tally_when_somebody_follows() {
         let world = crate::testnet::World::new();
         let me = crate::testnet::Identity::new(&world, 1).await;
@@ -1375,6 +1431,7 @@ mod tests {
             follows: Vec::new(),
             handle_follows: Vec::new(),
             followers: None,
+            enc_key: None,
             endorsements: Vec::new(),
             comments_url: None,
             updated_at: "2026-08-06T12:00:00.000Z".into(),
@@ -1433,6 +1490,7 @@ mod tests {
             endorsements: Vec::new(),
             comments_url: None,
             followers: None,
+            enc_key: None,
             updated_at: "2026-08-06T12:00:00.000Z".into(),
         };
         // Compared as parsed values, not as bytes. A directory document is PARSED by

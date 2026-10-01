@@ -1003,6 +1003,7 @@ mod tests {
             follows: Vec::new(),
             handle_follows: Vec::new(),
             followers: None,
+            enc_key: None,
             url: "sia://theirs".into(),
             epoch: 1,
             seen_at: "2026-09-05T00:00:00.000Z".into(),

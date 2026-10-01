@@ -62,6 +62,10 @@ export type DirectoryDoc = {
   // How many follow this identity as a PERSON, as it folded that — the tally with its
   // receipts. Absent while nobody follows.
   followers?: PersonTally
+  // This identity's X25519 encryption key, base64 — what a box meant for it is sealed to:
+  // an invitation to a channel only its members may read. Derived from the AppKey, so every
+  // device publishes the same one.
+  encKey?: string
   updatedAt: string
 }
 
