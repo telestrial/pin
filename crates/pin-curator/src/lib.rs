@@ -757,7 +757,7 @@ pub(crate) fn seal_doc_value<T: serde::Serialize>(
     value: &T,
 ) -> Result<Vec<u8>, String> {
     let json = serde_json::to_vec(value).map_err(|e| format!("encode: {e}"))?;
-    pin_channel::seal(sealing, &json).map(String::into_bytes)
+    pin_channel::seal(sealing, pin_channel::Kind::DocValue, &json).map(String::into_bytes)
 }
 
 /// A channel-doc value, opened with the content key the reader holds. `None` for anything
@@ -1235,6 +1235,7 @@ mod tests {
     fn sealed(k: &[u8; 32], iso: &str) -> Vec<u8> {
         pin_channel::seal(
             &pin_channel::author_sealing(&[1u8; 32], k),
+            pin_channel::Kind::Manifest,
             published(iso).as_bytes(),
         )
         .unwrap()

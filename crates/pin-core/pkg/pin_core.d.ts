@@ -102,7 +102,7 @@ export function channel_resolve_tallies_url(channel_key: Uint8Array): Promise<st
  * tier's fakes publish through this, so what they put in the fake world is the real
  * format rather than a lookalike.
  */
-export function channel_seal(app_key_hex: string, channel_key: Uint8Array, payload_json: string): string;
+export function channel_seal(app_key_hex: string, channel_key: Uint8Array, kind: string, payload_json: string): string;
 
 /**
  * The collection holding the comments this identity has written.
@@ -1005,7 +1005,7 @@ export interface InitOutput {
     readonly channel_resolve: (a: number, b: number) => any;
     readonly channel_resolve_conversations_url: (a: number, b: number) => any;
     readonly channel_resolve_tallies_url: (a: number, b: number) => any;
-    readonly channel_seal: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
+    readonly channel_seal: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
     readonly comment_collection: () => [number, number];
     readonly comment_files_collection: () => [number, number];
     readonly comment_rkey: (a: number, b: number, c: number, d: number) => [number, number];

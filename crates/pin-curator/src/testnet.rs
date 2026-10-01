@@ -406,6 +406,7 @@ impl Identity {
         });
         let sealed = pin_channel::seal(
             &pin_channel::author_sealing(&self.app_key, &k),
+            pin_channel::Kind::Manifest,
             &serde_json::to_vec(&manifest).expect("serialize"),
         )
         .expect("seal manifest");
@@ -2610,7 +2611,8 @@ mod content_keys {
 
         // Sealed by somebody else's AppKey, so a derivation from John's could not match.
         let their_sealing = pin_channel::author_sealing(&[9u8; 32], &theirs);
-        let blob = pin_channel::seal(&their_sealing, b"{}").expect("seal");
+        let blob =
+            pin_channel::seal(&their_sealing, pin_channel::Kind::Manifest, b"{}").expect("seal");
         crate::write_record(
             &john.doc,
             john.author_id,
@@ -2648,7 +2650,7 @@ mod content_keys {
             john.author_id,
             crate::SUB_COLLECTION,
             &channel_id,
-            pin_channel::seal(&members_only, b"{}")
+            pin_channel::seal(&members_only, pin_channel::Kind::Manifest, b"{}")
                 .expect("seal")
                 .into_bytes(),
         )

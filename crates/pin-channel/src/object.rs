@@ -21,12 +21,63 @@
 //! One format for all three artifacts a channel publishes — the manifest, the tallies and
 //! the conversations — so a reader who can open one can open the others, and there is one
 //! place a head is read.
+//!
+//! THE HEAD IS SIGNED BY THE AUTHOR, because K is no proof of authorship. Every pointer a
+//! channel publishes is signed by a key derived from K, so anyone holding K can repoint
+//! one, and an object sealed under K is just as easy for them to make. The signature is
+//! the author's did:dht key over the channel, what the object is, its epoch, its read key
+//! and a digest of the sealed body — so a reader who checks it against the author's did
+//! knows the object is the author's, whoever served it and whatever pointer led to it.
 
 use serde::{Deserialize, Serialize};
 
 /// The leading byte of an object in this format. Version 1 was the whole payload sealed
 /// under K as one `pin_crypto::encrypt` envelope, and is not read.
 const OBJECT_VERSION: u8 = 2;
+/// The domain an object's signature is made in. The did:dht key also signs pkarr packets
+/// and engagement records, so a signature with no prefix of its own could be valid for
+/// something else.
+const SIGNING_DOMAIN: &[u8] = b"pin.channel-object.v1";
+
+/// What a sealed object is.
+///
+/// Signed, so one kind cannot be passed off as another: a channel's tallies are a genuine
+/// object of its author's, and a pointer to the manifest that named them would otherwise
+/// be a pointer to a genuine object of the wrong kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    Manifest,
+    Tallies,
+    Conversations,
+    /// A value in the channel's own doc.
+    DocValue,
+    /// A piece of the member tree.
+    Members,
+}
+
+impl Kind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Kind::Manifest => "manifest",
+            Kind::Tallies => "tallies",
+            Kind::Conversations => "conversations",
+            Kind::DocValue => "doc-value",
+            Kind::Members => "members",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        [
+            Kind::Manifest,
+            Kind::Tallies,
+            Kind::Conversations,
+            Kind::DocValue,
+            Kind::Members,
+        ]
+        .into_iter()
+        .find(|k| k.as_str() == s)
+    }
+}
 const HEAD_LEN_BYTES: usize = 4;
 
 /// A channel's content key at one epoch.
@@ -45,6 +96,8 @@ pub struct Sealing<'a> {
     pub content: ContentKey,
     /// Whether C goes in the head, which makes the body readable by anyone holding K.
     pub publish_read_key: bool,
+    /// The author's did:dht seed, which signs the head.
+    pub signer: [u8; 32],
 }
 
 /// An opened object: the body, and the content key it was sealed under.
@@ -66,19 +119,71 @@ struct Head {
     /// C, base64. Absent when only members may read the body.
     #[serde(rename = "readKey", default, skip_serializing_if = "Option::is_none")]
     read_key: Option<String>,
+    /// What the object is, as `Kind::as_str` spells it.
+    kind: String,
+    /// The author's signature over `signing_bytes`, base64.
+    sig: String,
 }
 
-/// Seal a payload into an object.
-pub fn seal(sealing: &Sealing, payload: &[u8]) -> Result<String, String> {
+/// What the author signs: everything in the head, the channel it belongs to, and a digest
+/// of the sealed body.
+///
+/// The body's CIPHERTEXT, so the signature checks without C: anyone who can find the
+/// channel can tell a forged object from a genuine one, member or not. The channel is the
+/// one derived from K rather than anything the head claims, so an object cannot be moved
+/// from one channel to another.
+fn signing_bytes(
+    channel_id: &str,
+    kind: &str,
+    epoch: u32,
+    read_key: Option<&str>,
+    body: &[u8],
+) -> Vec<u8> {
+    let mut out = Vec::with_capacity(SIGNING_DOMAIN.len() + 128);
+    out.extend_from_slice(SIGNING_DOMAIN);
+    for field in [channel_id, kind, &epoch.to_string()] {
+        out.extend_from_slice(&(field.len() as u32).to_be_bytes());
+        out.extend_from_slice(field.as_bytes());
+    }
+    // Tagged rather than bare, so a present read key and an absent one never sign the same
+    // bytes.
+    match read_key {
+        Some(k) => {
+            out.push(1);
+            out.extend_from_slice(&(k.len() as u32).to_be_bytes());
+            out.extend_from_slice(k.as_bytes());
+        }
+        None => out.push(0),
+    }
+    out.extend_from_slice(&pin_crypto::sha256(body));
+    out
+}
+
+/// Seal a payload into an object, signed by its author.
+pub fn seal(sealing: &Sealing, kind: Kind, payload: &[u8]) -> Result<String, String> {
+    let body = pin_crypto::seal_raw(&sealing.content.key, payload)?;
+    let read_key = sealing
+        .publish_read_key
+        .then(|| pin_crypto::b64_encode(&sealing.content.key));
+    let channel_id = pin_crypto::channel_id(sealing.channel_key);
+    let sig = pin_pkarr::sign_detached(
+        &sealing.signer,
+        &signing_bytes(
+            &channel_id,
+            kind.as_str(),
+            sealing.content.epoch,
+            read_key.as_deref(),
+            &body,
+        ),
+    )?;
     let head = Head {
         epoch: sealing.content.epoch,
-        read_key: sealing
-            .publish_read_key
-            .then(|| pin_crypto::b64_encode(&sealing.content.key)),
+        read_key,
+        kind: kind.as_str().to_string(),
+        sig,
     };
     let head_json = serde_json::to_vec(&head).map_err(|e| format!("head: {e}"))?;
     let head = pin_crypto::seal_raw(sealing.channel_key, &head_json)?;
-    let body = pin_crypto::seal_raw(&sealing.content.key, payload)?;
 
     let head_len = u32::try_from(head.len()).map_err(|_| "head too large".to_string())?;
     let mut out = Vec::with_capacity(1 + HEAD_LEN_BYTES + head.len() + body.len());
@@ -211,17 +316,20 @@ mod tests {
         key: [9u8; 32],
     };
 
+    const SIGNER: [u8; 32] = [11u8; 32];
+
     fn sealing(publish_read_key: bool) -> Sealing<'static> {
         Sealing {
             channel_key: &K,
             content: C,
             publish_read_key,
+            signer: SIGNER,
         }
     }
 
     #[test]
     fn an_object_opens_with_k_and_reports_its_content_key() {
-        let blob = seal(&sealing(true), b"payload").unwrap();
+        let blob = seal(&sealing(true), Kind::Manifest, b"payload").unwrap();
         let opened = open(&K, &blob).unwrap();
         assert_eq!(opened.payload, b"payload");
         assert_eq!(opened.content, C);
@@ -232,7 +340,7 @@ mod tests {
         // Sealed as a member-only object, then given the read key by hand: if the body
         // were under K, K alone would open it, which is the property the split exists to
         // remove.
-        let blob = seal(&sealing(false), b"payload").unwrap();
+        let blob = seal(&sealing(false), Kind::Manifest, b"payload").unwrap();
         let bytes = pin_crypto::b64_decode(&blob).unwrap();
         let len = u32::from_be_bytes(bytes[1..5].try_into().unwrap()) as usize;
         let body = &bytes[5 + len..];
@@ -242,14 +350,14 @@ mod tests {
 
     #[test]
     fn an_object_without_a_read_key_does_not_open_with_k() {
-        let blob = seal(&sealing(false), b"payload").unwrap();
+        let blob = seal(&sealing(false), Kind::Manifest, b"payload").unwrap();
         let err = open(&K, &blob).unwrap_err();
         assert!(err.contains("no read key for epoch 3"), "{err}");
     }
 
     #[test]
     fn an_object_does_not_open_with_the_wrong_k() {
-        let blob = seal(&sealing(true), b"payload").unwrap();
+        let blob = seal(&sealing(true), Kind::Manifest, b"payload").unwrap();
         let mut wrong = K;
         wrong[0] ^= 1;
         assert!(open(&wrong, &blob).is_err());
@@ -257,7 +365,7 @@ mod tests {
 
     #[test]
     fn the_content_key_is_read_from_the_head_alone() {
-        let blob = seal(&sealing(true), b"payload").unwrap();
+        let blob = seal(&sealing(true), Kind::Manifest, b"payload").unwrap();
         assert_eq!(content_key(&K, &blob).unwrap(), C);
         // A body nothing could open still yields its key, which is what lets the head be
         // read without paying for the body.
@@ -271,12 +379,16 @@ mod tests {
         let mut wrong = K;
         wrong[0] ^= 1;
         assert!(content_key(&wrong, &blob).is_err());
-        assert!(content_key(&K, &seal(&sealing(false), b"payload").unwrap()).is_err());
+        assert!(content_key(
+            &K,
+            &seal(&sealing(false), Kind::Manifest, b"payload").unwrap()
+        )
+        .is_err());
     }
 
     #[test]
     fn an_object_with_no_read_key_opens_with_a_held_content_key() {
-        let blob = seal(&sealing(false), b"payload").unwrap();
+        let blob = seal(&sealing(false), Kind::Manifest, b"payload").unwrap();
         assert_eq!(open_with(&K, &blob, &C).unwrap(), b"payload");
         // A key for another epoch is refused by its epoch, before the body is tried.
         let other = ContentKey { epoch: 4, ..C };
@@ -288,6 +400,53 @@ mod tests {
             ..C
         };
         assert!(open_with(&K, &blob, &wrong).is_err());
+    }
+
+    /// The head as sealed, opened with K, and its body's sealed bytes.
+    fn head_and_body(blob: &str) -> (Head, Vec<u8>) {
+        let bytes = pin_crypto::b64_decode(blob).unwrap();
+        let (head, body) = split_head(&K, &bytes[1..]).unwrap();
+        (head, body.to_vec())
+    }
+
+    #[test]
+    fn the_head_is_signed_by_the_author_over_what_it_says() {
+        let author = pin_pkarr::public_key_from_seed(&SIGNER).unwrap();
+        let channel = pin_crypto::channel_id(&K);
+        let blob = seal(&sealing(true), Kind::Tallies, b"payload").unwrap();
+        let (head, body) = head_and_body(&blob);
+        assert_eq!(head.kind, "tallies");
+        let message = signing_bytes(&channel, "tallies", 3, head.read_key.as_deref(), &body);
+        assert!(pin_pkarr::verify_detached(&author, &message, &head.sig).is_ok());
+
+        // Each thing the signature covers moves it: another kind, epoch, channel, read key
+        // or body all fail against the same signature.
+        for wrong in [
+            signing_bytes(&channel, "manifest", 3, head.read_key.as_deref(), &body),
+            signing_bytes(&channel, "tallies", 4, head.read_key.as_deref(), &body),
+            signing_bytes("elsewhere", "tallies", 3, head.read_key.as_deref(), &body),
+            signing_bytes(&channel, "tallies", 3, None, &body),
+            signing_bytes(&channel, "tallies", 3, head.read_key.as_deref(), b"other"),
+        ] {
+            assert!(pin_pkarr::verify_detached(&author, &wrong, &head.sig).is_err());
+        }
+        // And somebody else's key does not verify it.
+        let stranger = pin_pkarr::public_key_from_seed(&[12u8; 32]).unwrap();
+        assert!(pin_pkarr::verify_detached(&stranger, &message, &head.sig).is_err());
+    }
+
+    #[test]
+    fn a_kind_round_trips_through_its_name() {
+        for kind in [
+            Kind::Manifest,
+            Kind::Tallies,
+            Kind::Conversations,
+            Kind::DocValue,
+            Kind::Members,
+        ] {
+            assert_eq!(Kind::parse(kind.as_str()), Some(kind));
+        }
+        assert_eq!(Kind::parse("other"), None);
     }
 
     #[test]
@@ -314,29 +473,28 @@ mod tests {
     fn the_head_carries_only_the_epoch_and_the_read_key() {
         // Whatever the head holds, anyone who can find the channel can read. Asserted on
         // the key set so a field added here is a decision rather than a side effect.
-        let blob = seal(&sealing(true), b"payload").unwrap();
+        let blob = seal(&sealing(true), Kind::Manifest, b"payload").unwrap();
         let bytes = pin_crypto::b64_decode(&blob).unwrap();
         let len = u32::from_be_bytes(bytes[1..5].try_into().unwrap()) as usize;
         let head = pin_crypto::open_raw(&K, &bytes[5..5 + len]).unwrap();
         let head: serde_json::Value = serde_json::from_slice(&head).unwrap();
         let mut keys: Vec<&String> = head.as_object().unwrap().keys().collect();
         keys.sort();
-        assert_eq!(keys, ["epoch", "readKey"]);
+        assert_eq!(keys, ["epoch", "kind", "readKey", "sig"]);
 
-        let blob = seal(&sealing(false), b"payload").unwrap();
+        let blob = seal(&sealing(false), Kind::Manifest, b"payload").unwrap();
         let bytes = pin_crypto::b64_decode(&blob).unwrap();
         let len = u32::from_be_bytes(bytes[1..5].try_into().unwrap()) as usize;
         let head = pin_crypto::open_raw(&K, &bytes[5..5 + len]).unwrap();
         let head: serde_json::Value = serde_json::from_slice(&head).unwrap();
-        assert_eq!(
-            head.as_object().unwrap().keys().collect::<Vec<_>>(),
-            ["epoch"]
-        );
+        let mut keys: Vec<&String> = head.as_object().unwrap().keys().collect();
+        keys.sort();
+        assert_eq!(keys, ["epoch", "kind", "sig"]);
     }
 
     #[test]
     fn a_truncated_object_is_refused_rather_than_misread() {
-        let blob = seal(&sealing(true), b"payload").unwrap();
+        let blob = seal(&sealing(true), Kind::Manifest, b"payload").unwrap();
         let bytes = pin_crypto::b64_decode(&blob).unwrap();
         for cut in [1, 3, 5, 20] {
             let short = pin_crypto::b64_encode(&bytes[..cut]);

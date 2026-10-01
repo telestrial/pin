@@ -96,7 +96,7 @@ export function fakeChannelLocatorNativeModule() {
     ) => {
       const world = getCurrentWorld()
       const id = world.nextObjectID()
-      const blob = channel_seal(appKeyHex, channelKey, manifestJson)
+      const blob = channel_seal(appKeyHex, channelKey, 'manifest', manifestJson)
       world.objects.set(id, {
         id,
         bytes: new TextEncoder().encode(blob),
@@ -173,7 +173,7 @@ const FAKE_AUTHOR_APP_KEY = '11'.repeat(32)
 /** Seal a payload as a channel's author would — the real object format, so a test that
  *  plants a manifest in the doc plants what a publish would have left there. */
 export function sealAsAuthor(channelKey: Uint8Array, payload: string): string {
-  return channel_seal(FAKE_AUTHOR_APP_KEY, channelKey, payload)
+  return channel_seal(FAKE_AUTHOR_APP_KEY, channelKey, 'manifest', payload)
 }
 
 /** Publish a channel's conversations the way its author's Curator would. Sealed for real,
@@ -190,6 +190,7 @@ export function publishFakeConversations(
       channel_seal(
         FAKE_AUTHOR_APP_KEY,
         channelKey,
+        'conversations',
         JSON.stringify(conversations),
       ),
     ),
@@ -213,7 +214,12 @@ export function publishFakeTallies(
   world.objects.set(id, {
     id,
     bytes: new TextEncoder().encode(
-      channel_seal(FAKE_AUTHOR_APP_KEY, channelKey, JSON.stringify(tallies)),
+      channel_seal(
+        FAKE_AUTHOR_APP_KEY,
+        channelKey,
+        'tallies',
+        JSON.stringify(tallies),
+      ),
     ),
     createdAt: new Date(),
     metadata: '',

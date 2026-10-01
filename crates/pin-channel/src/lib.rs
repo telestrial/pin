@@ -26,7 +26,9 @@
 mod object;
 pub mod tree;
 
-pub use object::{content_key, fingerprint, open, open_with, seal, ContentKey, Opened, Sealing};
+pub use object::{
+    content_key, fingerprint, open, open_with, seal, ContentKey, Kind, Opened, Sealing,
+};
 
 /// How an author seals their own channel: C derived from the AppKey at the initial epoch,
 /// and carried in the head.
@@ -44,6 +46,7 @@ pub fn author_sealing<'a>(app_key: &[u8; 32], channel_key: &'a [u8; 32]) -> Seal
             key: pin_derive::channel_content_key(app_key, &channel_id, pin_derive::INITIAL_EPOCH),
         },
         publish_read_key: true,
+        signer: pin_derive::did_dht_seed(app_key),
     }
 }
 
@@ -105,6 +108,8 @@ pub struct Resolved {
 struct Pointer {
     seed: [u8; 32],
     prefix: &'static str,
+    /// What the object behind it is, which the object's signature covers.
+    kind: Kind,
 }
 
 /// Where a channel's manifest is advertised.
@@ -112,6 +117,7 @@ fn manifest_pointer(channel_key: &[u8; 32]) -> Pointer {
     Pointer {
         seed: pin_derive::channel_locator_seed(channel_key),
         prefix: POINTER_PREFIX,
+        kind: Kind::Manifest,
     }
 }
 
@@ -120,6 +126,7 @@ fn tallies_pointer(channel_key: &[u8; 32]) -> Pointer {
     Pointer {
         seed: pin_derive::engagement_locator_seed(channel_key),
         prefix: TALLIES_PREFIX,
+        kind: Kind::Tallies,
     }
 }
 
@@ -127,6 +134,7 @@ fn conversations_pointer(channel_key: &[u8; 32]) -> Pointer {
     Pointer {
         seed: pin_derive::conversation_locator_seed(channel_key),
         prefix: CONVERSATIONS_PREFIX,
+        kind: Kind::Conversations,
     }
 }
 
@@ -142,7 +150,7 @@ async fn seal_and_point(
     pointer: Pointer,
     payload_json: &str,
 ) -> Result<Published, String> {
-    let sealed = object::seal(sealing, payload_json.as_bytes())?;
+    let sealed = object::seal(sealing, pointer.kind, payload_json.as_bytes())?;
     let uploaded = sia
         .upload_item(sealed.clone().into_bytes(), None, None)
         .await?;
@@ -474,8 +482,9 @@ mod tests {
                 key: [9u8; 32],
             },
             publish_read_key: true,
+            signer: [1u8; 32],
         };
-        let sealed = object::seal(&sealing, manifest.as_bytes()).unwrap();
+        let sealed = object::seal(&sealing, Kind::Manifest, manifest.as_bytes()).unwrap();
         assert_eq!(open_blob(&key, &sealed).unwrap(), manifest);
         assert_eq!(open_payload(&key, &sealed).unwrap().1, sealing.content);
 
@@ -507,7 +516,7 @@ mod tests {
         assert!(sealing.publish_read_key);
 
         // And what it seals opens with K alone, through the head.
-        let blob = seal(&sealing, b"{}").unwrap();
+        let blob = seal(&sealing, Kind::Manifest, b"{}").unwrap();
         assert_eq!(open_payload(&k, &blob).unwrap().1, sealing.content);
     }
 }

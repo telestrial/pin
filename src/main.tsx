@@ -158,7 +158,7 @@ if (import.meta.env.DEV || inTauri()) {
       await putRecord(
         'channel',
         channelID,
-        enc.encode(channel_seal(hex, k, JSON.stringify(manifest))),
+        enc.encode(channel_seal(hex, k, 'manifest', JSON.stringify(manifest))),
       )
       // And an older copy of the same channel, for the subscriber to hold as the pull loop
       // would leave it after a read from Sia. A subscriber finds the live doc under the
@@ -167,6 +167,7 @@ if (import.meta.env.DEV || inTauri()) {
       const cachedHead = channel_seal(
         hex,
         k,
+        'manifest',
         JSON.stringify({
           ...manifest,
           name: `${name} (before the push)`,

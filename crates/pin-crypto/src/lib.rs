@@ -183,6 +183,12 @@ pub fn comment_subject(actor: &str, created_at: &str) -> String {
     base32_encode(&hasher.finalize())
 }
 
+/// SHA-256 of some bytes — for a digest that goes into a signature, where `content_hash`'s
+/// CID encoding would only be ceremony.
+pub fn sha256(bytes: &[u8]) -> [u8; 32] {
+    Sha256::digest(bytes).into()
+}
+
 /// Base64 (standard alphabet, padded) — the encoding used wherever bytes have to
 /// travel through JSON that both implementations read.
 ///

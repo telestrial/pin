@@ -1412,13 +1412,17 @@ pub async fn channel_publish(
 pub fn channel_seal(
     app_key_hex: String,
     channel_key: &[u8],
+    kind: &str,
     payload_json: String,
 ) -> Result<String, JsValue> {
     let app_key = decode_app_key(&app_key_hex)
         .ok_or_else(|| JsValue::from_str("app key must be 64 hex chars"))?;
     let key = key32(channel_key)?;
+    let kind = pin_channel::Kind::parse(kind)
+        .ok_or_else(|| JsValue::from_str(&format!("unknown object kind {kind}")))?;
     pin_channel::seal(
         &pin_channel::author_sealing(&app_key, &key),
+        kind,
         payload_json.as_bytes(),
     )
     .map_err(je)
