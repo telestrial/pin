@@ -57,8 +57,10 @@ describe('the channel round-trip under Tauri', () => {
   it('publishes through the native backend, not the WebView', async () => {
     const { publishLocator: publish } = await import('./channelLocatorNative')
     const key = new Uint8Array(32)
-    await expect(publish(key, '{}')).resolves.toMatchObject({ objectId: 'id' })
-    expect(publishLocator).toHaveBeenCalledWith(key, '{}')
+    await expect(publish('00'.repeat(32), key, '{}')).resolves.toMatchObject({
+      objectId: 'id',
+    })
+    expect(publishLocator).toHaveBeenCalledWith('00'.repeat(32), key, '{}')
   })
 
   it('resolves and republishes through the native backend too', async () => {

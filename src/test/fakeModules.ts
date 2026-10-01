@@ -18,8 +18,8 @@
 // `SiaClient` seam instead, which is where the app's dependency always was.
 
 import {
-  decrypt_for_channel,
-  encrypt_for_channel,
+  channel_open_blob,
+  channel_seal,
   pkarr_chunk_txt,
   pkarr_rejoin_txt,
 } from '../../crates/pin-core/pkg/pin_core.js'
@@ -69,8 +69,8 @@ function fakePublicKey(seed: Uint8Array): string {
 // It models the same thing the real one does, over the FakeWorld: a pointer keyed by the
 // K-derived locator seed, and the manifest as an object in the author's scope.
 //
-// The seal is REAL — the same Rust AES the production path uses. Only Sia and pkarr are
-// faked, because those are the network. Faking the format too would make the cached blob
+// The seal is REAL — the same Rust object format and AES the production path uses. Only Sia
+// and pkarr are faked, because those are the network. Faking the format too would make the cached blob
 // something no other code could open, and a test that checks the cache holds a genuinely
 // sealed manifest would fail against a fake rather than against the code.
 function locatorKeyFor(channelKey: Uint8Array): string {
@@ -89,10 +89,14 @@ export function fakeChannelLocatorNativeModule() {
     `cnv-${fakePublicKey(channelKey)}`
 
   return {
-    publishLocator: async (channelKey: Uint8Array, manifestJson: string) => {
+    publishLocator: async (
+      appKeyHex: string,
+      channelKey: Uint8Array,
+      manifestJson: string,
+    ) => {
       const world = getCurrentWorld()
       const id = world.nextObjectID()
-      const blob = encrypt_for_channel(channelKey, manifestJson)
+      const blob = channel_seal(appKeyHex, channelKey, manifestJson)
       world.objects.set(id, {
         id,
         bytes: new TextEncoder().encode(blob),
@@ -103,7 +107,12 @@ export function fakeChannelLocatorNativeModule() {
       world.pkarr.set(locatorKeyFor(channelKey), [
         { name: '_c0', value: itemURL },
       ])
-      return { locatorKey: locatorKeyFor(channelKey), objectId: id, itemURL }
+      return {
+        locatorKey: locatorKeyFor(channelKey),
+        objectId: id,
+        itemURL,
+        blob,
+      }
     },
 
     resolveLocator: async (channelKey: Uint8Array) => {
@@ -117,7 +126,7 @@ export function fakeChannelLocatorNativeModule() {
       // caller treats it as a hard read failure rather than an absent channel.
       if (!bytes) throw new Error(`Object not found: ${itemURL}`)
       const blob = new TextDecoder().decode(bytes)
-      return { manifestJson: decrypt_for_channel(channelKey, blob), blob }
+      return { manifestJson: channel_open_blob(channelKey, blob), blob }
     },
 
     republishPointer: async (channelKey: Uint8Array, itemURL: string) => {
@@ -127,7 +136,7 @@ export function fakeChannelLocatorNativeModule() {
     },
 
     openBlob: async (channelKey: Uint8Array, blob: string) =>
-      decrypt_for_channel(channelKey, blob),
+      channel_open_blob(channelKey, blob),
 
     resolveTalliesUrl: async (channelKey: Uint8Array) =>
       getCurrentWorld()
@@ -139,7 +148,7 @@ export function fakeChannelLocatorNativeModule() {
       const id = fakeObjectID(itemURL) ?? ''
       const bytes = world.objects.get(id)?.bytes
       if (!bytes) throw new Error(`Object not found: ${itemURL}`)
-      return decrypt_for_channel(channelKey, new TextDecoder().decode(bytes))
+      return channel_open_blob(channelKey, new TextDecoder().decode(bytes))
     },
 
     resolveConversationsUrl: async (channelKey: Uint8Array) =>
@@ -152,13 +161,17 @@ export function fakeChannelLocatorNativeModule() {
       const id = fakeObjectID(itemURL) ?? ''
       const bytes = world.objects.get(id)?.bytes
       if (!bytes) throw new Error(`Object not found: ${itemURL}`)
-      return decrypt_for_channel(channelKey, new TextDecoder().decode(bytes))
+      return channel_open_blob(channelKey, new TextDecoder().decode(bytes))
     },
   }
 }
 
-/** Publish a channel's conversations the way its author's Curator would. Sealed under K for
- *  real, like the counts — only Sia and pkarr are faked. */
+/** The AppKey the fakes seal a channel's counts and words under, standing in for the
+ *  author's. Any key will do: a reader takes the content key from the object's head. */
+const FAKE_AUTHOR_APP_KEY = '11'.repeat(32)
+
+/** Publish a channel's conversations the way its author's Curator would. Sealed for real,
+ *  like the counts — only Sia and pkarr are faked. */
 export function publishFakeConversations(
   channelKey: Uint8Array,
   conversations: Record<string, unknown>,
@@ -168,7 +181,11 @@ export function publishFakeConversations(
   world.objects.set(id, {
     id,
     bytes: new TextEncoder().encode(
-      encrypt_for_channel(channelKey, JSON.stringify(conversations)),
+      channel_seal(
+        FAKE_AUTHOR_APP_KEY,
+        channelKey,
+        JSON.stringify(conversations),
+      ),
     ),
     createdAt: new Date(),
     metadata: '',
@@ -179,8 +196,8 @@ export function publishFakeConversations(
 }
 
 /** Publish a channel's counts the way its author's Curator would, so a test can read
- *  them back through the path a screen uses. Sealed under K for real — only Sia and
- *  pkarr are faked. */
+ *  them back through the path a screen uses. Sealed for real — only Sia and pkarr are
+ *  faked. */
 export function publishFakeTallies(
   channelKey: Uint8Array,
   tallies: Record<string, unknown>,
@@ -190,7 +207,7 @@ export function publishFakeTallies(
   world.objects.set(id, {
     id,
     bytes: new TextEncoder().encode(
-      encrypt_for_channel(channelKey, JSON.stringify(tallies)),
+      channel_seal(FAKE_AUTHOR_APP_KEY, channelKey, JSON.stringify(tallies)),
     ),
     createdAt: new Date(),
     metadata: '',

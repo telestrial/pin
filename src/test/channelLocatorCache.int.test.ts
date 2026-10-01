@@ -21,16 +21,14 @@ vi.mock('../lib/docs', async () =>
 )
 
 import { createChannel, newChannelKey } from '../core/channels'
-import {
-  channelKeyFromBase64,
-  decryptForChannel,
-  encryptForChannel,
-} from '../core/crypto'
+import { channelKeyFromBase64, encryptForChannel } from '../core/crypto'
 import type { ChannelManifest, ItemRef, SubscriptionRef } from '../core/types'
 import {
   commitChannelManifest,
+  decodeChannelManifest,
   makeCachingLocatorReader,
 } from '../lib/channelLocator'
+import { resolveLocator } from '../lib/channelLocatorNative'
 import { applyCachedChannel, applyIfChanged } from '../lib/channelRevalidate'
 import { useFeedStore } from '../stores/feed'
 import { fakeDocStore as docStore } from './fakeModules'
@@ -40,6 +38,35 @@ describe('integration: caching locator reader seeds sub/<id>', () => {
   beforeEach(() => {
     resetAllStores()
     docStore.clear()
+  })
+
+  it('records the owned manifest as the very object it published', async () => {
+    // One seal, two copies. A second seal under a fresh nonce would be a different blob
+    // for the same manifest, and the channel doc copies this record verbatim to every
+    // subscriber, so the two would disagree byte-for-byte about what was published.
+    const app = createFakeApp()
+    const alice = app.createAccount({
+      did: 'did:plc:alice',
+      handle: 'alice.test',
+    })
+    const created = await createChannel(alice.client, {
+      channelKey: await newChannelKey(),
+      name: "Alice's voice",
+      description: '',
+    })
+    await commitChannelManifest(
+      alice.client,
+      FAKE_APP_KEY_HEX,
+      created.channelID,
+      created.channelKey,
+      created.manifest,
+    )
+
+    const kBytes = channelKeyFromBase64(created.channelKey)
+    const onSia = await resolveLocator(kBytes)
+    const recorded = docStore.get(`channel/${created.channelID}`)
+    expect(onSia).not.toBeNull()
+    expect(new TextDecoder().decode(recorded)).toBe(onSia?.blob)
   })
 
   it('returns the manifest AND caches the exact ciphertext under sub/<channelID>', async () => {
@@ -74,14 +101,11 @@ describe('integration: caching locator reader seeds sub/<id>', () => {
       expect(docStore.has(`sub/${created.channelID}`)).toBe(true),
     )
 
-    // The cached blob is the EXACT ciphertext — decrypting it with K yields the
-    // same manifest the reader returned (the byte-identical decode step 3 needs).
+    // The cached blob is the EXACT ciphertext — decoding it with K yields the same
+    // manifest the reader returned (the byte-identical decode step 3 needs).
     const cached = docStore.get(`sub/${created.channelID}`)!
     const kBytes = channelKeyFromBase64(created.channelKey)
-    const decoded = JSON.parse(
-      await decryptForChannel(kBytes, new TextDecoder().decode(cached)),
-    )
-    expect(decoded).toEqual(manifest)
+    expect(await decodeChannelManifest(kBytes, cached)).toEqual(manifest)
   })
 
   it('does not throw the read even when the doc write fails', async () => {
@@ -195,10 +219,7 @@ describe('integration: caching locator reader seeds sub/<id>', () => {
     // ...and the fresh read re-seeds the cache, so the fast path is correct after.
     await vi.waitFor(async () => {
       const cached = docStore.get(`sub/${created.channelID}`)!
-      const decoded = JSON.parse(
-        await decryptForChannel(kBytes, new TextDecoder().decode(cached)),
-      )
-      expect(decoded.name).toBe('Current')
+      expect((await decodeChannelManifest(kBytes, cached)).name).toBe('Current')
     })
   })
 

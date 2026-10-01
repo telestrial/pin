@@ -68,10 +68,11 @@ export function channel_id(channel_key: Uint8Array): string;
 export function channel_open_blob(channel_key: Uint8Array, blob: string): string;
 
 /**
- * Seal a manifest under K, upload it, and publish the pointer. Returns `Published`
- * as JSON — the caller needs the object id to reclaim the generation it superseded.
+ * Seal a manifest as its author, upload it, and publish the pointer. Returns
+ * `Published` as JSON — the caller needs the object id to reclaim the generation it
+ * superseded, and the blob to record the same bytes in the doc.
  */
-export function channel_publish(channel_key: Uint8Array, manifest_json: string): Promise<string>;
+export function channel_publish(app_key_hex: string, channel_key: Uint8Array, manifest_json: string): Promise<string>;
 
 /**
  * Re-sign a channel's current pointer to refresh its TTL, without minting a new object.
@@ -95,6 +96,13 @@ export function channel_resolve(channel_key: Uint8Array): Promise<string | undef
 export function channel_resolve_conversations_url(channel_key: Uint8Array): Promise<string | undefined>;
 
 export function channel_resolve_tallies_url(channel_key: Uint8Array): Promise<string | undefined>;
+
+/**
+ * Seal a payload as a channel's author would, with nothing uploaded. The integration
+ * tier's fakes publish through this, so what they put in the fake world is the real
+ * format rather than a lookalike.
+ */
+export function channel_seal(app_key_hex: string, channel_key: Uint8Array, payload_json: string): string;
 
 /**
  * The collection holding the comments this identity has written.
@@ -992,11 +1000,12 @@ export interface InitOutput {
     readonly channel_fetch_tallies: (a: number, b: number, c: number, d: number) => any;
     readonly channel_id: (a: number, b: number) => [number, number, number, number];
     readonly channel_open_blob: (a: number, b: number, c: number, d: number) => [number, number, number, number];
-    readonly channel_publish: (a: number, b: number, c: number, d: number) => any;
+    readonly channel_publish: (a: number, b: number, c: number, d: number, e: number, f: number) => any;
     readonly channel_republish_pointer: (a: number, b: number, c: number, d: number) => any;
     readonly channel_resolve: (a: number, b: number) => any;
     readonly channel_resolve_conversations_url: (a: number, b: number) => any;
     readonly channel_resolve_tallies_url: (a: number, b: number) => any;
+    readonly channel_seal: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
     readonly comment_collection: () => [number, number];
     readonly comment_files_collection: () => [number, number];
     readonly comment_rkey: (a: number, b: number, c: number, d: number) => [number, number];

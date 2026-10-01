@@ -21,7 +21,7 @@ rust-version = "1.95"
 # The bytes. Takes a `&Session` rather than owning one, so the browser and the desktop
 # each pass the session they already hold connected.
 pin-sia = { path = "../pin-sia" }
-# The seal over the manifest, under K.
+# The seals: an object's head under K, its body under the content key.
 pin-crypto = { path = "../pin-crypto" }
 # The locator seed, from K — the derivation a subscriber reproduces.
 pin-derive = { path = "../pin-derive" }
@@ -30,7 +30,5 @@ pin-derive = { path = "../pin-derive" }
 pin-pkarr = { path = "../pin-pkarr" }
 # The descriptors cross to the frontend as JSON.
 serde = { version = "1", features = ["derive"] }
-
-[dev-dependencies]
-# To assert the descriptors' serialized key names. Already in the tree via pin-core.
+# An object's head is JSON. Already in the tree via pin-core.
 serde_json = "1"

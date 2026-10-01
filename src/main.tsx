@@ -493,13 +493,18 @@ if (import.meta.env.DEV || inTauri()) {
     const { useFeedStore } = await import('./stores/feed')
     const auth = useAuthStore.getState()
     const ch = auth.myChannels[0]
-    if (!auth.client || !ch) return 'no client / no owned channel'
+    if (!auth.client || !auth.storedKeyHex || !ch)
+      return 'no client / no owned channel'
     const manifest = useFeedStore.getState().manifests[ch.channelID]
     if (!manifest) return `manifest for ${ch.channelID} not loaded yet`
     const { publishChannelLocator, resolveChannelViaLocator } = await import(
       './lib/channelLocator'
     )
-    const pub = await publishChannelLocator(ch.channelKey, manifest)
+    const pub = await publishChannelLocator(
+      auth.storedKeyHex,
+      ch.channelKey,
+      manifest,
+    )
     const got = await resolveChannelViaLocator(ch.channelKey)
     const match =
       got?.name === manifest.name && got?.items.length === manifest.items.length

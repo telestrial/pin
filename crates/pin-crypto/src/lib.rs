@@ -236,22 +236,9 @@ fn cipher(key: &[u8; KEY_BYTES]) -> Aes256Gcm {
 
 /// Seal bytes under a 32-byte key, returning the base64 blob.
 pub fn encrypt(key: &[u8; KEY_BYTES], plaintext: &[u8]) -> Result<String, String> {
-    let mut nonce = [0u8; NONCE_BYTES];
-    getrandom::fill(&mut nonce).map_err(|e| format!("nonce: {e}"))?;
-
-    let sealed = cipher(key)
-        .encrypt(
-            &Nonce::from(nonce),
-            Payload {
-                msg: plaintext,
-                aad: &[],
-            },
-        )
-        .map_err(|_| "encrypt failed".to_string())?;
-
-    let mut blob = Vec::with_capacity(1 + NONCE_BYTES + sealed.len());
+    let sealed = seal_raw(key, plaintext)?;
+    let mut blob = Vec::with_capacity(1 + sealed.len());
     blob.push(ENVELOPE_VERSION);
-    blob.extend_from_slice(&nonce);
     blob.extend_from_slice(&sealed);
     Ok(B64.encode(blob))
 }
@@ -271,15 +258,49 @@ pub fn decrypt(key: &[u8; KEY_BYTES], blob_b64: &str) -> Result<Vec<u8>, String>
             blob[0]
         ));
     }
+    open_raw(key, &blob[1..])
+}
+
+/// Seal bytes under a 32-byte key with no version byte and no encoding: `nonce |
+/// ciphertext-with-tag`.
+///
+/// For a container that carries its own version and encodes once around several sealed
+/// parts — a channel's published object holds two. Sealing each part through `encrypt`
+/// would base64 a base64 string, which costs a third again on every read of a channel.
+pub fn seal_raw(key: &[u8; KEY_BYTES], plaintext: &[u8]) -> Result<Vec<u8>, String> {
+    let mut nonce = [0u8; NONCE_BYTES];
+    getrandom::fill(&mut nonce).map_err(|e| format!("nonce: {e}"))?;
+
+    let sealed = cipher(key)
+        .encrypt(
+            &Nonce::from(nonce),
+            Payload {
+                msg: plaintext,
+                aad: &[],
+            },
+        )
+        .map_err(|_| "encrypt failed".to_string())?;
+
+    let mut out = Vec::with_capacity(NONCE_BYTES + sealed.len());
+    out.extend_from_slice(&nonce);
+    out.extend_from_slice(&sealed);
+    Ok(out)
+}
+
+/// The inverse of `seal_raw`.
+pub fn open_raw(key: &[u8; KEY_BYTES], sealed: &[u8]) -> Result<Vec<u8>, String> {
+    if sealed.len() < NONCE_BYTES + TAG_BYTES {
+        return Err("sealed bytes too short to hold nonce + tag".into());
+    }
     // Infallible after the length check above, which is what lets this copy rather
     // than carry a second error path for a case the guard already refused.
     let mut nonce = [0u8; NONCE_BYTES];
-    nonce.copy_from_slice(&blob[1..1 + NONCE_BYTES]);
+    nonce.copy_from_slice(&sealed[..NONCE_BYTES]);
     cipher(key)
         .decrypt(
             &Nonce::from(nonce),
             Payload {
-                msg: &blob[1 + NONCE_BYTES..],
+                msg: &sealed[NONCE_BYTES..],
                 aad: &[],
             },
         )

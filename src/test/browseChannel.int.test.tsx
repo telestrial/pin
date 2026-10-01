@@ -45,6 +45,10 @@ import { useFeedStore } from '../stores/feed'
 import { fakeDocStore as docStore } from './fakeModules'
 import { createFakeApp, mountAs, resetAllStores } from './setupFakeApp'
 
+/** The AppKey their channel is sealed under — anything; a reader takes the content key
+ *  from the object's head. */
+const THEIR_APP_KEY = '22'.repeat(32)
+
 const THEM = 'did:dht:them'
 const KEY = 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8='
 const CHANNEL = 'theirchannel0001'
@@ -83,6 +87,7 @@ function manifest(
 async function published(items: ItemRef[], visibility = 'public') {
   const { publishLocator } = await import('../lib/channelLocatorNative')
   await publishLocator(
+    THEIR_APP_KEY,
     channelKeyFromBase64(KEY),
     JSON.stringify(manifest('Their channel', items, visibility)),
   )

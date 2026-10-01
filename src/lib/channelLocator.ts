@@ -10,7 +10,7 @@
 // namespace and Pin's is per-channel K, so obscure channels stay unenumerable — you
 // can't derive a channel's locator without its K.
 
-import { channelKeyFromBase64, encryptForChannel } from '../core/crypto'
+import { channelKeyFromBase64 } from '../core/crypto'
 import type { FetchChannel } from '../core/feed'
 import type { SiaClient } from '../core/siaClient'
 import { CHANNEL_MANIFEST_VERSION, type ChannelManifest } from '../core/types'
@@ -40,17 +40,19 @@ const SUB_COLLECTION = 'sub'
 // one of them is mine to rewrite.
 const OWN_COLLECTION = 'channel'
 
-/** Mirror a channel's manifest to its own Sia object (encrypted under K) and publish
+/** Mirror a channel's manifest to its own Sia object (sealed as its author) and publish
  *  the pointer to that object under the channel's K-derived pkarr locator. Call
  *  (background) whenever the manifest changes. ~5s (Mainline store latency).
  *
- *  Returns the locator key + the Sia object's id/URL. The caller (the publish hook)
- *  deletes the superseded object using the returned id. */
+ *  Returns the locator key, the Sia object's id/URL, and the sealed blob it uploaded.
+ *  The caller (the publish hook) deletes the superseded object using the returned id. */
 export async function publishChannelLocator(
+  appKeyHex: string,
   channelKeyB64: string,
   manifest: ChannelManifest,
-): Promise<{ locatorKey: string; id: string; url: string }> {
+): Promise<{ locatorKey: string; id: string; url: string; blob: string }> {
   const published = await publishLocator(
+    appKeyHex,
     channelKeyFromBase64(channelKeyB64),
     JSON.stringify(manifest),
   )
@@ -58,6 +60,7 @@ export async function publishChannelLocator(
     locatorKey: published.locatorKey,
     id: published.objectId,
     url: published.itemURL,
+    blob: published.blob,
   }
 }
 
@@ -141,19 +144,17 @@ async function cacheSubscribedManifest(
  *  devices without each one resolving every locator.
  *
  *  Part of the commit rather than best-effort beside it: a doc that lags the locator
- *  is precisely the stale read this is meant to prevent. */
+ *  is precisely the stale read this is meant to prevent.
+ *
+ *  Records the blob the publish uploaded, so the doc's copy and the object on Sia are
+ *  the same bytes. */
 async function recordOwnManifest(
   appKeyHex: string,
   channelID: string,
-  channelKeyB64: string,
-  manifest: ChannelManifest,
+  blob: string,
 ): Promise<void> {
   await openDocs(appKeyHex)
-  const sealed = await encryptForChannel(
-    channelKeyFromBase64(channelKeyB64),
-    JSON.stringify(manifest),
-  )
-  await putRecord(OWN_COLLECTION, channelID, new TextEncoder().encode(sealed))
+  await putRecord(OWN_COLLECTION, channelID, new TextEncoder().encode(blob))
 }
 
 /** An owned channel's manifest as the doc has it, or null when the doc doesn't hold
@@ -300,7 +301,11 @@ export async function commitChannelManifest(
 ): Promise<void> {
   const rkey = await channelPublishKey(channelID)
   const prev = await readPublished(appKeyHex, rkey)
-  const { id, url } = await publishChannelLocator(channelKeyB64, manifest)
+  const { id, url, blob } = await publishChannelLocator(
+    appKeyHex,
+    channelKeyB64,
+    manifest,
+  )
   // New current = id; keep prev.id as the grace generation; reclaim prev.olderId.
   await writePublished(appKeyHex, rkey, {
     id,
@@ -309,7 +314,7 @@ export async function commitChannelManifest(
   })
   // Record it in the doc too, awaited: the screen reads this, and a doc that lagged
   // the locator would be the stale read it exists to prevent.
-  await recordOwnManifest(appKeyHex, channelID, channelKeyB64, manifest)
+  await recordOwnManifest(appKeyHex, channelID, blob)
   const toReclaim = prev?.olderId
   if (toReclaim && toReclaim !== id && toReclaim !== prev?.id) {
     await client

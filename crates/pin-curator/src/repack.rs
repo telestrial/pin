@@ -401,19 +401,20 @@ async fn read_own_manifest(
 /// Put the rewritten manifest back, so the screen sees what the Curator did. This is
 /// the whole reason the record exists — without it a tab keeps rendering item URLs
 /// whose objects this pass is about to delete.
+///
+/// Records the blob the publish uploaded, so the doc's copy and the object on Sia are the
+/// same bytes rather than two seals of one manifest.
 async fn write_own_manifest(
     ctx: &RepackContext,
     channel_id: &str,
-    k: &[u8; 32],
-    json: &str,
+    blob: String,
 ) -> Result<(), String> {
-    let sealed = pin_crypto::encrypt(k, json.as_bytes())?;
     write_record(
         &ctx.doc,
         ctx.author_id,
         OWN_COLLECTION,
         channel_id,
-        sealed.into_bytes(),
+        blob.into_bytes(),
     )
     .await
 }
@@ -555,8 +556,13 @@ async fn rewrite_channels(
         // timestamps, so nothing reorders.
         manifest.published_at = now_iso.to_string();
         let json = serde_json::to_string(&manifest).map_err(|e| e.to_string())?;
-        pin_channel::publish(&ctx.sia, &k, &json).await?;
-        write_own_manifest(ctx, channel_id, &k, &json).await?;
+        let published = pin_channel::publish(
+            &ctx.sia,
+            &pin_channel::author_sealing(&ctx.app_key, &k),
+            &json,
+        )
+        .await?;
+        write_own_manifest(ctx, channel_id, published.blob).await?;
         count += 1;
     }
     Ok(count)

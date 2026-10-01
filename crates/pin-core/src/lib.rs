@@ -1386,15 +1386,42 @@ pub fn content_hash(bytes: &[u8]) -> String {
 // nothing to use it — and JSON is the plaintext inside every manifest already sealed on
 // Sia regardless, so it is what has to be produced either way.
 
-/// Seal a manifest under K, upload it, and publish the pointer. Returns `Published`
-/// as JSON — the caller needs the object id to reclaim the generation it superseded.
+/// Seal a manifest as its author, upload it, and publish the pointer. Returns
+/// `Published` as JSON — the caller needs the object id to reclaim the generation it
+/// superseded, and the blob to record the same bytes in the doc.
 #[wasm_bindgen]
-pub async fn channel_publish(channel_key: &[u8], manifest_json: String) -> Result<String, JsValue> {
+pub async fn channel_publish(
+    app_key_hex: String,
+    channel_key: &[u8],
+    manifest_json: String,
+) -> Result<String, JsValue> {
+    let app_key = decode_app_key(&app_key_hex)
+        .ok_or_else(|| JsValue::from_str("app key must be 64 hex chars"))?;
     let key = key32(channel_key)?;
-    let published = pin_channel::publish(&sia(), &key, &manifest_json)
+    let sealing = pin_channel::author_sealing(&app_key, &key);
+    let published = pin_channel::publish(&sia(), &sealing, &manifest_json)
         .await
         .map_err(je)?;
     serde_json::to_string(&published).map_err(|e| JsValue::from_str(&format!("encode: {e}")))
+}
+
+/// Seal a payload as a channel's author would, with nothing uploaded. The integration
+/// tier's fakes publish through this, so what they put in the fake world is the real
+/// format rather than a lookalike.
+#[wasm_bindgen]
+pub fn channel_seal(
+    app_key_hex: String,
+    channel_key: &[u8],
+    payload_json: String,
+) -> Result<String, JsValue> {
+    let app_key = decode_app_key(&app_key_hex)
+        .ok_or_else(|| JsValue::from_str("app key must be 64 hex chars"))?;
+    let key = key32(channel_key)?;
+    pin_channel::seal(
+        &pin_channel::author_sealing(&app_key, &key),
+        payload_json.as_bytes(),
+    )
+    .map_err(je)
 }
 
 /// Read a channel from K alone. `undefined` when the locator resolves to nothing, which

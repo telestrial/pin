@@ -39,11 +39,13 @@ import { inTauri } from './openExternal'
 
 /** Where a published manifest ended up. `objectId` is what the caller reclaims when it
  *  supersedes a generation — the pointer takes seconds to propagate, so the previous
- *  object has to outlive the publish. */
+ *  object has to outlive the publish. `blob` is the sealed object exactly as uploaded,
+ *  so a copy recorded in the doc is those bytes rather than a second seal. */
 export type PublishedLocator = {
   locatorKey: string
   objectId: string
   itemURL: string
+  blob: string
 }
 
 /** A resolved channel: the manifest's JSON, plus the exact blob it was sealed in so a
@@ -53,6 +55,7 @@ export type ResolvedLocator = { manifestJson: string; blob: string }
 /** The session-bound half of the round-trip, per platform. */
 interface ChannelLocatorTransport {
   publishLocator(
+    appKeyHex: string,
     channelKey: Uint8Array,
     manifestJson: string,
   ): Promise<PublishedLocator>
@@ -79,10 +82,10 @@ async function buildTransport(): Promise<ChannelLocatorTransport> {
     return makeTauriChannelLocator()
   }
   return {
-    publishLocator: async (channelKey, manifestJson) => {
+    publishLocator: async (appKeyHex, channelKey, manifestJson) => {
       await ensureWasm()
       return JSON.parse(
-        await channel_publish(channelKey, manifestJson),
+        await channel_publish(appKeyHex, channelKey, manifestJson),
       ) as PublishedLocator
     },
     resolveLocator: async (channelKey) => {
@@ -113,12 +116,14 @@ async function buildTransport(): Promise<ChannelLocatorTransport> {
   }
 }
 
-/** Seal a manifest under K, upload it, and sign the pointer. */
+/** Seal a manifest as its author — the head under K, the body under the content key
+ *  the AppKey derives — upload it, and sign the pointer. */
 export async function publishLocator(
+  appKeyHex: string,
   channelKey: Uint8Array,
   manifestJson: string,
 ): Promise<PublishedLocator> {
-  return (await transport()).publishLocator(channelKey, manifestJson)
+  return (await transport()).publishLocator(appKeyHex, channelKey, manifestJson)
 }
 
 /** Read a channel from K alone. Null when the locator resolves to nothing — the channel

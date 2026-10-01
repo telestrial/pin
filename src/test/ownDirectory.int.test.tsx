@@ -43,6 +43,10 @@ import { useAuthStore } from '../stores/auth'
 import { fakeDocStore as docStore } from './fakeModules'
 import { createFakeApp, mountAs, resetAllStores } from './setupFakeApp'
 
+/** The AppKey their channel is sealed under — anything; a reader takes the content key
+ *  from the object's head. */
+const THEIR_APP_KEY = '22'.repeat(32)
+
 const ME = 'did:dht:me'
 const THEM = 'did:dht:them'
 // 32 bytes of base64, the shape a channel key travels in.
@@ -618,6 +622,7 @@ describe("integration: somebody else's hero cards walk the resolution ladder", (
     signedInWith([owned()])
     const { publishLocator } = await import('../lib/channelLocatorNative')
     await publishLocator(
+      THEIR_APP_KEY,
       channelKeyFromBase64(KEY),
       JSON.stringify(manifest('Resolved channel')),
     )
@@ -668,6 +673,7 @@ describe("integration: somebody else's hero cards walk the resolution ladder", (
     ])
     const { publishLocator } = await import('../lib/channelLocatorNative')
     await publishLocator(
+      THEIR_APP_KEY,
       channelKeyFromBase64(KEY),
       JSON.stringify(manifest('Only from the network')),
     )
@@ -702,6 +708,7 @@ describe("integration: somebody else's hero cards walk the resolution ladder", (
     await inTheCache('theirs', 'Stale name')
     const { publishLocator } = await import('../lib/channelLocatorNative')
     await publishLocator(
+      THEIR_APP_KEY,
       channelKeyFromBase64(KEY),
       JSON.stringify(manifest('Current name')),
     )
@@ -756,6 +763,7 @@ describe("integration: somebody else's hero cards walk the resolution ladder", (
     signedInWith([owned()])
     const { publishLocator } = await import('../lib/channelLocatorNative')
     await publishLocator(
+      THEIR_APP_KEY,
       channelKeyFromBase64(KEY),
       JSON.stringify(manifest('Resolved channel')),
     )
@@ -847,12 +855,14 @@ describe('integration: a profile is a feed of what its channels published', () =
     signedInWith([owned()])
     const { publishLocator } = await import('../lib/channelLocatorNative')
     await publishLocator(
+      THEIR_APP_KEY,
       channelKeyFromBase64(KEY),
       JSON.stringify(
         manifest('Shown', [post('theirs, shown', '2026-09-01T00:00:00.000Z')]),
       ),
     )
     await publishLocator(
+      THEIR_APP_KEY,
       channelKeyFromBase64(KEY2),
       JSON.stringify(
         manifest('Hidden', [

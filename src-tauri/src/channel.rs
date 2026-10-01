@@ -19,16 +19,21 @@ fn key32(channel_key: &[u8]) -> Result<[u8; 32], String> {
         .map_err(|_| format!("channel key must be 32 bytes; got {}", channel_key.len()))
 }
 
-/// Seal a manifest under K, upload it, and publish the pointer.
+/// Seal a manifest as its author, upload it, and publish the pointer.
 #[tauri::command]
 pub async fn channel_publish(
     state: tauri::State<'_, SiaState>,
+    app_key_hex: String,
     channel_key: Vec<u8>,
     manifest_json: String,
 ) -> Result<pin_channel::Published, String> {
+    let app_key = pin_derive::decode_app_key(&app_key_hex).ok_or("app key must be 64 hex chars")?;
     let key = key32(&channel_key)?;
     state
-        .run(move |s| async move { pin_channel::publish(&s, &key, &manifest_json).await })
+        .run(move |s| async move {
+            let sealing = pin_channel::author_sealing(&app_key, &key);
+            pin_channel::publish(&s, &sealing, &manifest_json).await
+        })
         .await
 }
 

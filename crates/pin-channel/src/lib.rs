@@ -1,11 +1,11 @@
 //! Publishing and resolving a channel through its K-derived pkarr locator.
 //!
-//! The shape, and why it is this shape: a channel's manifest is sealed under K and
-//! uploaded to Sia as its own object, and a pointer to that object is signed onto the
-//! DHT under a key ALSO derived from K. So K both locates and decrypts, which is the
-//! same capability shape as a Sia share URL — hand someone K and they can read the
-//! channel; hand them nothing and they cannot even discover it exists, because the
-//! locator key is unreachable without K.
+//! The shape, and why it is this shape: a channel's manifest is sealed into an object
+//! (see `object`: a head under K, a body under the content key C) and uploaded to Sia,
+//! and a pointer to that object is signed onto the DHT under a key derived from K. So K
+//! locates, and decrypts whatever the head lets it — hand someone K and they can find the
+//! channel and read what its head allows; hand them nothing and they cannot even discover
+//! it exists, because the locator key is unreachable without K.
 //!
 //! That last property is what makes obscure channels obscure, and it is why the locator
 //! is per-channel rather than a single index per author: iroh-docs' read capability is
@@ -22,6 +22,29 @@
 //! would mean a second definition of a rich nested shape with nothing to use it. JSON is
 //! not a choice at this layer regardless: it is already the plaintext inside every blob
 //! sealed on Sia, so it is what must be produced to stay readable.
+
+mod object;
+
+pub use object::{open, seal, ContentKey, Opened, Sealing};
+
+/// How an author seals their own channel: C derived from the AppKey at the initial epoch,
+/// and carried in the head.
+///
+/// Carried because every channel a reader can reach today is readable by whoever holds K;
+/// a channel only members may read is the first thing that will leave it out. Derived
+/// rather than stored, so every device holding the recovery phrase seals under the same C
+/// with nothing to keep in step.
+pub fn author_sealing<'a>(app_key: &[u8; 32], channel_key: &'a [u8; 32]) -> Sealing<'a> {
+    let channel_id = pin_crypto::channel_id(channel_key);
+    Sealing {
+        channel_key,
+        content: ContentKey {
+            epoch: pin_derive::INITIAL_EPOCH,
+            key: pin_derive::channel_content_key(app_key, &channel_id, pin_derive::INITIAL_EPOCH),
+        },
+        publish_read_key: true,
+    }
+}
 
 /// The manifest pointer's TXT prefix.
 const POINTER_PREFIX: &str = "_c";
@@ -48,6 +71,9 @@ pub struct Published {
     /// acronyms in full. Same reason pin-sia's descriptor says so.
     #[serde(rename = "itemURL")]
     pub item_url: String,
+    /// The sealed object exactly as uploaded, so a caller recording a copy records these
+    /// bytes rather than sealing a second time under a fresh nonce.
+    pub blob: String,
 }
 
 /// A resolved channel: the manifest, plus the exact blob it was sealed in.
@@ -63,6 +89,10 @@ pub struct Published {
 pub struct Resolved {
     pub manifest_json: String,
     pub blob: String,
+    /// The content key the manifest was sealed under — what opens the channel's other
+    /// artifacts too.
+    #[serde(skip)]
+    pub content: ContentKey,
 }
 
 /// Which of a channel's published artifacts a pointer names: the pkarr key it is signed
@@ -99,7 +129,7 @@ fn conversations_pointer(channel_key: &[u8; 32]) -> Pointer {
     }
 }
 
-/// Seal a payload under K, upload it, and sign a pointer to it.
+/// Seal a payload into an object, upload it, and sign a pointer to it.
 ///
 /// Ordering is the correctness property: the bytes are on Sia before the pointer names
 /// them, so a reader who resolves the new pointer always finds something behind it. It
@@ -107,12 +137,14 @@ fn conversations_pointer(channel_key: &[u8; 32]) -> Pointer {
 /// that ordering wrong in its own way.
 async fn seal_and_point(
     sia: &pin_sia::Session,
-    channel_key: &[u8; 32],
+    sealing: &Sealing<'_>,
     pointer: Pointer,
     payload_json: &str,
 ) -> Result<Published, String> {
-    let sealed = pin_crypto::encrypt(channel_key, payload_json.as_bytes())?;
-    let uploaded = sia.upload_item(sealed.into_bytes(), None, None).await?;
+    let sealed = object::seal(sealing, payload_json.as_bytes())?;
+    let uploaded = sia
+        .upload_item(sealed.clone().into_bytes(), None, None)
+        .await?;
 
     let locator_key = pin_pkarr::public_key_from_seed(&pointer.seed)?;
     pin_pkarr::publish(
@@ -125,6 +157,7 @@ async fn seal_and_point(
         locator_key,
         object_id: uploaded.id,
         item_url: uploaded.item_url,
+        blob: sealed,
     })
 }
 
@@ -149,16 +182,16 @@ async fn resolve_pointer(pointer: Pointer) -> Result<Option<String>, String> {
     Ok(Some(item_url))
 }
 
-/// Seal a manifest under K, upload it, and sign a pointer to it under K's locator key.
+/// Seal a manifest, upload it, and sign a pointer to it under K's locator key.
 pub async fn publish(
     sia: &pin_sia::Session,
-    channel_key: &[u8; 32],
+    sealing: &Sealing<'_>,
     manifest_json: &str,
 ) -> Result<Published, String> {
     seal_and_point(
         sia,
-        channel_key,
-        manifest_pointer(channel_key),
+        sealing,
+        manifest_pointer(sealing.channel_key),
         manifest_json,
     )
     .await
@@ -208,15 +241,17 @@ pub async fn fetch(
 ) -> Result<Resolved, String> {
     let ciphertext = sia.download_item(item_url).await?;
     let blob = String::from_utf8(ciphertext).map_err(|_| "manifest blob is not UTF-8")?;
+    let (manifest_json, content) = open_payload(channel_key, &blob)?;
     Ok(Resolved {
-        manifest_json: open_blob(channel_key, &blob)?,
+        manifest_json,
         blob,
+        content,
     })
 }
 
 // --- tallies: the same shape, for what a channel's readers endorsed --------------
 
-/// Seal a channel's tallies under K, upload them, and point the engagement key at them.
+/// Seal a channel's tallies, upload them, and point the engagement key at them.
 ///
 /// This is engagement's FLOOR rung. A tally also lives in the channel's iroh-docs
 /// replica, which reaches live subscribers in seconds — but everyone who can read a
@@ -226,25 +261,31 @@ pub async fn fetch(
 /// audience.
 pub async fn publish_tallies(
     sia: &pin_sia::Session,
-    channel_key: &[u8; 32],
+    sealing: &Sealing<'_>,
     tallies_json: &str,
 ) -> Result<Published, String> {
-    seal_and_point(sia, channel_key, tallies_pointer(channel_key), tallies_json).await
+    seal_and_point(
+        sia,
+        sealing,
+        tallies_pointer(sealing.channel_key),
+        tallies_json,
+    )
+    .await
 }
 
-/// Seal a channel's conversations under K, upload them, and point at them.
+/// Seal a channel's conversations, upload them, and point at them.
 ///
 /// The floor for the words, as `publish_tallies` is for the numbers: everyone who can read
 /// a channel holds K, and most of them hold no replica of its doc.
 pub async fn publish_conversations(
     sia: &pin_sia::Session,
-    channel_key: &[u8; 32],
+    sealing: &Sealing<'_>,
     conversations_json: &str,
 ) -> Result<Published, String> {
     seal_and_point(
         sia,
-        channel_key,
-        conversations_pointer(channel_key),
+        sealing,
+        conversations_pointer(sealing.channel_key),
         conversations_json,
     )
     .await
@@ -327,8 +368,15 @@ pub async fn resolve_tallies(
 /// to decode through this exact path rather than a parallel one. Shared with the
 /// tallies fetch for the same reason: one seal, one open.
 pub fn open_blob(channel_key: &[u8; 32], blob: &str) -> Result<String, String> {
-    let plaintext = pin_crypto::decrypt(channel_key, blob)?;
-    String::from_utf8(plaintext).map_err(|_| "decrypted manifest is not UTF-8".to_string())
+    open_payload(channel_key, blob).map(|(json, _)| json)
+}
+
+/// Open a sealed blob with K, returning its JSON and the content key it was sealed under.
+fn open_payload(channel_key: &[u8; 32], blob: &str) -> Result<(String, ContentKey), String> {
+    let opened = object::open(channel_key, blob)?;
+    let json = String::from_utf8(opened.payload)
+        .map_err(|_| "decrypted payload is not UTF-8".to_string())?;
+    Ok((json, opened.content))
 }
 
 #[cfg(test)]
@@ -373,13 +421,21 @@ mod tests {
             locator_key: "k".into(),
             object_id: "id".into(),
             item_url: "url".into(),
+            blob: "b".into(),
         })
         .unwrap();
-        assert_eq!(keys(published), ["itemURL", "locatorKey", "objectId"]);
+        assert_eq!(
+            keys(published),
+            ["blob", "itemURL", "locatorKey", "objectId"]
+        );
 
         let resolved = serde_json::to_value(Resolved {
             manifest_json: "{}".into(),
             blob: "b".into(),
+            content: ContentKey {
+                epoch: 0,
+                key: [0u8; 32],
+            },
         })
         .unwrap();
         assert_eq!(keys(resolved), ["blob", "manifestJson"]);
@@ -410,11 +466,55 @@ mod tests {
     fn open_blob_reads_what_publish_would_have_sealed() {
         let key = [7u8; 32];
         let manifest = r#"{"version":1,"name":"Test","items":[]}"#;
-        let sealed = pin_crypto::encrypt(&key, manifest.as_bytes()).unwrap();
+        let sealing = Sealing {
+            channel_key: &key,
+            content: ContentKey {
+                epoch: 0,
+                key: [9u8; 32],
+            },
+            publish_read_key: true,
+        };
+        let sealed = object::seal(&sealing, manifest.as_bytes()).unwrap();
         assert_eq!(open_blob(&key, &sealed).unwrap(), manifest);
+        assert_eq!(open_payload(&key, &sealed).unwrap().1, sealing.content);
 
         let mut wrong = key;
         wrong[0] ^= 1;
         assert!(open_blob(&wrong, &sealed).is_err());
+    }
+
+    #[test]
+    fn an_author_seals_under_the_content_key_derived_from_their_app_key() {
+        // Not under K: a channel whose body opened with K could never stop a finder from
+        // reading it, which is the whole of what the split is for.
+        let app_key = [1u8; 32];
+        let k = [7u8; 32];
+        let sealing = author_sealing(&app_key, &k);
+        let channel_id = pin_crypto::channel_id(&k);
+        assert_eq!(
+            sealing.content,
+            ContentKey {
+                epoch: pin_derive::INITIAL_EPOCH,
+                key: pin_derive::channel_content_key(
+                    &app_key,
+                    &channel_id,
+                    pin_derive::INITIAL_EPOCH
+                ),
+            }
+        );
+        assert_ne!(sealing.content.key, k);
+        assert!(sealing.publish_read_key);
+
+        // And what it seals opens with K alone, through the head.
+        let blob = seal(&sealing, b"{}").unwrap();
+        assert_eq!(open_payload(&k, &blob).unwrap().1, sealing.content);
+    }
+
+    #[test]
+    fn open_blob_reads_a_legacy_envelope() {
+        let key = [7u8; 32];
+        let manifest = r#"{"version":1,"name":"Test","items":[]}"#;
+        let sealed = pin_crypto::encrypt(&key, manifest.as_bytes()).unwrap();
+        assert_eq!(open_blob(&key, &sealed).unwrap(), manifest);
     }
 }

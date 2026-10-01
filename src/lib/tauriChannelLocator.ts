@@ -11,8 +11,13 @@ export async function makeTauriChannelLocator() {
   const { invoke } = await import('@tauri-apps/api/core')
 
   return {
-    publishLocator: (channelKey: Uint8Array, manifestJson: string) =>
+    publishLocator: (
+      appKeyHex: string,
+      channelKey: Uint8Array,
+      manifestJson: string,
+    ) =>
       invoke<PublishedLocator>('channel_publish', {
+        appKeyHex,
         channelKey: Array.from(channelKey),
         manifestJson,
       }),
