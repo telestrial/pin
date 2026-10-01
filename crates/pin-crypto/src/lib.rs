@@ -410,6 +410,34 @@ pub fn seal_to(recipient: &[u8; ENC_PUBLIC_BYTES], plaintext: &[u8]) -> Result<V
     Ok(out)
 }
 
+/// The shared secret between this identity's encryption key and another's.
+///
+/// Static on both sides, so both parties compute the same value without anything being
+/// sent: what a channel's author and a member derive the member's leaf key from. Refuses a
+/// key that would make the secret predictable, as `seal_to` does.
+pub fn enc_shared(
+    seed: &[u8; 32],
+    their_public: &[u8; ENC_PUBLIC_BYTES],
+) -> Result<[u8; 32], String> {
+    let secret = x25519_dalek::StaticSecret::from(*seed);
+    let shared = secret.diffie_hellman(&x25519_dalek::PublicKey::from(*their_public));
+    if !shared.was_contributory() {
+        return Err("their key is not a usable encryption key".into());
+    }
+    Ok(*shared.as_bytes())
+}
+
+/// Fill a buffer with random bytes — for filler that has to be indistinguishable from
+/// ciphertext.
+pub fn fill_random(buf: &mut [u8]) -> Result<(), String> {
+    getrandom::fill(buf).map_err(|e| format!("random: {e}"))
+}
+
+/// The length `seal_raw` produces for a plaintext of `len` bytes.
+pub const fn sealed_len(len: usize) -> usize {
+    NONCE_BYTES + len + TAG_BYTES
+}
+
 /// Open a sealed box with the seed of the identity it was sealed to.
 pub fn open_sealed(seed: &[u8; 32], sealed: &[u8]) -> Result<Vec<u8>, String> {
     let (ephemeral, rest) = sealed
@@ -791,6 +819,29 @@ mod sealed_box_tests {
             assert!(open_sealed(&alice, &bad).is_err(), "flip at {i}");
         }
         assert!(open_sealed(&alice, &sealed[..20]).is_err());
+    }
+
+    #[test]
+    fn both_sides_of_a_static_exchange_agree() {
+        let alice = [1u8; 32];
+        let bob = [2u8; 32];
+        assert_eq!(
+            enc_shared(&alice, &enc_public(&bob)).unwrap(),
+            enc_shared(&bob, &enc_public(&alice)).unwrap()
+        );
+        assert_ne!(
+            enc_shared(&alice, &enc_public(&bob)).unwrap(),
+            enc_shared(&alice, &enc_public(&[3u8; 32])).unwrap()
+        );
+        assert!(enc_shared(&alice, &[0u8; 32]).is_err());
+    }
+
+    #[test]
+    fn sealed_len_is_what_seal_raw_produces() {
+        assert_eq!(
+            seal_raw(&[1u8; 32], &[0u8; 32]).unwrap().len(),
+            sealed_len(32)
+        );
     }
 
     #[test]

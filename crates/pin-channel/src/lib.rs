@@ -24,6 +24,7 @@
 //! sealed on Sia, so it is what must be produced to stay readable.
 
 mod object;
+pub mod tree;
 
 pub use object::{content_key, fingerprint, open, open_with, seal, ContentKey, Opened, Sealing};
 
