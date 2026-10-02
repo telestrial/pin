@@ -50,14 +50,17 @@ pub enum ItemType {
     App,
 }
 
-/// Whether a channel is publicly followable. Set at creation and sticky: a public
-/// channel can't later be obscured, because the follow edges pointing at it would
-/// become orphan pointers.
+/// Who can find a channel and who can read it. Set at creation.
+///
+/// `Secret` is readable by its members alone: its objects carry no read key, so holding K
+/// finds the channel and reads nothing, and a member reads with the content key they climb
+/// to through its member tree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ChannelVisibility {
     Obscure,
     Public,
+    Secret,
 }
 
 /// A file carried alongside an item's body. Its bytes are their own pinned Sia
@@ -754,6 +757,21 @@ pub fn build_item_ref(uploaded: &UploadedItem, draft: ItemDraft, now: &str) -> I
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_visibility_crosses_as_its_lowercase_name() {
+        for (v, name) in [
+            (ChannelVisibility::Obscure, "obscure"),
+            (ChannelVisibility::Public, "public"),
+            (ChannelVisibility::Secret, "secret"),
+        ] {
+            assert_eq!(serde_json::to_value(v).unwrap(), serde_json::json!(name));
+            assert_eq!(
+                serde_json::from_value::<ChannelVisibility>(serde_json::json!(name)).unwrap(),
+                v
+            );
+        }
+    }
+
     use super::*;
     use serde_json::{json, Value};
 

@@ -33,24 +33,63 @@ pub use object::{
     ContentKey, Kind, Opened, Sealing, Signer,
 };
 
-/// How an author seals their own channel: C derived from the AppKey at the initial epoch,
-/// and carried in the head.
+/// How an author seals a channel anyone holding K may read: C derived from the AppKey at
+/// the initial epoch, and carried in the head.
 ///
-/// Carried because every channel a reader can reach today is readable by whoever holds K;
-/// a channel only members may read is the first thing that will leave it out. Derived
-/// rather than stored, so every device holding the recovery phrase seals under the same C
-/// with nothing to keep in step.
+/// Derived rather than stored, so every device holding the recovery phrase seals under the
+/// same C with nothing to keep in step.
 pub fn author_sealing<'a>(app_key: &[u8; 32], channel_key: &'a [u8; 32]) -> Sealing<'a> {
+    author_sealing_at(app_key, channel_key, pin_derive::INITIAL_EPOCH, false)
+}
+
+/// How an author seals their own channel at an epoch: C derived for that epoch, and carried
+/// in the head unless only the channel's members may read it.
+///
+/// A members-only channel's epoch is its member tree's, which moves with every removal, so
+/// it is the caller's to supply; a channel anyone holding K may read has no tree and stays
+/// at the initial epoch.
+pub fn author_sealing_at<'a>(
+    app_key: &[u8; 32],
+    channel_key: &'a [u8; 32],
+    epoch: u32,
+    members_only: bool,
+) -> Sealing<'a> {
     let channel_id = pin_crypto::channel_id(channel_key);
     Sealing {
         channel_key,
         content: ContentKey {
-            epoch: pin_derive::INITIAL_EPOCH,
-            key: pin_derive::channel_content_key(app_key, &channel_id, pin_derive::INITIAL_EPOCH),
+            epoch,
+            key: pin_derive::channel_content_key(app_key, &channel_id, epoch),
         },
-        publish_read_key: true,
+        publish_read_key: !members_only,
         signer: pin_derive::did_dht_seed(app_key),
     }
+}
+
+/// Open an object of the author's own channel, whatever epoch it was sealed at, answering
+/// with its payload and the content key it opened with.
+///
+/// The author derives every epoch's content key, so an object sealed before a rotation
+/// opens as readily as one sealed after, read key in its head or not. Verified against the
+/// author's own did like any other read.
+pub fn open_as_author(
+    app_key: &[u8; 32],
+    channel_key: &[u8; 32],
+    blob: &str,
+    kind: Kind,
+) -> Result<(Vec<u8>, ContentKey), String> {
+    let did = format!(
+        "did:dht:{}",
+        pin_pkarr::public_key_from_seed(&pin_derive::did_dht_seed(app_key))?
+    );
+    let signer = Signer::Author(&did);
+    let epoch = object::head_epoch(channel_key, blob, kind, signer)?;
+    let content = ContentKey {
+        epoch,
+        key: pin_derive::channel_content_key(app_key, &pin_crypto::channel_id(channel_key), epoch),
+    };
+    let payload = object::open_with(channel_key, blob, &content, kind, signer)?;
+    Ok((payload, content))
 }
 
 /// The manifest pointer's TXT prefix.
@@ -469,6 +508,54 @@ fn open_payload(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_members_only_channel_seals_without_a_read_key_at_its_epoch() {
+        let app_key = [1u8; 32];
+        let k = [7u8; 32];
+        let sealing = super::author_sealing_at(&app_key, &k, 3, true);
+        assert!(!sealing.publish_read_key);
+        assert_eq!(sealing.content.epoch, 3);
+        assert_eq!(
+            sealing.content.key,
+            pin_derive::channel_content_key(&app_key, &pin_crypto::channel_id(&k), 3)
+        );
+        let blob = super::seal(&sealing, super::Kind::Manifest, b"{}").unwrap();
+        let did = format!(
+            "did:dht:{}",
+            pin_pkarr::public_key_from_seed(&pin_derive::did_dht_seed(&app_key)).unwrap()
+        );
+        // K alone opens nothing.
+        assert!(super::open(
+            &k,
+            &blob,
+            super::Kind::Manifest,
+            super::Signer::Author(&did)
+        )
+        .is_err());
+        // The public case is the initial epoch with the key in the head.
+        let public = super::author_sealing(&app_key, &k);
+        assert!(public.publish_read_key);
+        assert_eq!(public.content.epoch, pin_derive::INITIAL_EPOCH);
+    }
+
+    #[test]
+    fn the_author_opens_their_own_object_at_whatever_epoch_it_was_sealed() {
+        let app_key = [1u8; 32];
+        let k = [7u8; 32];
+        for (epoch, members_only) in [(0, false), (0, true), (5, true)] {
+            let sealing = super::author_sealing_at(&app_key, &k, epoch, members_only);
+            let blob = super::seal(&sealing, super::Kind::Tallies, b"payload").unwrap();
+            let (payload, content) =
+                super::open_as_author(&app_key, &k, &blob, super::Kind::Tallies).unwrap();
+            assert_eq!(payload, b"payload");
+            assert_eq!(content, sealing.content);
+        }
+        // Somebody else's object, sealed under the same K, is not the author's.
+        let theirs = super::author_sealing_at(&[2u8; 32], &k, 0, true);
+        let blob = super::seal(&theirs, super::Kind::Tallies, b"payload").unwrap();
+        assert!(super::open_as_author(&app_key, &k, &blob, super::Kind::Tallies).is_err());
+    }
+
     #[test]
     fn a_members_pointer_reads_back_the_url_it_was_published_with() {
         let url = format!(
