@@ -672,6 +672,68 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_members_only_object_opens_once_its_key_is_climbed_to() {
+        let world = World::new();
+        let channel = Channel::new(&world).await;
+        let bob = Identity::new(&world, 2).await;
+        channel.seat(&bob).await;
+        channel.publish().await;
+
+        let a = &channel.author;
+        let sealing = pin_channel::author_sealing(&a.app_key, &channel.key);
+        let members_only = pin_channel::seal(
+            &pin_channel::Sealing {
+                publish_read_key: false,
+                ..sealing
+            },
+            pin_channel::Kind::Manifest,
+            b"{\"items\":[]}",
+        )
+        .unwrap();
+        let open = |blob: String| {
+            let bob = &bob;
+            let channel = &channel;
+            async move {
+                crate::open_held(
+                    &bob.doc,
+                    &bob.blobs,
+                    bob.author_id,
+                    &channel.id,
+                    &channel.key,
+                    &blob,
+                    pin_channel::Kind::Manifest,
+                    &channel.author.did,
+                )
+                .await
+            }
+        };
+
+        let err = open(members_only.clone()).await.unwrap_err();
+        assert!(err.contains("no content key held"), "{err}");
+        pass(&bob).await;
+        let (json, content) = open(members_only).await.unwrap();
+        assert_eq!(json, "{\"items\":[]}");
+        assert_eq!(content.key, channel.c(0));
+
+        // A channel anyone holding K may read opens with no membership at all.
+        let public = pin_channel::seal(&sealing, pin_channel::Kind::Manifest, b"{}").unwrap();
+        let carol = Identity::new(&world, 3).await;
+        let opened = crate::open_held(
+            &carol.doc,
+            &carol.blobs,
+            carol.author_id,
+            &channel.id,
+            &channel.key,
+            &public,
+            pin_channel::Kind::Manifest,
+            &channel.author.did,
+        )
+        .await
+        .unwrap();
+        assert_eq!(opened.0, "{}");
+    }
+
+    #[tokio::test]
     async fn nothing_published_and_nothing_reachable_write_nothing() {
         let world = World::new();
         let channel = Channel::new(&world).await;

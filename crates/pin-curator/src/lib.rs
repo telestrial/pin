@@ -760,6 +760,38 @@ pub(crate) async fn held_content_key(
     membership::held_key(doc, blobs, author_id, channel_id, epoch).await
 }
 
+/// Open a channel object this identity holds K for, answering with its payload and the
+/// content key it opened with: by the read key in its head, or — for a channel only its
+/// members may read — by the key this identity climbed to for the epoch the head says.
+///
+/// Verified either way: the head is checked against `author` before anything in it is
+/// believed, so a forged object fails here whichever route it would have taken.
+pub(crate) async fn open_held(
+    doc: &Doc,
+    blobs: &Store,
+    author_id: AuthorId,
+    channel_id: &str,
+    channel_key: &[u8; 32],
+    blob: &str,
+    kind: pin_channel::Kind,
+    author: &str,
+) -> Result<(String, pin_channel::ContentKey), String> {
+    let signer = pin_channel::Signer::Author(author);
+    let (payload, content) = match pin_channel::open(channel_key, blob, kind, signer) {
+        Ok(opened) => (opened.payload, opened.content),
+        Err(_) => {
+            let epoch = pin_channel::head_epoch(channel_key, blob, kind, signer)?;
+            let content = membership::held_key(doc, blobs, author_id, channel_id, epoch)
+                .await
+                .ok_or_else(|| format!("no content key held for epoch {epoch}"))?;
+            let payload = pin_channel::open_with(channel_key, blob, &content, kind, signer)?;
+            (payload, content)
+        }
+    };
+    let json = String::from_utf8(payload).map_err(|_| "payload is not UTF-8".to_string())?;
+    Ok((json, content))
+}
+
 /// How this identity seals a value it writes into one of its own channel docs: under the
 /// channel's content key, with no read key in the head.
 ///
@@ -1016,11 +1048,17 @@ fn published_at(manifest_json: &str) -> Option<String> {
 /// Anything unreadable — no cache, a blob that won't open, a manifest without the
 /// field — answers "not older", so the write proceeds. A guard that can't compare
 /// should get out of the way rather than block a channel forever.
+///
+/// `content` is the key the resolved manifest opened with, for a cached one whose head
+/// carries no read key — a channel only its members may read. A cached manifest from an
+/// earlier epoch will not open with it, and that too answers "not older": a rotation is
+/// newer by construction.
 pub(crate) fn is_older_than_cached(
     channel_key: &[u8; 32],
     author: &str,
     resolved_json: &str,
     cached_blob: Option<&[u8]>,
+    content: Option<&pin_channel::ContentKey>,
 ) -> bool {
     let Some(cached) = cached_blob else {
         return false;
@@ -1028,10 +1066,27 @@ pub(crate) fn is_older_than_cached(
     let Ok(cached_str) = std::str::from_utf8(cached) else {
         return false;
     };
-    let Ok(cached_json) =
-        pin_channel::open_blob(channel_key, cached_str, pin_channel::Signer::Author(author))
-    else {
-        return false;
+    let signer = pin_channel::Signer::Author(author);
+    let cached_json = match pin_channel::open_blob(channel_key, cached_str, signer) {
+        Ok(json) => json,
+        Err(_) => {
+            let Some(content) = content else {
+                return false;
+            };
+            let Ok(payload) = pin_channel::open_with(
+                channel_key,
+                cached_str,
+                content,
+                pin_channel::Kind::Manifest,
+                signer,
+            ) else {
+                return false;
+            };
+            let Ok(json) = String::from_utf8(payload) else {
+                return false;
+            };
+            json
+        }
     };
     match (published_at(resolved_json), published_at(&cached_json)) {
         // Strictly older only. Equal timestamps mean the same instant with different
@@ -1039,6 +1094,31 @@ pub(crate) fn is_older_than_cached(
         (Some(fresh), Some(held)) => fresh < held,
         _ => false,
     }
+}
+
+/// Download a channel's manifest and open it with whatever key this identity holds for it,
+/// answering with the manifest, the blob exactly as fetched, and the key it opened with.
+async fn fetch_held(
+    ctx: &PullContext,
+    channel_id: &str,
+    channel_key: &[u8; 32],
+    item_url: &str,
+    author: &str,
+) -> Result<(String, String, pin_channel::ContentKey), String> {
+    let bytes = ctx.sia.download_item(item_url).await?;
+    let blob = String::from_utf8(bytes).map_err(|_| "manifest blob is not UTF-8".to_string())?;
+    let (json, content) = open_held(
+        &ctx.doc,
+        &ctx.blobs,
+        ctx.author_id,
+        channel_id,
+        channel_key,
+        &blob,
+        pin_channel::Kind::Manifest,
+        author,
+    )
+    .await?;
+    Ok((json, blob, content))
 }
 
 /// One pass: refresh every subscribed channel's cached manifest and published counts, and
@@ -1107,9 +1187,8 @@ pub async fn pull_once(ctx: &PullContext) -> Result<PullOutcome, String> {
             continue;
         }
 
-        match pin_channel::fetch(&ctx.sia, &k, &mark.url, pin_channel::Signer::Author(author)).await
-        {
-            Ok(resolved) => {
+        match fetch_held(ctx, channel_id, &k, &mark.url, author).await {
+            Ok((manifest_json, blob, content)) => {
                 // What's already cached may be NEWER than what we just resolved. A
                 // browser resolves through pkarr relays that lag minutes behind the
                 // DHT a desktop reads directly, so a tab syncing with a desktop
@@ -1126,7 +1205,13 @@ pub async fn pull_once(ctx: &PullContext) -> Result<PullOutcome, String> {
                 .await
                 .ok()
                 .flatten();
-                if is_older_than_cached(&k, author, &resolved.manifest_json, cached.as_deref()) {
+                if is_older_than_cached(
+                    &k,
+                    author,
+                    &manifest_json,
+                    cached.as_deref(),
+                    Some(&content),
+                ) {
                     outcome.stale += 1;
                     continue;
                 }
@@ -1135,7 +1220,7 @@ pub async fn pull_once(ctx: &PullContext) -> Result<PullOutcome, String> {
                     .set_bytes(
                         ctx.author_id,
                         record_key(SUB_COLLECTION, channel_id),
-                        resolved.blob.into_bytes(),
+                        blob.into_bytes(),
                     )
                     .await
                 {
@@ -1365,7 +1450,8 @@ mod tests {
             &k,
             &author(),
             &published("2026-08-01T11:00:00.000Z"),
-            Some(&cached)
+            Some(&cached),
+            None
         ));
     }
 
@@ -1378,7 +1464,8 @@ mod tests {
             &k,
             &author(),
             &published("2026-08-01T13:00:00.000Z"),
-            Some(&cached)
+            Some(&cached),
+            None
         ));
         // Same instant, and by construction different content, since an identical
         // manifest would be a harmless rewrite either way. Refusing would be worse
@@ -1387,7 +1474,59 @@ mod tests {
             &k,
             &author(),
             &published("2026-08-01T12:00:00.000Z"),
-            Some(&cached)
+            Some(&cached),
+            None
+        ));
+    }
+
+    #[test]
+    fn a_members_only_cache_is_compared_with_the_key_the_fresh_copy_opened_with() {
+        // No read key in either head, so the cached manifest opens only with C — the key
+        // the resolved one just opened with, when both are at one epoch.
+        let k = [7u8; 32];
+        let content = pin_channel::ContentKey {
+            epoch: 3,
+            key: [5u8; 32],
+        };
+        let members_only = |content: pin_channel::ContentKey| pin_channel::Sealing {
+            content,
+            publish_read_key: false,
+            ..pin_channel::author_sealing(&[1u8; 32], &k)
+        };
+        let cached = pin_channel::seal(
+            &members_only(content),
+            pin_channel::Kind::Manifest,
+            published("2099-01-01T00:00:00Z").as_bytes(),
+        )
+        .unwrap()
+        .into_bytes();
+        let older = published("2026-01-01T00:00:00Z");
+        assert!(is_older_than_cached(
+            &k,
+            &author(),
+            &older,
+            Some(&cached),
+            Some(&content)
+        ));
+        // Without the key the guard cannot compare, and steps aside as it always has.
+        assert!(!is_older_than_cached(
+            &k,
+            &author(),
+            &older,
+            Some(&cached),
+            None
+        ));
+        // A key for another epoch: a rotation, newer by construction.
+        let rotated = pin_channel::ContentKey {
+            epoch: 4,
+            key: [6u8; 32],
+        };
+        assert!(!is_older_than_cached(
+            &k,
+            &author(),
+            &older,
+            Some(&cached),
+            Some(&rotated)
         ));
     }
 
@@ -1399,6 +1538,7 @@ mod tests {
             &k,
             &author(),
             &published("2026-01-01T00:00:00Z"),
+            None,
             None
         ));
         // A blob sealed under a DIFFERENT key won't open. Blocking the channel forever
@@ -1408,7 +1548,8 @@ mod tests {
             &k,
             &author(),
             &published("2026-01-01T00:00:00Z"),
-            Some(&other)
+            Some(&other),
+            None
         ));
         // A manifest with no version marker can't be ranked, so it doesn't block.
         let cached = sealed(&k, "2099-01-01T00:00:00Z");
@@ -1416,7 +1557,8 @@ mod tests {
             &k,
             &author(),
             r#"{"items":[]}"#,
-            Some(&cached)
+            Some(&cached),
+            None
         ));
     }
 

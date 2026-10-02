@@ -272,7 +272,13 @@ async fn push_manifest(ctx: &ChannelSyncContext, channel_id: &str, watched: &Wat
     .await
     .ok()
     .flatten();
-    if is_older_than_cached(&watched.key, &watched.author, &json, cached.as_deref()) {
+    if is_older_than_cached(
+        &watched.key,
+        &watched.author,
+        &json,
+        cached.as_deref(),
+        None,
+    ) {
         return Push::Stale;
     }
 
