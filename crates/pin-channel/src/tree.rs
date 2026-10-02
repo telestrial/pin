@@ -33,6 +33,8 @@
 
 use std::collections::BTreeMap;
 
+use serde::{Deserialize, Serialize};
+
 use crate::ContentKey;
 
 /// A node's place in the tree: its level above the leaves (0 is a leaf) and its position
@@ -78,6 +80,40 @@ pub struct NodeRecord {
     pub wraps: [Vec<u8>; 2],
 }
 
+/// One seating of one member: who, at which leaf, and whether they have since been removed.
+///
+/// The author's roster is a set of these, and the tree is derived from it rather than kept
+/// beside it. A record per SEATING rather than per member, so a member removed and later
+/// invited back is two records: the removal stays on record whatever comes after it, and
+/// the epoch, which counts removals, can only grow. A record per member would have the
+/// re-invite overwrite the removal and take the epoch backwards, which is the one direction
+/// a member refuses to see it move.
+///
+/// The only change ever made to a seating is setting `removed_at`, so two of the author's
+/// devices writing one seating agree on everything but when it was removed — and a removal
+/// counts the same whichever stamp survives.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Seat {
+    /// This seating's own id, minted when it is written. The record's key carries it, and
+    /// it breaks the tie when two seatings claim one leaf.
+    pub id: String,
+    /// The member, as did:dht.
+    pub did: String,
+    /// The member's published encryption key, base64, as their directory carries it.
+    pub enc_key: String,
+    pub leaf: u64,
+    pub added_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub removed_at: Option<String>,
+}
+
+/// One past the highest leaf a seating may name: 2²⁴, about sixteen million members.
+///
+/// The tree holds a slot per leaf up to the highest one seated, so a seating naming a
+/// leaf far past any real one would make deriving the tree allocate without bound.
+pub const MAX_LEAF: u64 = 1 << 24;
+
 /// The length of one wrap: a 32-byte key sealed by `seal_raw`.
 pub const WRAP_LEN: usize = pin_crypto::sealed_len(32);
 
@@ -121,6 +157,51 @@ impl Tree {
         }
     }
 
+    /// The tree a roster describes.
+    ///
+    /// Every removed seating is a removal at its leaf, so the versions and the epoch are
+    /// the same however the seatings are ordered and whichever device wrote them. Every
+    /// seating still standing seats its member, and when two claim one leaf — two devices
+    /// inviting at once, each filling the same hole — the earliest `added_at` takes it,
+    /// then the lower did, then the lower id, so every device seats the same one. The
+    /// other is in no leaf and climbs to nothing.
+    ///
+    /// Everything that cannot be read fails closed. A seating naming a leaf at or past
+    /// `MAX_LEAF`, or carrying an encryption key that is not one, seats nobody; a removal
+    /// still counts wherever it names, because the cost of counting one too many is a
+    /// rotation and the cost of dropping one is a member never removed.
+    pub fn from_roster(seats: &[Seat]) -> Self {
+        let mut tree = Tree::new();
+        let mut held: BTreeMap<u64, &Seat> = BTreeMap::new();
+        for seat in seats {
+            if seat.removed_at.is_some() {
+                if seat.leaf < MAX_LEAF {
+                    tree.reach(seat.leaf);
+                }
+                *tree.removals.entry(seat.leaf).or_insert(0) += 1;
+                continue;
+            }
+            if seat.leaf >= MAX_LEAF {
+                continue;
+            }
+            let rank = |s: &Seat| (s.added_at.clone(), s.did.clone(), s.id.clone());
+            match held.get(&seat.leaf) {
+                Some(other) if rank(other) <= rank(seat) => {}
+                _ => {
+                    held.insert(seat.leaf, seat);
+                }
+            }
+        }
+        for (leaf, seat) in held {
+            let key = pin_crypto::b64_decode(&seat.enc_key)
+                .and_then(|bytes| <[u8; 32]>::try_from(bytes).ok());
+            if let Some(key) = key {
+                tree.seat(leaf, key);
+            }
+        }
+        tree
+    }
+
     /// The root's version: every removal ever made.
     pub fn epoch(&self) -> u32 {
         self.removals.values().sum()
@@ -142,6 +223,15 @@ impl Tree {
         self.leaves.get(leaf as usize).copied().flatten()
     }
 
+    /// The leaf the next member would be seated at: the first hole, or the first leaf past
+    /// a full tree.
+    pub fn next_leaf(&self) -> u64 {
+        self.leaves
+            .iter()
+            .position(Option::is_none)
+            .unwrap_or(self.leaves.len()) as u64
+    }
+
     /// Seat a member at the first hole, growing the tree a level when there is none, and
     /// answer with their leaf position.
     ///
@@ -149,17 +239,27 @@ impl Tree {
     /// wraps on their path have to exist, and those are produced by `records` from state
     /// that has not moved.
     pub fn add(&mut self, enc_key: [u8; 32]) -> u64 {
-        if let Some(i) = self.leaves.iter().position(Option::is_none) {
-            self.leaves[i] = Some(enc_key);
-            return i as u64;
+        let at = self.next_leaf();
+        self.seat(at, enc_key);
+        at
+    }
+
+    /// Put a member at a given leaf, growing the tree until it reaches that far.
+    ///
+    /// Growing puts a new root on top. Every existing node keeps its place, and the old
+    /// root becomes an ordinary interior node whose key is now derived like any other's.
+    fn seat(&mut self, leaf: u64, enc_key: [u8; 32]) {
+        self.reach(leaf);
+        self.leaves[leaf as usize] = Some(enc_key);
+    }
+
+    /// Grow the tree until `leaf` is one of its leaves.
+    fn reach(&mut self, leaf: u64) {
+        while leaf >= self.leaves.len() as u64 {
+            self.height += 1;
+            let len = self.leaves.len() * 2;
+            self.leaves.resize(len, None);
         }
-        // Full: a new root on top. Every existing node keeps its place, and the old root
-        // becomes an ordinary interior node whose key is now derived like any other's.
-        let at = self.leaves.len();
-        self.height += 1;
-        self.leaves.resize(at * 2, None);
-        self.leaves[at] = Some(enc_key);
-        at as u64
     }
 
     /// Take a member out, and replace every key they held.
@@ -178,8 +278,13 @@ impl Tree {
         Ok(())
     }
 
-    /// A node's version: the removals made from the leaves beneath it.
+    /// A node's version: the removals made from the leaves beneath it. The root's is the
+    /// epoch, which counts every removal on record, including one at a leaf the tree never
+    /// reached (see `from_roster`).
     fn version(&self, id: NodeId) -> u32 {
+        if id == self.root() {
+            return self.epoch();
+        }
         let first = id.pos << id.level;
         let end = (id.pos + 1) << id.level;
         self.removals.range(first..end).map(|(_, n)| n).sum()
@@ -664,6 +769,123 @@ mod tests {
                 }
             }
         }
+    }
+
+    fn seating(id: u64, member: u64, leaf: u64) -> Seat {
+        Seat {
+            id: format!("s{id}"),
+            did: format!("did:dht:m{member}"),
+            enc_key: pin_crypto::b64_encode(&public(member)),
+            leaf,
+            added_at: format!("2026-10-01T00:00:{:02}.000Z", id % 60),
+            removed_at: None,
+        }
+    }
+
+    #[test]
+    fn a_roster_derives_the_tree_that_lived_through_it() {
+        // The roster is the record and the tree is derived from it, so a tree rebuilt from
+        // the seatings must be the one that saw every change happen — through growth,
+        // removals and holes refilled — and must not depend on the order they are read in.
+        for run in 0..4u64 {
+            let mut rng = Lcg(run.wrapping_mul(0x9e3779b97f4a7c15) + 7);
+            let mut tree = Tree::new();
+            let mut roster: Vec<Seat> = Vec::new();
+            let mut next = 0u64;
+            for _ in 0..60 {
+                let standing: Vec<usize> = (0..roster.len())
+                    .filter(|&i| roster[i].removed_at.is_none())
+                    .collect();
+                if !standing.is_empty() && rng.next() % 3 == 0 {
+                    let i = standing[(rng.next() as usize) % standing.len()];
+                    tree.remove(roster[i].leaf).unwrap();
+                    roster[i].removed_at = Some("2026-10-02T00:00:00.000Z".into());
+                } else {
+                    let leaf = tree.add(public(next));
+                    roster.push(seating(next, next, leaf));
+                    next += 1;
+                }
+                assert_eq!(Tree::from_roster(&roster), tree, "run {run}");
+            }
+            let mut shuffled = roster.clone();
+            for i in (1..shuffled.len()).rev() {
+                shuffled.swap(i, (rng.next() as usize) % (i + 1));
+            }
+            assert_eq!(Tree::from_roster(&shuffled), tree, "run {run}");
+        }
+    }
+
+    #[test]
+    fn a_member_invited_back_does_not_take_the_epoch_back() {
+        let mut first = seating(0, 1, 0);
+        first.removed_at = Some("2026-10-02T00:00:00.000Z".into());
+        let again = seating(1, 1, 0);
+        let tree = Tree::from_roster(&[first, again]);
+        assert_eq!(tree.epoch(), 1);
+        assert_eq!(tree.member_at(0), Some(public(1)));
+    }
+
+    #[test]
+    fn two_seatings_on_one_leaf_seat_the_earlier_on_every_device() {
+        let early = seating(3, 1, 0);
+        let late = seating(9, 2, 0);
+        for roster in [
+            vec![early.clone(), late.clone()],
+            vec![late.clone(), early.clone()],
+        ] {
+            let tree = Tree::from_roster(&roster);
+            assert_eq!(tree.member_at(0), Some(public(1)));
+            assert_eq!(
+                tree.epoch(),
+                0,
+                "a seating that lost its leaf was never removed"
+            );
+        }
+        // Stamped in the same instant, the lower did takes it.
+        let mut tied = late.clone();
+        tied.added_at = early.added_at.clone();
+        assert_eq!(
+            Tree::from_roster(&[tied.clone(), early.clone()]).member_at(0),
+            Some(public(1))
+        );
+    }
+
+    #[test]
+    fn an_unreadable_seating_seats_nobody_and_a_removal_still_counts() {
+        let mut bad_key = seating(0, 1, 0);
+        bad_key.enc_key = "not a key".into();
+        let mut short_key = seating(1, 2, 1);
+        short_key.enc_key = pin_crypto::b64_encode(&[7u8; 31]);
+        let far = seating(2, 3, MAX_LEAF);
+        let mut far_removed = seating(3, 4, MAX_LEAF + 5);
+        far_removed.removed_at = Some("2026-10-02T00:00:00.000Z".into());
+        let tree = Tree::from_roster(&[bad_key, short_key, far, far_removed]);
+        assert_eq!(tree.member_at(0), None);
+        assert_eq!(tree.member_at(1), None);
+        assert_eq!(tree.height(), 1, "a leaf past the bound grows nothing");
+        assert_eq!(tree.epoch(), 1);
+        // The epoch the root is published at is the one the author derives C for.
+        let root = tree.records(&APP_KEY, CHANNEL).unwrap().pop().unwrap();
+        assert_eq!(root.id, tree.root());
+        assert_eq!(root.version, 1);
+    }
+
+    #[test]
+    fn a_seating_crosses_as_these_keys() {
+        let mut seat = seating(0, 1, 4);
+        let standing = serde_json::to_value(&seat).unwrap();
+        let mut keys: Vec<&str> = standing
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort();
+        assert_eq!(keys, ["addedAt", "did", "encKey", "id", "leaf"]);
+        seat.removed_at = Some("2026-10-02T00:00:00.000Z".into());
+        let removed = serde_json::to_value(&seat).unwrap();
+        assert!(removed.get("removedAt").is_some());
+        assert_eq!(serde_json::from_value::<Seat>(removed).unwrap(), seat);
     }
 
     #[test]
