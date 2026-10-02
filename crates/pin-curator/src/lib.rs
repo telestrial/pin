@@ -742,7 +742,10 @@ pub(crate) async fn held_content_key(
         .iter()
         .any(|c| c.channel_id == channel_id)
     {
-        return Some(pin_channel::author_sealing(app_key, channel_key).content);
+        return channel_sealing(doc, blobs, author_id, app_key, settings, channel_key)
+            .await
+            .ok()
+            .map(|s| s.content);
     }
     let raw = read_record(doc, blobs, author_id, SUB_COLLECTION, channel_id)
         .await
@@ -792,6 +795,59 @@ pub(crate) async fn open_held(
     Ok((json, content))
 }
 
+/// Whether one of this identity's channels is one only its members may read.
+pub(crate) fn members_only(settings: &SettingsView, channel_id: &str) -> bool {
+    settings
+        .my_channels
+        .iter()
+        .any(|c| c.channel_id == channel_id && c.visibility.as_deref() == Some("secret"))
+}
+
+/// How this identity seals one of its own channels NOW: at the initial epoch with the read
+/// key in the head for a channel anyone holding K may read, and for a members-only one at
+/// its member tree's current epoch with no read key.
+///
+/// An error when the roster will not read, never a fallback: sealing a members-only channel
+/// at the wrong epoch locks its members out, and sealing it the public way hands its
+/// content to anyone holding K.
+pub(crate) async fn channel_sealing<'a>(
+    doc: &Doc,
+    blobs: &Store,
+    author_id: AuthorId,
+    app_key: &[u8; 32],
+    settings: &SettingsView,
+    channel_key: &'a [u8; 32],
+) -> Result<pin_channel::Sealing<'a>, String> {
+    let channel_id = pin_crypto::channel_id(channel_key);
+    if !members_only(settings, &channel_id) {
+        return Ok(pin_channel::author_sealing(app_key, channel_key));
+    }
+    let seats = members::roster(doc, blobs, author_id, &channel_id).await?;
+    let epoch = pin_channel::tree::Tree::from_roster(&seats).epoch();
+    Ok(pin_channel::author_sealing_at(
+        app_key,
+        channel_key,
+        epoch,
+        true,
+    ))
+}
+
+/// A value in one of this identity's own channel docs, opened at whatever epoch it was
+/// sealed: the author derives every epoch's key, so a value written before a rotation reads
+/// as readily as one written after. Reading it with the current key alone would drop every
+/// older value — and a floor republished from that drops what they held.
+pub(crate) fn open_own_doc_value<T: serde::de::DeserializeOwned>(
+    app_key: &[u8; 32],
+    channel_key: &[u8; 32],
+    bytes: &[u8],
+) -> Option<T> {
+    let blob = std::str::from_utf8(bytes).ok()?;
+    let (json, _) =
+        pin_channel::open_as_author(app_key, channel_key, blob, pin_channel::Kind::DocValue)
+            .ok()?;
+    serde_json::from_slice(&json).ok()
+}
+
 /// How this identity seals a value it writes into one of its own channel docs: under the
 /// channel's content key, with no read key in the head.
 ///
@@ -799,13 +855,10 @@ pub(crate) async fn open_held(
 /// anyone reading a value already holds it. Sealed at all because the doc stays put across
 /// a rotation: a removed member who kept the namespace id from a ticket they once held
 /// syncs on, and what they sync is sealed under a key they no longer have.
-pub(crate) fn doc_sealing<'a>(
-    app_key: &[u8; 32],
-    channel_key: &'a [u8; 32],
-) -> pin_channel::Sealing<'a> {
+pub(crate) fn doc_sealing(sealing: pin_channel::Sealing<'_>) -> pin_channel::Sealing<'_> {
     pin_channel::Sealing {
         publish_read_key: false,
-        ..pin_channel::author_sealing(app_key, channel_key)
+        ..sealing
     }
 }
 

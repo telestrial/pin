@@ -229,8 +229,15 @@ async fn own_subjects<N: crate::net::Network>(
         };
         // Through the channel's own open, which reads the head, and never a raw decrypt: the
         // record is the published object, and only `pin_channel` knows its layout.
-        let Ok(json) = pin_channel::open_blob(&k, &blob, pin_channel::Signer::Author(own_did))
+        // As its author, at whatever epoch it was sealed: a members-only channel's manifest
+        // carries no read key.
+        let _ = own_did;
+        let Ok((json, _)) =
+            pin_channel::open_as_author(&ctx.app_key, &k, &blob, pin_channel::Kind::Manifest)
         else {
+            continue;
+        };
+        let Ok(json) = String::from_utf8(json) else {
             continue;
         };
         let Ok(manifest) = serde_json::from_str::<pin_manifest::ChannelManifest>(&json) else {
@@ -361,16 +368,56 @@ fn owned_channel_key(settings: &SettingsView, channel_id: &str) -> Option<[u8; 3
 /// reading it back means holding the key the post was read with. Own channels only — a
 /// comment on anyone else's has no subject of ours to match, so opening it would buy nothing.
 ///
-/// Every channel is at its first epoch today. Once a content key can rotate this has to
-/// answer every epoch's key, not only the current one: a comment stays sealed under the
-/// epoch it was written in, and the author is the one reader who can derive them all.
-fn own_channel_keys(app_key: &[u8; 32], settings: &SettingsView) -> Vec<[u8; 32]> {
-    settings
-        .my_channels
-        .iter()
-        .filter_map(|c| pin_crypto::channel_key_from_base64(&c.channel_key))
-        .map(|k| pin_channel::author_sealing(app_key, &k).content.key)
-        .collect()
+/// EVERY epoch's key for a members-only channel, up to `epochs` gives as its current one:
+/// a comment stays sealed under the epoch it was written in, and the author is the one
+/// reader who can derive them all. A channel with no entry there is at its first epoch.
+fn own_channel_keys(
+    app_key: &[u8; 32],
+    settings: &SettingsView,
+    epochs: &HashMap<String, u32>,
+) -> Vec<[u8; 32]> {
+    let mut out = Vec::new();
+    for c in &settings.my_channels {
+        // A key that will not decode is a channel nothing can be sealed under.
+        if pin_crypto::channel_key_from_base64(&c.channel_key).is_none() {
+            continue;
+        }
+        let current = epochs.get(&c.channel_id).copied().unwrap_or(0);
+        for epoch in pin_derive::INITIAL_EPOCH..=current {
+            out.push(pin_derive::channel_content_key(
+                app_key,
+                &c.channel_id,
+                epoch,
+            ));
+        }
+    }
+    out
+}
+
+/// The current epoch of each of this identity's members-only channels.
+async fn own_epochs<N: crate::net::Network>(
+    ctx: &EngagementContext<N>,
+    settings: &SettingsView,
+) -> HashMap<String, u32> {
+    let mut out = HashMap::new();
+    for c in &settings.my_channels {
+        let Some(k) = pin_crypto::channel_key_from_base64(&c.channel_key) else {
+            continue;
+        };
+        if let Ok(sealing) = crate::channel_sealing(
+            &ctx.doc,
+            &ctx.blobs,
+            ctx.author_id,
+            &ctx.app_key,
+            settings,
+            &k,
+        )
+        .await
+        {
+            out.insert(c.channel_id.clone(), sealing.content.epoch);
+        }
+    }
+    out
 }
 
 /// The identities whose endorsements this pass will look for.
@@ -1088,7 +1135,7 @@ pub async fn engagement_once<N: crate::net::Network>(
         &subjects,
         comment_knocks,
         &comments_at,
-        &own_channel_keys(&ctx.app_key, &settings),
+        &own_channel_keys(&ctx.app_key, &settings, &own_epochs(ctx, &settings).await),
     )
     .await;
     outcome.comments = comments;
@@ -1259,7 +1306,19 @@ pub async fn engagement_once<N: crate::net::Network>(
         let Some(k) = owned_channel_key(&settings, channel_id) else {
             continue;
         };
-        let sealing = crate::doc_sealing(&ctx.app_key, &k);
+        let Ok(sealing) = crate::channel_sealing(
+            &ctx.doc,
+            &ctx.blobs,
+            ctx.author_id,
+            &ctx.app_key,
+            &settings,
+            &k,
+        )
+        .await
+        else {
+            continue;
+        };
+        let sealing = crate::doc_sealing(sealing);
         if gestures.is_empty() && commented.is_empty() {
             // Nothing endorses it any more. The tally goes rather than sitting at zero:
             // a reader treats an absent tally and a zero one the same, and one fewer
@@ -1462,12 +1521,7 @@ pub(crate) async fn read_tally<N: crate::net::Network>(
         .await
         .ok()??;
     let bytes = ctx.blobs.get_bytes(entry.content_hash()).await.ok()?;
-    crate::open_doc_value(
-        sealing.channel_key,
-        &sealing.content,
-        &crate::own_did(&ctx.app_key),
-        &bytes,
-    )
+    crate::open_own_doc_value(&ctx.app_key, sealing.channel_key, &bytes)
 }
 
 /// The retention time a published tally claims, if any.
@@ -1498,12 +1552,7 @@ async fn read_conversation<N: crate::net::Network>(
         .await
         .ok()??;
     let bytes = ctx.blobs.get_bytes(entry.content_hash()).await.ok()?;
-    crate::open_doc_value(
-        sealing.channel_key,
-        &sealing.content,
-        &crate::own_did(&ctx.app_key),
-        &bytes,
-    )
+    crate::open_own_doc_value(&ctx.app_key, sealing.channel_key, &bytes)
 }
 
 // --- the floor rung ---------------------------------------------------------------
@@ -1566,10 +1615,9 @@ async fn read_conversations<N: crate::net::Network>(
         let Ok(bytes) = ctx.blobs.get_bytes(entry.content_hash()).await else {
             continue;
         };
-        if let Some(conversation) = crate::open_doc_value::<pin_engagement::Conversation>(
+        if let Some(conversation) = crate::open_own_doc_value::<pin_engagement::Conversation>(
+            &ctx.app_key,
             sealing.channel_key,
-            &sealing.content,
-            &crate::own_did(&ctx.app_key),
             &bytes,
         ) {
             map.insert(subject, conversation);
@@ -1613,13 +1661,18 @@ pub async fn publish_channel_conversations<N: crate::net::Network>(
     channel_id: &str,
     channel_key: &[u8; 32],
 ) -> Result<bool, String> {
-    let channel_doc = open_channel_doc(ctx, channel_id).await?;
-    let map = read_conversations(
-        ctx,
-        &channel_doc,
-        &crate::doc_sealing(&ctx.app_key, channel_key),
+    let settings = crate::read_settings(&ctx.doc, &ctx.blobs, ctx.author_id, &ctx.app_key).await?;
+    let sealing = crate::channel_sealing(
+        &ctx.doc,
+        &ctx.blobs,
+        ctx.author_id,
+        &ctx.app_key,
+        &settings,
+        channel_key,
     )
     .await?;
+    let channel_doc = open_channel_doc(ctx, channel_id).await?;
+    let map = read_conversations(ctx, &channel_doc, &crate::doc_sealing(sealing)).await?;
 
     let rkey = pin_derive::published_conversation_rkey(channel_id);
     let published_key = pin_derive::published_key(&ctx.app_key);
@@ -1629,7 +1682,6 @@ pub async fn publish_channel_conversations<N: crate::net::Network>(
         return Ok(false);
     }
 
-    let sealing = pin_channel::author_sealing(&ctx.app_key, channel_key);
     let fingerprint = pin_channel::fingerprint(&sealing, &conversation_substance(&map)?);
     if previous.as_ref().and_then(|p| p.fp.as_deref()) == Some(fingerprint.as_str()) {
         return Ok(false);
@@ -1692,13 +1744,18 @@ pub async fn publish_channel_tallies<N: crate::net::Network>(
     channel_id: &str,
     channel_key: &[u8; 32],
 ) -> Result<bool, String> {
-    let channel_doc = open_channel_doc(ctx, channel_id).await?;
-    let map = read_tallies(
-        ctx,
-        &channel_doc,
-        &crate::doc_sealing(&ctx.app_key, channel_key),
+    let settings = crate::read_settings(&ctx.doc, &ctx.blobs, ctx.author_id, &ctx.app_key).await?;
+    let sealing = crate::channel_sealing(
+        &ctx.doc,
+        &ctx.blobs,
+        ctx.author_id,
+        &ctx.app_key,
+        &settings,
+        channel_key,
     )
     .await?;
+    let channel_doc = open_channel_doc(ctx, channel_id).await?;
+    let map = read_tallies(ctx, &channel_doc, &crate::doc_sealing(sealing)).await?;
 
     let rkey = pin_derive::published_engagement_rkey(channel_id);
     let published_key = pin_derive::published_key(&ctx.app_key);
@@ -1708,7 +1765,6 @@ pub async fn publish_channel_tallies<N: crate::net::Network>(
         return Ok(false);
     }
 
-    let sealing = pin_channel::author_sealing(&ctx.app_key, channel_key);
     let fingerprint = pin_channel::fingerprint(&sealing, &substance(&map)?);
     if previous.as_ref().and_then(|p| p.fp.as_deref()) == Some(fingerprint.as_str()) {
         return Ok(false);
@@ -2761,8 +2817,18 @@ mod own_keys {
             }],
         }))
         .unwrap();
-        let keys = super::own_channel_keys(&app_key, &settings);
+        let keys = super::own_channel_keys(&app_key, &settings, &std::collections::HashMap::new());
         let c = pin_channel::author_sealing(&app_key, &k).content.key;
         assert_eq!(keys, vec![c]);
+
+        // A members-only channel at epoch 2 answers all three, oldest first.
+        let id = pin_crypto::channel_id(&k);
+        let keys = super::own_channel_keys(
+            &app_key,
+            &settings,
+            &std::collections::HashMap::from([(id.clone(), 2)]),
+        );
+        let at = |e| pin_derive::channel_content_key(&app_key, &id, e);
+        assert_eq!(keys, vec![at(0), at(1), at(2)]);
     }
 }

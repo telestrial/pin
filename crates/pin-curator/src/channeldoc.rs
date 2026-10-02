@@ -134,7 +134,23 @@ pub async fn channel_docs_once(
                 }
             };
 
-        match serve_channel(ctx, id, &k, &sealed, copied).await {
+        let content = match crate::channel_sealing(
+            &ctx.doc,
+            &ctx.blobs,
+            ctx.author_id,
+            &ctx.app_key,
+            &settings,
+            &k,
+        )
+        .await
+        {
+            Ok(sealing) => sealing.content,
+            Err(_) => {
+                outcome.failed += 1;
+                continue;
+            }
+        };
+        match serve_channel(ctx, id, &content, &sealed, copied).await {
             Ok(Served {
                 copied: did_copy,
                 advertised,
@@ -171,7 +187,7 @@ struct Served {
 async fn serve_channel(
     ctx: &ChannelDocContext,
     channel_id: &str,
-    channel_key: &[u8; 32],
+    content: &pin_channel::ContentKey,
     sealed: &[u8],
     copied: &mut HashMap<String, String>,
 ) -> Result<Served, String> {
@@ -205,7 +221,6 @@ async fn serve_channel(
         .map_err(|e| format!("channel doc {channel_id}: share: {e}"))?;
     // Under C rather than K: the ticket is a read capability for the whole doc, so finding
     // it has to take what reading the channel takes.
-    let content = pin_channel::author_sealing(&ctx.app_key, channel_key).content;
     let seed = pin_derive::channel_doc_ticket_seed(&content.key);
     pin_pkarr::publish(
         &seed,

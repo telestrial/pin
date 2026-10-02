@@ -1785,7 +1785,7 @@ mod visibility {
             .await
             .expect("channel doc");
         let k = alice.channel_key();
-        let sealing = crate::doc_sealing(&alice.app_key, &k);
+        let sealing = crate::doc_sealing(pin_channel::author_sealing(&alice.app_key, &k));
         let tally = crate::engagement::read_tally(&ctx, &channel_doc, &sealing, &channel_id)
             .await
             .expect("the channel has a tally of its own");
@@ -2658,6 +2658,138 @@ mod content_keys {
             held(&john, &channel_id, &k, "unused for an owned channel").await,
             Some(pin_channel::author_sealing(&john.app_key, &k).content)
         );
+    }
+
+    /// John owns one channel, recorded with this visibility.
+    async fn owning(john: &Identity, visibility: &str) -> ([u8; 32], String) {
+        let k = john.channel_key();
+        let channel_id = pin_crypto::channel_id(&k);
+        john.set_settings(serde_json::json!({
+            "myChannels": [{
+                "channelID": channel_id,
+                "channelKey": pin_crypto::channel_key_to_base64(&k),
+                "visibility": visibility,
+            }],
+        }))
+        .await;
+        (k, channel_id)
+    }
+
+    async fn sealing_of(john: &Identity, k: &[u8; 32]) -> Result<pin_channel::ContentKey, String> {
+        let settings = settings_of(john).await;
+        crate::channel_sealing(
+            &john.doc,
+            &john.blobs,
+            john.author_id,
+            &john.app_key,
+            &settings,
+            k,
+        )
+        .await
+        .map(|s| {
+            assert_eq!(
+                s.publish_read_key,
+                !crate::members_only(&settings, &pin_crypto::channel_id(k))
+            );
+            s.content
+        })
+    }
+
+    #[tokio::test]
+    async fn a_secret_channel_seals_at_its_member_tree_s_epoch_with_no_read_key() {
+        let world = World::new();
+        let john = Identity::new(&world, 1).await;
+        let (k, channel_id) = owning(&john, "secret").await;
+        let invite = |did: &'static str| {
+            let john = &john;
+            async move {
+                crate::members::invite(
+                    &john.doc,
+                    &john.blobs,
+                    john.author_id,
+                    &john.app_key,
+                    &k,
+                    did,
+                    &pin_crypto::enc_public(&[2u8; 32]),
+                    "2026-10-01T00:00:00Z",
+                )
+                .await
+                .unwrap();
+            }
+        };
+        assert_eq!(sealing_of(&john, &k).await.unwrap().epoch, 0);
+        invite("did:dht:bob").await;
+        invite("did:dht:carol").await;
+        crate::members::remove(
+            &john.doc,
+            &john.blobs,
+            john.author_id,
+            &channel_id,
+            "did:dht:bob",
+            "2026-10-02T00:00:00Z",
+        )
+        .await
+        .unwrap();
+        let content = sealing_of(&john, &k).await.unwrap();
+        assert_eq!(content.epoch, 1);
+        assert_eq!(
+            content.key,
+            pin_derive::channel_content_key(&john.app_key, &channel_id, 1)
+        );
+        // What every reader of an owned channel's key is handed is the same.
+        assert_eq!(held(&john, &channel_id, &k, "unused").await, Some(content));
+    }
+
+    #[tokio::test]
+    async fn a_public_channel_seals_the_public_way_whatever_its_roster() {
+        let world = World::new();
+        let john = Identity::new(&world, 1).await;
+        let (k, _) = owning(&john, "public").await;
+        assert_eq!(
+            sealing_of(&john, &k).await.unwrap(),
+            pin_channel::author_sealing(&john.app_key, &k).content
+        );
+    }
+
+    #[tokio::test]
+    async fn a_secret_channel_whose_roster_will_not_read_is_not_sealed_at_all() {
+        // Never a fallback: the public way would hand its content to anyone holding K.
+        let world = World::new();
+        let john = Identity::new(&world, 1).await;
+        let (k, channel_id) = owning(&john, "secret").await;
+        crate::write_record(
+            &john.doc,
+            john.author_id,
+            pin_derive::MEMBERS_COLLECTION,
+            &pin_derive::member_rkey(&channel_id, "broken"),
+            b"not json".to_vec(),
+        )
+        .await
+        .unwrap();
+        assert!(sealing_of(&john, &k).await.is_err());
+        assert_eq!(held(&john, &channel_id, &k, "unused").await, None);
+    }
+
+    #[tokio::test]
+    async fn an_own_doc_value_from_before_a_rotation_still_reads() {
+        // Read with the current key alone, a floor republished after a removal would drop
+        // every tally written before it.
+        let world = World::new();
+        let john = Identity::new(&world, 1).await;
+        let k = john.channel_key();
+        for epoch in [0u32, 3] {
+            let sealing = crate::doc_sealing(pin_channel::author_sealing_at(
+                &john.app_key,
+                &k,
+                epoch,
+                true,
+            ));
+            let bytes =
+                crate::seal_doc_value(&sealing, &serde_json::json!({ "n": epoch })).unwrap();
+            let read: Option<serde_json::Value> =
+                crate::open_own_doc_value(&john.app_key, &k, &bytes);
+            assert_eq!(read, Some(serde_json::json!({ "n": epoch })));
+        }
     }
 
     #[tokio::test]
