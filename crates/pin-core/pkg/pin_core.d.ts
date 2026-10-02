@@ -62,6 +62,12 @@ export function channel_fetch_tallies(channel_key: Uint8Array, item_url: string)
 export function channel_id(channel_key: Uint8Array): string;
 
 /**
+ * Open a sealed object of a given kind with K. The integration tier's fakes read the
+ * channel's counts and words through this, so they check kind as the real fetches do.
+ */
+export function channel_open(channel_key: Uint8Array, kind: string, blob: string): string;
+
+/**
  * Open a sealed manifest blob with K — the path a CACHED copy takes, so that a cached
  * read and a fresh resolve decode identically.
  */
@@ -999,6 +1005,7 @@ export interface InitOutput {
     readonly channel_fetch_conversations: (a: number, b: number, c: number, d: number) => any;
     readonly channel_fetch_tallies: (a: number, b: number, c: number, d: number) => any;
     readonly channel_id: (a: number, b: number) => [number, number, number, number];
+    readonly channel_open: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
     readonly channel_open_blob: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly channel_publish: (a: number, b: number, c: number, d: number, e: number, f: number) => any;
     readonly channel_republish_pointer: (a: number, b: number, c: number, d: number) => any;

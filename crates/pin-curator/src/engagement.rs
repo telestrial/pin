@@ -221,7 +221,8 @@ async fn own_subjects<N: crate::net::Network>(
         };
         // Through the channel's own open, which reads the head, and never a raw decrypt: the
         // record is the published object, and only `pin_channel` knows its layout.
-        let Ok(json) = pin_channel::open_blob(&k, &blob) else {
+        let Ok(json) = pin_channel::open_blob(&k, &blob, pin_channel::Signer::Author(own_did))
+        else {
             continue;
         };
         let Ok(manifest) = serde_json::from_str::<pin_manifest::ChannelManifest>(&json) else {
@@ -1409,7 +1410,12 @@ pub(crate) async fn read_tally<N: crate::net::Network>(
         .await
         .ok()??;
     let bytes = ctx.blobs.get_bytes(entry.content_hash()).await.ok()?;
-    crate::open_doc_value(sealing.channel_key, &sealing.content, &bytes)
+    crate::open_doc_value(
+        sealing.channel_key,
+        &sealing.content,
+        &crate::own_did(&ctx.app_key),
+        &bytes,
+    )
 }
 
 /// The retention time a published tally claims, if any.
@@ -1440,7 +1446,12 @@ async fn read_conversation<N: crate::net::Network>(
         .await
         .ok()??;
     let bytes = ctx.blobs.get_bytes(entry.content_hash()).await.ok()?;
-    crate::open_doc_value(sealing.channel_key, &sealing.content, &bytes)
+    crate::open_doc_value(
+        sealing.channel_key,
+        &sealing.content,
+        &crate::own_did(&ctx.app_key),
+        &bytes,
+    )
 }
 
 // --- the floor rung ---------------------------------------------------------------
@@ -1506,6 +1517,7 @@ async fn read_conversations<N: crate::net::Network>(
         if let Some(conversation) = crate::open_doc_value::<pin_engagement::Conversation>(
             sealing.channel_key,
             &sealing.content,
+            &crate::own_did(&ctx.app_key),
             &bytes,
         ) {
             map.insert(subject, conversation);

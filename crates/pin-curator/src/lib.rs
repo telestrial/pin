@@ -449,6 +449,7 @@ async fn pull_tallies(
     ctx: &PullContext,
     channel_id: &str,
     k: &[u8; 32],
+    author: &str,
     outcome: &mut PullOutcome,
 ) {
     let Ok(Some(item_url)) = pin_channel::resolve_tallies_url(k).await else {
@@ -460,7 +461,10 @@ async fn pull_tallies(
         return;
     }
 
-    let Ok(json) = pin_channel::fetch_tallies(&ctx.sia, k, &mark.url).await else {
+    let Ok(json) =
+        pin_channel::fetch_tallies(&ctx.sia, k, &mark.url, pin_channel::Signer::Author(author))
+            .await
+    else {
         return;
     };
     let Ok(map) = serde_json::from_str::<BTreeMap<String, Aggregate>>(&json) else {
@@ -703,11 +707,19 @@ pub(crate) async fn read_record(
     }
 }
 
+/// This identity's own did:dht, the author every channel it owns is signed by.
+pub(crate) fn own_did(app_key: &[u8; 32]) -> String {
+    let key = pin_pkarr::public_key_from_seed(&pin_derive::did_dht_seed(app_key))
+        .expect("a 32-byte seed always makes a key");
+    format!("did:dht:{key}")
+}
+
 /// The content key a channel this identity reads is sealed under, from what it already
 /// holds: derived for a channel it owns, read from the head of the cached manifest for any
 /// other.
 ///
-/// `None` when no manifest is cached yet, which is the ordinary state of a channel
+/// `author` is whose signature the cached head must carry, and is not consulted for a
+/// channel this identity owns. `None` when no manifest is cached yet, which is the ordinary state of a channel
 /// subscribed to moments ago and is settled by the pull loop's next pass. A caller treats it
 /// as "not yet", never as a key it may do without.
 pub(crate) async fn held_content_key(
@@ -718,6 +730,7 @@ pub(crate) async fn held_content_key(
     settings: &SettingsView,
     channel_id: &str,
     channel_key: &[u8; 32],
+    author: &str,
 ) -> Option<pin_channel::ContentKey> {
     if settings
         .my_channels
@@ -731,7 +744,13 @@ pub(crate) async fn held_content_key(
         .ok()
         .flatten()?;
     let blob = String::from_utf8(raw).ok()?;
-    pin_channel::content_key(channel_key, &blob).ok()
+    pin_channel::content_key(
+        channel_key,
+        &blob,
+        pin_channel::Kind::Manifest,
+        pin_channel::Signer::Author(author),
+    )
+    .ok()
 }
 
 /// How this identity seals a value it writes into one of its own channel docs: under the
@@ -766,10 +785,18 @@ pub(crate) fn seal_doc_value<T: serde::Serialize>(
 pub(crate) fn open_doc_value<T: serde::de::DeserializeOwned>(
     channel_key: &[u8; 32],
     content: &pin_channel::ContentKey,
+    author: &str,
     bytes: &[u8],
 ) -> Option<T> {
     let blob = std::str::from_utf8(bytes).ok()?;
-    let json = pin_channel::open_with(channel_key, blob, content).ok()?;
+    let json = pin_channel::open_with(
+        channel_key,
+        blob,
+        content,
+        pin_channel::Kind::DocValue,
+        pin_channel::Signer::Author(author),
+    )
+    .ok()?;
     serde_json::from_slice(&json).ok()
 }
 
@@ -930,7 +957,14 @@ pub(crate) async fn read_settings(
 /// Own channels are excluded because their freshest state is local — the app reflects a
 /// publish immediately — so a cached copy could only ever be the same or staler, and
 /// serving a staler one would make a just-published post disappear.
-fn wanted_channels<'a>(settings: &SettingsView, reading: &'a Reading) -> Vec<(&'a str, &'a str)> {
+///
+/// Each with its author's did, which every object read from it must be signed by. A channel
+/// with no did — only a legacy link that named nobody makes one — cannot be verified, so it
+/// is not read at all.
+fn wanted_channels<'a>(
+    settings: &SettingsView,
+    reading: &'a Reading,
+) -> Vec<(&'a str, &'a str, &'a str)> {
     let owned: std::collections::HashSet<&str> = settings
         .my_channels
         .iter()
@@ -940,7 +974,13 @@ fn wanted_channels<'a>(settings: &SettingsView, reading: &'a Reading) -> Vec<(&'
         .channels
         .iter()
         .filter(|c| !owned.contains(c.channel_id.as_str()))
-        .map(|c| (c.channel_id.as_str(), c.channel_key.as_str()))
+        .filter_map(|c| {
+            Some((
+                c.channel_id.as_str(),
+                c.channel_key.as_str(),
+                c.did_dht.as_deref()?,
+            ))
+        })
         .collect()
 }
 
@@ -971,6 +1011,7 @@ fn published_at(manifest_json: &str) -> Option<String> {
 /// should get out of the way rather than block a channel forever.
 pub(crate) fn is_older_than_cached(
     channel_key: &[u8; 32],
+    author: &str,
     resolved_json: &str,
     cached_blob: Option<&[u8]>,
 ) -> bool {
@@ -980,7 +1021,9 @@ pub(crate) fn is_older_than_cached(
     let Ok(cached_str) = std::str::from_utf8(cached) else {
         return false;
     };
-    let Ok(cached_json) = pin_channel::open_blob(channel_key, cached_str) else {
+    let Ok(cached_json) =
+        pin_channel::open_blob(channel_key, cached_str, pin_channel::Signer::Author(author))
+    else {
         return false;
     };
     match (published_at(resolved_json), published_at(&cached_json)) {
@@ -1004,7 +1047,7 @@ pub async fn pull_once(ctx: &PullContext) -> Result<PullOutcome, String> {
     let wanted = wanted_channels(&settings, &reading);
     let mut outcome = PullOutcome::default();
 
-    for (channel_id, channel_key_b64) in &wanted {
+    for (channel_id, channel_key_b64, author) in &wanted {
         let Some(k) = pin_crypto::channel_key_from_base64(channel_key_b64) else {
             // A key we can't decode can never resolve; counting it as failed would
             // make the next pass retry something that cannot succeed.
@@ -1012,7 +1055,7 @@ pub async fn pull_once(ctx: &PullContext) -> Result<PullOutcome, String> {
         };
         // Independent of the manifest below: a channel whose posts haven't moved can still
         // have counts that have, so neither half's skip may stand in for the other's.
-        pull_tallies(ctx, channel_id, &k, &mut outcome).await;
+        pull_tallies(ctx, channel_id, &k, author, &mut outcome).await;
 
         let item_url = match pin_channel::resolve_url(&k).await {
             Ok(Some(url)) => url,
@@ -1042,7 +1085,8 @@ pub async fn pull_once(ctx: &PullContext) -> Result<PullOutcome, String> {
             continue;
         }
 
-        match pin_channel::fetch(&ctx.sia, &k, &mark.url).await {
+        match pin_channel::fetch(&ctx.sia, &k, &mark.url, pin_channel::Signer::Author(author)).await
+        {
             Ok(resolved) => {
                 // What's already cached may be NEWER than what we just resolved. A
                 // browser resolves through pkarr relays that lag minutes behind the
@@ -1060,7 +1104,7 @@ pub async fn pull_once(ctx: &PullContext) -> Result<PullOutcome, String> {
                 .await
                 .ok()
                 .flatten();
-                if is_older_than_cached(&k, &resolved.manifest_json, cached.as_deref()) {
+                if is_older_than_cached(&k, author, &resolved.manifest_json, cached.as_deref()) {
                     outcome.stale += 1;
                     continue;
                 }
@@ -1120,11 +1164,11 @@ pub async fn pull_once(ctx: &PullContext) -> Result<PullOutcome, String> {
 /// every pass, for the engagement loop to write straight back.
 fn tally_channels_to_keep<'a>(
     settings: &'a SettingsView,
-    wanted: &[(&'a str, &'a str)],
+    wanted: &[(&'a str, &'a str, &'a str)],
 ) -> std::collections::HashSet<&'a str> {
     wanted
         .iter()
-        .map(|(id, _)| *id)
+        .map(|(id, _, _)| *id)
         .chain(settings.my_channels.iter().map(|c| c.channel_id.as_str()))
         .collect()
 }
@@ -1133,7 +1177,7 @@ fn tally_channels_to_keep<'a>(
 async fn drop_tallies_for_gone_channels(
     ctx: &PullContext,
     settings: &SettingsView,
-    wanted: &[(&str, &str)],
+    wanted: &[(&str, &str, &str)],
 ) {
     let keep = tally_channels_to_keep(settings, wanted);
 
@@ -1154,10 +1198,10 @@ async fn drop_tallies_for_gone_channels(
 /// Delete cached manifests for channels the user no longer subscribes to (or that are
 /// now their own). Best-effort: a stray cached record is opaque and small, so a failed
 /// delete is not worth failing a pass over.
-async fn drop_unsubscribed(ctx: &PullContext, wanted: &[(&str, &str)]) -> usize {
+async fn drop_unsubscribed(ctx: &PullContext, wanted: &[(&str, &str, &str)]) -> usize {
     use n0_future::StreamExt as _;
 
-    let keep: std::collections::HashSet<&str> = wanted.iter().map(|(id, _)| *id).collect();
+    let keep: std::collections::HashSet<&str> = wanted.iter().map(|(id, _, _)| *id).collect();
     let prefix = pin_derive::collection_prefix(SUB_COLLECTION);
 
     let Ok(stream) = ctx
@@ -1232,6 +1276,11 @@ mod tests {
 
     /// A manifest sealed as its author would seal it. Any AppKey will do: a reader takes the
     /// content key from the head.
+    /// Who `sealed` signs as.
+    fn author() -> String {
+        crate::own_did(&[1u8; 32])
+    }
+
     fn sealed(k: &[u8; 32], iso: &str) -> Vec<u8> {
         pin_channel::seal(
             &pin_channel::author_sealing(&[1u8; 32], k),
@@ -1292,6 +1341,7 @@ mod tests {
         let cached = sealed(&k, "2026-08-01T12:00:00.000Z");
         assert!(is_older_than_cached(
             &k,
+            &author(),
             &published("2026-08-01T11:00:00.000Z"),
             Some(&cached)
         ));
@@ -1304,6 +1354,7 @@ mod tests {
         // Newer — the ordinary case.
         assert!(!is_older_than_cached(
             &k,
+            &author(),
             &published("2026-08-01T13:00:00.000Z"),
             Some(&cached)
         ));
@@ -1312,6 +1363,7 @@ mod tests {
         // than allowing.
         assert!(!is_older_than_cached(
             &k,
+            &author(),
             &published("2026-08-01T12:00:00.000Z"),
             Some(&cached)
         ));
@@ -1323,6 +1375,7 @@ mod tests {
         let k = [7u8; 32];
         assert!(!is_older_than_cached(
             &k,
+            &author(),
             &published("2026-01-01T00:00:00Z"),
             None
         ));
@@ -1331,12 +1384,18 @@ mod tests {
         let other = sealed(&[9u8; 32], "2099-01-01T00:00:00Z");
         assert!(!is_older_than_cached(
             &k,
+            &author(),
             &published("2026-01-01T00:00:00Z"),
             Some(&other)
         ));
         // A manifest with no version marker can't be ranked, so it doesn't block.
         let cached = sealed(&k, "2099-01-01T00:00:00Z");
-        assert!(!is_older_than_cached(&k, r#"{"items":[]}"#, Some(&cached)));
+        assert!(!is_older_than_cached(
+            &k,
+            &author(),
+            r#"{"items":[]}"#,
+            Some(&cached)
+        ));
     }
 
     /// The cached set for settings with no followed person held — watches alone.
@@ -1344,7 +1403,7 @@ mod tests {
         let r = reading(s, &Default::default());
         wanted_channels(s, &r)
             .into_iter()
-            .map(|(a, b)| (a.to_string(), b.to_string()))
+            .map(|(a, b, _)| (a.to_string(), b.to_string()))
             .collect()
     }
 
@@ -1354,7 +1413,7 @@ mod tests {
         // route their channels have into the cache.
         let s = settings(
             r#"{
-              "subscriptions": [{"channelID": "w", "channelKey": "kw"}],
+              "subscriptions": [{"channelID": "w", "channelKey": "kw", "didDht": "did:dht:author"}],
               "handleFollows": ["did:dht:alice"]
             }"#,
         );
@@ -1366,7 +1425,18 @@ mod tests {
             .unwrap(),
         )]);
         let r = reading(&s, &held);
-        assert_eq!(wanted_channels(&s, &r), vec![("w", "kw"), ("a1", "k1")]);
+        assert_eq!(
+            wanted_channels(&s, &r),
+            vec![("w", "kw", "did:dht:author"), ("a1", "k1", "did:dht:alice")]
+        );
+    }
+
+    #[test]
+    fn a_subscription_naming_no_author_is_not_read() {
+        // Everything read from a channel must be signed by its author, and a legacy link
+        // that named nobody gives nothing to check that against.
+        let s = settings(r#"{"subscriptions": [{"channelID": "x", "channelKey": "kx"}]}"#);
+        assert!(wanted(&s).is_empty());
     }
 
     #[test]
@@ -1377,8 +1447,8 @@ mod tests {
         let s = settings(
             r#"{
               "subscriptions": [
-                {"channelID": "aaa", "channelKey": "k1"},
-                {"channelID": "bbb", "channelKey": "k2"}
+                {"channelID": "aaa", "channelKey": "k1", "didDht": "did:dht:author"},
+                {"channelID": "bbb", "channelKey": "k2", "didDht": "did:dht:author"}
               ],
               "myChannels": [{"channelID": "aaa"}]
             }"#,
@@ -1395,7 +1465,7 @@ mod tests {
               "version": 3,
               "theme": "rounded",
               "somethingAddedLater": {"nested": true},
-              "subscriptions": [{"channelID": "aaa", "channelKey": "k1", "label": "x"}]
+              "subscriptions": [{"channelID": "aaa", "channelKey": "k1", "didDht": "did:dht:author", "label": "x"}]
             }"#,
         );
         assert_eq!(wanted(&s), vec![("aaa".into(), "k1".into())]);
@@ -1533,8 +1603,8 @@ mod tests {
         let s = settings(
             r#"{
               "subscriptions": [
-                {"channelID": "aaa", "channelKey": "k1"},
-                {"channelID": "bbb", "channelKey": "k2"}
+                {"channelID": "aaa", "channelKey": "k1", "didDht": "did:dht:author"},
+                {"channelID": "bbb", "channelKey": "k2", "didDht": "did:dht:author"}
               ],
               "myChannels": [{"channelID": "aaa"}]
             }"#,

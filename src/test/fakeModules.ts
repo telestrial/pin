@@ -18,6 +18,7 @@
 // `SiaClient` seam instead, which is where the app's dependency always was.
 
 import {
+  channel_open,
   channel_open_blob,
   channel_seal,
   pkarr_chunk_txt,
@@ -148,7 +149,11 @@ export function fakeChannelLocatorNativeModule() {
       const id = fakeObjectID(itemURL) ?? ''
       const bytes = world.objects.get(id)?.bytes
       if (!bytes) throw new Error(`Object not found: ${itemURL}`)
-      return channel_open_blob(channelKey, new TextDecoder().decode(bytes))
+      return channel_open(
+        channelKey,
+        'tallies',
+        new TextDecoder().decode(bytes),
+      )
     },
 
     resolveConversationsUrl: async (channelKey: Uint8Array) =>
@@ -161,7 +166,11 @@ export function fakeChannelLocatorNativeModule() {
       const id = fakeObjectID(itemURL) ?? ''
       const bytes = world.objects.get(id)?.bytes
       if (!bytes) throw new Error(`Object not found: ${itemURL}`)
-      return channel_open_blob(channelKey, new TextDecoder().decode(bytes))
+      return channel_open(
+        channelKey,
+        'conversations',
+        new TextDecoder().decode(bytes),
+      )
     },
   }
 }

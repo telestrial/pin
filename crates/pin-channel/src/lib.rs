@@ -27,7 +27,7 @@ mod object;
 pub mod tree;
 
 pub use object::{
-    content_key, fingerprint, open, open_with, seal, ContentKey, Kind, Opened, Sealing,
+    content_key, fingerprint, open, open_with, seal, ContentKey, Kind, Opened, Sealing, Signer,
 };
 
 /// How an author seals their own channel: C derived from the AppKey at the initial epoch,
@@ -225,11 +225,12 @@ pub async fn republish_pointer(channel_key: &[u8; 32], item_url: &str) -> Result
 pub async fn resolve(
     sia: &pin_sia::Session,
     channel_key: &[u8; 32],
+    signer: Signer<'_>,
 ) -> Result<Option<Resolved>, String> {
     let Some(item_url) = resolve_url(channel_key).await? else {
         return Ok(None);
     };
-    fetch(sia, channel_key, &item_url).await.map(Some)
+    fetch(sia, channel_key, &item_url, signer).await.map(Some)
 }
 
 /// Where a channel's manifest currently is, without fetching it.
@@ -247,10 +248,11 @@ pub async fn fetch(
     sia: &pin_sia::Session,
     channel_key: &[u8; 32],
     item_url: &str,
+    signer: Signer<'_>,
 ) -> Result<Resolved, String> {
     let ciphertext = sia.download_item(item_url).await?;
     let blob = String::from_utf8(ciphertext).map_err(|_| "manifest blob is not UTF-8")?;
-    let (manifest_json, content) = open_payload(channel_key, &blob)?;
+    let (manifest_json, content) = open_payload(channel_key, &blob, Kind::Manifest, signer)?;
     Ok(Resolved {
         manifest_json,
         blob,
@@ -339,10 +341,11 @@ pub async fn fetch_tallies(
     sia: &pin_sia::Session,
     channel_key: &[u8; 32],
     item_url: &str,
+    signer: Signer<'_>,
 ) -> Result<String, String> {
     let ciphertext = sia.download_item(item_url).await?;
     let blob = String::from_utf8(ciphertext).map_err(|_| "tallies blob is not UTF-8")?;
-    open_blob(channel_key, &blob)
+    open_payload(channel_key, &blob, Kind::Tallies, signer).map(|(json, _)| json)
 }
 
 /// Download and open a channel's conversations at a URL already resolved for it.
@@ -350,10 +353,11 @@ pub async fn fetch_conversations(
     sia: &pin_sia::Session,
     channel_key: &[u8; 32],
     item_url: &str,
+    signer: Signer<'_>,
 ) -> Result<String, String> {
     let ciphertext = sia.download_item(item_url).await?;
     let blob = String::from_utf8(ciphertext).map_err(|_| "conversations blob is not UTF-8")?;
-    open_blob(channel_key, &blob)
+    open_payload(channel_key, &blob, Kind::Conversations, signer).map(|(json, _)| json)
 }
 
 /// Read a channel's tallies from K alone.
@@ -364,11 +368,14 @@ pub async fn fetch_conversations(
 pub async fn resolve_tallies(
     sia: &pin_sia::Session,
     channel_key: &[u8; 32],
+    signer: Signer<'_>,
 ) -> Result<Option<String>, String> {
     let Some(item_url) = resolve_tallies_url(channel_key).await? else {
         return Ok(None);
     };
-    fetch_tallies(sia, channel_key, &item_url).await.map(Some)
+    fetch_tallies(sia, channel_key, &item_url, signer)
+        .await
+        .map(Some)
 }
 
 /// Open a sealed blob with K, returning its JSON.
@@ -376,13 +383,18 @@ pub async fn resolve_tallies(
 /// Public because a subscribed channel's CACHED manifest is the same blob, and it has
 /// to decode through this exact path rather than a parallel one. Shared with the
 /// tallies fetch for the same reason: one seal, one open.
-pub fn open_blob(channel_key: &[u8; 32], blob: &str) -> Result<String, String> {
-    open_payload(channel_key, blob).map(|(json, _)| json)
+pub fn open_blob(channel_key: &[u8; 32], blob: &str, signer: Signer) -> Result<String, String> {
+    open_payload(channel_key, blob, Kind::Manifest, signer).map(|(json, _)| json)
 }
 
 /// Open a sealed blob with K, returning its JSON and the content key it was sealed under.
-fn open_payload(channel_key: &[u8; 32], blob: &str) -> Result<(String, ContentKey), String> {
-    let opened = object::open(channel_key, blob)?;
+fn open_payload(
+    channel_key: &[u8; 32],
+    blob: &str,
+    kind: Kind,
+    signer: Signer,
+) -> Result<(String, ContentKey), String> {
+    let opened = object::open(channel_key, blob, kind, signer)?;
     let json = String::from_utf8(opened.payload)
         .map_err(|_| "decrypted payload is not UTF-8".to_string())?;
     Ok((json, opened.content))
@@ -484,13 +496,22 @@ mod tests {
             publish_read_key: true,
             signer: [1u8; 32],
         };
+        let author = pin_pkarr::public_key_from_seed(&[1u8; 32]).unwrap();
         let sealed = object::seal(&sealing, Kind::Manifest, manifest.as_bytes()).unwrap();
-        assert_eq!(open_blob(&key, &sealed).unwrap(), manifest);
-        assert_eq!(open_payload(&key, &sealed).unwrap().1, sealing.content);
+        assert_eq!(
+            open_blob(&key, &sealed, Signer::Author(&author)).unwrap(),
+            manifest
+        );
+        assert_eq!(
+            open_payload(&key, &sealed, Kind::Manifest, Signer::Author(&author))
+                .unwrap()
+                .1,
+            sealing.content
+        );
 
         let mut wrong = key;
         wrong[0] ^= 1;
-        assert!(open_blob(&wrong, &sealed).is_err());
+        assert!(open_blob(&wrong, &sealed, Signer::Author(&author)).is_err());
     }
 
     #[test]
@@ -517,6 +538,12 @@ mod tests {
 
         // And what it seals opens with K alone, through the head.
         let blob = seal(&sealing, Kind::Manifest, b"{}").unwrap();
-        assert_eq!(open_payload(&k, &blob).unwrap().1, sealing.content);
+        let author = pin_pkarr::public_key_from_seed(&pin_derive::did_dht_seed(&app_key)).unwrap();
+        assert_eq!(
+            open_payload(&k, &blob, Kind::Manifest, Signer::Author(&author))
+                .unwrap()
+                .1,
+            sealing.content
+        );
     }
 }

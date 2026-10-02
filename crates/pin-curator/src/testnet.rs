@@ -1750,16 +1750,27 @@ mod visibility {
         let raw = alice.blobs.get_bytes(entry.content_hash()).await.unwrap();
         assert!(serde_json::from_slice::<serde_json::Value>(&raw).is_err());
         let blob = std::str::from_utf8(&raw).unwrap();
+        let author = crate::own_did(&alice.app_key);
+        let signer = pin_channel::Signer::Author(&author);
         assert!(
-            pin_channel::open(&k, blob).is_err(),
+            pin_channel::open(&k, blob, pin_channel::Kind::DocValue, signer).is_err(),
             "no read key in the head"
         );
         let with_k = pin_channel::ContentKey {
             epoch: sealing.content.epoch,
             key: k,
         };
-        assert!(pin_channel::open_with(&k, blob, &with_k).is_err());
-        assert!(pin_channel::open_with(&k, blob, &sealing.content).is_ok());
+        assert!(
+            pin_channel::open_with(&k, blob, &with_k, pin_channel::Kind::DocValue, signer).is_err()
+        );
+        assert!(pin_channel::open_with(
+            &k,
+            blob,
+            &sealing.content,
+            pin_channel::Kind::DocValue,
+            signer
+        )
+        .is_ok());
     }
 
     /// A FOLLOW OF A PERSON IS COUNTED ON THE PERSON, and a withdrawal takes it back out.
@@ -2564,6 +2575,7 @@ mod content_keys {
         who: &Identity,
         channel_id: &str,
         k: &[u8; 32],
+        author: &str,
     ) -> Option<pin_channel::ContentKey> {
         let settings = settings_of(who).await;
         crate::held_content_key(
@@ -2574,6 +2586,7 @@ mod content_keys {
             &settings,
             channel_id,
             k,
+            author,
         )
         .await
     }
@@ -2587,7 +2600,7 @@ mod content_keys {
         let channel_id = pin_crypto::channel_id(&k);
 
         assert_eq!(
-            held(&john, &channel_id, &k).await,
+            held(&john, &channel_id, &k, "unused for an owned channel").await,
             Some(pin_channel::author_sealing(&john.app_key, &k).content)
         );
     }
@@ -2607,7 +2620,10 @@ mod content_keys {
         .await;
 
         // Subscribed with nothing cached yet: not known, and never a guess.
-        assert_eq!(held(&john, &channel_id, &theirs).await, None);
+        assert_eq!(
+            held(&john, &channel_id, &theirs, &crate::own_did(&[9u8; 32])).await,
+            None
+        );
 
         // Sealed by somebody else's AppKey, so a derivation from John's could not match.
         let their_sealing = pin_channel::author_sealing(&[9u8; 32], &theirs);
@@ -2623,8 +2639,15 @@ mod content_keys {
         .await
         .expect("cache");
         assert_eq!(
-            held(&john, &channel_id, &theirs).await,
+            held(&john, &channel_id, &theirs, &crate::own_did(&[9u8; 32])).await,
             Some(their_sealing.content)
+        );
+        // The same head, checked against anybody but the one who signed it, hands out no
+        // key: anyone holding K can make a head, and a forged one would hand its reader a
+        // key of the forger's choosing.
+        assert_eq!(
+            held(&john, &channel_id, &theirs, &crate::own_did(&[8u8; 32])).await,
+            None
         );
     }
 
@@ -2656,6 +2679,9 @@ mod content_keys {
         )
         .await
         .expect("cache");
-        assert_eq!(held(&john, &channel_id, &theirs).await, None);
+        assert_eq!(
+            held(&john, &channel_id, &theirs, &crate::own_did(&[9u8; 32])).await,
+            None
+        );
     }
 }

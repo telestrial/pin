@@ -42,6 +42,7 @@ type LiveHarness = {
     channelKey: string,
     hexOverride?: string,
     cachedHead?: string,
+    authorDid?: string,
   ) => Promise<string>
 }
 declare global {
@@ -83,12 +84,13 @@ test('a subscriber finds a channel from its key and is pushed the manifest', asy
     nsId: string
     passes: string[]
     cachedHead: string
+    authorDid: string
   }
   console.log('[rung1] published:', published)
   expect(published.nsId.length).toBeGreaterThan(0)
 
-  // The subscriber gets what a real subscribe URL carries — the channel key, and the
-  // channelID derived from it — plus the older copy a read from Sia would have cached. It
+  // The subscriber gets what a real subscribe URL carries — the channel key, the channelID
+  // derived from it, and its author's did, which every read is checked against — plus the older copy a read from Sia would have cached. It
   // has to find the author via the DHT. Poll, because a fresh pkarr publish takes seconds
   // to become resolvable.
   let result: { name: string | null; passes: string[] } = {
@@ -100,13 +102,14 @@ test('a subscriber finds a channel from its key and is pushed the manifest', asy
       async () => {
         result = JSON.parse(
           await subscriber.evaluate(
-            ({ id, key, hex, head }) =>
-              window.__pinChannelDocLive!.subscribe(id, key, hex, head),
+            ({ id, key, hex, head, author }) =>
+              window.__pinChannelDocLive!.subscribe(id, key, hex, head, author),
             {
               id: published.channelID,
               key: published.channelKey,
               hex: APP_KEY_HEX,
               head: published.cachedHead,
+              author: published.authorDid,
             },
           ),
         )

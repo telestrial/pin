@@ -90,6 +90,10 @@ pub struct ChannelSyncOutcome {
 struct Watched {
     /// The channel's K — to open a pushed manifest for the recency check.
     key: [u8; 32],
+    /// Its author's did:dht, which everything read from the replica must be signed by. The
+    /// replica is the author's alone to write, but what it carries is checked like anything
+    /// else, so a value is trusted for its signature rather than for the road it took.
+    author: String,
     /// The imported replica, read when its stream says something arrived.
     doc: Doc,
 }
@@ -114,11 +118,11 @@ async fn reconcile(
     // a channel we no longer watch is ignored below. Only on a complete set, for the reason
     // the pull loop's drop waits: an unsettled follow is missing for want of a reading.
     if reading.settled() {
-        let keep: std::collections::HashSet<&str> = wanted.iter().map(|(id, _)| *id).collect();
+        let keep: std::collections::HashSet<&str> = wanted.iter().map(|(id, _, _)| *id).collect();
         watched.retain(|id, _| keep.contains(id.as_str()));
     }
 
-    for (channel_id, channel_key_b64) in &wanted {
+    for (channel_id, channel_key_b64, author) in &wanted {
         if watched.contains_key(*channel_id) {
             continue;
         }
@@ -137,6 +141,7 @@ async fn reconcile(
             &settings,
             channel_id,
             &k,
+            author,
         )
         .await
         else {
@@ -146,7 +151,11 @@ async fn reconcile(
         match import_channel(ctx, channel_id, &content.key).await {
             Ok(Some((doc, stream))) => {
                 events.push(stream);
-                let w = Watched { key: k, doc };
+                let w = Watched {
+                    key: k,
+                    author: (*author).to_string(),
+                    doc,
+                };
                 // What a replica already holds is not re-emitted when it is re-imported,
                 // so an instance that restarts would otherwise learn a channel's counts
                 // only when the floor rung next ran.
@@ -245,7 +254,11 @@ async fn push_manifest(ctx: &ChannelSyncContext, channel_id: &str, watched: &Wat
     let Ok(sealed_str) = std::str::from_utf8(&sealed) else {
         return Push::Nothing;
     };
-    let Ok(json) = pin_channel::open_blob(&watched.key, sealed_str) else {
+    let Ok(json) = pin_channel::open_blob(
+        &watched.key,
+        sealed_str,
+        pin_channel::Signer::Author(&watched.author),
+    ) else {
         return Push::Nothing;
     };
 
@@ -259,7 +272,7 @@ async fn push_manifest(ctx: &ChannelSyncContext, channel_id: &str, watched: &Wat
     .await
     .ok()
     .flatten();
-    if is_older_than_cached(&watched.key, &json, cached.as_deref()) {
+    if is_older_than_cached(&watched.key, &watched.author, &json, cached.as_deref()) {
         return Push::Stale;
     }
 
@@ -360,9 +373,12 @@ async fn push_conversation(
     let Ok(bytes) = ctx.blobs.get_bytes(entry.content_hash()).await else {
         return TallyPush::NotReady;
     };
-    let Some(conversation) =
-        crate::open_doc_value::<pin_engagement::Conversation>(&watched.key, content, &bytes)
-    else {
+    let Some(conversation) = crate::open_doc_value::<pin_engagement::Conversation>(
+        &watched.key,
+        content,
+        &watched.author,
+        &bytes,
+    ) else {
         return TallyPush::Nothing;
     };
     if crate::cache_thread(
@@ -400,7 +416,9 @@ async fn push_tally(
     let Ok(bytes) = ctx.blobs.get_bytes(entry.content_hash()).await else {
         return TallyPush::NotReady;
     };
-    let Some(aggregate) = crate::open_doc_value::<Aggregate>(&watched.key, content, &bytes) else {
+    let Some(aggregate) =
+        crate::open_doc_value::<Aggregate>(&watched.key, content, &watched.author, &bytes)
+    else {
         return TallyPush::Nothing;
     };
     if cache_tally(
@@ -446,6 +464,7 @@ async fn content_for(
         &settings,
         channel_id,
         &watched.key,
+        &watched.author,
     )
     .await
 }

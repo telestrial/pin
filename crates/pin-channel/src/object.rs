@@ -100,6 +100,18 @@ pub struct Sealing<'a> {
     pub signer: [u8; 32],
 }
 
+/// Whose signature a read requires.
+#[derive(Debug, Clone, Copy)]
+pub enum Signer<'a> {
+    /// The author's did:dht, bare or prefixed. The read fails unless the head verifies
+    /// against it.
+    Author(&'a str),
+    /// No check. Only the frontend's bindings use it, for as long as they are not yet handed
+    /// an author to check against; it goes when they are, and the compiler then finds every
+    /// caller left.
+    Unchecked,
+}
+
 /// An opened object: the body, and the content key it was sealed under.
 ///
 /// The key comes back because the three artifacts share it — a reader who opened the
@@ -198,11 +210,16 @@ pub fn seal(sealing: &Sealing, kind: Kind, payload: &[u8]) -> Result<String, Str
 ///
 /// Fails on a head that carries no read key, because nothing yet holds C any other way —
 /// the failure a non-member meets, and the one membership will answer.
-pub fn open(channel_key: &[u8; 32], blob: &str) -> Result<Opened, String> {
+pub fn open(
+    channel_key: &[u8; 32],
+    blob: &str,
+    kind: Kind,
+    signer: Signer,
+) -> Result<Opened, String> {
     let bytes = pin_crypto::b64_decode(blob).ok_or("object is not base64")?;
     match bytes.first() {
         Some(&OBJECT_VERSION) => {
-            let (content, body) = read_head(channel_key, &bytes[1..])?;
+            let (content, body) = read_head(channel_key, &bytes[1..], kind, signer)?;
             Ok(Opened {
                 payload: pin_crypto::open_raw(&content.key, body)?,
                 content,
@@ -218,10 +235,20 @@ pub fn open(channel_key: &[u8; 32], blob: &str) -> Result<Opened, String> {
 /// For a caller that holds an object only to learn how to open the channel's other
 /// artifacts: a cached manifest, read for the key to its doc's ticket or to a comment's
 /// seal. The body is left sealed, so asking costs a head rather than a manifest.
-pub fn content_key(channel_key: &[u8; 32], blob: &str) -> Result<ContentKey, String> {
+///
+/// Verified like any other read, and this one most of all: a forged head could hand its
+/// reader a content key of the forger's choosing, and everything opened with it after.
+pub fn content_key(
+    channel_key: &[u8; 32],
+    blob: &str,
+    kind: Kind,
+    signer: Signer,
+) -> Result<ContentKey, String> {
     let bytes = pin_crypto::b64_decode(blob).ok_or("object is not base64")?;
     match bytes.first() {
-        Some(&OBJECT_VERSION) => read_head(channel_key, &bytes[1..]).map(|(content, _)| content),
+        Some(&OBJECT_VERSION) => {
+            read_head(channel_key, &bytes[1..], kind, signer).map(|(content, _)| content)
+        }
         Some(v) => Err(format!("unsupported object version {v}")),
         None => Err("object is empty".into()),
     }
@@ -255,11 +282,13 @@ pub fn open_with(
     channel_key: &[u8; 32],
     blob: &str,
     content: &ContentKey,
+    kind: Kind,
+    signer: Signer,
 ) -> Result<Vec<u8>, String> {
     let bytes = pin_crypto::b64_decode(blob).ok_or("object is not base64")?;
     match bytes.first() {
         Some(&OBJECT_VERSION) => {
-            let (head, body) = split_head(channel_key, &bytes[1..])?;
+            let (head, body) = split_head(channel_key, &bytes[1..], kind, signer)?;
             if head.epoch != content.epoch {
                 return Err(format!(
                     "sealed at epoch {}, key is for epoch {}",
@@ -275,8 +304,13 @@ pub fn open_with(
 
 /// Open the head of a layered object and work out its content key from it, answering with
 /// the still-sealed body beside it.
-fn read_head<'b>(channel_key: &[u8; 32], rest: &'b [u8]) -> Result<(ContentKey, &'b [u8]), String> {
-    let (head, body) = split_head(channel_key, rest)?;
+fn read_head<'b>(
+    channel_key: &[u8; 32],
+    rest: &'b [u8],
+    kind: Kind,
+    signer: Signer,
+) -> Result<(ContentKey, &'b [u8]), String> {
+    let (head, body) = split_head(channel_key, rest, kind, signer)?;
     let key = head
         .read_key
         .as_deref()
@@ -291,8 +325,41 @@ fn read_head<'b>(channel_key: &[u8; 32], rest: &'b [u8]) -> Result<(ContentKey, 
     ))
 }
 
-/// Open a layered object's head, answering with it and the still-sealed body.
-fn split_head<'b>(channel_key: &[u8; 32], rest: &'b [u8]) -> Result<(Head, &'b [u8]), String> {
+/// Open a layered object's head and check it, answering with it and the still-sealed body.
+///
+/// THE ONE PLACE A HEAD IS READ, so the one place it is checked: every open goes through
+/// here, and none can skip the signature by taking another path. Kind first, then the
+/// signature, both before anything in the head is believed.
+fn split_head<'b>(
+    channel_key: &[u8; 32],
+    rest: &'b [u8],
+    kind: Kind,
+    signer: Signer,
+) -> Result<(Head, &'b [u8]), String> {
+    let (head, body) = unverified_head(channel_key, rest)?;
+    if head.kind != kind.as_str() {
+        return Err(format!(
+            "object is a {}, not a {}",
+            head.kind,
+            kind.as_str()
+        ));
+    }
+    if let Signer::Author(author) = signer {
+        let message = signing_bytes(
+            &pin_crypto::channel_id(channel_key),
+            &head.kind,
+            head.epoch,
+            head.read_key.as_deref(),
+            body,
+        );
+        pin_pkarr::verify_detached(author, &message, &head.sig)
+            .map_err(|_| "object is not signed by its channel's author".to_string())?;
+    }
+    Ok((head, body))
+}
+
+/// A layered object's head as it stands, before any check.
+fn unverified_head<'b>(channel_key: &[u8; 32], rest: &'b [u8]) -> Result<(Head, &'b [u8]), String> {
     let (len, rest) = rest
         .split_at_checked(HEAD_LEN_BYTES)
         .ok_or("object too short to hold a head length")?;
@@ -317,6 +384,14 @@ mod tests {
     };
 
     const SIGNER: [u8; 32] = [11u8; 32];
+    /// SIGNER's did:dht key.
+    fn author() -> String {
+        pin_pkarr::public_key_from_seed(&SIGNER).unwrap()
+    }
+
+    fn content_key_of(blob: &str) -> Result<ContentKey, String> {
+        content_key(&K, blob, Kind::Manifest, Signer::Author(&author()))
+    }
 
     fn sealing(publish_read_key: bool) -> Sealing<'static> {
         Sealing {
@@ -330,7 +405,7 @@ mod tests {
     #[test]
     fn an_object_opens_with_k_and_reports_its_content_key() {
         let blob = seal(&sealing(true), Kind::Manifest, b"payload").unwrap();
-        let opened = open(&K, &blob).unwrap();
+        let opened = open(&K, &blob, Kind::Manifest, Signer::Author(&author())).unwrap();
         assert_eq!(opened.payload, b"payload");
         assert_eq!(opened.content, C);
     }
@@ -351,7 +426,7 @@ mod tests {
     #[test]
     fn an_object_without_a_read_key_does_not_open_with_k() {
         let blob = seal(&sealing(false), Kind::Manifest, b"payload").unwrap();
-        let err = open(&K, &blob).unwrap_err();
+        let err = open(&K, &blob, Kind::Manifest, Signer::Author(&author())).unwrap_err();
         assert!(err.contains("no read key for epoch 3"), "{err}");
     }
 
@@ -360,52 +435,53 @@ mod tests {
         let blob = seal(&sealing(true), Kind::Manifest, b"payload").unwrap();
         let mut wrong = K;
         wrong[0] ^= 1;
-        assert!(open(&wrong, &blob).is_err());
+        assert!(open(&wrong, &blob, Kind::Manifest, Signer::Author(&author())).is_err());
     }
 
     #[test]
     fn the_content_key_is_read_from_the_head_alone() {
         let blob = seal(&sealing(true), Kind::Manifest, b"payload").unwrap();
-        assert_eq!(content_key(&K, &blob).unwrap(), C);
-        // A body nothing could open still yields its key, which is what lets the head be
-        // read without paying for the body.
+        assert_eq!(content_key_of(&blob).unwrap(), C);
+        // A damaged body leaves the head unverifiable, since the signature covers the body's
+        // digest: a key is never handed out from an object that has been tampered with.
         let mut bytes = pin_crypto::b64_decode(&blob).unwrap();
         let last = bytes.len() - 1;
         bytes[last] ^= 1;
         let damaged = pin_crypto::b64_encode(&bytes);
-        assert!(open(&K, &damaged).is_err());
-        assert_eq!(content_key(&K, &damaged).unwrap(), C);
+        assert!(content_key_of(&damaged).is_err());
 
         let mut wrong = K;
         wrong[0] ^= 1;
-        assert!(content_key(&wrong, &blob).is_err());
-        assert!(content_key(
-            &K,
-            &seal(&sealing(false), Kind::Manifest, b"payload").unwrap()
-        )
-        .is_err());
+        assert!(content_key(&wrong, &blob, Kind::Manifest, Signer::Author(&author())).is_err());
+        assert!(
+            content_key_of(&seal(&sealing(false), Kind::Manifest, b"payload").unwrap()).is_err()
+        );
     }
 
     #[test]
     fn an_object_with_no_read_key_opens_with_a_held_content_key() {
         let blob = seal(&sealing(false), Kind::Manifest, b"payload").unwrap();
-        assert_eq!(open_with(&K, &blob, &C).unwrap(), b"payload");
+        assert_eq!(
+            open_with(&K, &blob, &C, Kind::Manifest, Signer::Author(&author())).unwrap(),
+            b"payload"
+        );
         // A key for another epoch is refused by its epoch, before the body is tried.
         let other = ContentKey { epoch: 4, ..C };
-        let err = open_with(&K, &blob, &other).unwrap_err();
+        let err =
+            open_with(&K, &blob, &other, Kind::Manifest, Signer::Author(&author())).unwrap_err();
         assert!(err.contains("sealed at epoch 3"), "{err}");
         // And the right epoch with the wrong key does not open.
         let wrong = ContentKey {
             key: [1u8; 32],
             ..C
         };
-        assert!(open_with(&K, &blob, &wrong).is_err());
+        assert!(open_with(&K, &blob, &wrong, Kind::Manifest, Signer::Author(&author())).is_err());
     }
 
     /// The head as sealed, opened with K, and its body's sealed bytes.
     fn head_and_body(blob: &str) -> (Head, Vec<u8>) {
         let bytes = pin_crypto::b64_decode(blob).unwrap();
-        let (head, body) = split_head(&K, &bytes[1..]).unwrap();
+        let (head, body) = unverified_head(&K, &bytes[1..]).unwrap();
         (head, body.to_vec())
     }
 
@@ -436,6 +512,27 @@ mod tests {
     }
 
     #[test]
+    fn a_read_requires_the_author_and_the_kind() {
+        let blob = seal(&sealing(true), Kind::Tallies, b"payload").unwrap();
+        assert!(open(&K, &blob, Kind::Tallies, Signer::Author(&author())).is_ok());
+        // Somebody else's did, prefixed or bare.
+        let stranger = pin_pkarr::public_key_from_seed(&[12u8; 32]).unwrap();
+        assert!(open(&K, &blob, Kind::Tallies, Signer::Author(&stranger)).is_err());
+        let prefixed = format!("did:dht:{}", author());
+        assert!(open(&K, &blob, Kind::Tallies, Signer::Author(&prefixed)).is_ok());
+        // The author's genuine object, asked for as another kind.
+        let err = open(&K, &blob, Kind::Manifest, Signer::Author(&author())).unwrap_err();
+        assert!(err.contains("not a manifest"), "{err}");
+        // A head re-signed by a stranger over the same bytes.
+        let forged = Sealing {
+            signer: [12u8; 32],
+            ..sealing(true)
+        };
+        let forged = seal(&forged, Kind::Tallies, b"payload").unwrap();
+        assert!(open(&K, &forged, Kind::Tallies, Signer::Author(&author())).is_err());
+    }
+
+    #[test]
     fn a_kind_round_trips_through_its_name() {
         for kind in [
             Kind::Manifest,
@@ -452,8 +549,8 @@ mod tests {
     #[test]
     fn a_version_1_envelope_is_refused() {
         let blob = pin_crypto::encrypt(&K, b"payload").unwrap();
-        assert!(open(&K, &blob).is_err());
-        assert!(content_key(&K, &blob).is_err());
+        assert!(open(&K, &blob, Kind::Manifest, Signer::Author(&author())).is_err());
+        assert!(content_key(&K, &blob, Kind::Manifest, Signer::Author(&author())).is_err());
     }
 
     #[test]
@@ -498,7 +595,10 @@ mod tests {
         let bytes = pin_crypto::b64_decode(&blob).unwrap();
         for cut in [1, 3, 5, 20] {
             let short = pin_crypto::b64_encode(&bytes[..cut]);
-            assert!(open(&K, &short).is_err(), "cut at {cut}");
+            assert!(
+                open(&K, &short, Kind::Manifest, Signer::Author(&author())).is_err(),
+                "cut at {cut}"
+            );
         }
     }
 }

@@ -45,7 +45,9 @@ pub async fn channel_resolve(
 ) -> Result<Option<pin_channel::Resolved>, String> {
     let key = key32(&channel_key)?;
     state
-        .run(move |s| async move { pin_channel::resolve(&s, &key).await })
+        .run(move |s| async move {
+            pin_channel::resolve(&s, &key, pin_channel::Signer::Unchecked).await
+        })
         .await
 }
 
@@ -87,7 +89,10 @@ pub async fn channel_fetch_conversations(
 ) -> Result<String, String> {
     let key = key32(&channel_key)?;
     state
-        .run(move |s| async move { pin_channel::fetch_conversations(&s, &key, &item_url).await })
+        .run(move |s| async move {
+            pin_channel::fetch_conversations(&s, &key, &item_url, pin_channel::Signer::Unchecked)
+                .await
+        })
         .await
 }
 
@@ -114,6 +119,8 @@ pub async fn channel_fetch_tallies(
 ) -> Result<String, String> {
     let key = key32(&channel_key)?;
     state
-        .run(move |s| async move { pin_channel::fetch_tallies(&s, &key, &item_url).await })
+        .run(move |s| async move {
+            pin_channel::fetch_tallies(&s, &key, &item_url, pin_channel::Signer::Unchecked).await
+        })
         .await
 }

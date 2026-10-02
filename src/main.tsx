@@ -50,6 +50,7 @@ if (import.meta.env.DEV || inTauri()) {
         channelKey: string,
         hexOverride?: string,
         cachedHead?: string,
+        authorDid?: string,
       ) => Promise<string>
     }
     __pinSync?: {
@@ -225,13 +226,25 @@ if (import.meta.env.DEV || inTauri()) {
         if (advertised) break
         await new Promise((r) => setTimeout(r, 250))
       }
-      return JSON.stringify({ channelID, channelKey, nsId, passes, cachedHead })
+      // Whose channel it is, which a subscribe link carries and every read is checked
+      // against.
+      const { deriveDidDht } = await import('./lib/pkarr')
+      const { did: authorDid } = await deriveDidDht(appKey)
+      return JSON.stringify({
+        channelID,
+        channelKey,
+        nsId,
+        passes,
+        cachedHead,
+        authorDid,
+      })
     },
     subscribe: async (
       channelID: string,
       channelKey: string,
       hexOverride?: string,
       cachedHead?: string,
+      authorDid?: string,
     ) => {
       const hex = hexOverride ?? (await session()).hex
       if (!hex) return 'not signed in'
@@ -252,7 +265,8 @@ if (import.meta.env.DEV || inTauri()) {
         subscriptions: [
           {
             authorHandle: '',
-            authorDID: '',
+            authorDID: authorDid ?? '',
+            didDht: authorDid,
             channelID,
             channelKey,
             addedAt: new Date().toISOString(),

@@ -5,6 +5,7 @@ export const channel_doc_namespaces: () => [number, number, number];
 export const channel_fetch_conversations: (a: number, b: number, c: number, d: number) => any;
 export const channel_fetch_tallies: (a: number, b: number, c: number, d: number) => any;
 export const channel_id: (a: number, b: number) => [number, number, number, number];
+export const channel_open: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
 export const channel_open_blob: (a: number, b: number, c: number, d: number) => [number, number, number, number];
 export const channel_publish: (a: number, b: number, c: number, d: number, e: number, f: number) => any;
 export const channel_republish_pointer: (a: number, b: number, c: number, d: number) => any;

@@ -394,7 +394,12 @@ async fn read_own_manifest(
     .ok()
     .flatten()?;
     let blob = String::from_utf8(raw).ok()?;
-    let json = pin_channel::open_blob(k, &blob).ok()?;
+    let json = pin_channel::open_blob(
+        k,
+        &blob,
+        pin_channel::Signer::Author(&crate::own_did(&ctx.app_key)),
+    )
+    .ok()?;
     serde_json::from_str(&json).ok()
 }
 

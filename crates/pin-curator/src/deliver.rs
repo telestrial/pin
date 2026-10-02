@@ -263,7 +263,7 @@ async fn subscribed_subjects(
         let Ok(blob) = String::from_utf8(sealed) else {
             continue;
         };
-        let Ok(json) = pin_channel::open_blob(&k, &blob) else {
+        let Ok(json) = pin_channel::open_blob(&k, &blob, pin_channel::Signer::Author(did)) else {
             continue;
         };
         let Ok(manifest) = serde_json::from_str::<pin_manifest::ChannelManifest>(&json) else {

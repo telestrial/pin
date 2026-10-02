@@ -445,6 +445,27 @@ fn held_channel_key(settings: &SettingsView, channel_id: &str) -> Option<[u8; 32
         .and_then(pin_crypto::channel_key_from_base64)
 }
 
+/// The author of one channel this identity holds: itself for one it owns, whoever its
+/// subscription names for one it watches.
+fn held_channel_author(
+    app_key: &[u8; 32],
+    settings: &SettingsView,
+    channel_id: &str,
+) -> Option<String> {
+    if settings
+        .my_channels
+        .iter()
+        .any(|c| c.channel_id == channel_id)
+    {
+        return Some(crate::own_did(app_key));
+    }
+    settings
+        .subscriptions
+        .iter()
+        .find(|s| s.channel_id == channel_id)
+        .and_then(|s| s.did_dht.clone())
+}
+
 /// What one comment's seal mark works out to.
 enum SealFor {
     /// No mark: a comment on a public post, published as it stands.
@@ -489,6 +510,11 @@ async fn seal_for(ctx: &IdentityContext, settings: &SettingsView, rkey: &str) ->
     let Some(k) = held_channel_key(settings, &channel_id) else {
         return SealFor::NoKey;
     };
+    // Whose the channel is, so its cached head can be checked before its key is believed. A
+    // subscription naming nobody cannot be checked, and a comment on it waits.
+    let Some(author) = held_channel_author(&ctx.app_key, settings, &channel_id) else {
+        return SealFor::NoKey;
+    };
     // Under the channel's content key, which is what its readers open its posts with. Not
     // yet known means no manifest is cached for it, and the comment waits rather than going
     // out under a key the post's readers may not hold.
@@ -500,6 +526,7 @@ async fn seal_for(ctx: &IdentityContext, settings: &SettingsView, rkey: &str) ->
         settings,
         &channel_id,
         &k,
+        &author,
     )
     .await
     {
