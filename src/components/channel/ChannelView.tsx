@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { content_key_collection } from '../../../crates/pin-core/pkg/pin_core.js'
 import { buildSubscribeURL } from '../../core/channels'
 import {
   contributingChannelOf,
@@ -8,7 +9,11 @@ import {
   portalKey,
 } from '../../core/feed'
 import type { ChannelImage, ChannelManifest } from '../../core/types'
-import { resolveChannelViaLocator } from '../../lib/channelLocator'
+import {
+  isKeyNotHeld,
+  resolveChannelViaLocator,
+} from '../../lib/channelLocator'
+import { subscribeDocChanges } from '../../lib/docs'
 import { useChannelClaim } from '../../lib/hooks/useChannelClaim'
 import {
   useChannelFollowerCount,
@@ -17,6 +22,7 @@ import {
 import { useIdentityName } from '../../lib/hooks/useIdentityName'
 import { useItemBlobURL } from '../../lib/hooks/useItemBytes'
 import { renderMarkdown } from '../../lib/markdown'
+import { readMemberships } from '../../lib/members'
 import { useAuthStore } from '../../stores/auth'
 import { renderable, useFeedStore } from '../../stores/feed'
 import { useReadChannels } from '../../stores/reading'
@@ -33,6 +39,12 @@ import { ChannelOwnerMenu } from './ChannelOwnerMenu'
 import { DeadRepost } from './DeadRepost'
 import { MembersPanel } from './MembersPanel'
 
+/** Why a browsed channel cannot be read, when the reason is a key rather than the network.
+ *
+ *  `not-invited` is a Secret channel this identity holds no membership in; `opening` is
+ *  one it was invited to whose key the Curator has not climbed to yet. */
+type Locked = 'not-invited' | 'opening'
+
 /** A channel this device holds nothing for, read with the key the navigation carried.
  *
  *  The bottom rung of the resolution ladder, reached when the ones above have nothing: a
@@ -44,34 +56,61 @@ import { MembersPanel } from './MembersPanel'
  *  Nothing is written back. Browsing is a read, and what to do about the channel is a
  *  decision the buttons on the page carry. */
 function useBrowsedChannel(
+  channelID: string,
   channelKey: string | undefined,
   author: string,
   enabled: boolean,
 ) {
   const [manifest, setManifest] = useState<ChannelManifest | null>(null)
   const [loading, setLoading] = useState(false)
+  const [locked, setLocked] = useState<Locked | null>(null)
+  // Bumped when a key for this channel is climbed to, which is what reads it again.
+  const [attempt, setAttempt] = useState(0)
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: attempt is a re-read trigger — bumping it resolves again
   useEffect(() => {
     let cancelled = false
     setManifest(null)
+    setLocked(null)
     if (!enabled || !channelKey) return
     setLoading(true)
     resolveChannelViaLocator(channelKey, author)
       .then((m) => {
         if (!cancelled) setManifest(m)
       })
-      // A locator that will not resolve is a read failure, never an empty channel. The
-      // page says it could not be read rather than that it holds nothing.
-      .catch(() => {})
+      .catch(async (err) => {
+        // A locator that will not resolve is a read failure, never an empty channel. The
+        // page says it could not be read rather than that it holds nothing — unless the
+        // object said it is members-only and no key is held for it, which is an answer.
+        if (!isKeyNotHeld(err)) return
+        const memberships = await readMemberships().catch(() => null)
+        if (cancelled || !memberships) return
+        setLocked(
+          memberships.some((m) => m.channelID === channelID)
+            ? 'opening'
+            : 'not-invited',
+        )
+      })
       .finally(() => {
         if (!cancelled) setLoading(false)
       })
     return () => {
       cancelled = true
     }
-  }, [channelKey, author, enabled])
+  }, [channelID, channelKey, author, enabled, attempt])
 
-  return { manifest, loading }
+  // Invited and waiting on the climb: the Curator writes the key on its next pull, and
+  // that write is the moment there is something new to read.
+  useEffect(() => {
+    if (locked !== 'opening') return
+    const collection = content_key_collection()
+    const prefix = `${channelID}:`
+    return subscribeDocChanges(({ collection: c, rkey }) => {
+      if (c === collection && rkey.startsWith(prefix)) setAttempt((n) => n + 1)
+    })
+  }, [locked, channelID])
+
+  return { manifest, loading, locked }
 }
 
 export function ChannelView({
@@ -137,6 +176,7 @@ export function ChannelView({
   // a channel you watch or own; the resolve below is for one you are only looking at.
   const browsing = !sub && !isOwned
   const browsed = useBrowsedChannel(
+    channelID,
     channelKey,
     authorDid ?? '',
     browsing && !held,
@@ -268,6 +308,39 @@ export function ChannelView({
   const avatar = manifest?.avatar
   const coverImage = manifest?.cover
   const description = manifest?.description ?? ''
+
+  // A Secret channel this identity cannot read says that and nothing else: no name, no
+  // picture, no button to ask. A request button would turn Secret into Private-but-unlisted
+  // and hand part of who-knows-it-exists to whoever forwarded the link.
+  if (browsing && !manifest && browsed.locked) {
+    return (
+      <div className="flex-1 p-6 lg:min-h-0">
+        <div className="flex flex-col gap-6 lg:h-full lg:min-h-0 lg:flex-row lg:items-start">
+          {sidebar}
+          <div className="flex-1 min-w-0">
+            <div className="border border-neutral-200 rounded-lg bg-white p-5 space-y-3">
+              <button
+                type="button"
+                onClick={onBack}
+                className="inline-flex items-center px-2.5 py-1 text-xs font-medium text-neutral-600 bg-neutral-100 hover:bg-neutral-200 rounded-full transition-colors cursor-pointer"
+              >
+                Back
+              </button>
+              {browsed.locked === 'not-invited' ? (
+                <p className="text-sm text-neutral-700">You’re not invited.</p>
+              ) : (
+                <p className="text-sm text-neutral-700">
+                  Your invitation to this channel hasn’t opened yet. It will
+                  appear here once it does.
+                </p>
+              )}
+            </div>
+          </div>
+          {rightSidebar}
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="flex-1 p-6 lg:min-h-0">
