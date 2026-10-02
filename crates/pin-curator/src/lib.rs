@@ -78,6 +78,7 @@ mod identity;
 mod instance;
 mod keepalive;
 pub mod members;
+pub mod membership;
 pub mod net;
 mod reading;
 mod rendezvous;

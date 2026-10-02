@@ -132,6 +132,19 @@ impl World {
     pub fn drop_blob(self: &Arc<Self>, url: &str) {
         self.blobs.lock().unwrap().remove(url);
     }
+
+    /// Serve a packet under any key, for a pointer that is not an identity's.
+    pub fn put_packet(self: &Arc<Self>, key: &str, records: Vec<TxtRecord>) {
+        self.packets
+            .lock()
+            .unwrap()
+            .insert(key.to_string(), records);
+    }
+
+    /// Serve bytes at a URL.
+    pub fn put_blob(self: &Arc<Self>, url: &str, bytes: Vec<u8>) {
+        self.blobs.lock().unwrap().insert(url.to_string(), bytes);
+    }
 }
 
 /// One identity's view of the world. Cloned per identity; they all share the `World`.
