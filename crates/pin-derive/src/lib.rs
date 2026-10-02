@@ -690,6 +690,29 @@ pub const COMMENT_DELIVER_COLLECTION: &str = "comment-deliver";
 /// made two writers clobber each other was that neither could see the other.
 pub const INSTANCE_COLLECTION: &str = "instance";
 
+/// The collection holding the roster of each channel this identity owns: one record per
+/// SEATING of a member, from which the channel's member tree is derived.
+///
+/// Per-record for the reason endorsements are: the author's devices merge it by UNION,
+/// where one list per channel would be last-writer-wins, and a removal lost to a
+/// concurrent write is a member never removed. Never deleted from, since a removal is
+/// counted by the epoch for as long as the channel exists.
+pub const MEMBERS_COLLECTION: &str = "members";
+
+/// The rkey for one seating: the channel, then the seating's own id.
+///
+/// The channel first so one prefix lists a channel's roster. Who the member is lives in
+/// the record rather than the key: a did carries colons, and nothing reads it back out
+/// of the key.
+pub fn member_rkey(channel_id: &str, seat_id: &str) -> String {
+    format!("{channel_id}:{seat_id}")
+}
+
+/// The prefix every seating of one channel's roster shares.
+pub fn member_rkey_prefix(channel_id: &str) -> String {
+    format!("{channel_id}:")
+}
+
 /// The rkey for one channel's publish state.
 ///
 /// Prefixed so channels can't collide with the identity-level publishers that share
