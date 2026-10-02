@@ -94,25 +94,36 @@ pub struct Tree {
     /// Each leaf's member, by their encryption key. `None` is a hole — never occupied, or
     /// left by a removal and waiting to be filled.
     leaves: Vec<Option<[u8; 32]>>,
-    /// Versions of the interior nodes below the root; absent means 0.
-    versions: BTreeMap<NodeId, u32>,
-    /// The root's version, which is the channel's epoch.
-    epoch: u32,
+    /// How many members have ever been removed from each leaf; absent means none.
+    ///
+    /// The only history the tree keeps, and every version is computed from it: a node's
+    /// version is the removals beneath it, and the root's is all of them, which is the
+    /// epoch. Counted rather than stored per node so a version never depends on how tall
+    /// the tree was when a removal happened — the old root of a tree that has since grown
+    /// carries the removals beneath it like any other node, and a tree rebuilt from its
+    /// roster comes out the same as the one that lived through the changes.
+    removals: BTreeMap<u64, u32>,
+}
+
+impl Default for Tree {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Tree {
-    /// An empty tree at `epoch`.
-    pub fn new(epoch: u32) -> Self {
+    /// An empty tree at epoch 0.
+    pub fn new() -> Self {
         Tree {
             height: 1,
             leaves: vec![None; 2],
-            versions: BTreeMap::new(),
-            epoch,
+            removals: BTreeMap::new(),
         }
     }
 
+    /// The root's version: every removal ever made.
     pub fn epoch(&self) -> u32 {
-        self.epoch
+        self.removals.values().sum()
     }
 
     pub fn height(&self) -> u8 {
@@ -154,29 +165,24 @@ impl Tree {
     /// Take a member out, and replace every key they held.
     ///
     /// The keys on their path are the only ones they ever derived, so those are the ones
-    /// that move: every interior node above them gets a new version, and the root's new
-    /// version is the next epoch. Their leaf is left a hole for the next member to fill;
-    /// nobody else moves, so nobody else's position ever changes.
+    /// that move: every interior node above them has one more removal beneath it and so a
+    /// new version, and the root's new version is the next epoch. Their leaf is left a hole
+    /// for the next member to fill; nobody else moves, so nobody else's position ever
+    /// changes.
     pub fn remove(&mut self, leaf: u64) -> Result<(), String> {
         match self.leaves.get_mut(leaf as usize) {
             Some(slot @ Some(_)) => *slot = None,
             _ => return Err(format!("no member at leaf {leaf}")),
         }
-        let mut node = NodeId::leaf(leaf).parent();
-        while node.level < self.height {
-            *self.versions.entry(node).or_insert(0) += 1;
-            node = node.parent();
-        }
-        self.epoch += 1;
+        *self.removals.entry(leaf).or_insert(0) += 1;
         Ok(())
     }
 
+    /// A node's version: the removals made from the leaves beneath it.
     fn version(&self, id: NodeId) -> u32 {
-        if id == self.root() {
-            self.epoch
-        } else {
-            self.versions.get(&id).copied().unwrap_or(0)
-        }
+        let first = id.pos << id.level;
+        let end = (id.pos + 1) << id.level;
+        self.removals.range(first..end).map(|(_, n)| n).sum()
     }
 
     /// Every node with somebody under it: each member's leaf and everything above it.
@@ -203,7 +209,7 @@ impl Tree {
     /// An interior node's key, as the author derives it.
     fn node_key(&self, app_key: &[u8; 32], channel_id: &str, id: NodeId) -> [u8; 32] {
         if id == self.root() {
-            pin_derive::channel_content_key(app_key, channel_id, self.epoch)
+            pin_derive::channel_content_key(app_key, channel_id, self.epoch())
         } else {
             interior_key(app_key, channel_id, id, self.version(id))
         }
@@ -418,7 +424,7 @@ mod tests {
 
     #[test]
     fn a_member_climbs_to_c() {
-        let mut tree = Tree::new(0);
+        let mut tree = Tree::new();
         let leaf = tree.add(public(1));
         let records = published(&tree);
         assert_eq!(climbs(&tree, &records, 1, leaf).unwrap(), current_c(&tree));
@@ -428,7 +434,7 @@ mod tests {
     fn a_full_tree_grows_without_rotating() {
         // Growing puts a new root on top. The epoch stays: nobody left, so nothing anybody
         // holds has to stop working, and the content key a member already has is still C.
-        let mut tree = Tree::new(0);
+        let mut tree = Tree::new();
         let mut seated = Vec::new();
         for i in 0..9 {
             seated.push((i, tree.add(public(i))));
@@ -446,7 +452,7 @@ mod tests {
 
     #[test]
     fn a_removal_moves_the_epoch_and_only_the_path() {
-        let mut tree = Tree::new(0);
+        let mut tree = Tree::new();
         for i in 0..8 {
             tree.add(public(i));
         }
@@ -468,8 +474,35 @@ mod tests {
     }
 
     #[test]
+    fn the_old_root_keeps_the_removals_beneath_it_when_the_tree_grows() {
+        // A version counts the removals under a node whatever the tree's height was when
+        // they happened, so the root a tree grows past carries its history with it rather
+        // than restarting at 0 as an ordinary node.
+        let mut tree = Tree::new();
+        tree.add(public(0));
+        tree.add(public(1));
+        tree.remove(1).unwrap();
+        let old_root = tree.root();
+        assert_eq!(tree.version(old_root), 1);
+        for i in 2..4 {
+            tree.add(public(i));
+        }
+        assert_eq!(tree.height(), 2);
+        assert_ne!(tree.root(), old_root);
+        assert_eq!(tree.version(old_root), 1);
+        assert_eq!(tree.epoch(), 1);
+        let records = published(&tree);
+        for (member, leaf) in [(0, 0), (2, 1), (3, 2)] {
+            assert_eq!(
+                climbs(&tree, &records, member, leaf).unwrap(),
+                current_c(&tree)
+            );
+        }
+    }
+
+    #[test]
     fn a_hole_is_filled_before_the_tree_grows() {
-        let mut tree = Tree::new(0);
+        let mut tree = Tree::new();
         for i in 0..4 {
             tree.add(public(i));
         }
@@ -481,7 +514,7 @@ mod tests {
     #[test]
     fn filler_is_the_length_of_a_wrap() {
         // Otherwise an observer could tell occupied leaves from empty ones by size alone.
-        let mut tree = Tree::new(0);
+        let mut tree = Tree::new();
         tree.add(public(1));
         for record in tree.records(&APP_KEY, CHANNEL).unwrap() {
             assert_eq!(record.wraps[0].len(), WRAP_LEN);
@@ -510,7 +543,7 @@ mod tests {
 
     #[test]
     fn a_record_replayed_from_an_older_version_opens_nothing() {
-        let mut tree = Tree::new(0);
+        let mut tree = Tree::new();
         for i in 0..4 {
             tree.add(public(i));
         }
@@ -570,7 +603,7 @@ mod tests {
         // C, and nobody removed can reach it from anything they ever held.
         for run in 0..4u64 {
             let mut rng = Lcg(run.wrapping_mul(0x9e3779b97f4a7c15) + 1);
-            let mut tree = Tree::new(0);
+            let mut tree = Tree::new();
             let mut seated: HashMap<u64, u64> = HashMap::new(); // member -> leaf
             let mut gone: Vec<HashSet<[u8; 32]>> = Vec::new();
             let mut next_member = 0u64;
@@ -636,7 +669,11 @@ mod tests {
     #[test]
     fn the_root_key_is_the_channel_content_key() {
         // So the author's own derivation of C and what the tree hands a member are one key.
-        let mut tree = Tree::new(3);
+        let mut tree = Tree::new();
+        for i in 0..3 {
+            let leaf = tree.add(public(100 + i));
+            tree.remove(leaf).unwrap();
+        }
         let leaf = tree.add(public(1));
         let records = published(&tree);
         let got = climbs(&tree, &records, 1, leaf).unwrap();
