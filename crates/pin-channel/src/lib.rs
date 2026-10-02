@@ -23,6 +23,7 @@
 //! not a choice at this layer regardless: it is already the plaintext inside every blob
 //! sealed on Sia, so it is what must be produced to stay readable.
 
+pub mod band;
 mod object;
 pub mod tree;
 
