@@ -299,6 +299,27 @@ pub fn content_key(
     }
 }
 
+/// The epoch an object was sealed at, read from its verified head alone.
+///
+/// For a reader whose head carries no read key: a member, who learned C some other way and
+/// holds it per epoch, has to know which epoch's key to open the body with. Verified like
+/// any other read, so a forged head cannot send a member looking for the wrong key.
+pub fn head_epoch(
+    channel_key: &[u8; 32],
+    blob: &str,
+    kind: Kind,
+    signer: Signer,
+) -> Result<u32, String> {
+    let bytes = pin_crypto::b64_decode(blob).ok_or("object is not base64")?;
+    match bytes.first() {
+        Some(&OBJECT_VERSION) => {
+            split_head(channel_key, &bytes[1..], kind, signer).map(|(head, _)| head.epoch)
+        }
+        Some(v) => Err(format!("unsupported object version {v}")),
+        None => Err("object is empty".into()),
+    }
+}
+
 /// A fingerprint of what an object would hold: its substance, and how it is sealed.
 ///
 /// For a publisher that skips an upload when nothing moved. A seal draws a fresh nonce, so
@@ -574,6 +595,24 @@ mod tests {
         };
         let forged = seal(&forged, Kind::Tallies, b"payload").unwrap();
         assert!(open(&K, &forged, Kind::Tallies, Signer::Author(&author())).is_err());
+    }
+
+    #[test]
+    fn a_head_says_its_epoch_without_its_read_key() {
+        let members_only = Sealing {
+            publish_read_key: false,
+            ..sealing(true)
+        };
+        let blob = seal(&members_only, Kind::Manifest, b"payload").unwrap();
+        assert!(content_key(&K, &blob, Kind::Manifest, Signer::Author(&author())).is_err());
+        assert_eq!(
+            head_epoch(&K, &blob, Kind::Manifest, Signer::Author(&author())).unwrap(),
+            C.epoch
+        );
+        // Verified: somebody else's did, or the wrong kind, is refused.
+        let stranger = pin_pkarr::public_key_from_seed(&[12u8; 32]).unwrap();
+        assert!(head_epoch(&K, &blob, Kind::Manifest, Signer::Author(&stranger)).is_err());
+        assert!(head_epoch(&K, &blob, Kind::Tallies, Signer::Author(&author())).is_err());
     }
 
     #[test]

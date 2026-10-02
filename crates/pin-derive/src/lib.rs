@@ -711,6 +711,38 @@ pub const INSTANCE_COLLECTION: &str = "instance";
 /// counted by the epoch for as long as the channel exists.
 pub const MEMBERS_COLLECTION: &str = "members";
 
+/// The collection recording each channel this identity is a MEMBER of: the channel's key,
+/// its author, the author's encryption key and this identity's leaf in the member tree —
+/// everything a climb to the content key needs. Keyed by channel, written when this identity
+/// joins.
+pub const MEMBERSHIP_COLLECTION: &str = "membership";
+
+/// The collection holding each content key this identity has climbed to, one record per
+/// channel and epoch. Written only by the member pass, which is why it is apart from
+/// `membership`: one writer to a record. Every epoch is kept, because an object sealed
+/// before a rotation still opens with the key of its own epoch, and because the highest
+/// epoch held is what an older tree is refused against.
+pub const CONTENT_KEY_COLLECTION: &str = "content-key";
+
+/// The rkey for one channel's content key at one epoch.
+///
+/// Ends in a terminator, since iroh-docs prunes by key prefix and epoch `1` would otherwise
+/// be a prefix of epoch `10`.
+pub fn content_key_rkey(channel_id: &str, epoch: u32) -> String {
+    format!("{channel_id}:{epoch};")
+}
+
+/// The prefix every content key of one channel shares.
+pub fn content_key_rkey_prefix(channel_id: &str) -> String {
+    format!("{channel_id}:")
+}
+
+/// The epoch a content-key rkey names, for a channel already matched by its prefix.
+pub fn parse_content_key_epoch(rkey: &str) -> Option<u32> {
+    let (_, rest) = rkey.split_once(':')?;
+    rest.strip_suffix(';')?.parse().ok()
+}
+
 /// The rkey for one seating: the channel, then the seating's own id.
 ///
 /// The channel first so one prefix lists a channel's roster. Who the member is lives in
@@ -1486,6 +1518,28 @@ mod tests {
             hex(&members_locator_seed(&[0u8; 32])),
             "dcf33f14c4a24a2d44bf1be979b32c160a11cfcaec07903028fb13578970e73e"
         );
+    }
+
+    #[test]
+    fn a_content_key_rkey_parses_back_and_no_epoch_prefixes_another() {
+        let keys: Vec<String> = [0u32, 1, 2, 10, 11, 100]
+            .iter()
+            .map(|&e| content_key_rkey("chan", e))
+            .collect();
+        for (key, epoch) in keys.iter().zip([0u32, 1, 2, 10, 11, 100]) {
+            assert_eq!(parse_content_key_epoch(key), Some(epoch));
+            assert!(key.starts_with(&content_key_rkey_prefix("chan")));
+        }
+        for a in &keys {
+            for b in &keys {
+                assert!(
+                    a == b || !b.starts_with(a.as_str()),
+                    "{a} is a prefix of {b}"
+                );
+            }
+        }
+        assert_eq!(parse_content_key_epoch("chan:7"), None);
+        assert_eq!(parse_content_key_epoch("chan:x;"), None);
     }
 
     #[test]

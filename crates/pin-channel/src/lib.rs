@@ -28,8 +28,8 @@ mod object;
 pub mod tree;
 
 pub use object::{
-    content_key, fingerprint, open, open_members, open_with, seal, seal_members, ContentKey, Kind,
-    Opened, Sealing, Signer,
+    content_key, fingerprint, head_epoch, open, open_members, open_with, seal, seal_members,
+    ContentKey, Kind, Opened, Sealing, Signer,
 };
 
 /// How an author seals their own channel: C derived from the AppKey at the initial epoch,
@@ -383,12 +383,34 @@ pub async fn fetch_conversations(
 /// author last published, for the reason [`republish_pointer`] takes its URL rather than
 /// resolving it.
 pub async fn point_members(channel_key: &[u8; 32], top_url: &str) -> Result<(), String> {
-    repoint(members_pointer(channel_key), top_url).await
+    pin_pkarr::publish(
+        &members_pointer(channel_key).seed,
+        &members_records(top_url),
+    )
+    .await
 }
 
 /// Where the top of a channel's member tree currently is, without fetching it.
 pub async fn resolve_members_url(channel_key: &[u8; 32]) -> Result<Option<String>, String> {
     resolve_pointer(members_pointer(channel_key)).await
+}
+
+/// The pkarr key a channel's member-tree pointer is published under, for a caller that
+/// resolves it by its own route.
+pub fn members_locator_key(channel_key: &[u8; 32]) -> Result<String, String> {
+    pin_pkarr::public_key_from_seed(&members_pointer(channel_key).seed)
+}
+
+/// The records a member-tree pointer to `top_url` publishes: what a test serving the
+/// pointer by another route has to answer with, chunked exactly as the publish chunks it.
+pub fn members_records(top_url: &str) -> Vec<pin_pkarr::TxtRecord> {
+    pin_pkarr::chunk_txt(MEMBERS_PREFIX, top_url)
+}
+
+/// The top band's URL in a resolved member-tree packet, or `None` when it names none.
+pub fn members_url_in(records: &[pin_pkarr::TxtRecord]) -> Option<String> {
+    let url = pin_pkarr::rejoin_txt(records, MEMBERS_PREFIX);
+    (!url.is_empty()).then_some(url)
 }
 
 /// Download and open one band of a channel's member tree, answering with the epoch it was
@@ -446,6 +468,25 @@ fn open_payload(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_members_pointer_reads_back_the_url_it_was_published_with() {
+        let url = format!(
+            "sia://sia.storage/objects/{}/shared#k={}",
+            "a".repeat(64),
+            "b".repeat(44)
+        );
+        assert_eq!(
+            super::members_url_in(&super::members_records(&url)).as_deref(),
+            Some(url.as_str())
+        );
+        assert_eq!(super::members_url_in(&[]), None);
+        // Another artifact's records under the same key name no tree.
+        assert_eq!(
+            super::members_url_in(&pin_pkarr::chunk_txt(super::TALLIES_PREFIX, &url)),
+            None
+        );
+    }
+
     #[test]
     fn a_channels_three_pointers_are_separate_records() {
         // Each is a pkarr record of its own, and a shared key would make publishing one
