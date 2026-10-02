@@ -47,18 +47,80 @@ pub async fn channel_publish(
 }
 
 /// Read a channel from K alone. `None` when the locator resolves to nothing.
+///
+/// `app_key_hex` opens a manifest with no read key in its head: as its author when this
+/// identity wrote it, or with a key the Curator climbed to as a member.
 #[tauri::command]
 pub async fn channel_resolve(
     state: tauri::State<'_, SiaState>,
+    curator: tauri::State<'_, crate::curator::CuratorState>,
     channel_key: Vec<u8>,
     author: String,
+    app_key_hex: Option<String>,
 ) -> Result<Option<pin_channel::Resolved>, String> {
     let key = key32(&channel_key)?;
+    let app_key = app_key_hex.as_deref().and_then(pin_derive::decode_app_key);
+    let engine = crate::curator::current_engine(&curator).ok();
     state
         .run(move |s| async move {
-            pin_channel::resolve(&s, &key, pin_channel::Signer::Author(&author)).await
+            let blobs = engine.as_ref().map(|e| (*e.blobs).clone());
+            let holdings = holdings(engine.as_deref(), blobs.as_ref(), app_key.as_ref());
+            pin_curator::resolve_channel(&s, &holdings, &key, &author).await
         })
         .await
+}
+
+/// Open a sealed manifest blob — the path a cached copy takes — with what the Curator
+/// holds for one whose head carries no read key.
+///
+/// Here rather than in the WebView, unlike before: a member's climbed keys live in the
+/// Curator's doc, which the WebView's wasm never opens on desktop.
+#[tauri::command]
+pub async fn channel_open_blob(
+    curator: tauri::State<'_, crate::curator::CuratorState>,
+    channel_key: Vec<u8>,
+    author: String,
+    blob: String,
+    app_key_hex: Option<String>,
+) -> Result<String, String> {
+    let key = key32(&channel_key)?;
+    let app_key = app_key_hex.as_deref().and_then(pin_derive::decode_app_key);
+    let engine = crate::curator::current_engine(&curator).ok();
+    let blobs = engine.as_ref().map(|e| (*e.blobs).clone());
+    let holdings = holdings(engine.as_deref(), blobs.as_ref(), app_key.as_ref());
+    pin_curator::open_channel_object(&holdings, &key, &blob, pin_channel::Kind::Manifest, &author)
+        .await
+        .map(|(json, _)| json)
+}
+
+/// What this process holds for opening channel objects: the Curator's doc when it is
+/// running, and the AppKey a caller passed.
+fn holdings<'a>(
+    engine: Option<&'a crate::docstore::DocEngine>,
+    blobs: Option<&'a iroh_blobs::api::Store>,
+    app_key: Option<&'a [u8; 32]>,
+) -> pin_curator::Holdings<'a> {
+    pin_curator::Holdings {
+        doc: engine.zip(blobs).map(|(e, b)| (&e.doc, b, e.author_id)),
+        app_key,
+    }
+}
+
+/// Download one of a channel's objects and open it with what the Curator holds.
+async fn fetch_object(
+    s: &pin_sia::Session,
+    engine: Option<std::sync::Arc<crate::docstore::DocEngine>>,
+    app_key: Option<[u8; 32]>,
+    key: [u8; 32],
+    author: String,
+    item_url: String,
+    kind: pin_channel::Kind,
+) -> Result<String, String> {
+    let blobs = engine.as_ref().map(|e| (*e.blobs).clone());
+    let holdings = holdings(engine.as_deref(), blobs.as_ref(), app_key.as_ref());
+    pin_curator::fetch_channel_object(s, &holdings, &key, &item_url, kind, &author)
+        .await
+        .map(|(json, _, _)| json)
 }
 
 /// Re-sign a channel's current pointer to refresh its TTL, minting no new object.
@@ -94,18 +156,25 @@ pub async fn channel_resolve_conversations_url(
 #[tauri::command]
 pub async fn channel_fetch_conversations(
     state: tauri::State<'_, SiaState>,
+    curator: tauri::State<'_, crate::curator::CuratorState>,
     channel_key: Vec<u8>,
     author: String,
     item_url: String,
+    app_key_hex: Option<String>,
 ) -> Result<String, String> {
     let key = key32(&channel_key)?;
+    let app_key = app_key_hex.as_deref().and_then(pin_derive::decode_app_key);
+    let engine = crate::curator::current_engine(&curator).ok();
     state
         .run(move |s| async move {
-            pin_channel::fetch_conversations(
+            fetch_object(
                 &s,
-                &key,
-                &item_url,
-                pin_channel::Signer::Author(&author),
+                engine,
+                app_key,
+                key,
+                author,
+                item_url,
+                pin_channel::Kind::Conversations,
             )
             .await
         })
@@ -130,15 +199,27 @@ pub async fn channel_resolve_tallies_url(
 #[tauri::command]
 pub async fn channel_fetch_tallies(
     state: tauri::State<'_, SiaState>,
+    curator: tauri::State<'_, crate::curator::CuratorState>,
     channel_key: Vec<u8>,
     author: String,
     item_url: String,
+    app_key_hex: Option<String>,
 ) -> Result<String, String> {
     let key = key32(&channel_key)?;
+    let app_key = app_key_hex.as_deref().and_then(pin_derive::decode_app_key);
+    let engine = crate::curator::current_engine(&curator).ok();
     state
         .run(move |s| async move {
-            pin_channel::fetch_tallies(&s, &key, &item_url, pin_channel::Signer::Author(&author))
-                .await
+            fetch_object(
+                &s,
+                engine,
+                app_key,
+                key,
+                author,
+                item_url,
+                pin_channel::Kind::Tallies,
+            )
+            .await
         })
         .await
 }

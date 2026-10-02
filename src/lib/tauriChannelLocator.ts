@@ -22,12 +22,30 @@ export async function makeTauriChannelLocator() {
         manifestJson,
       }),
 
-    resolveLocator: async (channelKey: Uint8Array, author: string) =>
+    resolveLocator: async (
+      channelKey: Uint8Array,
+      author: string,
+      appKeyHex: string | undefined,
+    ) =>
       // Rust's `Option<Resolved>` arrives as null, which the seam reports as null.
       (await invoke<ResolvedLocator | null>('channel_resolve', {
         channelKey: Array.from(channelKey),
         author,
+        appKeyHex,
       })) ?? null,
+
+    openBlob: (
+      channelKey: Uint8Array,
+      author: string,
+      blob: string,
+      appKeyHex: string | undefined,
+    ) =>
+      invoke<string>('channel_open_blob', {
+        channelKey: Array.from(channelKey),
+        author,
+        blob,
+        appKeyHex,
+      }),
 
     republishPointer: (channelKey: Uint8Array, itemURL: string) =>
       invoke<void>('channel_republish_pointer', {
@@ -43,22 +61,30 @@ export async function makeTauriChannelLocator() {
       channelKey: Uint8Array,
       author: string,
       itemURL: string,
+      appKeyHex: string | undefined,
     ) =>
       invoke<string>('channel_fetch_conversations', {
         channelKey: [...channelKey],
         author,
         itemUrl: itemURL,
+        appKeyHex,
       }),
     resolveTalliesUrl: async (channelKey: Uint8Array) =>
       (await invoke<string | null>('channel_resolve_tallies_url', {
         channelKey: Array.from(channelKey),
       })) ?? null,
 
-    fetchTallies: (channelKey: Uint8Array, author: string, itemURL: string) =>
+    fetchTallies: (
+      channelKey: Uint8Array,
+      author: string,
+      itemURL: string,
+      appKeyHex: string | undefined,
+    ) =>
       invoke<string>('channel_fetch_tallies', {
         channelKey: Array.from(channelKey),
         author,
         itemUrl: itemURL,
+        appKeyHex,
       }),
   }
 }

@@ -1447,15 +1447,22 @@ pub fn channel_seal(
 
 /// Read a channel from K alone. `undefined` when the locator resolves to nothing, which
 /// is ordinary — unpublished, or aged off the DHT.
-#[wasm_bindgen]
 ///
-/// `author` is the channel's did:dht; the manifest must be signed by it.
+/// `author` is the channel's did:dht; the manifest must be signed by it. `app_key_hex`
+/// opens a manifest with no read key in its head: as its author when this identity wrote
+/// it, or with a key climbed to as a member, which the open doc holds.
+#[wasm_bindgen]
 pub async fn channel_resolve(
     channel_key: &[u8],
     author: String,
+    app_key_hex: Option<String>,
 ) -> Result<Option<String>, JsValue> {
     let key = key32(channel_key)?;
-    match pin_channel::resolve(&sia(), &key, pin_channel::Signer::Author(&author))
+    let app_key = app_key_hex.as_deref().and_then(decode_app_key);
+    let eng = engine().ok();
+    let blobs = eng.as_ref().map(|e| (*e.blobs).clone());
+    let holdings = holdings(eng.as_deref(), blobs.as_ref(), app_key.as_ref());
+    match pin_curator::resolve_channel(&sia(), &holdings, &key, &author)
         .await
         .map_err(je)?
     {
@@ -1464,6 +1471,19 @@ pub async fn channel_resolve(
             serde_json::to_string(&resolved)
                 .map_err(|e| JsValue::from_str(&format!("encode: {e}")))?,
         )),
+    }
+}
+
+/// What this tab holds for opening channel objects: its doc, when one is open, and the
+/// AppKey a caller passed.
+fn holdings<'a>(
+    eng: Option<&'a Engine>,
+    blobs: Option<&'a iroh_blobs::api::Store>,
+    app_key: Option<&'a [u8; 32]>,
+) -> pin_curator::Holdings<'a> {
+    pin_curator::Holdings {
+        doc: eng.zip(blobs).map(|(e, b)| (&e.doc, b, e.author_id)),
+        app_key,
     }
 }
 
@@ -1480,15 +1500,24 @@ pub async fn channel_republish_pointer(
 }
 
 /// Open a sealed manifest blob with K — the path a CACHED copy takes, so that a cached
-/// read and a fresh resolve decode identically.
+/// read and a fresh resolve decode identically, with what this tab holds for a manifest
+/// whose head carries no read key.
 #[wasm_bindgen]
-pub fn channel_open_blob(channel_key: &[u8], author: &str, blob: &str) -> Result<String, JsValue> {
-    pin_channel::open_blob(
-        &key32(channel_key)?,
-        blob,
-        pin_channel::Signer::Author(author),
-    )
-    .map_err(je)
+pub async fn channel_open_blob(
+    channel_key: &[u8],
+    author: String,
+    blob: String,
+    app_key_hex: Option<String>,
+) -> Result<String, JsValue> {
+    let key = key32(channel_key)?;
+    let app_key = app_key_hex.as_deref().and_then(decode_app_key);
+    let eng = engine().ok();
+    let blobs = eng.as_ref().map(|e| (*e.blobs).clone());
+    let holdings = holdings(eng.as_deref(), blobs.as_ref(), app_key.as_ref());
+    pin_curator::open_channel_object(&holdings, &key, &blob, pin_channel::Kind::Manifest, &author)
+        .await
+        .map(|(json, _)| json)
+        .map_err(je)
 }
 
 /// Open a sealed object of a given kind with K. The integration tier's fakes read the
@@ -1533,15 +1562,35 @@ pub async fn channel_fetch_conversations(
     channel_key: &[u8],
     author: String,
     item_url: String,
+    app_key_hex: Option<String>,
 ) -> Result<String, JsValue> {
-    pin_channel::fetch_conversations(
-        &sia(),
-        &key32(channel_key)?,
+    fetch_object(
+        channel_key,
+        &author,
         &item_url,
-        pin_channel::Signer::Author(&author),
+        app_key_hex,
+        pin_channel::Kind::Conversations,
     )
     .await
-    .map_err(je)
+}
+
+/// Download one of a channel's objects and open it with what this tab holds.
+async fn fetch_object(
+    channel_key: &[u8],
+    author: &str,
+    item_url: &str,
+    app_key_hex: Option<String>,
+    kind: pin_channel::Kind,
+) -> Result<String, JsValue> {
+    let key = key32(channel_key)?;
+    let app_key = app_key_hex.as_deref().and_then(decode_app_key);
+    let eng = engine().ok();
+    let blobs = eng.as_ref().map(|e| (*e.blobs).clone());
+    let holdings = holdings(eng.as_deref(), blobs.as_ref(), app_key.as_ref());
+    pin_curator::fetch_channel_object(&sia(), &holdings, &key, item_url, kind, author)
+        .await
+        .map(|(json, _, _)| json)
+        .map_err(je)
 }
 
 #[wasm_bindgen]
@@ -1558,15 +1607,16 @@ pub async fn channel_fetch_tallies(
     channel_key: &[u8],
     author: String,
     item_url: String,
+    app_key_hex: Option<String>,
 ) -> Result<String, JsValue> {
-    pin_channel::fetch_tallies(
-        &sia(),
-        &key32(channel_key)?,
+    fetch_object(
+        channel_key,
+        &author,
         &item_url,
-        pin_channel::Signer::Author(&author),
+        app_key_hex,
+        pin_channel::Kind::Tallies,
     )
     .await
-    .map_err(je)
 }
 
 // --- manifest transforms -------------------------------------------------------

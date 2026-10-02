@@ -129,7 +129,15 @@ export function fakeChannelLocatorNativeModule() {
       // caller treats it as a hard read failure rather than an absent channel.
       if (!bytes) throw new Error(`Object not found: ${itemURL}`)
       const blob = new TextDecoder().decode(bytes)
-      return { manifestJson: channel_open_blob(channelKey, author, blob), blob }
+      return {
+        manifestJson: await channel_open_blob(
+          channelKey,
+          author,
+          blob,
+          undefined,
+        ),
+        blob,
+      }
     },
 
     republishPointer: async (channelKey: Uint8Array, itemURL: string) => {
@@ -139,7 +147,7 @@ export function fakeChannelLocatorNativeModule() {
     },
 
     openBlob: async (channelKey: Uint8Array, author: string, blob: string) =>
-      channel_open_blob(channelKey, author, blob),
+      channel_open_blob(channelKey, author, blob, undefined),
 
     resolveTalliesUrl: async (channelKey: Uint8Array) =>
       getCurrentWorld()

@@ -21,8 +21,13 @@
 // the better transport: native QUIC for the Sia object, and the Mainline DHT directly for
 // the pointer instead of relays whose read-after-write lag runs to minutes.
 //
-// `openBlob` does NOT fork. It is pure AES over bytes the caller already holds — no
-// session, no network — so the wasm path is correct on both platforms.
+// `openBlob` forks too. Opening a channel only its members may read takes a content key
+// held in the doc — climbed to as a member, or derived as its author — and on desktop that
+// doc is the native Curator's, which the WebView's wasm never opens.
+//
+// Every read passes the session's AppKey, so a channel this identity wrote opens as its
+// author and one it is a member of opens with the key it climbed to. Taken here rather
+// than from each caller, which would thread one value through every read path.
 
 import {
   channel_fetch_conversations,
@@ -62,20 +67,36 @@ interface ChannelLocatorTransport {
   resolveLocator(
     channelKey: Uint8Array,
     author: string,
+    appKeyHex: string | undefined,
   ): Promise<ResolvedLocator | null>
+  openBlob(
+    channelKey: Uint8Array,
+    author: string,
+    blob: string,
+    appKeyHex: string | undefined,
+  ): Promise<string>
   republishPointer(channelKey: Uint8Array, itemURL: string): Promise<void>
   resolveTalliesUrl(channelKey: Uint8Array): Promise<string | null>
   fetchTallies(
     channelKey: Uint8Array,
     author: string,
     itemURL: string,
+    appKeyHex: string | undefined,
   ): Promise<string>
   resolveConversationsUrl(channelKey: Uint8Array): Promise<string | null>
   fetchConversations(
     channelKey: Uint8Array,
     author: string,
     itemURL: string,
+    appKeyHex: string | undefined,
   ): Promise<string>
+}
+
+/** The signed-in identity's AppKey, for opening what only it may read. Imported at call
+ *  time because the auth store reaches back into the channel modules. */
+async function appKeyHex(): Promise<string | undefined> {
+  const { useAuthStore } = await import('../stores/auth')
+  return useAuthStore.getState().storedKeyHex ?? undefined
 }
 
 let transportP: Promise<ChannelLocatorTransport> | null = null
@@ -99,10 +120,14 @@ async function buildTransport(): Promise<ChannelLocatorTransport> {
         await channel_publish(appKeyHex, channelKey, manifestJson),
       ) as PublishedLocator
     },
-    resolveLocator: async (channelKey, author) => {
+    resolveLocator: async (channelKey, author, appKeyHex) => {
       await ensureWasm()
-      const json = await channel_resolve(channelKey, author)
+      const json = await channel_resolve(channelKey, author, appKeyHex)
       return json === undefined ? null : (JSON.parse(json) as ResolvedLocator)
+    },
+    openBlob: async (channelKey, author, blob, appKeyHex) => {
+      await ensureWasm()
+      return channel_open_blob(channelKey, author, blob, appKeyHex)
     },
     republishPointer: async (channelKey, itemURL) => {
       await ensureWasm()
@@ -112,17 +137,17 @@ async function buildTransport(): Promise<ChannelLocatorTransport> {
       await ensureWasm()
       return (await channel_resolve_tallies_url(channelKey)) ?? null
     },
-    fetchTallies: async (channelKey, author, itemURL) => {
+    fetchTallies: async (channelKey, author, itemURL, appKeyHex) => {
       await ensureWasm()
-      return channel_fetch_tallies(channelKey, author, itemURL)
+      return channel_fetch_tallies(channelKey, author, itemURL, appKeyHex)
     },
     resolveConversationsUrl: async (channelKey) => {
       await ensureWasm()
       return (await channel_resolve_conversations_url(channelKey)) ?? null
     },
-    fetchConversations: async (channelKey, author, itemURL) => {
+    fetchConversations: async (channelKey, author, itemURL, appKeyHex) => {
       await ensureWasm()
-      return channel_fetch_conversations(channelKey, author, itemURL)
+      return channel_fetch_conversations(channelKey, author, itemURL, appKeyHex)
     },
   }
 }
@@ -146,7 +171,11 @@ export async function resolveLocator(
   channelKey: Uint8Array,
   author: string,
 ): Promise<ResolvedLocator | null> {
-  return (await transport()).resolveLocator(channelKey, author)
+  return (await transport()).resolveLocator(
+    channelKey,
+    author,
+    await appKeyHex(),
+  )
 }
 
 /** Re-sign a channel's current pointer to refresh its TTL, minting no new object. */
@@ -175,7 +204,12 @@ export async function fetchTallies(
   author: string,
   itemURL: string,
 ): Promise<string> {
-  return (await transport()).fetchTallies(channelKey, author, itemURL)
+  return (await transport()).fetchTallies(
+    channelKey,
+    author,
+    itemURL,
+    await appKeyHex(),
+  )
 }
 
 /** Where a channel's conversations currently are, without fetching them. */
@@ -192,7 +226,12 @@ export async function fetchConversations(
   author: string,
   itemURL: string,
 ): Promise<string> {
-  return (await transport()).fetchConversations(channelKey, author, itemURL)
+  return (await transport()).fetchConversations(
+    channelKey,
+    author,
+    itemURL,
+    await appKeyHex(),
+  )
 }
 
 /** Open a sealed manifest blob with K, returning its JSON, and refusing one `author` did
@@ -203,6 +242,10 @@ export async function openBlob(
   author: string,
   blob: string,
 ): Promise<string> {
-  await ensureWasm()
-  return channel_open_blob(channelKey, author, blob)
+  return (await transport()).openBlob(
+    channelKey,
+    author,
+    blob,
+    await appKeyHex(),
+  )
 }
