@@ -285,6 +285,28 @@ impl Band {
         }
     }
 
+    /// Seal this band as its object, signed by the author at the tree's epoch.
+    pub fn seal(
+        &self,
+        channel_key: &[u8; 32],
+        epoch: u32,
+        signer: [u8; 32],
+    ) -> Result<String, String> {
+        let json = serde_json::to_vec(self).map_err(|e| format!("encode band: {e}"))?;
+        crate::seal_members(channel_key, epoch, signer, &json)
+    }
+
+    /// Open a band's object, answering with the epoch it was published at and the band.
+    pub fn open(
+        channel_key: &[u8; 32],
+        blob: &str,
+        signer: crate::Signer,
+    ) -> Result<(u32, Band), String> {
+        let (epoch, json) = crate::open_members(channel_key, blob, signer)?;
+        let band = serde_json::from_slice(&json).map_err(|e| format!("band: {e}"))?;
+        Ok((epoch, band))
+    }
+
     pub fn id(&self) -> BandId {
         BandId {
             tier: self.tier,
@@ -723,6 +745,23 @@ mod tests {
             other.add(pin_crypto::enc_public(&seed(if i == 17 { 99 } else { i })));
         }
         assert_ne!(fp(&other), base);
+    }
+
+    #[test]
+    fn a_band_round_trips_through_its_object() {
+        const K: [u8; 32] = [7u8; 32];
+        const SIGNER: [u8; 32] = [11u8; 32];
+        let author = pin_pkarr::public_key_from_seed(&SIGNER).unwrap();
+        let mut tree = Tree::new();
+        tree.add(pin_crypto::enc_public(&seed(1)));
+        let plan = Publication::new(&tree, &APP_KEY, CHANNEL);
+        let band = plan.band(plan.top(), Vec::new()).unwrap();
+        let blob = band.seal(&K, 4, SIGNER).unwrap();
+        let (epoch, opened) = Band::open(&K, &blob, crate::Signer::Author(&author)).unwrap();
+        assert_eq!(epoch, 4);
+        assert_eq!(opened, band);
+        let stranger = pin_pkarr::public_key_from_seed(&[12u8; 32]).unwrap();
+        assert!(Band::open(&K, &blob, crate::Signer::Author(&stranger)).is_err());
     }
 
     #[test]

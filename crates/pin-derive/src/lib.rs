@@ -126,6 +126,13 @@ pub const ENGAGEMENT_LOCATOR_INFO: &[u8] = b"pin:engagement:v1";
 /// each change re-uploads the whole object — so sharing one would re-upload every comment
 /// body in a channel every time somebody tapped a heart.
 pub const CONVERSATION_LOCATOR_INFO: &[u8] = b"pin:conversation:v1";
+/// HKDF `info` for the pkarr key naming the top of a channel's member tree. K-derived, so
+/// whoever can find the channel can find its tree, which is everyone who might be a member.
+///
+/// Its own pointer because it moves on its own schedule: on a join or a removal, and never
+/// on a post or a like. A K-holder can rewrite it like any K-derived pointer, which is why
+/// the band it names is author-signed and flagged as the top.
+pub const MEMBERS_LOCATOR_INFO: &[u8] = b"pin:members:v1";
 /// HKDF `info` for the pkarr key holding the pointer to your settings snapshot.
 ///
 /// A device-facing ACCELERANT, and nobody else's business: the seed derives from the
@@ -213,6 +220,11 @@ pub fn engagement_locator_seed(channel_key: &[u8]) -> [u8; 32] {
 /// The pkarr seed for a channel's published-conversations pointer.
 pub fn conversation_locator_seed(channel_key: &[u8]) -> [u8; 32] {
     hkdf32(channel_key, CONVERSATION_LOCATOR_INFO)
+}
+
+/// The pkarr seed for the pointer to the top of a channel's member tree.
+pub fn members_locator_seed(channel_key: &[u8]) -> [u8; 32] {
+    hkdf32(channel_key, MEMBERS_LOCATOR_INFO)
 }
 
 /// The pkarr seed for your settings-snapshot pointer.
@@ -1448,6 +1460,16 @@ mod tests {
     }
 
     #[test]
+    fn members_locator_seed_matches_the_locked_vector() {
+        // Every member resolves the tree through this key, so moving it strands every
+        // member of every channel at the tree they last read.
+        assert_eq!(
+            hex(&members_locator_seed(&[0u8; 32])),
+            "dcf33f14c4a24a2d44bf1be979b32c160a11cfcaec07903028fb13578970e73e"
+        );
+    }
+
+    #[test]
     fn every_derivation_is_domain_separated() {
         // Same IKM through each derivation must give a different key; a collision
         // would mean one secret's compromise leaked another's.
@@ -1465,6 +1487,7 @@ mod tests {
             channel_doc_ticket_seed(&ikm),
             engagement_locator_seed(&ikm),
             conversation_locator_seed(&ikm),
+            members_locator_seed(&ikm),
             settings_locator_seed(&ikm),
             rendezvous_seed(&ikm),
             rendezvous_instance_seed(&ikm, "inst"),

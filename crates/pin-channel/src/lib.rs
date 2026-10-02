@@ -63,6 +63,8 @@ const TALLIES_PREFIX: &str = "_e";
 /// Distinct from every other prefix even though each pointer lives under its own pkarr key,
 /// so a packet's records name one thing whichever key it was found beneath.
 const CONVERSATIONS_PREFIX: &str = "_v";
+/// The TXT prefix the pointer to a channel's member tree is chunked under.
+const MEMBERS_PREFIX: &str = "_m";
 
 /// Where a published manifest ended up.
 ///
@@ -137,6 +139,15 @@ fn conversations_pointer(channel_key: &[u8; 32]) -> Pointer {
         seed: pin_derive::conversation_locator_seed(channel_key),
         prefix: CONVERSATIONS_PREFIX,
         kind: Kind::Conversations,
+    }
+}
+
+/// Where the top of a channel's member tree is advertised.
+fn members_pointer(channel_key: &[u8; 32]) -> Pointer {
+    Pointer {
+        seed: pin_derive::members_locator_seed(channel_key),
+        prefix: MEMBERS_PREFIX,
+        kind: Kind::Members,
     }
 }
 
@@ -360,6 +371,37 @@ pub async fn fetch_conversations(
     let ciphertext = sia.download_item(item_url).await?;
     let blob = String::from_utf8(ciphertext).map_err(|_| "conversations blob is not UTF-8")?;
     open_payload(channel_key, &blob, Kind::Conversations, signer).map(|(json, _)| json)
+}
+
+// --- the member tree: how members of a channel only they may read find C ------------
+
+/// Point a channel's member-tree key at its top band, already uploaded.
+///
+/// Takes the URL rather than uploading anything, unlike the other artifacts: the tree is
+/// many objects, uploaded bottom tier first so each band can name the ones beneath it, and
+/// only the top's URL goes in the pointer. Also the keep-alive, re-signing the URL the
+/// author last published, for the reason [`republish_pointer`] takes its URL rather than
+/// resolving it.
+pub async fn point_members(channel_key: &[u8; 32], top_url: &str) -> Result<(), String> {
+    repoint(members_pointer(channel_key), top_url).await
+}
+
+/// Where the top of a channel's member tree currently is, without fetching it.
+pub async fn resolve_members_url(channel_key: &[u8; 32]) -> Result<Option<String>, String> {
+    resolve_pointer(members_pointer(channel_key)).await
+}
+
+/// Download and open one band of a channel's member tree, answering with the epoch it was
+/// published at and the band.
+pub async fn fetch_band(
+    sia: &pin_sia::Session,
+    channel_key: &[u8; 32],
+    item_url: &str,
+    signer: Signer<'_>,
+) -> Result<(u32, band::Band), String> {
+    let ciphertext = sia.download_item(item_url).await?;
+    let blob = String::from_utf8(ciphertext).map_err(|_| "band blob is not UTF-8")?;
+    band::Band::open(channel_key, &blob, signer)
 }
 
 /// Read a channel's tallies from K alone.
