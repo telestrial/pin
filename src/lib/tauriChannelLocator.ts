@@ -32,7 +32,7 @@ export async function makeTauriChannelLocator() {
     republishPointer: (channelKey: Uint8Array, itemURL: string) =>
       invoke<void>('channel_republish_pointer', {
         channelKey: Array.from(channelKey),
-        itemURL,
+        itemUrl: itemURL,
       }),
 
     resolveConversationsUrl: async (channelKey: Uint8Array) =>
@@ -58,7 +58,7 @@ export async function makeTauriChannelLocator() {
       invoke<string>('channel_fetch_tallies', {
         channelKey: Array.from(channelKey),
         author,
-        itemURL,
+        itemUrl: itemURL,
       }),
   }
 }
