@@ -21,7 +21,9 @@ import {
   channel_open,
   channel_open_blob,
   channel_seal,
+  derive_did_dht_seed,
   pkarr_chunk_txt,
+  pkarr_public_key,
   pkarr_rejoin_txt,
 } from '../../crates/pin-core/pkg/pin_core.js'
 import { ensureWasm } from '../core/wasm'
@@ -116,7 +118,7 @@ export function fakeChannelLocatorNativeModule() {
       }
     },
 
-    resolveLocator: async (channelKey: Uint8Array) => {
+    resolveLocator: async (channelKey: Uint8Array, author: string) => {
       const world = getCurrentWorld()
       const records = world.pkarr.get(locatorKeyFor(channelKey))
       const itemURL = records?.find((r) => r.name === '_c0')?.value
@@ -127,7 +129,7 @@ export function fakeChannelLocatorNativeModule() {
       // caller treats it as a hard read failure rather than an absent channel.
       if (!bytes) throw new Error(`Object not found: ${itemURL}`)
       const blob = new TextDecoder().decode(bytes)
-      return { manifestJson: channel_open_blob(channelKey, blob), blob }
+      return { manifestJson: channel_open_blob(channelKey, author, blob), blob }
     },
 
     republishPointer: async (channelKey: Uint8Array, itemURL: string) => {
@@ -136,15 +138,19 @@ export function fakeChannelLocatorNativeModule() {
       ])
     },
 
-    openBlob: async (channelKey: Uint8Array, blob: string) =>
-      channel_open_blob(channelKey, blob),
+    openBlob: async (channelKey: Uint8Array, author: string, blob: string) =>
+      channel_open_blob(channelKey, author, blob),
 
     resolveTalliesUrl: async (channelKey: Uint8Array) =>
       getCurrentWorld()
         .pkarr.get(talliesKeyFor(channelKey))
         ?.find((r) => r.name === '_e0')?.value ?? null,
 
-    fetchTallies: async (channelKey: Uint8Array, itemURL: string) => {
+    fetchTallies: async (
+      channelKey: Uint8Array,
+      author: string,
+      itemURL: string,
+    ) => {
       const world = getCurrentWorld()
       const id = fakeObjectID(itemURL) ?? ''
       const bytes = world.objects.get(id)?.bytes
@@ -152,6 +158,7 @@ export function fakeChannelLocatorNativeModule() {
       return channel_open(
         channelKey,
         'tallies',
+        author,
         new TextDecoder().decode(bytes),
       )
     },
@@ -161,7 +168,11 @@ export function fakeChannelLocatorNativeModule() {
         .pkarr.get(conversationsKeyFor(channelKey))
         ?.find((r) => r.name === '_v0')?.value ?? null,
 
-    fetchConversations: async (channelKey: Uint8Array, itemURL: string) => {
+    fetchConversations: async (
+      channelKey: Uint8Array,
+      author: string,
+      itemURL: string,
+    ) => {
       const world = getCurrentWorld()
       const id = fakeObjectID(itemURL) ?? ''
       const bytes = world.objects.get(id)?.bytes
@@ -169,25 +180,43 @@ export function fakeChannelLocatorNativeModule() {
       return channel_open(
         channelKey,
         'conversations',
+        author,
         new TextDecoder().decode(bytes),
       )
     },
   }
 }
 
-/** The AppKey the fakes seal a channel's counts and words under, standing in for the
- *  author's. Any key will do: a reader takes the content key from the object's head. */
-const FAKE_AUTHOR_APP_KEY = '11'.repeat(32)
-
-/** Seal a payload as a channel's author would — the real object format, so a test that
- *  plants a manifest in the doc plants what a publish would have left there. */
-export function sealAsAuthor(channelKey: Uint8Array, payload: string): string {
-  return channel_seal(FAKE_AUTHOR_APP_KEY, channelKey, 'manifest', payload)
+/** The did a channel sealed by `appKeyHex` is signed by — what every read of it must be
+ *  checked against. */
+export async function didOf(appKeyHex: string): Promise<string> {
+  await ensureWasm()
+  const seed = derive_did_dht_seed(Uint8Array.fromHex(appKeyHex))
+  return `did:dht:${pkarr_public_key(seed)}`
 }
 
-/** Publish a channel's conversations the way its author's Curator would. Sealed for real,
- *  like the counts — only Sia and pkarr are faked. */
+/** `didOf`, for a caller that knows the wasm is already up — the int tier's setup brings
+ *  it up before any test runs, which is what lets an account have its did as it is made. */
+export function didOfSync(appKeyHex: string): string {
+  const seed = derive_did_dht_seed(Uint8Array.fromHex(appKeyHex))
+  return `did:dht:${pkarr_public_key(seed)}`
+}
+
+/** Seal a payload as a channel's author would — the real object format and the author's
+ *  real signature, so a test that plants a manifest in the doc plants what a publish by
+ *  that author would have left there. */
+export function sealAsAuthor(
+  authorAppKeyHex: string,
+  channelKey: Uint8Array,
+  payload: string,
+): string {
+  return channel_seal(authorAppKeyHex, channelKey, 'manifest', payload)
+}
+
+/** Publish a channel's conversations the way its author's Curator would, signed by that
+ *  author. Sealed for real, like the counts — only Sia and pkarr are faked. */
 export function publishFakeConversations(
+  authorAppKeyHex: string,
   channelKey: Uint8Array,
   conversations: Record<string, unknown>,
 ): void {
@@ -197,7 +226,7 @@ export function publishFakeConversations(
     id,
     bytes: new TextEncoder().encode(
       channel_seal(
-        FAKE_AUTHOR_APP_KEY,
+        authorAppKeyHex,
         channelKey,
         'conversations',
         JSON.stringify(conversations),
@@ -212,9 +241,10 @@ export function publishFakeConversations(
 }
 
 /** Publish a channel's counts the way its author's Curator would, so a test can read
- *  them back through the path a screen uses. Sealed for real — only Sia and pkarr are
- *  faked. */
+ *  them back through the path a screen uses. Sealed and signed for real, by the author whose
+ *  AppKey is passed — only Sia and pkarr are faked. */
 export function publishFakeTallies(
+  authorAppKeyHex: string,
   channelKey: Uint8Array,
   tallies: Record<string, unknown>,
 ): void {
@@ -224,7 +254,7 @@ export function publishFakeTallies(
     id,
     bytes: new TextEncoder().encode(
       channel_seal(
-        FAKE_AUTHOR_APP_KEY,
+        authorAppKeyHex,
         channelKey,
         'tallies',
         JSON.stringify(tallies),
@@ -304,9 +334,14 @@ export function fakePkarrModule() {
     await ensureWasm()
     return pkarr_rejoin_txt(JSON.stringify(records), prefix)
   }
-  const identityFromSeed = async (seed: Uint8Array) => ({
-    publicKey: fakePublicKey(seed),
-  })
+  // The REAL key derivation, as the chunking above is: a channel object's head is signed
+  // by its author's did:dht key and checked against the did every reader names, so a did a
+  // fake made up would never match the signature a real seal carries. Only the network is
+  // faked.
+  const identityFromSeed = async (seed: Uint8Array) => {
+    await ensureWasm()
+    return { publicKey: pkarr_public_key(seed) }
+  }
   return {
     chunkForTxt,
     reassembleTxt,
@@ -314,7 +349,8 @@ export function fakePkarrModule() {
     // Publish is keyed by SEED now, not by a keypair object — the signing key never
     // leaves Rust, so the seed is what crosses every boundary.
     publishRecords: async (seed: Uint8Array, records: FakeTxt[]) => {
-      getCurrentWorld().pkarr.set(fakePublicKey(seed), records)
+      const { publicKey } = await identityFromSeed(seed)
+      getCurrentWorld().pkarr.set(publicKey, records)
     },
     resolveDidDht: async (didOrKey: string) => {
       const key = didOrKey.startsWith('did:dht:')
@@ -322,8 +358,12 @@ export function fakePkarrModule() {
         : didOrKey
       return getCurrentWorld().pkarr.get(key) ?? []
     },
+    // The did the AppKey really derives — through its own seed, as production's does.
     deriveDidDht: async (appKeyBytes: Uint8Array) => {
-      const { publicKey } = await identityFromSeed(appKeyBytes)
+      await ensureWasm()
+      const { publicKey } = await identityFromSeed(
+        derive_did_dht_seed(appKeyBytes),
+      )
       return { did: `did:dht:${publicKey}`, publicKey }
     },
   }

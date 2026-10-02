@@ -84,7 +84,10 @@ describe('integration: action journal resume', () => {
     expect(done?.ledger.publishedChannelIDs).toEqual([channel.channelID])
 
     // The append landed in the manifest committed to the locator.
-    const manifest = await resolveChannelViaLocator(channel.channelKey)
+    const manifest = await resolveChannelViaLocator(
+      channel.channelKey,
+      alice.didDht,
+    )
     expect(manifest?.items.some((i) => i.summary === 'fresh post')).toBe(true)
   })
 
@@ -163,7 +166,10 @@ describe('integration: action journal resume', () => {
     expect(app.world.objects.has(bodyObjectID)).toBe(true)
 
     // The append still landed, pointing at the checkpoint's bytes.
-    const manifest = await resolveChannelViaLocator(channel.channelKey)
+    const manifest = await resolveChannelViaLocator(
+      channel.channelKey,
+      alice.didDht,
+    )
     expect(manifest?.items.some((i) => i.itemURL === itemRef.itemURL)).toBe(
       true,
     )

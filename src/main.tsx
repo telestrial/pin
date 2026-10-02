@@ -306,6 +306,7 @@ if (import.meta.env.DEV || inTauri()) {
           try {
             const manifest = await decodeChannelManifest(
               channelKeyFromBase64(channelKey),
+              authorDid ?? '',
               stored,
             )
             name = manifest.name
@@ -547,7 +548,8 @@ if (import.meta.env.DEV || inTauri()) {
       ch.channelKey,
       manifest,
     )
-    const got = await resolveChannelViaLocator(ch.channelKey)
+    const me = auth.myDidDht ?? ''
+    const got = await resolveChannelViaLocator(ch.channelKey, me)
     const match =
       got?.name === manifest.name && got?.items.length === manifest.items.length
     return `locator ${pub.locatorKey.slice(0, 12)}… → reader resolved "${got?.name}" (${got?.items.length ?? 0}/${manifest.items.length} items) — ${match ? 'MATCH' : 'MISMATCH'}`
@@ -620,7 +622,11 @@ if (import.meta.env.DEV || inTauri()) {
         `  cached: ${
           cached
             ? describe(
-                await locator.openBlob(k, new TextDecoder().decode(cached)),
+                await locator.openBlob(
+                  k,
+                  sub.didDht ?? '',
+                  new TextDecoder().decode(cached),
+                ),
               )
             : '(no sub/ record)'
         }`,
@@ -632,7 +638,7 @@ if (import.meta.env.DEV || inTauri()) {
       )
 
       try {
-        const live = await locator.resolveLocator(k)
+        const live = await locator.resolveLocator(k, sub.didDht ?? '')
         lines.push(
           `  live:   ${live ? describe(live.manifestJson) : '(locator resolves to nothing)'}`,
         )

@@ -83,12 +83,18 @@ function entry(
  *  on the next one — two whole-doc Sia mirrors to cache nothing. */
 async function cachedChannels(
   appKeyHex: string | null,
+  author: string,
   channels: { channelID: string; key: string; showOnProfile?: boolean }[],
 ): Promise<ChannelEntry[]> {
   if (!appKeyHex) return []
   const held = await Promise.all(
     channels.map(async (c): Promise<ChannelEntry | null> => {
-      const manifest = await readCachedManifest(appKeyHex, c.channelID, c.key)
+      const manifest = await readCachedManifest(
+        appKeyHex,
+        c.channelID,
+        c.key,
+        author,
+      )
       return manifest
         ? entry(c.channelID, c.key, manifest, c.showOnProfile)
         : null
@@ -110,6 +116,7 @@ async function cachedChannels(
  *  neither is dropped rather than failing the page — one missing hero card is a better
  *  answer than a profile that would not open. */
 async function resolveChannels(
+  author: string,
   channels: { channelID: string; key: string; showOnProfile?: boolean }[],
   held: ChannelEntry[],
 ): Promise<ChannelEntry[]> {
@@ -117,7 +124,7 @@ async function resolveChannels(
   const resolved = await Promise.all(
     channels.map(async (c): Promise<ChannelEntry | null> => {
       try {
-        const manifest = await resolveChannelViaLocator(c.key)
+        const manifest = await resolveChannelViaLocator(c.key, author)
         if (manifest)
           return entry(c.channelID, c.key, manifest, c.showOnProfile)
       } catch {
@@ -307,7 +314,11 @@ export function HandleDirectory({
         // The channel list is the CRAWL's, so it is only as fresh as its last pass — a
         // channel published since then is missing and one withdrawn since is still here.
         // Both are settled by the read below, which is what landing is for.
-        const fromIndex = await cachedChannels(storedKeyHex, indexed.channels)
+        const fromIndex = await cachedChannels(
+          storedKeyHex,
+          handle,
+          indexed.channels,
+        )
         if (cancelled) return
         setState({
           kind: 'loaded',
@@ -338,7 +349,7 @@ export function HandleDirectory({
         return
       }
       // The cards this device holds, on screen before the re-read below goes out for them.
-      const cached = await cachedChannels(storedKeyHex, doc.channels)
+      const cached = await cachedChannels(storedKeyHex, handle, doc.channels)
       if (cancelled) return
       if (cached.length > 0) {
         setState({
@@ -356,7 +367,7 @@ export function HandleDirectory({
         })
       }
 
-      const ownChannels = await resolveChannels(doc.channels, cached)
+      const ownChannels = await resolveChannels(handle, doc.channels, cached)
       if (!cancelled) {
         setState({
           kind: 'loaded',

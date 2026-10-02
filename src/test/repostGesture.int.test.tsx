@@ -27,6 +27,7 @@ import {
 import { EngagementRow } from '../components/engagement/EngagementRow'
 import type { FeedEntry } from '../core/feed'
 import { resolveChannelViaLocator } from '../lib/channelLocator'
+import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
 import { fakeDocStore as docStore } from './fakeModules'
 import {
@@ -130,10 +131,16 @@ describe('integration: the repost gesture', () => {
 
     // The published manifest, read back off the locator the way a subscriber would.
     await waitFor(async () => {
-      const published = await resolveChannelViaLocator(mine.channelKey)
+      const published = await resolveChannelViaLocator(
+        mine.channelKey,
+        useAuthStore.getState().myDidDht ?? '',
+      )
       expect(published?.reposts).toHaveLength(1)
     })
-    const published = await resolveChannelViaLocator(mine.channelKey)
+    const published = await resolveChannelViaLocator(
+      mine.channelKey,
+      useAuthStore.getState().myDidDht ?? '',
+    )
     expect(published?.reposts?.[0]).toMatchObject({
       didDht: SOURCE,
       channelID: SRC_CHANNEL,
@@ -155,7 +162,12 @@ describe('integration: the repost gesture', () => {
     )
     await waitFor(async () => {
       expect(
-        (await resolveChannelViaLocator(mine.channelKey))?.reposts,
+        (
+          await resolveChannelViaLocator(
+            mine.channelKey,
+            useAuthStore.getState().myDidDht ?? '',
+          )
+        )?.reposts,
       ).toHaveLength(1)
     })
 
@@ -177,7 +189,10 @@ describe('integration: the repost gesture', () => {
 
     await userEvent.click(row())
     await waitFor(async () => {
-      const published = await resolveChannelViaLocator(mine.channelKey)
+      const published = await resolveChannelViaLocator(
+        mine.channelKey,
+        useAuthStore.getState().myDidDht ?? '',
+      )
       expect(published?.reposts).toBeUndefined()
     })
   })
@@ -196,7 +211,12 @@ describe('integration: the repost gesture', () => {
     await pickOne(/My channel/)
     await waitFor(async () => {
       expect(
-        (await resolveChannelViaLocator(mine.channelKey))?.reposts,
+        (
+          await resolveChannelViaLocator(
+            mine.channelKey,
+            useAuthStore.getState().myDidDht ?? '',
+          )
+        )?.reposts,
       ).toHaveLength(1)
     })
     expect(repostButton()).toHaveAttribute('aria-pressed', 'true')
@@ -261,7 +281,10 @@ describe('integration: the repost gesture', () => {
         },
       ],
     })
-    const published = await resolveChannelViaLocator(mine.channelKey)
+    const published = await resolveChannelViaLocator(
+      mine.channelKey,
+      useAuthStore.getState().myDidDht ?? '',
+    )
     if (!published) throw new Error('not resolvable')
     useFeedStore.getState().setManifest(mine.channelID, published)
 
@@ -503,7 +526,10 @@ describe('integration: circulating your own post', () => {
     // channel-as-voice, so a post in your own channel carries the gesture like any other.
     const { me, first, second } = await withTwoChannels(app)
     await publishTextPost(me, first, 'my own post')
-    const published = await resolveChannelViaLocator(first.channelKey)
+    const published = await resolveChannelViaLocator(
+      first.channelKey,
+      useAuthStore.getState().myDidDht ?? '',
+    )
     if (!published) throw new Error('not resolvable')
     useFeedStore.getState().setManifest(first.channelID, published)
 
@@ -541,7 +567,10 @@ describe('integration: circulating your own post', () => {
 
     await pick(/Second channel/)
     await waitFor(async () => {
-      const after = await resolveChannelViaLocator(second.channelKey)
+      const after = await resolveChannelViaLocator(
+        second.channelKey,
+        useAuthStore.getState().myDidDht ?? '',
+      )
       expect(after?.reposts).toHaveLength(1)
     })
   })

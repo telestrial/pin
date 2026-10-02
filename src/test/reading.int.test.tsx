@@ -106,9 +106,9 @@ describe('the home feed', () => {
     )
 
     mountAs(bob)
-    useAuthStore.setState({ handleFollows: [ALICE] })
+    useAuthStore.setState({ handleFollows: [alice.didDht] })
     await hold(
-      ALICE,
+      alice.didDht,
       directory([
         {
           channelID: channel.channelID,

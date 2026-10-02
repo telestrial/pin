@@ -64,10 +64,14 @@ export async function applyCachedChannel(
   sub: SubscriptionRef,
 ): Promise<boolean> {
   try {
+    // A subscription naming nobody has nothing to check the manifest against, so it is
+    // not read — the same rule the Curator's pull loop applies.
+    if (!sub.didDht) return false
     const cached = await getRecord(SUB_COLLECTION, sub.channelID)
     if (!cached) return false
     const manifest = await decodeChannelManifest(
       channelKeyFromBase64(sub.channelKey),
+      sub.didDht,
       cached,
     )
     return applyIfChanged(sub, manifest)

@@ -42,7 +42,11 @@ import { DeadRepost } from './DeadRepost'
  *
  *  Nothing is written back. Browsing is a read, and what to do about the channel is a
  *  decision the buttons on the page carry. */
-function useBrowsedChannel(channelKey: string | undefined, enabled: boolean) {
+function useBrowsedChannel(
+  channelKey: string | undefined,
+  author: string,
+  enabled: boolean,
+) {
   const [manifest, setManifest] = useState<ChannelManifest | null>(null)
   const [loading, setLoading] = useState(false)
 
@@ -51,7 +55,7 @@ function useBrowsedChannel(channelKey: string | undefined, enabled: boolean) {
     setManifest(null)
     if (!enabled || !channelKey) return
     setLoading(true)
-    resolveChannelViaLocator(channelKey)
+    resolveChannelViaLocator(channelKey, author)
       .then((m) => {
         if (!cancelled) setManifest(m)
       })
@@ -64,7 +68,7 @@ function useBrowsedChannel(channelKey: string | undefined, enabled: boolean) {
     return () => {
       cancelled = true
     }
-  }, [channelKey, enabled])
+  }, [channelKey, author, enabled])
 
   return { manifest, loading }
 }
@@ -73,6 +77,7 @@ export function ChannelView({
   authorHandle,
   channelID,
   channelKey,
+  authorDid,
   onItemClick,
   onChannelClick,
   onHandleClick,
@@ -87,6 +92,8 @@ export function ChannelView({
   channelID: string
   /** Present only when browsing — see `useBrowsedChannel`. */
   channelKey?: string
+  /** Whose channel it is, when browsing: the did:dht its manifest must be signed by. */
+  authorDid?: string
   onItemClick: (entry: FeedEntry) => void
   onChannelClick: (authorHandle: string, channelID: string) => void
   onHandleClick: (handle: string) => void
@@ -128,7 +135,11 @@ export function ChannelView({
   // Held or browsed: one page, two rungs. `held` is what the pull loop keeps current for
   // a channel you watch or own; the resolve below is for one you are only looking at.
   const browsing = !sub && !isOwned
-  const browsed = useBrowsedChannel(channelKey, browsing && !held)
+  const browsed = useBrowsedChannel(
+    channelKey,
+    authorDid ?? '',
+    browsing && !held,
+  )
   // Whether this channel is one of your public follows. Watching is hidden behind it
   // because following already watches.
   const following = useAuthStore((s) =>
@@ -164,6 +175,7 @@ export function ChannelView({
   const followerCount = useChannelFollowerCount(
     isPublic ? channelID : '',
     watchKey,
+    authorDid ?? '',
     browsing,
     followers?.length ?? null,
   )

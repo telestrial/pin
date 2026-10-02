@@ -236,6 +236,7 @@ function useFollowTallyCount(
 export function useChannelFollowerCount(
   channelID: string,
   channelKey: string | undefined,
+  author: string,
   browsing: boolean,
   scan: number | null,
 ): number | null {
@@ -247,7 +248,8 @@ export function useChannelFollowerCount(
     `channel:${browsing}:${channelKey ?? ''}`,
     scan,
     browsing && channelKey && storedKeyHex
-      ? () => void warmChannelTallies(storedKeyHex, channelID, channelKey)
+      ? () =>
+          void warmChannelTallies(storedKeyHex, channelID, channelKey, author)
       : undefined,
   )
 }

@@ -42,11 +42,12 @@ pub async fn channel_publish(
 pub async fn channel_resolve(
     state: tauri::State<'_, SiaState>,
     channel_key: Vec<u8>,
+    author: String,
 ) -> Result<Option<pin_channel::Resolved>, String> {
     let key = key32(&channel_key)?;
     state
         .run(move |s| async move {
-            pin_channel::resolve(&s, &key, pin_channel::Signer::Unchecked).await
+            pin_channel::resolve(&s, &key, pin_channel::Signer::Author(&author)).await
         })
         .await
 }
@@ -85,13 +86,19 @@ pub async fn channel_resolve_conversations_url(
 pub async fn channel_fetch_conversations(
     state: tauri::State<'_, SiaState>,
     channel_key: Vec<u8>,
+    author: String,
     item_url: String,
 ) -> Result<String, String> {
     let key = key32(&channel_key)?;
     state
         .run(move |s| async move {
-            pin_channel::fetch_conversations(&s, &key, &item_url, pin_channel::Signer::Unchecked)
-                .await
+            pin_channel::fetch_conversations(
+                &s,
+                &key,
+                &item_url,
+                pin_channel::Signer::Author(&author),
+            )
+            .await
         })
         .await
 }
@@ -115,12 +122,14 @@ pub async fn channel_resolve_tallies_url(
 pub async fn channel_fetch_tallies(
     state: tauri::State<'_, SiaState>,
     channel_key: Vec<u8>,
+    author: String,
     item_url: String,
 ) -> Result<String, String> {
     let key = key32(&channel_key)?;
     state
         .run(move |s| async move {
-            pin_channel::fetch_tallies(&s, &key, &item_url, pin_channel::Signer::Unchecked).await
+            pin_channel::fetch_tallies(&s, &key, &item_url, pin_channel::Signer::Author(&author))
+                .await
         })
         .await
 }

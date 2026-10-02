@@ -82,6 +82,10 @@ export type View =
       // the directory entry both hold it, and dropping it at the boundary is what left a
       // browsed channel rendering an empty page.
       channelKey?: string
+      // Whose channel it is, when browsing: the did:dht its manifest must be signed by.
+      // Its own field rather than `authorHandle`, which the page matches feed entries on
+      // and which a did:dht channel leaves empty.
+      authorDid?: string
     }
   | {
       kind: 'editing-channel'
@@ -271,6 +275,7 @@ export function Home({
             authorHandle,
             channelID,
             channelKey,
+            authorDid: directoryView.handle,
           })
         }
         onHandleClick={(handle) =>
@@ -355,6 +360,7 @@ export function Home({
             authorHandle: didDht ? '' : authorHandle,
             channelID,
             channelKey,
+            authorDid: didDht,
           })
         }
         onOpenProfile={(didDht) =>
@@ -456,6 +462,7 @@ export function Home({
         authorHandle={view.authorHandle}
         channelID={view.channelID}
         channelKey={view.channelKey}
+        authorDid={view.authorDid}
         onItemClick={(entry) => setView(opened(entry, channelView))}
         onChannelClick={(authorHandle, channelID) =>
           setView({

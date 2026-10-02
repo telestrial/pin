@@ -66,9 +66,9 @@ describe('the channel round-trip under Tauri', () => {
   it('resolves and republishes through the native backend too', async () => {
     const mod = await import('./channelLocatorNative')
     const key = new Uint8Array(32)
-    await expect(mod.resolveLocator(key)).resolves.toBeNull()
+    await expect(mod.resolveLocator(key, 'did:dht:x')).resolves.toBeNull()
     await expect(mod.republishPointer(key, 'sia://x')).resolves.toBeUndefined()
-    expect(resolveLocator).toHaveBeenCalledOnce()
+    expect(resolveLocator).toHaveBeenCalledWith(key, 'did:dht:x')
     expect(republishPointer).toHaveBeenCalledWith(key, 'sia://x')
   })
 })

@@ -45,13 +45,13 @@ export function channel_doc_namespaces(): any;
 /**
  * Download and open a channel's conversations at a URL already resolved for it.
  */
-export function channel_fetch_conversations(channel_key: Uint8Array, item_url: string): Promise<string>;
+export function channel_fetch_conversations(channel_key: Uint8Array, author: string, item_url: string): Promise<string>;
 
 /**
  * Download and open a channel's tallies at a URL already resolved for it. Returns the
  * subject-to-tally map as JSON.
  */
-export function channel_fetch_tallies(channel_key: Uint8Array, item_url: string): Promise<string>;
+export function channel_fetch_tallies(channel_key: Uint8Array, author: string, item_url: string): Promise<string>;
 
 /**
  * A channel's public identifier, derived from its key. Pin's own format (a truncated
@@ -65,13 +65,13 @@ export function channel_id(channel_key: Uint8Array): string;
  * Open a sealed object of a given kind with K. The integration tier's fakes read the
  * channel's counts and words through this, so they check kind as the real fetches do.
  */
-export function channel_open(channel_key: Uint8Array, kind: string, blob: string): string;
+export function channel_open(channel_key: Uint8Array, kind: string, author: string, blob: string): string;
 
 /**
  * Open a sealed manifest blob with K — the path a CACHED copy takes, so that a cached
  * read and a fresh resolve decode identically.
  */
-export function channel_open_blob(channel_key: Uint8Array, blob: string): string;
+export function channel_open_blob(channel_key: Uint8Array, author: string, blob: string): string;
 
 /**
  * Seal a manifest as its author, upload it, and publish the pointer. Returns
@@ -88,8 +88,10 @@ export function channel_republish_pointer(channel_key: Uint8Array, item_url: str
 /**
  * Read a channel from K alone. `undefined` when the locator resolves to nothing, which
  * is ordinary — unpublished, or aged off the DHT.
+ *
+ * `author` is the channel's did:dht; the manifest must be signed by it.
  */
-export function channel_resolve(channel_key: Uint8Array): Promise<string | undefined>;
+export function channel_resolve(channel_key: Uint8Array, author: string): Promise<string | undefined>;
 
 /**
  * Where a channel's tallies currently are, without fetching them.
@@ -1002,14 +1004,14 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly channel_doc_namespaces: () => [number, number, number];
-    readonly channel_fetch_conversations: (a: number, b: number, c: number, d: number) => any;
-    readonly channel_fetch_tallies: (a: number, b: number, c: number, d: number) => any;
+    readonly channel_fetch_conversations: (a: number, b: number, c: number, d: number, e: number, f: number) => any;
+    readonly channel_fetch_tallies: (a: number, b: number, c: number, d: number, e: number, f: number) => any;
     readonly channel_id: (a: number, b: number) => [number, number, number, number];
-    readonly channel_open: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
-    readonly channel_open_blob: (a: number, b: number, c: number, d: number) => [number, number, number, number];
+    readonly channel_open: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
+    readonly channel_open_blob: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
     readonly channel_publish: (a: number, b: number, c: number, d: number, e: number, f: number) => any;
     readonly channel_republish_pointer: (a: number, b: number, c: number, d: number) => any;
-    readonly channel_resolve: (a: number, b: number) => any;
+    readonly channel_resolve: (a: number, b: number, c: number, d: number) => any;
     readonly channel_resolve_conversations_url: (a: number, b: number) => any;
     readonly channel_resolve_tallies_url: (a: number, b: number) => any;
     readonly channel_seal: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];

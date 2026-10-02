@@ -1431,9 +1431,14 @@ pub fn channel_seal(
 /// Read a channel from K alone. `undefined` when the locator resolves to nothing, which
 /// is ordinary — unpublished, or aged off the DHT.
 #[wasm_bindgen]
-pub async fn channel_resolve(channel_key: &[u8]) -> Result<Option<String>, JsValue> {
+///
+/// `author` is the channel's did:dht; the manifest must be signed by it.
+pub async fn channel_resolve(
+    channel_key: &[u8],
+    author: String,
+) -> Result<Option<String>, JsValue> {
     let key = key32(channel_key)?;
-    match pin_channel::resolve(&sia(), &key, pin_channel::Signer::Unchecked)
+    match pin_channel::resolve(&sia(), &key, pin_channel::Signer::Author(&author))
         .await
         .map_err(je)?
     {
@@ -1460,21 +1465,31 @@ pub async fn channel_republish_pointer(
 /// Open a sealed manifest blob with K — the path a CACHED copy takes, so that a cached
 /// read and a fresh resolve decode identically.
 #[wasm_bindgen]
-pub fn channel_open_blob(channel_key: &[u8], blob: &str) -> Result<String, JsValue> {
-    pin_channel::open_blob(&key32(channel_key)?, blob, pin_channel::Signer::Unchecked).map_err(je)
+pub fn channel_open_blob(channel_key: &[u8], author: &str, blob: &str) -> Result<String, JsValue> {
+    pin_channel::open_blob(
+        &key32(channel_key)?,
+        blob,
+        pin_channel::Signer::Author(author),
+    )
+    .map_err(je)
 }
 
 /// Open a sealed object of a given kind with K. The integration tier's fakes read the
 /// channel's counts and words through this, so they check kind as the real fetches do.
 #[wasm_bindgen]
-pub fn channel_open(channel_key: &[u8], kind: &str, blob: &str) -> Result<String, JsValue> {
+pub fn channel_open(
+    channel_key: &[u8],
+    kind: &str,
+    author: &str,
+    blob: &str,
+) -> Result<String, JsValue> {
     let kind = pin_channel::Kind::parse(kind)
         .ok_or_else(|| JsValue::from_str(&format!("unknown object kind {kind}")))?;
     let opened = pin_channel::open(
         &key32(channel_key)?,
         blob,
         kind,
-        pin_channel::Signer::Unchecked,
+        pin_channel::Signer::Author(author),
     )
     .map_err(je)?;
     String::from_utf8(opened.payload).map_err(|_| JsValue::from_str("payload is not UTF-8"))
@@ -1499,13 +1514,14 @@ pub async fn channel_resolve_conversations_url(
 #[wasm_bindgen]
 pub async fn channel_fetch_conversations(
     channel_key: &[u8],
+    author: String,
     item_url: String,
 ) -> Result<String, JsValue> {
     pin_channel::fetch_conversations(
         &sia(),
         &key32(channel_key)?,
         &item_url,
-        pin_channel::Signer::Unchecked,
+        pin_channel::Signer::Author(&author),
     )
     .await
     .map_err(je)
@@ -1523,13 +1539,14 @@ pub async fn channel_resolve_tallies_url(channel_key: &[u8]) -> Result<Option<St
 #[wasm_bindgen]
 pub async fn channel_fetch_tallies(
     channel_key: &[u8],
+    author: String,
     item_url: String,
 ) -> Result<String, JsValue> {
     pin_channel::fetch_tallies(
         &sia(),
         &key32(channel_key)?,
         &item_url,
-        pin_channel::Signer::Unchecked,
+        pin_channel::Signer::Author(&author),
     )
     .await
     .map_err(je)

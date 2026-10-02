@@ -10,7 +10,7 @@
 // asymmetry this locks, in both directions.
 
 import { render, screen, waitFor, within } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('../lib/docs', async () =>
   (await import('./fakeModules')).fakeDocsModule(),
@@ -40,15 +40,32 @@ import { HandleDirectory } from '../components/HandleDirectory'
 import { channelKeyFromBase64 } from '../core/crypto'
 import type { ChannelManifest, ItemRef, OwnedChannel } from '../core/types'
 import { useAuthStore } from '../stores/auth'
-import { fakeDocStore as docStore, sealAsAuthor } from './fakeModules'
-import { createFakeApp, mountAs, resetAllStores } from './setupFakeApp'
+import {
+  didOfSync,
+  fakeDocStore as docStore,
+  sealAsAuthor,
+} from './fakeModules'
+import {
+  appKeyFor,
+  createFakeApp,
+  mountAs,
+  resetAllStores,
+} from './setupFakeApp'
 
-/** The AppKey their channel is sealed under — anything; a reader takes the content key
- *  from the object's head. */
+/** The AppKey their channel is sealed under. */
 const THEIR_APP_KEY = '22'.repeat(32)
+/** The signed-in account's, which its own channels are sealed under. */
+const MY_APP_KEY = appKeyFor('did:plc:me')
 
-const ME = 'did:dht:me'
-const THEM = 'did:dht:them'
+// Real dids, of the keys their channels are sealed under: every channel object is signed
+// by its author and checked against the did a reader names, so a label would name somebody
+// who signed nothing. Set once the wasm is up, which the int tier's setup does first.
+let ME = ''
+let THEM = ''
+beforeAll(() => {
+  ME = didOfSync(MY_APP_KEY)
+  THEM = didOfSync(THEIR_APP_KEY)
+})
 // 32 bytes of base64, the shape a channel key travels in.
 const KEY = 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8='
 // A second channel key, so two channels on one profile resolve to two different
@@ -90,6 +107,7 @@ async function inTheDoc(
   key = KEY,
 ) {
   const sealed = sealAsAuthor(
+    MY_APP_KEY,
     channelKeyFromBase64(key),
     JSON.stringify(manifest(name, items)),
   )
@@ -105,6 +123,7 @@ async function inTheCache(
   key = KEY,
 ) {
   const sealed = sealAsAuthor(
+    THEIR_APP_KEY,
     channelKeyFromBase64(key),
     JSON.stringify(manifest(name, items)),
   )

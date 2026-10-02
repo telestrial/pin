@@ -103,16 +103,16 @@ export async function warmChannelConversations(
   appKeyHex: string,
   channelID: string,
   channelKeyB64: string,
+  author: string,
 ): Promise<void> {
   try {
     const k = channelKeyFromBase64(channelKeyB64)
     const itemURL = await resolveConversationsUrl(k)
     if (!itemURL) return
 
-    const map = JSON.parse(await fetchConversations(k, itemURL)) as Record<
-      string,
-      Conversation
-    >
+    const map = JSON.parse(
+      await fetchConversations(k, author, itemURL),
+    ) as Record<string, Conversation>
     await openDocs(appKeyHex)
     await ensureWasm()
     const collection = thread_collection()

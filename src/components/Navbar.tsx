@@ -44,6 +44,8 @@ export function Navbar({
                 authorHandle,
                 channelID,
                 channelKey,
+                // A search hit names its author by did.
+                authorDid: authorHandle,
               })
             }
           />

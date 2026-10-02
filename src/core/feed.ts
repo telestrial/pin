@@ -212,7 +212,8 @@ export type FeedFetchResult = {
 }
 
 export type FetchChannel = (
-  authorHandleOrDID: string,
+  // The channel's author's did:dht, which its manifest must be signed by.
+  author: string,
   channelID: string,
   channelKey: string,
   // Skip any local cache and go to the network. Set when the READ IS THE POINT —
@@ -245,7 +246,9 @@ export async function buildHomeFeed(
   const settled = await Promise.allSettled(
     subscriptions.map((sub) =>
       fetcher(
-        sub.authorDID || sub.authorHandle,
+        // The did:dht every manifest is checked against. A subscription naming nobody
+        // has nothing to check against, and its read fails as unverifiable.
+        sub.didDht ?? '',
         sub.channelID,
         sub.channelKey,
         fresh,

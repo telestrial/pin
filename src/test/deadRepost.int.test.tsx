@@ -23,6 +23,7 @@ import { DeadRepost } from '../components/channel/DeadRepost'
 import type { RepostRef } from '../core/types'
 import { resolveChannelViaLocator } from '../lib/channelLocator'
 import { repostInChannel } from '../lib/channelWrites'
+import { useAuthStore } from '../stores/auth'
 import { fakeDocStore as docStore } from './fakeModules'
 import {
   authorCreateChannel,
@@ -99,14 +100,22 @@ describe('integration: a dead portal in your own channel', () => {
   it('takes the portal out of the published manifest when dismissed', async () => {
     const mine = await withACirculatedPost(app)
     expect(
-      (await resolveChannelViaLocator(mine.channelKey))?.reposts,
+      (
+        await resolveChannelViaLocator(
+          mine.channelKey,
+          useAuthStore.getState().myDidDht ?? '',
+        )
+      )?.reposts,
     ).toHaveLength(1)
 
     render(<DeadRepost channel={mine} repost={REPOST} state="deleted" />)
     await userEvent.click(screen.getByRole('button', { name: 'Remove' }))
 
     await waitFor(async () => {
-      const published = await resolveChannelViaLocator(mine.channelKey)
+      const published = await resolveChannelViaLocator(
+        mine.channelKey,
+        useAuthStore.getState().myDidDht ?? '',
+      )
       expect(published?.reposts).toBeUndefined()
     })
   })

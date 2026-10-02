@@ -22,6 +22,7 @@ import {
 } from './channelLocatorNative'
 import { warmChannelTallies } from './channelTallies'
 import { deleteRecord, getRecord, openDocs, putRecord } from './docs'
+import { deriveDidDht } from './pkarr'
 import {
   channelPublishKey,
   readPublished,
@@ -64,15 +65,17 @@ export async function publishChannelLocator(
   }
 }
 
-/** Decrypt + parse a channel-manifest ciphertext blob with K, checking the version.
- *  The blob is exactly what the Sia object holds (and what `sub/<id>` caches), so
- *  the fresh-resolve and cached-read paths decode identically. */
+/** Decrypt + parse a channel-manifest ciphertext blob with K, checking that `author`
+ *  signed it and that its version is one this reads. The blob is exactly what the Sia
+ *  object holds (and what `sub/<id>` caches), so the fresh-resolve and cached-read paths
+ *  decode and check identically. */
 export async function decodeChannelManifest(
   kBytes: Uint8Array,
+  author: string,
   ciphertext: Uint8Array,
 ): Promise<ChannelManifest> {
   const manifest = JSON.parse(
-    await openBlob(kBytes, new TextDecoder().decode(ciphertext)),
+    await openBlob(kBytes, author, new TextDecoder().decode(ciphertext)),
   )
   if (manifest?.version !== CHANNEL_MANIFEST_VERSION) {
     throw new Error(
@@ -87,8 +90,12 @@ export async function decodeChannelManifest(
  *  isn't published / resolvable. */
 async function resolveChannelBytes(
   channelKeyB64: string,
+  author: string,
 ): Promise<{ manifest: ChannelManifest; ciphertext: Uint8Array } | null> {
-  const resolved = await resolveLocator(channelKeyFromBase64(channelKeyB64))
+  const resolved = await resolveLocator(
+    channelKeyFromBase64(channelKeyB64),
+    author,
+  )
   if (!resolved) return null
 
   const manifest = JSON.parse(resolved.manifestJson)
@@ -105,13 +112,14 @@ async function resolveChannelBytes(
   }
 }
 
-/** Reader side: resolve a channel from its K alone (no atproto, no author handle).
- *  Derive the locator → resolve the Sia pointer off the DHT → download + decrypt
- *  with K. Returns null when the locator isn't published / resolvable. */
+/** Reader side: resolve a channel from its K and its author's did. Derive the locator →
+ *  resolve the Sia pointer off the DHT → download + decrypt with K, refusing a manifest
+ *  the author did not sign. Returns null when the locator isn't published / resolvable. */
 export async function resolveChannelViaLocator(
   channelKeyB64: string,
+  author: string,
 ): Promise<ChannelManifest | null> {
-  const resolved = await resolveChannelBytes(channelKeyB64)
+  const resolved = await resolveChannelBytes(channelKeyB64, author)
   return resolved ? resolved.manifest : null
 }
 
@@ -168,7 +176,13 @@ export async function readOwnManifest(
     await openDocs(appKeyHex)
     const stored = await getRecord(OWN_COLLECTION, channelID)
     if (!stored) return null
-    return await decodeChannelManifest(channelKeyFromBase64(channelKey), stored)
+    // Signed by this identity, whose did the AppKey derives.
+    const { did } = await deriveDidDht(Uint8Array.fromHex(appKeyHex))
+    return await decodeChannelManifest(
+      channelKeyFromBase64(channelKey),
+      did,
+      stored,
+    )
   } catch {
     return null
   }
@@ -192,12 +206,11 @@ export async function forgetOwnManifest(
  *  atproto). Channels are locator-native now, so a miss/error is a genuine
  *  read failure — it throws, and `buildHomeFeed` records it as a channel error
  *  (rather than silently masking a DHT/Sia problem behind an atproto read that
- *  no longer has anything to serve). The `FetchChannel` signature keeps its
- *  author-identifier arg (unused here) so this drops in wherever the feed's fetcher
- *  is injected. */
+ *  no longer has anything to serve). The author identifier is the did every
+ *  manifest is checked against. */
 export function makeLocatorReader(): FetchChannel {
-  return async (_authorHandleOrDID, channelID, channelKey) => {
-    const manifest = await resolveChannelViaLocator(channelKey)
+  return async (author, channelID, channelKey) => {
+    const manifest = await resolveChannelViaLocator(channelKey, author)
     if (!manifest) {
       throw new Error(`Channel ${channelID} not resolvable (no locator)`)
     }
@@ -218,12 +231,17 @@ export async function readCachedManifest(
   appKeyHex: string,
   channelID: string,
   channelKey: string,
+  author: string,
 ): Promise<ChannelManifest | null> {
   try {
     await openDocs(appKeyHex)
     const cached = await getRecord(SUB_COLLECTION, channelID)
     if (!cached) return null
-    return await decodeChannelManifest(channelKeyFromBase64(channelKey), cached)
+    return await decodeChannelManifest(
+      channelKeyFromBase64(channelKey),
+      author,
+      cached,
+    )
   } catch {
     return null
   }
@@ -251,7 +269,7 @@ export function makeCachingLocatorReader(
   appKeyHex: string,
   ownedChannelIDs: ReadonlySet<string>,
 ): FetchChannel {
-  return async (_authorHandleOrDID, channelID, channelKey, fresh) => {
+  return async (author, channelID, channelKey, fresh) => {
     if (!fresh) {
       // Owned channels read their own record, subscribed ones read the cache. The
       // owned read used to be excluded from caching entirely, because a stale cache
@@ -260,10 +278,10 @@ export function makeCachingLocatorReader(
       // rewrite from elsewhere: the Curator's repack, or another of your devices.
       const stored = ownedChannelIDs.has(channelID)
         ? await readOwnManifest(appKeyHex, channelID, channelKey)
-        : await readCachedManifest(appKeyHex, channelID, channelKey)
+        : await readCachedManifest(appKeyHex, channelID, channelKey, author)
       if (stored) return stored
     }
-    const resolved = await resolveChannelBytes(channelKey)
+    const resolved = await resolveChannelBytes(channelKey, author)
     if (!resolved) {
       throw new Error(`Channel ${channelID} not resolvable (no locator)`)
     }
@@ -274,8 +292,8 @@ export function makeCachingLocatorReader(
     // go to the network for the posts is exactly the read whose engagement isn't cached
     // either. Owned channels included — the engagement loop fills their cache, and a screen
     // open before it has run would otherwise show a post with nothing beside it.
-    void warmChannelTallies(appKeyHex, channelID, channelKey)
-    void warmChannelConversations(appKeyHex, channelID, channelKey)
+    void warmChannelTallies(appKeyHex, channelID, channelKey, author)
+    void warmChannelConversations(appKeyHex, channelID, channelKey, author)
     return resolved.manifest
   }
 }

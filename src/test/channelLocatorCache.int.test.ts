@@ -32,7 +32,7 @@ import { resolveLocator } from '../lib/channelLocatorNative'
 import { applyCachedChannel, applyIfChanged } from '../lib/channelRevalidate'
 import { useFeedStore } from '../stores/feed'
 import { fakeDocStore as docStore, sealAsAuthor } from './fakeModules'
-import { createFakeApp, FAKE_APP_KEY_HEX, resetAllStores } from './setupFakeApp'
+import { createFakeApp, resetAllStores } from './setupFakeApp'
 
 describe('integration: caching locator reader seeds sub/<id>', () => {
   beforeEach(() => {
@@ -56,14 +56,14 @@ describe('integration: caching locator reader seeds sub/<id>', () => {
     })
     await commitChannelManifest(
       alice.client,
-      FAKE_APP_KEY_HEX,
+      alice.appKeyHex,
       created.channelID,
       created.channelKey,
       created.manifest,
     )
 
     const kBytes = channelKeyFromBase64(created.channelKey)
-    const onSia = await resolveLocator(kBytes)
+    const onSia = await resolveLocator(kBytes, alice.didDht)
     const recorded = docStore.get(`channel/${created.channelID}`)
     expect(onSia).not.toBeNull()
     expect(new TextDecoder().decode(recorded)).toBe(onSia?.blob)
@@ -86,14 +86,18 @@ describe('integration: caching locator reader seeds sub/<id>', () => {
     // commit is what puts the pointer + Sia object in place).
     await commitChannelManifest(
       client,
-      FAKE_APP_KEY_HEX,
+      alice.appKeyHex,
       created.channelID,
       created.channelKey,
       created.manifest,
     )
 
     const reader = makeCachingLocatorReader('deadbeef', new Set())
-    const manifest = await reader('', created.channelID, created.channelKey)
+    const manifest = await reader(
+      alice.didDht,
+      created.channelID,
+      created.channelKey,
+    )
     expect(manifest.name).toBe("Alice's voice")
 
     // The cache-back is fire-and-forget; wait for it to land.
@@ -105,7 +109,9 @@ describe('integration: caching locator reader seeds sub/<id>', () => {
     // manifest the reader returned (the byte-identical decode step 3 needs).
     const cached = docStore.get(`sub/${created.channelID}`)!
     const kBytes = channelKeyFromBase64(created.channelKey)
-    expect(await decodeChannelManifest(kBytes, cached)).toEqual(manifest)
+    expect(await decodeChannelManifest(kBytes, alice.didDht, cached)).toEqual(
+      manifest,
+    )
   })
 
   it('does not throw the read even when the doc write fails', async () => {
@@ -122,7 +128,7 @@ describe('integration: caching locator reader seeds sub/<id>', () => {
     })
     await commitChannelManifest(
       client,
-      FAKE_APP_KEY_HEX,
+      alice.appKeyHex,
       created.channelID,
       created.channelKey,
       created.manifest,
@@ -130,7 +136,11 @@ describe('integration: caching locator reader seeds sub/<id>', () => {
 
     // A doc write that throws must not break the read (cache is best-effort).
     const reader = makeCachingLocatorReader('', new Set())
-    const manifest = await reader('', created.channelID, created.channelKey)
+    const manifest = await reader(
+      alice.didDht,
+      created.channelID,
+      created.channelKey,
+    )
     expect(manifest.name).toBe('Resilient')
   })
 
@@ -150,7 +160,7 @@ describe('integration: caching locator reader seeds sub/<id>', () => {
     })
     await commitChannelManifest(
       client,
-      FAKE_APP_KEY_HEX,
+      alice.appKeyHex,
       created.channelID,
       created.channelKey,
       created.manifest,
@@ -159,6 +169,7 @@ describe('integration: caching locator reader seeds sub/<id>', () => {
     // fresh-resolve.
     const kBytes = channelKeyFromBase64(created.channelKey)
     const cachedCiphertext = sealAsAuthor(
+      alice.appKeyHex,
       kBytes,
       JSON.stringify({ ...created.manifest, name: 'Cached' }),
     )
@@ -169,7 +180,7 @@ describe('integration: caching locator reader seeds sub/<id>', () => {
 
     // Not owned → serves the cached manifest.
     const reader = makeCachingLocatorReader('deadbeef', new Set())
-    const m = await reader('', created.channelID, created.channelKey)
+    const m = await reader(alice.didDht, created.channelID, created.channelKey)
     expect(m.name).toBe('Cached')
   })
 
@@ -189,7 +200,7 @@ describe('integration: caching locator reader seeds sub/<id>', () => {
     })
     await commitChannelManifest(
       client,
-      FAKE_APP_KEY_HEX,
+      alice.appKeyHex,
       created.channelID,
       created.channelKey,
       created.manifest,
@@ -200,6 +211,7 @@ describe('integration: caching locator reader seeds sub/<id>', () => {
       `sub/${created.channelID}`,
       new TextEncoder().encode(
         sealAsAuthor(
+          alice.appKeyHex,
           kBytes,
           JSON.stringify({ ...created.manifest, name: 'Stale' }),
         ),
@@ -208,18 +220,21 @@ describe('integration: caching locator reader seeds sub/<id>', () => {
 
     const reader = makeCachingLocatorReader('deadbeef', new Set())
     // Normal read: cache wins (fast path).
-    expect((await reader('', created.channelID, created.channelKey)).name).toBe(
-      'Stale',
-    )
+    expect(
+      (await reader(alice.didDht, created.channelID, created.channelKey)).name,
+    ).toBe('Stale')
     // Fresh read: goes to the network instead.
     expect(
-      (await reader('', created.channelID, created.channelKey, true)).name,
+      (await reader(alice.didDht, created.channelID, created.channelKey, true))
+        .name,
     ).toBe('Current')
 
     // ...and the fresh read re-seeds the cache, so the fast path is correct after.
     await vi.waitFor(async () => {
       const cached = docStore.get(`sub/${created.channelID}`)!
-      expect((await decodeChannelManifest(kBytes, cached)).name).toBe('Current')
+      expect(
+        (await decodeChannelManifest(kBytes, alice.didDht, cached)).name,
+      ).toBe('Current')
     })
   })
 
@@ -237,7 +252,7 @@ describe('integration: caching locator reader seeds sub/<id>', () => {
     })
     await commitChannelManifest(
       client,
-      FAKE_APP_KEY_HEX,
+      alice.appKeyHex,
       created.channelID,
       created.channelKey,
       created.manifest,
@@ -247,6 +262,7 @@ describe('integration: caching locator reader seeds sub/<id>', () => {
       `sub/${created.channelID}`,
       new TextEncoder().encode(
         sealAsAuthor(
+          alice.appKeyHex,
           kBytes,
           JSON.stringify({ ...created.manifest, name: 'Cached' }),
         ),
@@ -258,7 +274,7 @@ describe('integration: caching locator reader seeds sub/<id>', () => {
       'deadbeef',
       new Set([created.channelID]),
     )
-    const m = await reader('', created.channelID, created.channelKey)
+    const m = await reader(alice.didDht, created.channelID, created.channelKey)
     expect(m.name).toBe('Fresh')
   })
 })
@@ -273,10 +289,14 @@ describe('integration: revalidate fills the feed in out of band', () => {
     docStore.clear()
   })
 
-  const subFor = (channelID: string, channelKey: string): SubscriptionRef => ({
+  const subFor = (
+    channelID: string,
+    channelKey: string,
+    didDht = 'did:dht:someauthor',
+  ): SubscriptionRef => ({
     authorHandle: '',
     authorDID: '',
-    didDht: 'did:dht:someauthor',
+    didDht,
     channelID,
     channelKey,
     addedAt: new Date().toISOString(),
@@ -361,7 +381,7 @@ describe('integration: revalidate fills the feed in out of band', () => {
       name: 'Ordered',
       description: '',
     })
-    const sub = subFor(created.channelID, created.channelKey)
+    const sub = subFor(created.channelID, created.channelKey, alice.didDht)
 
     const older: ChannelManifest = {
       ...created.manifest,
@@ -408,12 +428,12 @@ describe('integration: revalidate fills the feed in out of band', () => {
     })
     await commitChannelManifest(
       client,
-      FAKE_APP_KEY_HEX,
+      alice.appKeyHex,
       created.channelID,
       created.channelKey,
       created.manifest,
     )
-    const sub = subFor(created.channelID, created.channelKey)
+    const sub = subFor(created.channelID, created.channelKey, alice.didDht)
 
     // v1 is in the feed, as a first read would have left it.
     applyIfChanged(sub, created.manifest)
@@ -424,7 +444,7 @@ describe('integration: revalidate fills the feed in out of band', () => {
     const v2 = withPost(created.manifest, 'fresh post')
     await commitChannelManifest(
       client,
-      FAKE_APP_KEY_HEX,
+      alice.appKeyHex,
       created.channelID,
       created.channelKey,
       v2,
@@ -435,6 +455,7 @@ describe('integration: revalidate fills the feed in out of band', () => {
       `sub/${created.channelID}`,
       new TextEncoder().encode(
         sealAsAuthor(
+          alice.appKeyHex,
           channelKeyFromBase64(created.channelKey),
           JSON.stringify(v2),
         ),
@@ -474,7 +495,7 @@ describe('integration: revalidate fills the feed in out of band', () => {
     })
     await commitChannelManifest(
       alice.client,
-      FAKE_APP_KEY_HEX,
+      alice.appKeyHex,
       created.channelID,
       created.channelKey,
       created.manifest,
@@ -488,6 +509,7 @@ describe('integration: revalidate fills the feed in out of band', () => {
       `channel/${created.channelID}`,
       new TextEncoder().encode(
         sealAsAuthor(
+          alice.appKeyHex,
           channelKeyFromBase64(created.channelKey),
           JSON.stringify(rewritten),
         ),
@@ -495,14 +517,23 @@ describe('integration: revalidate fills the feed in out of band', () => {
     )
 
     const reader = makeCachingLocatorReader(
-      FAKE_APP_KEY_HEX,
+      alice.appKeyHex,
       new Set([created.channelID]),
     )
-    const seen = await reader('', created.channelID, created.channelKey)
+    const seen = await reader(
+      alice.didDht,
+      created.channelID,
+      created.channelKey,
+    )
     expect(seen.name).toBe('Repacked')
 
     // And an explicit Refresh still bypasses it for the network's answer.
-    const forced = await reader('', created.channelID, created.channelKey, true)
+    const forced = await reader(
+      alice.didDht,
+      created.channelID,
+      created.channelKey,
+      true,
+    )
     expect(forced.name).toBe('Mine')
   })
 })

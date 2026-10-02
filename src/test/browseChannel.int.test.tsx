@@ -18,7 +18,15 @@ import {
   waitFor,
   within,
 } from '@testing-library/react'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest'
 
 vi.mock('../lib/docs', async () =>
   (await import('./fakeModules')).fakeDocsModule(),
@@ -42,14 +50,18 @@ import type { ChannelManifest, ItemRef } from '../core/types'
 import { startWatching } from '../lib/watch'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
-import { fakeDocStore as docStore } from './fakeModules'
+import { didOfSync, fakeDocStore as docStore } from './fakeModules'
 import { createFakeApp, mountAs, resetAllStores } from './setupFakeApp'
 
-/** The AppKey their channel is sealed under — anything; a reader takes the content key
- *  from the object's head. */
+/** The AppKey their channel is sealed under. */
 const THEIR_APP_KEY = '22'.repeat(32)
 
-const THEM = 'did:dht:them'
+// Their real did, which their channel's manifest is signed by and the page checks it against.
+// Set once the wasm is up, which the int tier's setup does first.
+let THEM = ''
+beforeAll(() => {
+  THEM = didOfSync(THEIR_APP_KEY)
+})
 const KEY = 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8='
 const CHANNEL = 'theirchannel0001'
 
@@ -132,6 +144,7 @@ function view(channelKey?: string) {
       authorHandle=""
       channelID={CHANNEL}
       channelKey={channelKey}
+      authorDid={THEM}
       onItemClick={() => {}}
       onChannelClick={() => {}}
       onHandleClick={() => {}}

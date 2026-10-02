@@ -119,13 +119,14 @@ export async function warmChannelTallies(
   appKeyHex: string,
   channelID: string,
   channelKeyB64: string,
+  author: string,
 ): Promise<void> {
   try {
     const k = channelKeyFromBase64(channelKeyB64)
     const itemURL = await resolveTalliesUrl(k)
     if (!itemURL) return
 
-    const map = JSON.parse(await fetchTallies(k, itemURL)) as Record<
+    const map = JSON.parse(await fetchTallies(k, author, itemURL)) as Record<
       string,
       Aggregate
     >

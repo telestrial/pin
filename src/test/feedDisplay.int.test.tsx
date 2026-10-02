@@ -23,7 +23,9 @@ vi.mock('../lib/channelLocatorNative', async () =>
 )
 
 import { HomeFeed } from '../components/HomeFeed'
+import { DIRECTORY_DOC_VERSION } from '../core/identityDoc'
 import type { SubscriptionRef } from '../core/types'
+import { publishFakeDirectory } from './fakeModules'
 import {
   authorCreateChannel,
   createFakeApp,
@@ -61,10 +63,21 @@ describe('integration: subscriber feed display', () => {
       'hello from alice',
     )
 
+    // Her directory, which is where a did:dht author's name comes from — a row names a
+    // did:dht author by what they publish about themselves, never by a handle label.
+    await publishFakeDirectory(alice.didDht, {
+      version: DIRECTORY_DOC_VERSION,
+      profile: { username: 'alice.test' },
+      channels: [],
+      follows: [],
+      handleFollows: [],
+    })
+
     // Bob mounts the app with alice's channel subscribed.
     const bobsSub: SubscriptionRef = {
       authorHandle: alice.handle,
       authorDID: alice.did,
+      didDht: alice.didDht,
       channelID: channel.channelID,
       channelKey: channel.channelKey,
       addedAt: new Date().toISOString(),
@@ -118,6 +131,7 @@ describe('integration: subscriber feed display', () => {
     const sub: SubscriptionRef = {
       authorHandle: alice.handle,
       authorDID: alice.did,
+      didDht: alice.didDht,
       channelID: channel.channelID,
       channelKey: channel.channelKey,
       addedAt: new Date().toISOString(),

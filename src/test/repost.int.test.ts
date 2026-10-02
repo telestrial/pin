@@ -53,7 +53,9 @@ import {
   resetAllStores,
 } from './setupFakeApp'
 
-const SOURCE_DID = 'did:dht:sourceauthor'
+// The source author's real did, set as each case makes its author: the portal's did is what
+// the source channel's manifest is checked against, so it has to be the did that signed it.
+let SOURCE_DID = ''
 
 type Channel = { channelID: string; channelKey: string }
 
@@ -131,6 +133,7 @@ describe('integration: resolving a portal', () => {
     resetAllStores()
     app = createFakeApp()
     author = app.createAccount({ did: 'did:src', handle: 'src' })
+    SOURCE_DID = author.didDht
     // A different account holding no subscription and no key: everything the reader
     // learns, it learns from the author's own published directory.
     reader = app.createAccount({ did: 'did:reader', handle: 'reader' })
@@ -239,11 +242,11 @@ describe('integration: resolving a portal', () => {
 
   it('reports a retracted post as deleted', async () => {
     const { channel, item } = await aChannelWorthReposting(author)
-    const current = await resolveOrThrow(channel)
+    const current = await resolveOrThrow(author, channel)
     const { manifest } = await deletePublishedItem(current, item.id)
     await commitChannelManifest(
       author.client,
-      FAKE_APP_KEY_HEX,
+      author.appKeyHex,
       channel.channelID,
       channel.channelKey,
       manifest,
@@ -326,8 +329,11 @@ describe('integration: resolving a portal', () => {
 })
 
 /** The channel's manifest as published, for a case that needs to rewrite it. */
-async function resolveOrThrow(channel: Channel) {
-  const manifest = await resolveChannelViaLocator(channel.channelKey)
+async function resolveOrThrow(author: FakeAccount, channel: Channel) {
+  const manifest = await resolveChannelViaLocator(
+    channel.channelKey,
+    author.didDht,
+  )
   if (!manifest) throw new Error('channel not resolvable')
   return manifest
 }
@@ -341,6 +347,7 @@ describe('integration: resolving a portal into a channel the reader already hold
     resetAllStores()
     app = createFakeApp()
     author = app.createAccount({ did: 'did:src', handle: 'src' })
+    SOURCE_DID = author.didDht
     reader = app.createAccount({ did: 'did:reader', handle: 'reader' })
   })
 
@@ -383,11 +390,11 @@ describe('integration: resolving a portal into a channel the reader already hold
 
   it('still reports a retract, which holding K cannot argue with', async () => {
     const { channel, item } = await aChannelWorthReposting(author)
-    const current = await resolveOrThrow(channel)
+    const current = await resolveOrThrow(author, channel)
     const { manifest } = await deletePublishedItem(current, item.id)
     await commitChannelManifest(
       author.client,
-      FAKE_APP_KEY_HEX,
+      author.appKeyHex,
       channel.channelID,
       channel.channelKey,
       manifest,
@@ -404,7 +411,7 @@ describe('integration: resolving a portal into a channel the reader already hold
   it('reads a manifest already in hand without touching the network', async () => {
     // Which is what makes a portal to one of your OWN posts free.
     const { channel, item } = await aChannelWorthReposting(author)
-    const inHand = await resolveOrThrow(channel)
+    const inHand = await resolveOrThrow(author, channel)
     unpublishFakeDirectory(SOURCE_DID)
     unpublishFakeLocator(channelKeyFromBase64(channel.channelKey))
 
@@ -441,6 +448,7 @@ describe('integration: a portal brings the source’s counts with it', () => {
     docStore.clear()
     app = createFakeApp()
     author = app.createAccount({ did: 'did:src', handle: 'src' })
+    SOURCE_DID = author.didDht
     reader = app.createAccount({ did: 'did:reader', handle: 'reader' })
   })
 
@@ -449,14 +457,18 @@ describe('integration: a portal brings the source’s counts with it', () => {
     const { engagement_subject } = await import(
       '../../crates/pin-core/pkg/pin_core.js'
     )
-    publishFakeTallies(channelKeyFromBase64(channel.channelKey), {
-      [engagement_subject(channel.channelID, item.publishedAt, undefined)]: {
-        kinds: {
-          like: { count, setRoot: 'root-a', sampleActors: ['did:dht:bob'] },
+    publishFakeTallies(
+      author.appKeyHex,
+      channelKeyFromBase64(channel.channelKey),
+      {
+        [engagement_subject(channel.channelID, item.publishedAt, undefined)]: {
+          kinds: {
+            like: { count, setRoot: 'root-a', sampleActors: ['did:dht:bob'] },
+          },
+          updatedAt: item.publishedAt,
         },
-        updatedAt: item.publishedAt,
       },
-    })
+    )
   }
 
   /** A resolver warming counts for real, plus the reads to wait on. A row reads the
@@ -466,8 +478,10 @@ describe('integration: a portal brings the source’s counts with it', () => {
     const resolver = makePortalResolver(
       reader.client,
       held,
-      (channelID, channelKey) => {
-        reads.push(warmChannelTallies(FAKE_APP_KEY_HEX, channelID, channelKey))
+      (channelID, channelKey, author) => {
+        reads.push(
+          warmChannelTallies(FAKE_APP_KEY_HEX, channelID, channelKey, author),
+        )
       },
     )
     return { resolver, reads, settled: () => Promise.all(reads) }
@@ -528,11 +542,11 @@ describe('integration: a portal brings the source’s counts with it', () => {
     // The manifest WAS read here, so the channel is reachable and the cheap condition
     // would fire — but a retracted post has no row, and counts are for a row.
     const { channel, item } = await aChannelWorthReposting(author)
-    const current = await resolveOrThrow(channel)
+    const current = await resolveOrThrow(author, channel)
     const { manifest } = await deletePublishedItem(current, item.id)
     await commitChannelManifest(
       author.client,
-      FAKE_APP_KEY_HEX,
+      author.appKeyHex,
       channel.channelID,
       channel.channelKey,
       manifest,

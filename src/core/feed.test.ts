@@ -200,7 +200,9 @@ describe('buildHomeFeed', () => {
     expect(result.errors[0].error).toBe('plain string failure')
   })
 
-  it('prefers authorDID over authorHandle when calling the fetcher', async () => {
+  it('hands the fetcher the did:dht its manifest is checked against', async () => {
+    // Never the legacy handle or atproto DID: those name nobody whose signature a channel
+    // object can carry, and a did:dht subscription leaves both empty anyway.
     const fetcher: FetchChannel = vi
       .fn()
       .mockResolvedValue(manifest('Alice', []))
@@ -209,37 +211,29 @@ describe('buildHomeFeed', () => {
         sub({
           authorHandle: 'alice.test',
           authorDID: 'did:plc:alice',
+          didDht: 'did:dht:alice',
         }),
       ],
       fetcher,
     )
     expect(fetcher).toHaveBeenCalledWith(
-      'did:plc:alice',
+      'did:dht:alice',
       'alicechannel0001',
       'AAAA',
       false,
     )
   })
 
-  it('falls back to authorHandle when authorDID is empty', async () => {
+  it('names no author for a subscription that names no did:dht', async () => {
+    // So its read fails as unverifiable, rather than being checked against a label.
     const fetcher: FetchChannel = vi
       .fn()
       .mockResolvedValue(manifest('Alice', []))
     await buildHomeFeed(
-      [
-        sub({
-          authorHandle: 'alice.test',
-          authorDID: '',
-        }),
-      ],
+      [sub({ authorHandle: 'alice.test', authorDID: 'did:plc:alice' })],
       fetcher,
     )
-    expect(fetcher).toHaveBeenCalledWith(
-      'alice.test',
-      'alicechannel0001',
-      'AAAA',
-      false,
-    )
+    expect(fetcher).toHaveBeenCalledWith('', 'alicechannel0001', 'AAAA', false)
   })
 
   it('forwards a fresh read to the fetcher', async () => {

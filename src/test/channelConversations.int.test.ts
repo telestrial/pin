@@ -58,7 +58,7 @@ async function aChannelWithComments(did: string, bodies: string[]) {
   })
   await commitChannelManifest(
     alice.client,
-    FAKE_APP_KEY_HEX,
+    alice.appKeyHex,
     created.channelID,
     created.channelKey,
     created.manifest,
@@ -69,13 +69,13 @@ async function aChannelWithComments(did: string, bodies: string[]) {
     '../../crates/pin-core/pkg/pin_core.js'
   )
   const subject = engagement_subject(created.channelID, PUBLISHED_AT, undefined)
-  publishFakeConversations(k, {
+  publishFakeConversations(alice.appKeyHex, k, {
     [subject]: {
       comments: bodies.map((b, i) => comment(b, `2026-08-22T1${i}:00:00.000Z`)),
       updatedAt: PUBLISHED_AT,
     },
   })
-  return { ...created, subject }
+  return { ...created, subject, author: alice }
 }
 
 describe('integration: a channel’s published conversation reaches a reader', () => {
@@ -94,6 +94,7 @@ describe('integration: a channel’s published conversation reaches a reader', (
       FAKE_APP_KEY_HEX,
       channel.channelID,
       channel.channelKey,
+      channel.author.didDht,
     )
 
     // Read by the item, not by the subject: a screen knows what it is rendering and the
@@ -118,6 +119,7 @@ describe('integration: a channel’s published conversation reaches a reader', (
       FAKE_APP_KEY_HEX,
       channel.channelID,
       channel.channelKey,
+      channel.author.didDht,
     )
 
     const held = await readConversation(FAKE_APP_KEY_HEX, {
@@ -136,6 +138,7 @@ describe('integration: a channel’s published conversation reaches a reader', (
       FAKE_APP_KEY_HEX,
       channel.channelID,
       channel.channelKey,
+      channel.author.didDht,
     )
 
     // A different item in the same channel. Absent reads the same as none to a screen, so
@@ -161,7 +164,7 @@ describe('integration: a channel’s published conversation reaches a reader', (
     })
     await commitChannelManifest(
       alice.client,
-      FAKE_APP_KEY_HEX,
+      alice.appKeyHex,
       created.channelID,
       created.channelKey,
       created.manifest,
@@ -172,6 +175,7 @@ describe('integration: a channel’s published conversation reaches a reader', (
       FAKE_APP_KEY_HEX,
       created.channelID,
       created.channelKey,
+      alice.didDht,
     )
     expect(
       await readConversation(FAKE_APP_KEY_HEX, {
@@ -186,7 +190,7 @@ describe('integration: a channel’s published conversation reaches a reader', (
     // overwrite the numbers, and a feed row would start carrying every comment body.
     const channel = await aChannelWithComments('did:plc:conv5', ['said'])
     const k = channelKeyFromBase64(channel.channelKey)
-    publishFakeTallies(k, {
+    publishFakeTallies(channel.author.appKeyHex, k, {
       [channel.subject]: {
         kinds: { comment: { count: 1, setRoot: 'root', sampleActors: [] } },
         updatedAt: PUBLISHED_AT,
@@ -197,11 +201,13 @@ describe('integration: a channel’s published conversation reaches a reader', (
       FAKE_APP_KEY_HEX,
       channel.channelID,
       channel.channelKey,
+      channel.author.didDht,
     )
     await warmChannelConversations(
       FAKE_APP_KEY_HEX,
       channel.channelID,
       channel.channelKey,
+      channel.author.didDht,
     )
 
     const item = { channelID: channel.channelID, publishedAt: PUBLISHED_AT }

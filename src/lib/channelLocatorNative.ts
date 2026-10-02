@@ -59,12 +59,23 @@ interface ChannelLocatorTransport {
     channelKey: Uint8Array,
     manifestJson: string,
   ): Promise<PublishedLocator>
-  resolveLocator(channelKey: Uint8Array): Promise<ResolvedLocator | null>
+  resolveLocator(
+    channelKey: Uint8Array,
+    author: string,
+  ): Promise<ResolvedLocator | null>
   republishPointer(channelKey: Uint8Array, itemURL: string): Promise<void>
   resolveTalliesUrl(channelKey: Uint8Array): Promise<string | null>
-  fetchTallies(channelKey: Uint8Array, itemURL: string): Promise<string>
+  fetchTallies(
+    channelKey: Uint8Array,
+    author: string,
+    itemURL: string,
+  ): Promise<string>
   resolveConversationsUrl(channelKey: Uint8Array): Promise<string | null>
-  fetchConversations(channelKey: Uint8Array, itemURL: string): Promise<string>
+  fetchConversations(
+    channelKey: Uint8Array,
+    author: string,
+    itemURL: string,
+  ): Promise<string>
 }
 
 let transportP: Promise<ChannelLocatorTransport> | null = null
@@ -88,9 +99,9 @@ async function buildTransport(): Promise<ChannelLocatorTransport> {
         await channel_publish(appKeyHex, channelKey, manifestJson),
       ) as PublishedLocator
     },
-    resolveLocator: async (channelKey) => {
+    resolveLocator: async (channelKey, author) => {
       await ensureWasm()
-      const json = await channel_resolve(channelKey)
+      const json = await channel_resolve(channelKey, author)
       return json === undefined ? null : (JSON.parse(json) as ResolvedLocator)
     },
     republishPointer: async (channelKey, itemURL) => {
@@ -101,17 +112,17 @@ async function buildTransport(): Promise<ChannelLocatorTransport> {
       await ensureWasm()
       return (await channel_resolve_tallies_url(channelKey)) ?? null
     },
-    fetchTallies: async (channelKey, itemURL) => {
+    fetchTallies: async (channelKey, author, itemURL) => {
       await ensureWasm()
-      return channel_fetch_tallies(channelKey, itemURL)
+      return channel_fetch_tallies(channelKey, author, itemURL)
     },
     resolveConversationsUrl: async (channelKey) => {
       await ensureWasm()
       return (await channel_resolve_conversations_url(channelKey)) ?? null
     },
-    fetchConversations: async (channelKey, itemURL) => {
+    fetchConversations: async (channelKey, author, itemURL) => {
       await ensureWasm()
-      return channel_fetch_conversations(channelKey, itemURL)
+      return channel_fetch_conversations(channelKey, author, itemURL)
     },
   }
 }
@@ -126,12 +137,16 @@ export async function publishLocator(
   return (await transport()).publishLocator(appKeyHex, channelKey, manifestJson)
 }
 
-/** Read a channel from K alone. Null when the locator resolves to nothing — the channel
- *  may never have been published, or its record may have aged off the DHT. */
+/** Read a channel from K, refusing a manifest its author did not sign. `author` is the
+ *  channel's did:dht — K locates and decrypts, but anyone holding it can publish under its
+ *  locator, so what K finds is believed only when the author's key signed it. Null when
+ *  the locator resolves to nothing: the channel may never have been published, or its
+ *  record may have aged off the DHT. */
 export async function resolveLocator(
   channelKey: Uint8Array,
+  author: string,
 ): Promise<ResolvedLocator | null> {
-  return (await transport()).resolveLocator(channelKey)
+  return (await transport()).resolveLocator(channelKey, author)
 }
 
 /** Re-sign a channel's current pointer to refresh its TTL, minting no new object. */
@@ -157,9 +172,10 @@ export async function resolveTalliesUrl(
  *  subject-to-tally map as JSON. */
 export async function fetchTallies(
   channelKey: Uint8Array,
+  author: string,
   itemURL: string,
 ): Promise<string> {
-  return (await transport()).fetchTallies(channelKey, itemURL)
+  return (await transport()).fetchTallies(channelKey, author, itemURL)
 }
 
 /** Where a channel's conversations currently are, without fetching them. */
@@ -173,17 +189,20 @@ export async function resolveConversationsUrl(
  *  the subject-to-conversation map as JSON. */
 export async function fetchConversations(
   channelKey: Uint8Array,
+  author: string,
   itemURL: string,
 ): Promise<string> {
-  return (await transport()).fetchConversations(channelKey, itemURL)
+  return (await transport()).fetchConversations(channelKey, author, itemURL)
 }
 
-/** Open a sealed manifest blob with K, returning its JSON. The path a CACHED copy takes,
- *  so a cached read and a fresh resolve decode through the same code. */
+/** Open a sealed manifest blob with K, returning its JSON, and refusing one `author` did
+ *  not sign. The path a CACHED copy takes, so a cached read and a fresh resolve decode
+ *  and check through the same code. */
 export async function openBlob(
   channelKey: Uint8Array,
+  author: string,
   blob: string,
 ): Promise<string> {
   await ensureWasm()
-  return channel_open_blob(channelKey, blob)
+  return channel_open_blob(channelKey, author, blob)
 }

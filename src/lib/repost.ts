@@ -150,7 +150,11 @@ export type HeldChannels = (target: PortalTarget) => HeldChannel | null
  *  Injected for the same reason `held` is, and called only from rung 2: a channel this
  *  identity already holds has its engagement on the way through the ordinary subscribed
  *  path, so warming there would spend DHT resolves and Sia reads on work already done. */
-export type WarmChannel = (channelID: string, channelKey: string) => void
+export type WarmChannel = (
+  channelID: string,
+  channelKey: string,
+  author: string,
+) => void
 
 /** One post's conversation as this identity currently holds it, or null when it holds none.
  *
@@ -205,11 +209,14 @@ export function makePortalResolver(
     return p
   }
 
-  const manifest = (channelKey: string) => {
-    let p = manifests.get(channelKey)
+  // Keyed by author and K together: what a manifest is checked against is part of what
+  // was read.
+  const manifest = (channelKey: string, author: string) => {
+    const at = `${author} ${channelKey}`
+    let p = manifests.get(at)
     if (!p) {
-      p = resolveChannelViaLocator(channelKey).catch(() => null)
-      manifests.set(channelKey, p)
+      p = resolveChannelViaLocator(channelKey, author).catch(() => null)
+      manifests.set(at, p)
     }
     return p
   }
@@ -220,7 +227,8 @@ export function makePortalResolver(
       // author is not sharing this channel with us, and they demonstrably are.
       const mine = held(target)
       if (mine) {
-        const source = mine.manifest ?? (await manifest(mine.channelKey))
+        const source =
+          mine.manifest ?? (await manifest(mine.channelKey, target.didDht))
         if (!source) return { state: 'unreachable' }
         return narrow(
           found(target, source, mine.channelKey),
@@ -240,7 +248,7 @@ export function makePortalResolver(
       )
       if (!advertised) return { state: 'unavailable' }
 
-      const source = await manifest(advertised.key)
+      const source = await manifest(advertised.key, target.didDht)
       // A pointer that does not answer says nothing about the post. Propagation lag on
       // the DHT looks exactly like this, so it must not read as a retract.
       if (!source) return { state: 'unreachable' }
@@ -255,7 +263,7 @@ export function makePortalResolver(
       // Waiting on it here would make every portal in the feed wait on a Sia read.
       if (outcome.state === 'resolved' && !warmed.has(target.channelID)) {
         warmed.add(target.channelID)
-        warm(target.channelID, advertised.key)
+        warm(target.channelID, advertised.key, target.didDht)
       }
       return narrow(outcome, target, conversation)
     },

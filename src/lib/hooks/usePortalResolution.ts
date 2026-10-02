@@ -84,13 +84,18 @@ export function usePortalResolution() {
           const resolver = makePortalResolver(
             client,
             heldChannels(),
-            (channelID, channelKey) => {
+            (channelID, channelKey, author) => {
               if (!appKeyHex) return
               // Unawaited, like every other read of a channel's engagement: the posts are
               // what the row is waiting on, and counts arriving a moment behind them is
               // the ordinary shape of this.
-              void warmChannelTallies(appKeyHex, channelID, channelKey)
-              void warmChannelConversations(appKeyHex, channelID, channelKey)
+              void warmChannelTallies(appKeyHex, channelID, channelKey, author)
+              void warmChannelConversations(
+                appKeyHex,
+                channelID,
+                channelKey,
+                author,
+              )
             },
             // A portal to a comment reads the comment out of what the HOST publishes, which
             // is the cache the warm above fills and the pull loop keeps current for anything

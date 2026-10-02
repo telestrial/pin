@@ -30,6 +30,7 @@ import {
   forgetOwnManifest,
   resolveChannelViaLocator,
 } from './channelLocator'
+import { deriveDidDht } from './pkarr'
 import {
   channelPublishKey,
   clearPublished,
@@ -115,7 +116,9 @@ async function unendorseOwn(channelID: string, publishedAt: readonly string[]) {
 async function loadCurrentManifest(channel: Channel): Promise<ChannelManifest> {
   const cached = useFeedStore.getState().manifests[channel.channelID]
   if (cached) return cached
-  const resolved = await resolveChannelViaLocator(channel.channelKey)
+  // Signed by this identity, whose did the AppKey derives.
+  const { did } = await deriveDidDht(Uint8Array.fromHex(appKey()))
+  const resolved = await resolveChannelViaLocator(channel.channelKey, did)
   if (!resolved) {
     throw new Error(`Channel ${channel.channelID} not found (no locator)`)
   }

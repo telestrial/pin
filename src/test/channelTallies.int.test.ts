@@ -55,7 +55,7 @@ async function aChannelWithCounts(did: string, count: number) {
   })
   await commitChannelManifest(
     alice.client,
-    FAKE_APP_KEY_HEX,
+    alice.appKeyHex,
     created.channelID,
     created.channelKey,
     created.manifest,
@@ -67,9 +67,9 @@ async function aChannelWithCounts(did: string, count: number) {
     '../../crates/pin-core/pkg/pin_core.js'
   )
   const subject = engagement_subject(created.channelID, PUBLISHED_AT, undefined)
-  publishFakeTallies(k, { [subject]: aggregate(count) })
+  publishFakeTallies(alice.appKeyHex, k, { [subject]: aggregate(count) })
 
-  return { ...created, subject }
+  return { ...created, subject, author: alice }
 }
 
 describe('integration: a channel’s published counts reach a reader', () => {
@@ -85,6 +85,7 @@ describe('integration: a channel’s published counts reach a reader', () => {
       FAKE_APP_KEY_HEX,
       channel.channelID,
       channel.channelKey,
+      channel.author.didDht,
     )
 
     // Read by the item, not by the subject: a row knows what it is rendering, and the
@@ -104,6 +105,7 @@ describe('integration: a channel’s published counts reach a reader', () => {
       FAKE_APP_KEY_HEX,
       channel.channelID,
       channel.channelKey,
+      channel.author.didDht,
     )
 
     // A different item in the same channel. Absent reads the same as zero to a row, so
@@ -128,7 +130,7 @@ describe('integration: a channel’s published counts reach a reader', () => {
     })
     await commitChannelManifest(
       alice.client,
-      FAKE_APP_KEY_HEX,
+      alice.appKeyHex,
       created.channelID,
       created.channelKey,
       created.manifest,
@@ -140,6 +142,7 @@ describe('integration: a channel’s published counts reach a reader', () => {
       FAKE_APP_KEY_HEX,
       created.channelID,
       created.channelKey,
+      alice.didDht,
     )
     expect(
       await readTally(FAKE_APP_KEY_HEX, {
@@ -155,7 +158,7 @@ describe('integration: a channel’s published counts reach a reader', () => {
     // The fall-through is wired to the channel read rather than called separately, so a
     // reader that had to go to the network for the posts gets the counts with them.
     const reader = makeCachingLocatorReader(FAKE_APP_KEY_HEX, new Set())
-    await reader('', channel.channelID, channel.channelKey)
+    await reader(channel.author.didDht, channel.channelID, channel.channelKey)
 
     await vi.waitFor(async () =>
       expect(

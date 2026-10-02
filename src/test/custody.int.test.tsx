@@ -62,6 +62,7 @@ async function setupAlicePublishesBobSubscribes(): Promise<{
   const sub: SubscriptionRef = {
     authorHandle: alice.handle,
     authorDID: alice.did,
+    didDht: alice.didDht,
     channelID: channel.channelID,
     channelKey: channel.channelKey,
     addedAt: new Date().toISOString(),

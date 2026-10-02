@@ -101,15 +101,14 @@ pub struct Sealing<'a> {
 }
 
 /// Whose signature a read requires.
+///
+/// One variant, deliberately: every read names the author it expects, and there is no way
+/// to ask for an object without saying whose it must be.
 #[derive(Debug, Clone, Copy)]
 pub enum Signer<'a> {
     /// The author's did:dht, bare or prefixed. The read fails unless the head verifies
     /// against it.
     Author(&'a str),
-    /// No check. Only the frontend's bindings use it, for as long as they are not yet handed
-    /// an author to check against; it goes when they are, and the compiler then finds every
-    /// caller left.
-    Unchecked,
 }
 
 /// An opened object: the body, and the content key it was sealed under.
@@ -344,17 +343,16 @@ fn split_head<'b>(
             kind.as_str()
         ));
     }
-    if let Signer::Author(author) = signer {
-        let message = signing_bytes(
-            &pin_crypto::channel_id(channel_key),
-            &head.kind,
-            head.epoch,
-            head.read_key.as_deref(),
-            body,
-        );
-        pin_pkarr::verify_detached(author, &message, &head.sig)
-            .map_err(|_| "object is not signed by its channel's author".to_string())?;
-    }
+    let Signer::Author(author) = signer;
+    let message = signing_bytes(
+        &pin_crypto::channel_id(channel_key),
+        &head.kind,
+        head.epoch,
+        head.read_key.as_deref(),
+        body,
+    );
+    pin_pkarr::verify_detached(author, &message, &head.sig)
+        .map_err(|_| "object is not signed by its channel's author".to_string())?;
     Ok((head, body))
 }
 

@@ -24,24 +24,44 @@ import { useFeedStore } from '../stores/feed'
 import { usePinStore } from '../stores/pin'
 import { useReadingStore } from '../stores/reading'
 import { useToastStore } from '../stores/toast'
-import { setCurrentWorld } from './fakeModules'
+import { didOfSync, setCurrentWorld } from './fakeModules'
 import { createFakeWorld, FakeSiaClient, type FakeWorld } from './fakeSia'
 
-// A real-shaped AppKey hex (64 chars), because it's now an HKDF input rather than an
-// opaque label — publish state is sealed under a key derived from it. One value for
-// every fake account: they already share a doc in these tests, and nothing here turns
-// on two accounts deriving different keys.
+// A real-shaped AppKey hex (64 chars), because it's an HKDF input rather than an opaque
+// label. For a test with no account in it. An ACCOUNT has its own — see `createAccount` —
+// because every channel object is signed by its author's did and checked against the did a
+// reader names, so two people in a test have to be two identities.
 export const FAKE_APP_KEY_HEX = 'a1'.repeat(32)
+
+/** A real-shaped AppKey for an account, derived from its label so a test reproduces. */
+export function appKeyFor(label: string): string {
+  // FNV-1a, stepped once per byte. Deterministic and distinct per label is all a test
+  // needs here; nothing about it has to resist anyone.
+  let h = 2166136261
+  let out = ''
+  for (let i = 0; i < 32; i++) {
+    for (const c of `${i}:pin:fake-account:${label}`) {
+      h ^= c.charCodeAt(0)
+      h = Math.imul(h, 16777619) >>> 0
+    }
+    out += (h & 0xff).toString(16).padStart(2, '0')
+  }
+  return out
+}
 
 export type FakeAccount = {
   // The Sia surface the app talks to. Tests that need to assert on storage
   // directly (scope contents, byte totals) go through this too — there is no
   // lower layer to reach for, because the real one is Rust.
   client: FakeSiaClient
-  // did/handle are test bookkeeping for building SubscriptionRefs; identity is
-  // did:dht (derived from the AppKey) in the app itself.
+  // did/handle are test bookkeeping: the labels an account is filed under in the fake
+  // world, which predate identities being did:dht.
   did: string
   handle: string
+  // The account's own identity, as the app derives it: everything it publishes is sealed
+  // as this AppKey's author and signed by this did.
+  appKeyHex: string
+  didDht: string
 }
 
 export type FakeApp = {
@@ -61,7 +81,14 @@ export function createFakeApp(): FakeApp {
     createAccount: ({ did, handle, maxPinned }) => {
       if (maxPinned !== undefined) world.accountMax.set(did, maxPinned)
       world.handles.set(did, handle)
-      return { client: new FakeSiaClient(did, world), did, handle }
+      const appKeyHex = appKeyFor(did)
+      return {
+        client: new FakeSiaClient(did, world),
+        did,
+        handle,
+        appKeyHex,
+        didDht: didOfSync(appKeyHex),
+      }
     },
   }
 }
@@ -83,10 +110,14 @@ export function resetAllStores(): void {
 // The channel's current published manifest, read back off its locator (the
 // same path a reader uses). Helpers read-modify-write against this instead of
 // threading the manifest through the test.
-async function loadChannelManifest(channel: {
-  channelKey: string
-}): Promise<ChannelManifest> {
-  const manifest = await resolveChannelViaLocator(channel.channelKey)
+async function loadChannelManifest(
+  author: FakeAccount,
+  channel: { channelKey: string },
+): Promise<ChannelManifest> {
+  const manifest = await resolveChannelViaLocator(
+    channel.channelKey,
+    author.didDht,
+  )
   if (!manifest) throw new Error('channel locator not resolvable')
   return manifest
 }
@@ -108,11 +139,11 @@ export async function publishTextPost(
     mimeType: 'text/markdown',
     bytes,
   })
-  const current = await loadChannelManifest(channel)
+  const current = await loadChannelManifest(author, channel)
   const manifest = await appendItemToChannel(current, item)
   await commitChannelManifest(
     client,
-    FAKE_APP_KEY_HEX,
+    author.appKeyHex,
     channel.channelID,
     channel.channelKey,
     manifest,
@@ -139,11 +170,11 @@ export async function editTextPost(
     bytes,
   })
   const newItem: ItemRef = { ...built, editedAt: new Date().toISOString() }
-  const current = await loadChannelManifest(channel)
+  const current = await loadChannelManifest(author, channel)
   const { manifest, item } = await editItem(current, oldItemID, newItem)
   await commitChannelManifest(
     client,
-    FAKE_APP_KEY_HEX,
+    author.appKeyHex,
     channel.channelID,
     channel.channelKey,
     manifest,
@@ -164,7 +195,7 @@ export async function authorCreateChannel(
   })
   await commitChannelManifest(
     client,
-    FAKE_APP_KEY_HEX,
+    author.appKeyHex,
     created.channelID,
     created.channelKey,
     created.manifest,
@@ -186,7 +217,8 @@ export function mountAs(
 ): void {
   useAuthStore.setState({
     client: account.client,
-    storedKeyHex: FAKE_APP_KEY_HEX,
+    storedKeyHex: account.appKeyHex,
+    myDidDht: account.didDht,
     indexerURL: 'https://indexer.fake',
     step: 'connected',
     subscriptions: options.subscriptions ?? [],

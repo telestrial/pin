@@ -152,7 +152,9 @@ export const useFeedStore = create<FeedState>()((set, get) => ({
   refreshChannel: async (sub, fresh = false) => {
     try {
       const manifest = await get().channelReader(
-        sub.authorDID || sub.authorHandle,
+        // The did:dht every manifest is checked against. A subscription naming nobody
+        // has nothing to check against, and its read fails as unverifiable.
+        sub.didDht ?? '',
         sub.channelID,
         sub.channelKey,
         fresh,
