@@ -2009,6 +2009,73 @@ pub fn reading_channels(settings_json: &str, held_json: &str) -> Result<String, 
     pin_curator::reading_json(settings_json, held_json).map_err(|e| JsValue::from_str(&e))
 }
 
+/// Seat a person in one of this identity's members-only channels and seal their invitation,
+/// answering with the seating as JSON. `enc_key_b64` is the encryption key their directory
+/// publishes. A person already in is answered with the seating they have.
+#[wasm_bindgen]
+pub async fn members_invite(
+    app_key_hex: String,
+    channel_key: &[u8],
+    did: String,
+    enc_key_b64: String,
+    now_iso: String,
+) -> Result<String, JsValue> {
+    let app_key = decode_app_key(&app_key_hex)
+        .ok_or_else(|| JsValue::from_str("app key must be 64 hex chars"))?;
+    let key = key32(channel_key)?;
+    let enc_key: [u8; 32] = pin_crypto::b64_decode(&enc_key_b64)
+        .and_then(|b| b.try_into().ok())
+        .ok_or_else(|| JsValue::from_str("encryption key must be 32 bytes of base64"))?;
+    let eng = engine()?;
+    let seat = pin_curator::members::invite(
+        &eng.doc,
+        &eng.blobs,
+        eng.author_id,
+        &app_key,
+        &key,
+        &did,
+        &enc_key,
+        &now_iso,
+    )
+    .await
+    .map_err(je)?;
+    serde_json::to_string(&seat).map_err(|e| JsValue::from_str(&format!("encode: {e}")))
+}
+
+/// Take a person out of one of this identity's members-only channels, answering with how
+/// many of their seatings were standing.
+#[wasm_bindgen]
+pub async fn members_remove(
+    channel_id: String,
+    did: String,
+    now_iso: String,
+) -> Result<usize, JsValue> {
+    let eng = engine()?;
+    pin_curator::members::remove(
+        &eng.doc,
+        &eng.blobs,
+        eng.author_id,
+        &channel_id,
+        &did,
+        &now_iso,
+    )
+    .await
+    .map_err(je)
+}
+
+/// The collection a channel's roster lives in. From Rust so the frontend reads where the
+/// Curator writes.
+#[wasm_bindgen]
+pub fn members_collection() -> String {
+    pin_derive::MEMBERS_COLLECTION.to_string()
+}
+
+/// The collection this identity's memberships live in.
+#[wasm_bindgen]
+pub fn membership_collection() -> String {
+    pin_derive::MEMBERSHIP_COLLECTION.to_string()
+}
+
 /// How many identities one discovery pass will read. Exported so a simulation reports
 /// against the value that actually ships rather than one written down beside it.
 #[wasm_bindgen]

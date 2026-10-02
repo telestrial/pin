@@ -58,6 +58,8 @@ pin-derive = { path = "../crates/pin-derive" }
 # because the connected Sia session is in this process — and because both of its halves
 # get the better transport here (native QUIC, and the DHT rather than relays).
 pin-channel = { path = "../crates/pin-channel" }
+# Base64 for the encryption key an invitation is sealed to, as a directory publishes it.
+pin-crypto = { path = "../crates/pin-crypto" }
 # pin-curator: the Curator's loops. Shared with the browser engine, which runs the same
 # ones for as long as its tab is open.
 pin-curator = { path = "../crates/pin-curator" }

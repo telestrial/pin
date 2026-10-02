@@ -426,6 +426,59 @@ pub fn docs_namespace(state: tauri::State<CuratorState>) -> Option<String> {
     current_engine(&state).ok().map(|e| e.namespace_id.clone())
 }
 
+/// Seat a person in one of this identity's members-only channels and seal their invitation.
+#[tauri::command]
+pub async fn members_invite(
+    state: tauri::State<'_, CuratorState>,
+    app_key_hex: String,
+    channel_key: Vec<u8>,
+    did: String,
+    enc_key_b64: String,
+    now_iso: String,
+) -> Result<pin_channel::tree::Seat, String> {
+    let app_key = pin_derive::decode_app_key(&app_key_hex).ok_or("app key must be 64 hex chars")?;
+    let key: [u8; 32] = channel_key
+        .try_into()
+        .map_err(|_| "channel key must be 32 bytes".to_string())?;
+    let enc_key: [u8; 32] = pin_crypto::b64_decode(&enc_key_b64)
+        .and_then(|b| b.try_into().ok())
+        .ok_or("encryption key must be 32 bytes of base64")?;
+    let engine = current_engine(&state)?;
+    let blobs = (*engine.blobs).clone();
+    pin_curator::members::invite(
+        &engine.doc,
+        &blobs,
+        engine.author_id,
+        &app_key,
+        &key,
+        &did,
+        &enc_key,
+        &now_iso,
+    )
+    .await
+}
+
+/// Take a person out of one of this identity's members-only channels.
+#[tauri::command]
+pub async fn members_remove(
+    state: tauri::State<'_, CuratorState>,
+    channel_id: String,
+    did: String,
+    now_iso: String,
+) -> Result<usize, String> {
+    let engine = current_engine(&state)?;
+    let blobs = (*engine.blobs).clone();
+    pin_curator::members::remove(
+        &engine.doc,
+        &blobs,
+        engine.author_id,
+        &channel_id,
+        &did,
+        &now_iso,
+    )
+    .await
+}
+
 #[tauri::command]
 pub async fn docs_put_record(
     state: tauri::State<'_, CuratorState>,

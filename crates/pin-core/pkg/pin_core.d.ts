@@ -479,6 +479,30 @@ export function max_comment_attachments(): number;
 export function max_comment_bytes(): number;
 
 /**
+ * The collection a channel's roster lives in. From Rust so the frontend reads where the
+ * Curator writes.
+ */
+export function members_collection(): string;
+
+/**
+ * Seat a person in one of this identity's members-only channels and seal their invitation,
+ * answering with the seating as JSON. `enc_key_b64` is the encryption key their directory
+ * publishes. A person already in is answered with the seating they have.
+ */
+export function members_invite(app_key_hex: string, channel_key: Uint8Array, did: string, enc_key_b64: string, now_iso: string): Promise<string>;
+
+/**
+ * Take a person out of one of this identity's members-only channels, answering with how
+ * many of their seatings were standing.
+ */
+export function members_remove(channel_id: string, did: string, now_iso: string): Promise<number>;
+
+/**
+ * The collection this identity's memberships live in.
+ */
+export function membership_collection(): string;
+
+/**
  * Open (create) the in-memory doc engine, with the namespace + author derived from
  * the Sia AppKey. Returns the namespace id. A second call rebuilds from scratch.
  *
@@ -1071,6 +1095,10 @@ export interface InitOutput {
     readonly manifest_remove_repost: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
     readonly max_comment_attachments: () => number;
     readonly max_comment_bytes: () => number;
+    readonly members_collection: () => [number, number];
+    readonly members_invite: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => any;
+    readonly members_remove: (a: number, b: number, c: number, d: number, e: number, f: number) => any;
+    readonly membership_collection: () => [number, number];
     readonly open: (a: number, b: number) => any;
     readonly open_channel_doc: (a: number, b: number) => any;
     readonly person_tally_collection: () => [number, number];

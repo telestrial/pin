@@ -152,6 +152,7 @@ dependencies = [
  "iroh-gossip",
  "log",
  "pin-channel",
+ "pin-crypto",
  "pin-curator",
  "pin-derive",
  "pin-pkarr",

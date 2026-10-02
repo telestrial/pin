@@ -66,6 +66,10 @@ export const manifest_remove_attachment: (a: number, b: number, c: number, d: nu
 export const manifest_remove_repost: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
 export const max_comment_attachments: () => number;
 export const max_comment_bytes: () => number;
+export const members_collection: () => [number, number];
+export const members_invite: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => any;
+export const members_remove: (a: number, b: number, c: number, d: number, e: number, f: number) => any;
+export const membership_collection: () => [number, number];
 export const open: (a: number, b: number) => any;
 export const open_channel_doc: (a: number, b: number) => any;
 export const person_tally_collection: () => [number, number];
