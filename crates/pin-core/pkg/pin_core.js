@@ -532,6 +532,24 @@ export function content_hash(bytes) {
 }
 
 /**
+ * The collection the content keys this identity climbed to live in, one per channel and
+ * epoch. A write here is a members-only channel becoming readable.
+ * @returns {string}
+ */
+export function content_key_collection() {
+    let deferred1_0;
+    let deferred1_1;
+    try {
+        const ret = wasm.content_key_collection();
+        deferred1_0 = ret[0];
+        deferred1_1 = ret[1];
+        return getStringFromWasm0(ret[0], ret[1]);
+    } finally {
+        wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+    }
+}
+
+/**
  * Open a base64 blob sealed under a channel key. The plaintext is UTF-8 (a manifest's
  * JSON), so this returns it as a string.
  * @param {Uint8Array} key

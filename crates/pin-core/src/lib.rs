@@ -2076,6 +2076,13 @@ pub fn membership_collection() -> String {
     pin_derive::MEMBERSHIP_COLLECTION.to_string()
 }
 
+/// The collection the content keys this identity climbed to live in, one per channel and
+/// epoch. A write here is a members-only channel becoming readable.
+#[wasm_bindgen]
+pub fn content_key_collection() -> String {
+    pin_derive::CONTENT_KEY_COLLECTION.to_string()
+}
+
 /// How many identities one discovery pass will read. Exported so a simulation reports
 /// against the value that actually ships rather than one written down beside it.
 #[wasm_bindgen]

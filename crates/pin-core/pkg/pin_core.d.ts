@@ -171,6 +171,12 @@ export function configure_relays(pkarr: string[], iroh: string[]): void;
 export function content_hash(bytes: Uint8Array): string;
 
 /**
+ * The collection the content keys this identity climbed to live in, one per channel and
+ * epoch. A write here is a members-only channel becoming readable.
+ */
+export function content_key_collection(): string;
+
+/**
  * Open a base64 blob sealed under a channel key. The plaintext is UTF-8 (a manifest's
  * JSON), so this returns it as a string.
  */
@@ -1049,6 +1055,7 @@ export interface InitOutput {
     readonly comment_subject: (a: number, b: number, c: number, d: number) => [number, number];
     readonly configure_relays: (a: number, b: number, c: number, d: number) => [number, number];
     readonly content_hash: (a: number, b: number) => [number, number];
+    readonly content_key_collection: () => [number, number];
     readonly decrypt_for_channel: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly decrypt_settings: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly delete_channel_record: (a: number, b: number, c: number, d: number, e: number, f: number) => any;

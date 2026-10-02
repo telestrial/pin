@@ -20,6 +20,7 @@ export const comment_seal_collection: () => [number, number];
 export const comment_subject: (a: number, b: number, c: number, d: number) => [number, number];
 export const configure_relays: (a: number, b: number, c: number, d: number) => [number, number];
 export const content_hash: (a: number, b: number) => [number, number];
+export const content_key_collection: () => [number, number];
 export const decrypt_for_channel: (a: number, b: number, c: number, d: number) => [number, number, number, number];
 export const decrypt_settings: (a: number, b: number, c: number, d: number) => [number, number, number, number];
 export const delete_channel_record: (a: number, b: number, c: number, d: number, e: number, f: number) => any;
