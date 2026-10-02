@@ -205,6 +205,52 @@ pub fn seal(sealing: &Sealing, kind: Kind, payload: &[u8]) -> Result<String, Str
     Ok(pin_crypto::b64_encode(&out))
 }
 
+/// Seal a piece of the member tree: an object whose body is under K rather than C.
+///
+/// The member tree is how a member LEARNS C, so it cannot be sealed under C; it is sealed
+/// for whoever can find the channel, and what keeps its secrets is the wraps inside it,
+/// each of which opens only for the members beneath it. Signed and epoch-stamped like any
+/// other object, so a member can tell the author's tree from one a K-holder made up, and
+/// refuse one older than a tree it has already seen.
+pub fn seal_members(
+    channel_key: &[u8; 32],
+    epoch: u32,
+    signer: [u8; 32],
+    payload: &[u8],
+) -> Result<String, String> {
+    seal(
+        &Sealing {
+            channel_key,
+            content: ContentKey {
+                epoch,
+                key: *channel_key,
+            },
+            publish_read_key: false,
+            signer,
+        },
+        Kind::Members,
+        payload,
+    )
+}
+
+/// Open a piece of the member tree, answering with the epoch it was published at and its
+/// payload.
+pub fn open_members(
+    channel_key: &[u8; 32],
+    blob: &str,
+    signer: Signer,
+) -> Result<(u32, Vec<u8>), String> {
+    let bytes = pin_crypto::b64_decode(blob).ok_or("object is not base64")?;
+    match bytes.first() {
+        Some(&OBJECT_VERSION) => {
+            let (head, body) = split_head(channel_key, &bytes[1..], Kind::Members, signer)?;
+            Ok((head.epoch, pin_crypto::open_raw(channel_key, body)?))
+        }
+        Some(v) => Err(format!("unsupported object version {v}")),
+        None => Err("object is empty".into()),
+    }
+}
+
 /// Open an object with K.
 ///
 /// Fails on a head that carries no read key, because nothing yet holds C any other way —
@@ -528,6 +574,28 @@ mod tests {
         };
         let forged = seal(&forged, Kind::Tallies, b"payload").unwrap();
         assert!(open(&K, &forged, Kind::Tallies, Signer::Author(&author())).is_err());
+    }
+
+    #[test]
+    fn a_piece_of_the_member_tree_opens_with_k_alone() {
+        // A member opens it before holding C — it is how they come to hold C.
+        let blob = seal_members(&K, 5, SIGNER, b"band").unwrap();
+        let (epoch, payload) = open_members(&K, &blob, Signer::Author(&author())).unwrap();
+        assert_eq!(epoch, 5);
+        assert_eq!(payload, b"band");
+        // No read key in the head: K opens the body, and nothing in the head hands out a
+        // content key.
+        assert!(head_and_body(&blob).0.read_key.is_none());
+        assert!(content_key(&K, &blob, Kind::Members, Signer::Author(&author())).is_err());
+        // Signed like anything else, and refused as another kind.
+        let stranger = pin_pkarr::public_key_from_seed(&[12u8; 32]).unwrap();
+        assert!(open_members(&K, &blob, Signer::Author(&stranger)).is_err());
+        let forged = seal_members(&K, 5, [12u8; 32], b"band").unwrap();
+        assert!(open_members(&K, &forged, Signer::Author(&author())).is_err());
+        let tallies = seal(&sealing(false), Kind::Tallies, b"band").unwrap();
+        assert!(open_members(&K, &tallies, Signer::Author(&author())).is_err());
+        // Another channel's K opens nothing.
+        assert!(open_members(&[8u8; 32], &blob, Signer::Author(&author())).is_err());
     }
 
     #[test]

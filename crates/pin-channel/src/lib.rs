@@ -27,7 +27,8 @@ mod object;
 pub mod tree;
 
 pub use object::{
-    content_key, fingerprint, open, open_with, seal, ContentKey, Kind, Opened, Sealing, Signer,
+    content_key, fingerprint, open, open_members, open_with, seal, seal_members, ContentKey, Kind,
+    Opened, Sealing, Signer,
 };
 
 /// How an author seals their own channel: C derived from the AppKey at the initial epoch,
