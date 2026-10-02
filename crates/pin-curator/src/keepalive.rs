@@ -72,6 +72,10 @@ pub struct KeepAliveOutcome {
     pub conversations_refreshed: usize,
     /// Channels whose conversations republish failed. Retried next pass, like the rest.
     pub conversations_failed: usize,
+    /// Channels whose member-tree pointer was re-signed.
+    pub members_refreshed: usize,
+    /// Channels whose member-tree republish failed. Retried next pass, like the rest.
+    pub members_failed: usize,
     /// What happened to the settings locator, reported separately from the channel
     /// counts: "3 refreshed" would otherwise say nothing about whether the one pointer
     /// that recovers a whole account is still alive.
@@ -143,6 +147,17 @@ pub async fn keep_alive_once(ctx: &KeepAliveContext) -> Result<KeepAliveOutcome,
             match pin_channel::republish_conversations_pointer(&k, &url).await {
                 Ok(()) => outcome.conversations_refreshed += 1,
                 Err(_) => outcome.conversations_failed += 1,
+            }
+        }
+
+        // And the member tree's, for a channel anyone has been seated in. Losing this one
+        // strands members rather than readers: a member who cannot find the tree cannot
+        // learn the current content key, and reads nothing published after it last moved.
+        let members_rkey = pin_derive::published_members_rkey(&owned.channel_id);
+        if let Some(url) = read_published_url(ctx, &published_key, &members_rkey).await {
+            match pin_channel::point_members(&k, &url).await {
+                Ok(()) => outcome.members_refreshed += 1,
+                Err(_) => outcome.members_failed += 1,
             }
         }
     }

@@ -613,6 +613,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_keep_alive_reads_the_pointer_the_publish_pass_wrote() {
+        // One writer, one reader, one rkey: checked through the keep-alive's own reader,
+        // since a test naming the key twice could not see the two disagree.
+        let world = World::new();
+        let me = Identity::new(&world, 1).await;
+        let sink = FakeSink::default();
+        seat_in(&me, 1).await;
+        publish(&me, &sink).await.unwrap();
+        let ctx = crate::KeepAliveContext {
+            doc: me.doc.clone(),
+            blobs: me.blobs.clone(),
+            author_id: me.author_id,
+            app_key: me.app_key,
+        };
+        let read = crate::keepalive::read_published_url(
+            &ctx,
+            &pin_derive::published_key(&me.app_key),
+            &pin_derive::published_members_rkey(&channel()),
+        )
+        .await;
+        assert_eq!(read, *sink.pointed.borrow());
+        assert!(read.is_some());
+    }
+
+    #[tokio::test]
     async fn invitations_fill_leaves_in_order_and_a_removal_moves_the_epoch() {
         let world = World::new();
         let me = Identity::new(&world, 1).await;
