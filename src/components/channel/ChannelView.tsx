@@ -31,6 +31,7 @@ import { WatchButton } from '../WatchButton'
 import { ChannelAvatar } from './ChannelAvatar'
 import { ChannelOwnerMenu } from './ChannelOwnerMenu'
 import { DeadRepost } from './DeadRepost'
+import { MembersPanel } from './MembersPanel'
 
 /** A channel this device holds nothing for, read with the key the navigation carried.
  *
@@ -183,6 +184,10 @@ export function ChannelView({
   // page's body is the channel's feed, and a standing list of people would push the posts
   // down on every visit.
   const [showFollowers, setShowFollowers] = useState(false)
+  // Who can read a Secret channel you own, and where you invite and remove them. Folded
+  // away like the Followers list, for the same reason.
+  const isOwnSecret = isOwned && manifest?.visibility === 'secret'
+  const [showMembers, setShowMembers] = useState(false)
 
   // Backfill the manifest cache on cold-mount (e.g. empty channel that
   // contributed no feed entries to the initial refresh). Updates arrive on
@@ -370,6 +375,20 @@ export function ChannelView({
                               Copy link
                             </button>
                           )}
+                          {isOwnSecret && (
+                            <button
+                              type="button"
+                              onClick={() => setShowMembers((v) => !v)}
+                              aria-expanded={showMembers}
+                              className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors cursor-pointer ${
+                                showMembers
+                                  ? 'text-neutral-900 bg-neutral-200'
+                                  : 'text-neutral-700 hover:text-neutral-900 bg-neutral-100 hover:bg-neutral-200'
+                              }`}
+                            >
+                              Members
+                            </button>
+                          )}
                           {/* Context menu — only the claim toggle, so it
                               shows for public channels only (claim doesn't
                               apply to obscure ones). */}
@@ -472,6 +491,14 @@ export function ChannelView({
               </p>
             </div>
           </div>
+
+          {isOwnSecret && showMembers && owned && (
+            <MembersPanel
+              channelID={channelID}
+              channelKey={owned.channelKey}
+              onHandleClick={onHandleClick}
+            />
+          )}
 
           {showFollowers && followers && followers.length > 0 && (
             <section aria-label="Followers" className="space-y-2">
