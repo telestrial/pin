@@ -31,11 +31,11 @@
 //! Pure, like the tree: what is uploaded where, and the pointer to the top, are the
 //! publisher's.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::tree::{climb, NodeId, NodeRecord};
+use crate::tree::{climb, NodeId, NodeRecord, Tree};
 use crate::ContentKey;
 
 /// Levels of the tree in one band.
@@ -87,6 +87,32 @@ impl BandId {
     }
 }
 
+/// How many bands a tier of a tree this tall holds: one per node at its apex level, or
+/// the one band on top when the apex is above the root.
+fn tier_width(tier: u8, height: u8) -> u64 {
+    let apex = apex_level(tier);
+    if apex >= height {
+        1
+    } else {
+        1u64 << (height - apex)
+    }
+}
+
+/// The interior nodes a band holds in a tree this tall, lowest level first.
+fn nodes_of(id: BandId, height: u8) -> Vec<NodeId> {
+    let low = BAND_LEVELS * id.tier + 1;
+    let high = (low + BAND_LEVELS - 1).min(height);
+    let apex = apex_level(id.tier);
+    let mut out = Vec::new();
+    for level in low..=high {
+        let span = 1u64 << (apex - level);
+        let width = 1u64 << (height - level);
+        let first = id.pos * span;
+        out.extend((first..(first + span).min(width)).map(|pos| NodeId { level, pos }));
+    }
+    out
+}
+
 /// The level of a tier's apex.
 fn apex_level(tier: u8) -> u8 {
     BAND_LEVELS * (tier + 1)
@@ -111,6 +137,105 @@ pub fn layout(records: Vec<NodeRecord>) -> BTreeMap<BandId, Vec<NodeRecord>> {
         out.entry(BandId::of(record.id)).or_default().push(record);
     }
     out
+}
+
+/// A tree on its way to being published: what each band would say, and the band itself
+/// for the ones that have to be uploaded.
+///
+/// Split so a publisher can decide WHICH bands to upload before paying for any of them. A
+/// band's records are sealed under fresh nonces and so cannot be compared with last time's;
+/// its fingerprint is taken over what decides them instead, and only a band whose
+/// fingerprint moved is built. Bottom tier first, because a band names the URLs of the ones
+/// beneath it — so a change anywhere moves every band above it, up to the top, and nothing
+/// else.
+pub struct Publication<'t> {
+    tree: &'t Tree,
+    app_key: [u8; 32],
+    channel_id: String,
+    occupied: HashSet<NodeId>,
+}
+
+/// The leading tag of a band's fingerprint, so a change to what goes into one is a change
+/// to every fingerprint rather than a silent collision with the old ones.
+const FINGERPRINT_FORMAT: &str = "pin.members-band.v1";
+
+impl<'t> Publication<'t> {
+    pub fn new(tree: &'t Tree, app_key: &[u8; 32], channel_id: &str) -> Self {
+        Publication {
+            tree,
+            app_key: *app_key,
+            channel_id: channel_id.to_string(),
+            occupied: tree.occupied(),
+        }
+    }
+
+    pub fn top(&self) -> BandId {
+        BandId::top(self.tree.height())
+    }
+
+    /// The epoch the bands are published at: the tree's.
+    pub fn epoch(&self) -> u32 {
+        self.tree.epoch()
+    }
+
+    /// Every band of one tier.
+    pub fn bands_in(&self, tier: u8) -> Vec<BandId> {
+        (0..tier_width(tier, self.tree.height()))
+            .map(|pos| BandId { tier, pos })
+            .collect()
+    }
+
+    /// The URLs a band names, from where the bands beneath it ended up. An error when one
+    /// of them has none, since a band published without a child would cut every member
+    /// beneath it off.
+    pub fn children_urls(
+        &self,
+        id: BandId,
+        urls: &HashMap<BandId, String>,
+    ) -> Result<Vec<String>, String> {
+        id.children(self.tree.height())
+            .into_iter()
+            .map(|child| {
+                urls.get(&child)
+                    .cloned()
+                    .ok_or_else(|| format!("band {child:?} has no URL yet"))
+            })
+            .collect()
+    }
+
+    /// What a band would say: equal to last time's exactly when it would hold the same
+    /// records — up to the nonces their seals draw — and name the same bands beneath it.
+    pub fn fingerprint(&self, id: BandId, children: &[String]) -> String {
+        let height = self.tree.height();
+        let mut out = format!(
+            "{FINGERPRINT_FORMAT}|{}|{}|{}",
+            id.tier,
+            id.pos,
+            u8::from(id == BandId::top(height))
+        );
+        for node in nodes_of(id, height) {
+            out.push('|');
+            out.push_str(&self.tree.node_substance(node, &self.occupied));
+        }
+        for url in children {
+            out.push('|');
+            out.push_str(url);
+        }
+        pin_crypto::content_hash(out.as_bytes())
+    }
+
+    /// A band, built: its records sealed for the members beneath it.
+    pub fn band(&self, id: BandId, children: Vec<String>) -> Result<Band, String> {
+        let height = self.tree.height();
+        let records = nodes_of(id, height)
+            .into_iter()
+            .map(|node| {
+                self.tree
+                    .record_with(&self.app_key, &self.channel_id, node, &self.occupied)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Band::new(id, height, &records, children))
+    }
 }
 
 /// One band, as its object carries it.
@@ -386,6 +511,218 @@ mod tests {
         assert!(top_band.child_url(BandId { tier: 0, pos: 2 }).is_some());
         assert!(top_band.child_url(BandId { tier: 0, pos: 99 }).is_none());
         assert!(top_band.child_url(BandId { tier: 1, pos: 0 }).is_none());
+    }
+
+    /// An author publishing through `Publication`, as the Curator will: bottom tier first,
+    /// a band uploaded only when its fingerprint moved, with a fresh URL standing in for
+    /// each upload. Every band ever uploaded stays readable by its URL, as a generation a
+    /// reader may still hold does.
+    #[derive(Default)]
+    struct Author {
+        published: HashMap<BandId, (String, String)>,
+        by_url: HashMap<String, Band>,
+        uploads: usize,
+    }
+
+    impl Author {
+        /// Publish, answering with the bands uploaded this time and the top band's URL.
+        fn publish(&mut self, tree: &Tree) -> (Vec<BandId>, String) {
+            let plan = Publication::new(tree, &APP_KEY, CHANNEL);
+            let mut urls: HashMap<BandId, String> = HashMap::new();
+            let mut uploaded = Vec::new();
+            for tier in 0..=plan.top().tier {
+                for id in plan.bands_in(tier) {
+                    let children = plan.children_urls(id, &urls).unwrap();
+                    let fp = plan.fingerprint(id, &children);
+                    match self.published.get(&id) {
+                        Some((held, url)) if *held == fp => {
+                            urls.insert(id, url.clone());
+                        }
+                        _ => {
+                            let band = plan.band(id, children).unwrap();
+                            let band: Band =
+                                serde_json::from_slice(&serde_json::to_vec(&band).unwrap())
+                                    .unwrap();
+                            self.uploads += 1;
+                            let url = format!("sia://upload/{}", self.uploads);
+                            self.by_url.insert(url.clone(), band);
+                            self.published.insert(id, (fp, url.clone()));
+                            urls.insert(id, url);
+                            uploaded.push(id);
+                        }
+                    }
+                }
+            }
+            (uploaded, urls[&plan.top()].clone())
+        }
+
+        fn climbs(&self, top: &str, member: u64, leaf: u64) -> Result<ContentKey, String> {
+            climb_bands(
+                &walk(&self.by_url, top, leaf),
+                leaf,
+                member_leaf_key(member),
+                CHANNEL,
+            )
+        }
+    }
+
+    fn content_key(tree: &Tree) -> ContentKey {
+        ContentKey {
+            epoch: tree.epoch(),
+            key: pin_derive::channel_content_key(&APP_KEY, CHANNEL, tree.epoch()),
+        }
+    }
+
+    #[test]
+    fn a_publication_builds_the_bands_the_layout_groups() {
+        // Two routes to one answer: the planner enumerates each band's nodes from its
+        // address, the layout groups every record the tree publishes.
+        for count in [1u64, 5, 17, 300] {
+            let mut tree = Tree::new();
+            for i in 0..count {
+                tree.add(pin_crypto::enc_public(&seed(i)));
+            }
+            let grouped = layout(tree.records(&APP_KEY, CHANNEL).unwrap());
+            let plan = Publication::new(&tree, &APP_KEY, CHANNEL);
+            let mut planned = Vec::new();
+            for tier in 0..=plan.top().tier {
+                planned.extend(plan.bands_in(tier));
+            }
+            assert_eq!(
+                planned,
+                grouped.keys().copied().collect::<Vec<_>>(),
+                "{count}"
+            );
+            for (id, records) in grouped {
+                let ids: Vec<NodeId> = records.iter().map(|r| r.id).collect();
+                assert_eq!(nodes_of(id, tree.height()), ids, "{count} {id:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn nothing_moved_uploads_nothing() {
+        let mut tree = Tree::new();
+        for i in 0..40 {
+            tree.add(pin_crypto::enc_public(&seed(i)));
+        }
+        let mut author = Author::default();
+        let (first, top) = author.publish(&tree);
+        assert_eq!(first.len(), 1 + 4, "a top band over four tier-0 bands");
+        let (again, same_top) = author.publish(&tree);
+        assert!(again.is_empty(), "{again:?}");
+        assert_eq!(same_top, top);
+    }
+
+    #[test]
+    fn a_removal_uploads_one_band_per_tier_and_only_its_member_is_out() {
+        let mut tree = Tree::new();
+        let seated: Vec<(u64, u64)> = (0..300)
+            .map(|i| (i, tree.add(pin_crypto::enc_public(&seed(i)))))
+            .collect();
+        let mut author = Author::default();
+        author.publish(&tree);
+
+        let (gone, gone_leaf) = seated[123];
+        tree.remove(gone_leaf).unwrap();
+        let (uploaded, top) = author.publish(&tree);
+        let mut expected = path(gone_leaf, tree.height());
+        expected.reverse();
+        assert_eq!(uploaded, expected);
+
+        let c = content_key(&tree);
+        for &(member, leaf) in &seated {
+            if member == gone {
+                assert!(author.climbs(&top, member, leaf).is_err());
+            } else {
+                assert_eq!(
+                    author.climbs(&top, member, leaf).unwrap(),
+                    c,
+                    "member {member}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_join_uploads_only_its_own_path() {
+        // No key moves when somebody joins, so only the wraps on their path change: filler
+        // becomes a wrap for them.
+        let mut tree = Tree::new();
+        for i in 0..40 {
+            tree.add(pin_crypto::enc_public(&seed(i)));
+        }
+        let mut author = Author::default();
+        author.publish(&tree);
+        let leaf = tree.add(pin_crypto::enc_public(&seed(40)));
+        let (uploaded, top) = author.publish(&tree);
+        let mut expected = path(leaf, tree.height());
+        expected.reverse();
+        assert_eq!(uploaded, expected);
+        assert_eq!(author.climbs(&top, 40, leaf).unwrap(), content_key(&tree));
+        assert_eq!(author.climbs(&top, 0, 0).unwrap(), content_key(&tree));
+    }
+
+    #[test]
+    fn growing_past_a_band_republishes_the_old_top_and_adds_a_new_one() {
+        // Sixteen members fill a height-4 tree whose top is tier 0; the seventeenth grows it
+        // to height 5. The old top's apex stops being the root, so its key, and the band,
+        // changes; the new member's tier-0 band and the new top are new.
+        let mut tree = Tree::new();
+        for i in 0..16 {
+            tree.add(pin_crypto::enc_public(&seed(i)));
+        }
+        let mut author = Author::default();
+        author.publish(&tree);
+        let leaf = tree.add(pin_crypto::enc_public(&seed(16)));
+        assert_eq!(tree.height(), 5);
+        let (mut uploaded, top) = author.publish(&tree);
+        uploaded.sort();
+        assert_eq!(
+            uploaded,
+            [
+                BandId { tier: 0, pos: 0 },
+                BandId { tier: 0, pos: 1 },
+                BandId { tier: 1, pos: 0 },
+            ]
+        );
+        let c = content_key(&tree);
+        assert_eq!(author.climbs(&top, 16, leaf).unwrap(), c);
+        assert_eq!(author.climbs(&top, 3, 3).unwrap(), c);
+    }
+
+    #[test]
+    fn a_fingerprint_moves_with_every_input() {
+        let mut tree = Tree::new();
+        for i in 0..20 {
+            tree.add(pin_crypto::enc_public(&seed(i)));
+        }
+        let id = BandId { tier: 0, pos: 1 };
+        let fp = |t: &Tree| Publication::new(t, &APP_KEY, CHANNEL).fingerprint(id, &[]);
+        let base = fp(&tree);
+        // Same inputs, same fingerprint, though every seal would draw new nonces.
+        assert_eq!(base, fp(&tree));
+        // A child's URL.
+        let top = BandId { tier: 1, pos: 0 };
+        let plan = Publication::new(&tree, &APP_KEY, CHANNEL);
+        assert_ne!(
+            plan.fingerprint(top, &["a".into(), "b".into()]),
+            plan.fingerprint(top, &["a".into(), "c".into()])
+        );
+        // A removal beneath it, and then a different member in the hole it left.
+        let mut removed = tree.clone();
+        removed.remove(17).unwrap();
+        let mut swapped = removed.clone();
+        swapped.add(pin_crypto::enc_public(&seed(99)));
+        assert_ne!(fp(&removed), base);
+        assert_ne!(fp(&swapped), fp(&removed));
+        // Another member at the same leaf with no removal between: two devices seating at
+        // once, and the roster settling the leaf on the other one.
+        let mut other = Tree::new();
+        for i in 0..20 {
+            other.add(pin_crypto::enc_public(&seed(if i == 17 { 99 } else { i })));
+        }
+        assert_ne!(fp(&other), base);
     }
 
     #[test]

@@ -294,7 +294,7 @@ impl Tree {
     ///
     /// Walked up from the members rather than asked of each node by scanning its leaves,
     /// which would make publishing the whole tree quadratic in its size.
-    fn occupied(&self) -> std::collections::HashSet<NodeId> {
+    pub(crate) fn occupied(&self) -> std::collections::HashSet<NodeId> {
         let mut out = std::collections::HashSet::new();
         for (leaf, member) in self.leaves.iter().enumerate() {
             if member.is_none() {
@@ -350,7 +350,7 @@ impl Tree {
         self.record_with(app_key, channel_id, id, &self.occupied())
     }
 
-    fn record_with(
+    pub(crate) fn record_with(
         &self,
         app_key: &[u8; 32],
         channel_id: &str,
@@ -377,6 +377,47 @@ impl Tree {
             };
         }
         Ok(NodeRecord { id, version, wraps })
+    }
+
+    /// Everything that decides an interior node's record, short of the randomness a seal
+    /// draws: its place, its version, whether it is the root (whose key is C rather than an
+    /// interior key), and for each child whether anyone is under it and what that child's
+    /// key is derived from — its version, or at a leaf the member's encryption key.
+    ///
+    /// For a publisher that skips a node whose record would say the same thing as last time:
+    /// the record itself is re-sealed under a fresh nonce on every call, so its bytes cannot
+    /// be compared.
+    pub(crate) fn node_substance(
+        &self,
+        id: NodeId,
+        occupied: &std::collections::HashSet<NodeId>,
+    ) -> String {
+        let mut out = format!(
+            "{}:{}:{}:{}",
+            id.level,
+            id.pos,
+            self.version(id),
+            u8::from(id == self.root())
+        );
+        for side in 0..2 {
+            let child = id.child(side);
+            out.push(':');
+            if !occupied.contains(&child) {
+                out.push('-');
+            } else if child.level == 0 {
+                match self.member_at(child.pos) {
+                    Some(member) => {
+                        out.push('k');
+                        out.push_str(&pin_crypto::b64_encode(&member));
+                    }
+                    None => out.push('-'),
+                }
+            } else {
+                out.push('v');
+                out.push_str(&self.version(child).to_string());
+            }
+        }
+        out
     }
 
     /// Every interior node, published.
@@ -603,6 +644,22 @@ mod tests {
                 current_c(&tree)
             );
         }
+    }
+
+    #[test]
+    fn a_node_s_substance_says_whether_it_is_the_root() {
+        // The root's key is C and every other node's is derived from its place, so the same
+        // node at the same version says something different once the tree grows past it.
+        let mut tree = Tree::new();
+        for i in 0..16 {
+            tree.add(public(i));
+        }
+        let node = tree.root();
+        let as_root = tree.node_substance(node, &tree.occupied());
+        let mut grown = tree.clone();
+        grown.reach(16);
+        assert_eq!(grown.version(node), tree.version(node));
+        assert_ne!(grown.node_substance(node, &grown.occupied()), as_root);
     }
 
     #[test]
