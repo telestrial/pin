@@ -205,6 +205,15 @@ struct DirectoryDoc {
     /// announce itself merely to be sealed to.
     #[serde(rename = "encKey", default, skip_serializing_if = "Option::is_none")]
     enc_key: Option<String>,
+    /// Invitations to this identity's members-only channels, each a box sealed to its
+    /// invitee, base64.
+    ///
+    /// The FLOOR for an invitation: it is also knocked to its invitee, and this is how one
+    /// who could not be reached finds it anyway — by reading this blob, which any reader of
+    /// this identity does. Anyone can see how many there are; only an invitee can open
+    /// theirs, or tell whose any other is. Absent while there are none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    invites: Vec<String>,
     #[serde(rename = "updatedAt")]
     updated_at: String,
 }
@@ -765,6 +774,12 @@ async fn assemble_directory(
         enc_key: Some(pin_crypto::b64_encode(&pin_crypto::enc_public(
             &pin_derive::enc_key_seed(&ctx.app_key),
         ))),
+        // A roster that will not read publishes no invitations this pass. Harmless: an
+        // invitee who already opened theirs keeps the membership it recorded, and nothing
+        // reads a box's absence as anything.
+        invites: crate::members::invitation_boxes(&ctx.doc, &ctx.blobs, ctx.author_id)
+            .await
+            .unwrap_or_default(),
         updated_at: now_iso,
     }
 }
@@ -784,6 +799,8 @@ fn has_anything(doc: &DirectoryDoc) -> bool {
         || doc.comments_url.is_some()
         // Being followed is something to say too: it is the one count about a person.
         || doc.followers.is_some()
+        // An invitation is only ever found here when its knock could not land.
+        || !doc.invites.is_empty()
 }
 
 /// Which generation to reclaim, and which to keep alive, after publishing `current`.
@@ -1006,6 +1023,8 @@ fn directory_moved(event: &LiveEvent) -> bool {
         pin_derive::COMMENT_SEAL_COLLECTION,
         // Written by the engagement loop, gated on substance, so it converges.
         pin_derive::PERSON_TALLY_COLLECTION,
+        // An invitation or a removal, which adds a box to the directory or takes one out.
+        pin_derive::MEMBERS_COLLECTION,
     ]
     .iter()
     .any(|c| key.starts_with(&pin_derive::collection_prefix(c)))
@@ -1118,6 +1137,7 @@ mod tests {
         assert!(directory_moved(&wrote("endorse/like:abc")));
         assert!(directory_moved(&wrote("comment/abc:def")));
         assert!(directory_moved(&wrote("comment-seal/abc:def")));
+        assert!(directory_moved(&wrote("members/chan:abc")));
 
         // A neighbouring collection is not the same collection. `comment-object` is a
         // reclaim mark, written while minting a body, and prefix-matching it would wake a
@@ -1301,6 +1321,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_directory_carries_the_invitations_of_standing_members() {
+        let world = crate::testnet::World::new();
+        let me = crate::testnet::Identity::new(&world, 1).await;
+        me.set_settings(serde_json::json!({ "handleFollows": ["did:dht:x"] }))
+            .await;
+        let ctx = ctx_over(&me);
+        let settings = read_settings(&ctx.doc, &ctx.blobs, ctx.author_id, &ctx.app_key)
+            .await
+            .expect("settings");
+
+        let none = assemble_directory(&ctx, &settings, None, "now".into()).await;
+        assert!(serde_json::to_value(&none)
+            .unwrap()
+            .get("invites")
+            .is_none());
+
+        crate::members::invite(
+            &me.doc,
+            &me.blobs,
+            me.author_id,
+            &me.app_key,
+            &me.channel_key(),
+            "did:dht:bob",
+            &pin_crypto::enc_public(&[2u8; 32]),
+            "2026-10-01T00:00:00Z",
+        )
+        .await
+        .unwrap();
+        let doc = assemble_directory(&ctx, &settings, None, "now".into()).await;
+        let v = serde_json::to_value(&doc).unwrap();
+        let expected = crate::members::invitation_boxes(&me.doc, &me.blobs, me.author_id)
+            .await
+            .unwrap();
+        assert_eq!(expected.len(), 1);
+        assert_eq!(v["invites"], serde_json::json!(expected));
+    }
+
+    #[tokio::test]
     async fn the_directory_carries_a_key_this_identity_can_open_a_box_sealed_to() {
         // Asserted by sealing to what was published and opening with what the AppKey
         // derives, rather than by comparing to a recomputation: the claim is that the key
@@ -1456,6 +1514,7 @@ mod tests {
             handle_follows: Vec::new(),
             followers: None,
             enc_key: None,
+            invites: Vec::new(),
             endorsements: Vec::new(),
             comments_url: None,
             updated_at: "2026-08-06T12:00:00.000Z".into(),
@@ -1515,6 +1574,7 @@ mod tests {
             comments_url: None,
             followers: None,
             enc_key: None,
+            invites: Vec::new(),
             updated_at: "2026-08-06T12:00:00.000Z".into(),
         };
         // Compared as parsed values, not as bytes. A directory document is PARSED by

@@ -1691,7 +1691,6 @@ mod visibility {
     async fn a_pass_publishes_the_member_tree_of_a_seated_channel_only() {
         let world = World::new();
         let alice = Identity::new(&world, 1).await;
-        let channel_id = pin_crypto::channel_id(&alice.channel_key());
         alice.publishing_n(serde_json::json!({}), 1).await;
         let ctx = alice.engagement_ctx();
         let pass = || async {
@@ -1713,7 +1712,8 @@ mod visibility {
             &alice.doc,
             &alice.blobs,
             alice.author_id,
-            &channel_id,
+            &alice.app_key,
+            &alice.channel_key(),
             "did:dht:member",
             &pin_crypto::enc_public(&[9u8; 32]),
             "2026-10-01T00:00:00.000Z",

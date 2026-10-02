@@ -19,7 +19,7 @@ use pin_channel::band::{BandId, Publication};
 use pin_channel::tree::{Seat, Tree};
 use pin_derive::{
     member_rkey, member_rkey_prefix, published_members_band_rkey, published_members_rkey,
-    MEMBERS_COLLECTION,
+    INVITE_BOX_COLLECTION, MEMBERS_COLLECTION,
 };
 
 use crate::{
@@ -69,26 +69,43 @@ pub async fn seated_channels(
         .collect())
 }
 
-/// Seat a member in one of this identity's channels, answering with their seating.
+/// Seat a member in one of this identity's channels and seal their invitation, answering
+/// with their seating.
 ///
 /// A member already standing in the roster is answered with the seating they have rather
 /// than given a second. Otherwise they go at the first hole of the tree the roster
 /// derives. Two devices inviting at once may both pick that hole; the roster settles
 /// which of them holds it, the same way on every device.
+///
+/// The invitation is written BEFORE the seating, so a failure between the two leaves a box
+/// with no seating — which nothing publishes — rather than a seating whose invitee is never
+/// told. Asking again for a member already standing puts back a box that is missing.
+///
+/// Takes K rather than the channel's id: the invitation carries K, and the id is derived
+/// from it, so the two cannot disagree.
+#[allow(clippy::too_many_arguments)]
 pub async fn invite(
     doc: &Doc,
     blobs: &Store,
     author_id: AuthorId,
-    channel_id: &str,
+    app_key: &[u8; 32],
+    channel_key: &[u8; 32],
     did: &str,
     enc_key: &[u8; 32],
     now_iso: &str,
 ) -> Result<Seat, String> {
-    let seats = roster(doc, blobs, author_id, channel_id).await?;
+    let channel_id = pin_crypto::channel_id(channel_key);
+    let seats = roster(doc, blobs, author_id, &channel_id).await?;
     if let Some(seat) = seats
         .iter()
         .find(|s| s.did == did && s.removed_at.is_none())
     {
+        if invitation_box(doc, blobs, author_id, &channel_id, &seat.id)
+            .await
+            .is_none()
+        {
+            seal_box(doc, author_id, app_key, channel_key, seat).await?;
+        }
         return Ok(seat.clone());
     }
     let mut id = [0u8; 16];
@@ -101,8 +118,86 @@ pub async fn invite(
         added_at: now_iso.to_string(),
         removed_at: None,
     };
-    write_seat(doc, author_id, channel_id, &seat).await?;
+    seal_box(doc, author_id, app_key, channel_key, &seat).await?;
+    write_seat(doc, author_id, &channel_id, &seat).await?;
     Ok(seat)
+}
+
+/// Seal one seating's invitation and keep it.
+async fn seal_box(
+    doc: &Doc,
+    author_id: AuthorId,
+    app_key: &[u8; 32],
+    channel_key: &[u8; 32],
+    seat: &Seat,
+) -> Result<(), String> {
+    let enc_key = pin_crypto::b64_decode(&seat.enc_key)
+        .and_then(|b| <[u8; 32]>::try_from(b).ok())
+        .ok_or("seating encryption key is malformed")?;
+    let sealed = pin_channel::invite::seal_invitation(
+        app_key,
+        channel_key,
+        &seat.did,
+        &enc_key,
+        seat.leaf,
+        &seat.id,
+    )?;
+    write_record(
+        doc,
+        author_id,
+        INVITE_BOX_COLLECTION,
+        &member_rkey(&pin_crypto::channel_id(channel_key), &seat.id),
+        sealed.into_bytes(),
+    )
+    .await
+}
+
+/// One seating's sealed invitation, or `None` when none is kept.
+async fn invitation_box(
+    doc: &Doc,
+    blobs: &Store,
+    author_id: AuthorId,
+    channel_id: &str,
+    seat_id: &str,
+) -> Option<String> {
+    let bytes = read_record(
+        doc,
+        blobs,
+        author_id,
+        INVITE_BOX_COLLECTION,
+        &member_rkey(channel_id, seat_id),
+    )
+    .await
+    .ok()
+    .flatten()?;
+    String::from_utf8(bytes).ok()
+}
+
+/// The invitations this identity publishes: the box behind every STANDING seating in
+/// every roster it keeps, sorted so the same set is the same list every pass.
+///
+/// A removed member's box drops out with their seating, which is all the directory can
+/// say about a removal — the box itself still opens for them, and still says only what it
+/// said, an invitation to a tree they can no longer climb.
+pub async fn invitation_boxes(
+    doc: &Doc,
+    blobs: &Store,
+    author_id: AuthorId,
+) -> Result<Vec<String>, String> {
+    let mut out = Vec::new();
+    for channel_id in seated_channels(doc, author_id).await? {
+        for seat in roster(doc, blobs, author_id, &channel_id).await? {
+            if seat.removed_at.is_some() {
+                continue;
+            }
+            if let Some(sealed) = invitation_box(doc, blobs, author_id, &channel_id, &seat.id).await
+            {
+                out.push(sealed);
+            }
+        }
+    }
+    out.sort();
+    Ok(out)
 }
 
 /// Take a member out of one of this identity's channels, answering with how many of their
@@ -339,7 +434,13 @@ mod tests {
     use crate::testnet::{Identity, World};
     use pin_channel::ContentKey;
 
-    const CHANNEL: &str = "chan";
+    /// A channel's key, and a second one beside it.
+    const CK: [u8; 32] = [4u8; 32];
+    const OTHER: [u8; 32] = [6u8; 32];
+
+    fn chan() -> String {
+        pin_crypto::channel_id(&CK)
+    }
 
     fn member(i: u8) -> (String, [u8; 32]) {
         (format!("did:dht:m{i}"), pin_crypto::enc_public(&[i; 32]))
@@ -347,9 +448,18 @@ mod tests {
 
     async fn seat(me: &Identity, i: u8, at: &str) -> Seat {
         let (did, key) = member(i);
-        invite(&me.doc, &me.blobs, me.author_id, CHANNEL, &did, &key, at)
-            .await
-            .unwrap()
+        invite(
+            &me.doc,
+            &me.blobs,
+            me.author_id,
+            &me.app_key,
+            &CK,
+            &did,
+            &key,
+            at,
+        )
+        .await
+        .unwrap()
     }
 
     async fn tree(me: &Identity, channel: &str) -> Tree {
@@ -433,7 +543,8 @@ mod tests {
             &me.doc,
             &me.blobs,
             me.author_id,
-            &channel(),
+            &me.app_key,
+            &K,
             &did,
             &key,
             "2026-10-01T00:00:00Z",
@@ -664,21 +775,21 @@ mod tests {
         ]
         .to_vec();
         assert_eq!(leaves, [0, 1, 2]);
-        assert_eq!(tree(&me, CHANNEL).await.epoch(), 0);
+        assert_eq!(tree(&me, &chan()).await.epoch(), 0);
 
         let (did, _) = member(2);
         let n = remove(
             &me.doc,
             &me.blobs,
             me.author_id,
-            CHANNEL,
+            &chan(),
             &did,
             "2026-10-02T00:00:00Z",
         )
         .await
         .unwrap();
         assert_eq!(n, 1);
-        let derived = tree(&me, CHANNEL).await;
+        let derived = tree(&me, &chan()).await;
         assert_eq!(derived.epoch(), 1);
         assert_eq!(derived.member_at(1), None);
 
@@ -694,7 +805,7 @@ mod tests {
         let again = seat(&me, 1, "2026-10-01T00:00:09Z").await;
         assert_eq!(again, first);
         assert_eq!(
-            roster(&me.doc, &me.blobs, me.author_id, CHANNEL)
+            roster(&me.doc, &me.blobs, me.author_id, &chan())
                 .await
                 .unwrap()
                 .len(),
@@ -712,7 +823,7 @@ mod tests {
             &me.doc,
             &me.blobs,
             me.author_id,
-            CHANNEL,
+            &chan(),
             &did,
             "2026-10-02T00:00:00Z",
         )
@@ -720,7 +831,7 @@ mod tests {
         .unwrap();
         let back = seat(&me, 1, "2026-10-03T00:00:00Z").await;
         assert_ne!(back.id, first.id);
-        let seats = roster(&me.doc, &me.blobs, me.author_id, CHANNEL)
+        let seats = roster(&me.doc, &me.blobs, me.author_id, &chan())
             .await
             .unwrap();
         assert_eq!(seats.len(), 2);
@@ -738,14 +849,14 @@ mod tests {
             &me.doc,
             &me.blobs,
             me.author_id,
-            CHANNEL,
+            &chan(),
             "did:dht:nobody",
             "2026-10-02T00:00:00Z",
         )
         .await
         .unwrap();
         assert_eq!(n, 0);
-        assert_eq!(tree(&me, CHANNEL).await.epoch(), 0);
+        assert_eq!(tree(&me, &chan()).await.epoch(), 0);
     }
 
     #[tokio::test]
@@ -758,14 +869,15 @@ mod tests {
             &me.doc,
             &me.blobs,
             me.author_id,
-            "other",
+            &me.app_key,
+            &OTHER,
             &did,
             &key,
             "2026-10-01T00:00:02Z",
         )
         .await
         .unwrap();
-        let mine = roster(&me.doc, &me.blobs, me.author_id, CHANNEL)
+        let mine = roster(&me.doc, &me.blobs, me.author_id, &chan())
             .await
             .unwrap();
         assert_eq!(mine.len(), 1);
@@ -787,7 +899,8 @@ mod tests {
             &me.doc,
             &me.blobs,
             me.author_id,
-            "other",
+            &me.app_key,
+            &OTHER,
             &did,
             &key,
             "2026-10-01T00:00:03Z",
@@ -799,7 +912,90 @@ mod tests {
             .unwrap()
             .into_iter()
             .collect();
-        assert_eq!(seated, [CHANNEL, "other"]);
+        let mut expected = vec![chan(), pin_crypto::channel_id(&OTHER)];
+        expected.sort();
+        assert_eq!(seated, expected);
+    }
+
+    #[tokio::test]
+    async fn an_invitation_is_sealed_to_its_member_and_published_until_they_are_removed() {
+        let world = World::new();
+        let me = Identity::new(&world, 1).await;
+        let bob = Identity::new(&world, 2).await;
+        let bob_enc = pin_crypto::enc_public(&pin_derive::enc_key_seed(&bob.app_key));
+        let invite_bob = || {
+            invite(
+                &me.doc,
+                &me.blobs,
+                me.author_id,
+                &me.app_key,
+                &CK,
+                &bob.did,
+                &bob_enc,
+                "2026-10-01T00:00:00Z",
+            )
+        };
+        let boxes = || invitation_boxes(&me.doc, &me.blobs, me.author_id);
+
+        let seat = invite_bob().await.unwrap();
+        let published = boxes().await.unwrap();
+        assert_eq!(published.len(), 1);
+        let opened =
+            pin_channel::invite::open_invitation(&bob.app_key, &bob.did, &published[0]).unwrap();
+        assert_eq!(opened.author, me.did);
+        assert_eq!(opened.leaf, seat.leaf);
+        assert_eq!(opened.seat_id, seat.id);
+        assert_eq!(opened.channel_id().unwrap(), chan());
+
+        remove(
+            &me.doc,
+            &me.blobs,
+            me.author_id,
+            &chan(),
+            &bob.did,
+            "2026-10-02T00:00:00Z",
+        )
+        .await
+        .unwrap();
+        assert!(
+            boxes().await.unwrap().is_empty(),
+            "removed, so no longer published"
+        );
+
+        let again = invite_bob().await.unwrap();
+        let published = boxes().await.unwrap();
+        assert_eq!(published.len(), 1);
+        let opened =
+            pin_channel::invite::open_invitation(&bob.app_key, &bob.did, &published[0]).unwrap();
+        assert_eq!(opened.seat_id, again.id, "the new seating's own invitation");
+    }
+
+    #[tokio::test]
+    async fn asking_again_puts_back_a_missing_invitation() {
+        let world = World::new();
+        let me = Identity::new(&world, 1).await;
+        let seat = seat(&me, 1, "2026-10-01T00:00:01Z").await;
+        crate::delete_record(
+            &me.doc,
+            me.author_id,
+            INVITE_BOX_COLLECTION,
+            &member_rkey(&chan(), &seat.id),
+        )
+        .await
+        .unwrap();
+        assert!(invitation_boxes(&me.doc, &me.blobs, me.author_id)
+            .await
+            .unwrap()
+            .is_empty());
+        let again = super::tests::seat(&me, 1, "2026-10-01T00:00:09Z").await;
+        assert_eq!(again, seat);
+        assert_eq!(
+            invitation_boxes(&me.doc, &me.blobs, me.author_id)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     #[tokio::test]
@@ -813,12 +1009,12 @@ mod tests {
             &me.doc,
             me.author_id,
             MEMBERS_COLLECTION,
-            &member_rkey(CHANNEL, "broken"),
+            &member_rkey(&chan(), "broken"),
             b"not json".to_vec(),
         )
         .await
         .unwrap();
-        assert!(roster(&me.doc, &me.blobs, me.author_id, CHANNEL)
+        assert!(roster(&me.doc, &me.blobs, me.author_id, &chan())
             .await
             .is_err());
     }

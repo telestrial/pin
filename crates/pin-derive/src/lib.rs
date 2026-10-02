@@ -711,6 +711,15 @@ pub const INSTANCE_COLLECTION: &str = "instance";
 /// counted by the epoch for as long as the channel exists.
 pub const MEMBERS_COLLECTION: &str = "members";
 
+/// The collection holding the sealed invitation behind each seating in this identity's
+/// rosters, keyed like the seating (`member_rkey`).
+///
+/// Sealed ONCE, when the seating is written, and kept: a seal draws a fresh ephemeral key,
+/// so sealing again on every publish would make the directory that carries these look new
+/// every pass. Apart from the roster because the box is what gets published and the
+/// seating never is.
+pub const INVITE_BOX_COLLECTION: &str = "invite-box";
+
 /// The collection recording each channel this identity is a MEMBER of: the channel's key,
 /// its author, the author's encryption key and this identity's leaf in the member tree —
 /// everything a climb to the content key needs. Keyed by channel, written when this identity
