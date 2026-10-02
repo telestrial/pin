@@ -112,6 +112,24 @@ async function resolveChannelBytes(
   }
 }
 
+/** Whether a resolve failed because this identity holds no key for a members-only
+ *  channel, as opposed to failing to reach it.
+ *
+ *  Both readings come after the author's signature over the head has verified, so the
+ *  object is genuine and only unreadable here: `pin_channel::open` answers "no read key"
+ *  when nothing beyond K was offered, and `open_channel_object` answers "no content key
+ *  held" when the doc holds no key climbed to that epoch. Each string is pinned by a Rust
+ *  test where it is produced (`an_object_without_a_read_key_does_not_open_with_k`, and the
+ *  climb test in `membership.rs`), so a change there fails a test there. Errors cross
+ *  both the wasm and the Tauri seam as strings, which is why this reads text. */
+export function isKeyNotHeld(err: unknown): boolean {
+  const text = String(err)
+  return (
+    text.includes('no read key for epoch') ||
+    text.includes('no content key held')
+  )
+}
+
 /** Reader side: resolve a channel from its K and its author's did. Derive the locator →
  *  resolve the Sia pointer off the DHT → download + decrypt with K, refusing a manifest
  *  the author did not sign. Returns null when the locator isn't published / resolvable. */
