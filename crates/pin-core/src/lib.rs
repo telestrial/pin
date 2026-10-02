@@ -791,6 +791,7 @@ pub async fn start_engagement_loop(
                         "publishFailed": o.publish_failed,
                         "membersPublished": o.members_published,
                         "membersFailed": o.members_failed,
+                        "invitations": o.invitations,
                     })
                     .to_string(),
                     Err(e) => serde_json::json!({ "error": e }).to_string(),

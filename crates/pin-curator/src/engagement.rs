@@ -170,6 +170,9 @@ pub struct EngagementOutcome {
     /// Channels whose member tree failed to publish. Retried next pass: a band's
     /// fingerprint is recorded only once it lands, and the pointer moves only after.
     pub members_failed: usize,
+    /// Invitations to this identity, by knock or found in a directory read this pass, that
+    /// recorded a new membership.
+    pub invitations: usize,
     /// What the comment lane did with its half of the same drain.
     pub comments: crate::comments::CommentsOutcome,
 }
@@ -835,10 +838,24 @@ pub async fn engagement_once<N: crate::net::Network>(
     // ONE drain, split by lane. `pin-rpc` never parses a record, so both kinds arrive here
     // together; two drains over one inbox would mean whichever ran second found the other's
     // knocks already gone.
-    let (comment_knocks, knocks): (Vec<_>, Vec<_>) = pin_rpc::drain(&ctx.inbox)
+    let (invitation_knocks, knocks): (Vec<_>, Vec<_>) = pin_rpc::drain(&ctx.inbox)
         .into_iter()
         .map(|k| k.record)
-        .partition(crate::comments::is_comment);
+        .partition(crate::membership::is_invitation_knock);
+    let (comment_knocks, knocks): (Vec<_>, Vec<_>) =
+        knocks.into_iter().partition(crate::comments::is_comment);
+    let knocked_boxes: Vec<String> = invitation_knocks
+        .iter()
+        .filter_map(|r| r["invite"].as_str().map(str::to_string))
+        .collect();
+    outcome.invitations += crate::membership::take_invitations(
+        &ctx.doc,
+        &ctx.blobs,
+        ctx.author_id,
+        &ctx.app_key,
+        &knocked_boxes,
+    )
+    .await;
     // Taken with the drain, so the refusals reported cover the same window as the knocks
     // taken. These arrived while the inbox was full and were never parked, so there is
     // nothing here to process — only to report.
@@ -953,6 +970,16 @@ pub async fn engagement_once<N: crate::net::Network>(
                     ctx.author_id,
                     &did,
                     crate::discover::parse_directory(&blob, &resolved.txt, &mark.url, &now_iso),
+                )
+                .await;
+                // And any invitation it carries for us: the floor under a knock that could
+                // not land.
+                outcome.invitations += crate::membership::take_invitations(
+                    &ctx.doc,
+                    &ctx.blobs,
+                    ctx.author_id,
+                    &ctx.app_key,
+                    &crate::membership::boxes_in(&blob),
                 )
                 .await;
                 reached.insert(did.clone());

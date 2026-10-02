@@ -40,6 +40,10 @@ pub struct Membership {
     pub author_enc_key: String,
     /// This identity's leaf in the tree.
     pub leaf: u64,
+    /// The seating the invitation was for. A member removed and invited back holds a new
+    /// seating at a new leaf, and this is how the newer invitation is told from the old.
+    #[serde(default)]
+    pub seat_id: String,
 }
 
 /// A content key as kept: the key, base64. Its channel and epoch are in its rkey.
@@ -57,6 +61,78 @@ pub async fn join(
 ) -> Result<(), String> {
     let bytes = serde_json::to_vec(membership).map_err(|e| format!("encode membership: {e}"))?;
     write_record(doc, author_id, MEMBERSHIP_COLLECTION, channel_id, bytes).await
+}
+
+/// The record an invitation knock carries: the sealed box, as the directory carries it.
+pub fn invitation_knock(sealed: &str) -> serde_json::Value {
+    serde_json::json!({ "invite": sealed })
+}
+
+/// Whether a knocked record is an invitation rather than an endorsement or a comment.
+pub(crate) fn is_invitation_knock(record: &serde_json::Value) -> bool {
+    record.get("invite").and_then(|v| v.as_str()).is_some()
+}
+
+/// The sealed boxes a directory blob publishes.
+pub(crate) fn boxes_in(blob: &serde_json::Value) -> Vec<String> {
+    blob.get("invites")
+        .and_then(|v| v.as_array())
+        .map(|boxes| {
+            boxes
+                .iter()
+                .filter_map(|b| b.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Record a membership for every invitation to this identity among `boxes`, answering how
+/// many were new.
+///
+/// Every box is tried, because a box does not say whose it is: the ones for somebody else
+/// fail to open and are passed over, and that is most of them. An invitation already held
+/// for the same seating writes nothing; one for a NEWER seating of the same channel — a
+/// member removed and invited back — replaces the old, whose leaf no longer climbs.
+///
+/// Recording a membership is not joining a feed. It is what lets this identity's Curator
+/// climb to the channel's key, so the channel is readable the moment its person accepts;
+/// what reaches their feed is still what they choose to watch.
+pub(crate) async fn take_invitations(
+    doc: &Doc,
+    blobs: &Store,
+    author_id: AuthorId,
+    app_key: &[u8; 32],
+    boxes: &[String],
+) -> usize {
+    let me = crate::own_did(app_key);
+    let mut taken = 0;
+    for sealed in boxes {
+        let Ok(invitation) = pin_channel::invite::open_invitation(app_key, &me, sealed) else {
+            continue;
+        };
+        let Ok(channel_id) = invitation.channel_id() else {
+            continue;
+        };
+        let held = read_record(doc, blobs, author_id, MEMBERSHIP_COLLECTION, &channel_id)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|b| serde_json::from_slice::<Membership>(&b).ok());
+        if held.is_some_and(|h| h.seat_id == invitation.seat_id) {
+            continue;
+        }
+        let membership = Membership {
+            channel_key: invitation.channel_key,
+            author: invitation.author,
+            author_enc_key: invitation.author_enc_key,
+            leaf: invitation.leaf,
+            seat_id: invitation.seat_id,
+        };
+        if join(doc, author_id, &channel_id, &membership).await.is_ok() {
+            taken += 1;
+        }
+    }
+    taken
 }
 
 /// Every channel this identity is a member of. A record that will not read is left out:
@@ -344,14 +420,11 @@ mod tests {
             }
         }
 
-        fn enc_public(&self) -> [u8; 32] {
-            pin_crypto::enc_public(&pin_derive::enc_key_seed(&self.author.app_key))
-        }
-
-        /// Seat a member and record the membership on their side, as an invitation will.
+        /// Seat a member, and have their side take the invitation from what the author
+        /// publishes — the directory's boxes, as a crawl of the author would find them.
         async fn seat(&self, member: &Identity) {
             let a = &self.author;
-            let seat = invite(
+            invite(
                 &a.doc,
                 &a.blobs,
                 a.author_id,
@@ -363,19 +436,17 @@ mod tests {
             )
             .await
             .unwrap();
-            join(
+            let boxes = crate::members::invitation_boxes(&a.doc, &a.blobs, a.author_id)
+                .await
+                .unwrap();
+            take_invitations(
                 &member.doc,
+                &member.blobs,
                 member.author_id,
-                &self.id,
-                &Membership {
-                    channel_key: pin_crypto::b64_encode(&self.key),
-                    author: a.did.clone(),
-                    author_enc_key: pin_crypto::b64_encode(&self.enc_public()),
-                    leaf: seat.leaf,
-                },
+                &member.app_key,
+                &boxes,
             )
-            .await
-            .unwrap();
+            .await;
         }
 
         async fn unseat(&self, member: &Identity) {
@@ -732,6 +803,159 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(opened.0, "{}");
+    }
+
+    async fn boxes(channel: &Channel) -> Vec<String> {
+        let a = &channel.author;
+        crate::members::invitation_boxes(&a.doc, &a.blobs, a.author_id)
+            .await
+            .unwrap()
+    }
+
+    async fn membership_of(member: &Identity, channel: &Channel) -> Option<Membership> {
+        read_record(
+            &member.doc,
+            &member.blobs,
+            member.author_id,
+            MEMBERSHIP_COLLECTION,
+            &channel.id,
+        )
+        .await
+        .unwrap()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+    }
+
+    async fn take(who: &Identity, boxes: Vec<String>) -> usize {
+        take_invitations(&who.doc, &who.blobs, who.author_id, &who.app_key, &boxes).await
+    }
+
+    #[tokio::test]
+    async fn only_ones_own_invitation_is_taken_and_only_once() {
+        let world = World::new();
+        let channel = Channel::new(&world).await;
+        let bob = Identity::new(&world, 2).await;
+        let carol = Identity::new(&world, 3).await;
+        channel.seat(&carol).await;
+        // Carol's box is in what bob reads; it is not his.
+
+        assert_eq!(take(&bob, boxes(&channel).await).await, 0);
+        assert!(membership_of(&bob, &channel).await.is_none());
+        assert_eq!(
+            take(&carol, boxes(&channel).await).await,
+            0,
+            "already taken"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_invitation_back_replaces_the_membership_it_supersedes() {
+        let world = World::new();
+        let channel = Channel::new(&world).await;
+        let bob = Identity::new(&world, 2).await;
+        let carol = Identity::new(&world, 3).await;
+        channel.seat(&carol).await;
+        channel.seat(&bob).await;
+        let first = membership_of(&bob, &channel).await.unwrap();
+        assert_eq!(first.leaf, 1);
+
+        // Out, carol's leaf freed, back in: a new seating at a new leaf.
+        channel.unseat(&bob).await;
+        channel.unseat(&carol).await;
+        channel.seat(&bob).await;
+        let second = membership_of(&bob, &channel).await.unwrap();
+        assert_ne!(second.seat_id, first.seat_id);
+        assert_eq!(second.leaf, 0);
+        channel.publish().await;
+        assert_eq!(pass(&bob).await.climbed, 1, "the new leaf climbs");
+    }
+
+    #[tokio::test]
+    async fn a_knocked_invitation_records_a_membership() {
+        let world = World::new();
+        let channel = Channel::new(&world).await;
+        let bob = Identity::new(&world, 2).await;
+        bob.follows(&[]).await;
+        let a = &channel.author;
+        invite(
+            &a.doc,
+            &a.blobs,
+            a.author_id,
+            &a.app_key,
+            &channel.key,
+            &bob.did,
+            &pin_crypto::enc_public(&pin_derive::enc_key_seed(&bob.app_key)),
+            "2026-10-01T00:00:00Z",
+        )
+        .await
+        .unwrap();
+        let sealed = boxes(&channel).await.remove(0);
+
+        let ctx = bob.engagement_ctx();
+        let handler = pin_rpc::HeyHandler::new(ctx.inbox.clone());
+        assert!(handler.accept_knock(&pin_rpc::hey_request(&invitation_knock(&sealed))));
+        let outcome = crate::engagement_once(
+            &ctx,
+            &bob.did,
+            "2026-10-01T00:00:00.000Z".into(),
+            false,
+            false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(outcome.invitations, 1);
+        assert_eq!(
+            outcome.rejected + outcome.knocks_rejected,
+            0,
+            "not read as an endorsement"
+        );
+        assert_eq!(membership_of(&bob, &channel).await.unwrap().author, a.did);
+    }
+
+    #[tokio::test]
+    async fn an_invitation_in_a_directory_the_crawl_reads_records_a_membership() {
+        let world = World::new();
+        let channel = Channel::new(&world).await;
+        let bob = Identity::new(&world, 2).await;
+        bob.follows_and_publishes(&[&channel.author.did]).await;
+        let a = &channel.author;
+        invite(
+            &a.doc,
+            &a.blobs,
+            a.author_id,
+            &a.app_key,
+            &channel.key,
+            &bob.did,
+            &pin_crypto::enc_public(&pin_derive::enc_key_seed(&bob.app_key)),
+            "2026-10-01T00:00:00Z",
+        )
+        .await
+        .unwrap();
+        world.publish(
+            &a.did,
+            "sia://alice-directory",
+            serde_json::json!({
+                "version": 1,
+                "profile": { "username": "alice" },
+                "channels": [],
+                "follows": [],
+                "handleFollows": [],
+                "endorsements": [],
+                "invites": boxes(&channel).await,
+                "updatedAt": "2026-10-01T00:00:00.000Z",
+            }),
+        );
+
+        let outcome = crate::engagement_once(
+            &bob.engagement_ctx(),
+            &bob.did,
+            "2026-10-01T00:00:00.000Z".into(),
+            true,
+            false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(outcome.invitations, 1);
+        assert_eq!(membership_of(&bob, &channel).await.unwrap().author, a.did);
     }
 
     #[tokio::test]

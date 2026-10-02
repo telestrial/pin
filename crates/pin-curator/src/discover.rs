@@ -915,6 +915,16 @@ async fn read_new<N: crate::net::Network>(
         .await
         .ok()?;
     let fresh = parse_directory(&blob, &resolved.txt, &resolved.url, now_iso);
+    // An invitation to us among this identity's boxes is recorded as we pass: a stranger
+    // who invited us is read here or not at all, unless their knock landed.
+    crate::membership::take_invitations(
+        &ctx.doc,
+        &ctx.blobs,
+        ctx.author_id,
+        &ctx.app_key,
+        &crate::membership::boxes_in(&blob),
+    )
+    .await;
     record_directory(
         &ctx.doc,
         &ctx.blobs,
@@ -1042,6 +1052,14 @@ pub async fn discover_once<N: crate::net::Network>(
             continue;
         };
         let fresh = parse_directory(&blob, &resolved.txt, &resolved.url, &now_iso);
+        crate::membership::take_invitations(
+            &ctx.doc,
+            &ctx.blobs,
+            ctx.author_id,
+            &ctx.app_key,
+            &crate::membership::boxes_in(&blob),
+        )
+        .await;
         // A new edge only WIDENS anything if it points at somebody neither held nor covered
         // elsewhere, which is the same pair `frontier` itself skips. Asking here is what
         // keeps an unfollow — or a follow of somebody already known — from paying for a

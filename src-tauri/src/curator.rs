@@ -1295,14 +1295,16 @@ pub async fn curator_start_engagement(
                         || o.publish_failed > 0
                         || o.members_published > 0
                         || o.members_failed > 0
+                        || o.invitations > 0
                         || comments > 0
                         || comment_withdrawals > 0
                     {
                         log::info!(
-                            "curator engagement: reached {} unreachable {} added {} withdrawn {} folded {} tallies {} cleared {} rejected {} not-ours {} published {} publish-failed {} member-bands {} members-failed {} | knocks: accepted {} rejected {} not-ours {} stale {} refused {} | withdrawals: applied {} rejected {} not-ours {} ignored {}{}{}",
+                            "curator engagement: reached {} unreachable {} added {} withdrawn {} folded {} tallies {} cleared {} rejected {} not-ours {} published {} publish-failed {} member-bands {} members-failed {} invitations {} | knocks: accepted {} rejected {} not-ours {} stale {} refused {} | withdrawals: applied {} rejected {} not-ours {} ignored {}{}{}",
                             o.reached, o.unreachable, o.added, o.withdrawn, o.folded, o.tallies,
                             o.cleared, o.rejected, o.not_ours, o.published,
                             o.publish_failed, o.members_published, o.members_failed,
+                            o.invitations,
                             o.knocked, o.knocks_rejected,
                             o.knocks_not_ours, o.stale_knocks, o.knocks_refused,
                             o.retractions_applied,
