@@ -26,5 +26,9 @@ export type DispatchSettings = {
   // published into the identity-doc for others to resolve. Optional for
   // back-compat (absent → no profile set).
   profile?: ProfileRecord | null
+  // Invitations to members-only channels this identity has turned down, by channelID.
+  // The membership the Curator wrote stays; this only keeps the invitation off the
+  // sidebar, on every device. Optional (absent → none dismissed).
+  dismissedInvitations?: string[]
   updatedAt: string
 }

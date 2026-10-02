@@ -21,6 +21,7 @@ const EMPTY: SettingsFields = {
   follows: [],
   handleFollows: [],
   profile: null,
+  dismissedInvitations: [],
 }
 
 // A full DispatchSettings from a partial SettingsFields (peer wire shape).
@@ -78,7 +79,16 @@ describe('decidePeerSettings', () => {
       follows: [],
       handleFollows: [],
       profile: null,
+      dismissedInvitations: [],
     })
+  })
+
+  it('applies a dismissal made on another device', () => {
+    // Settings-synced on purpose, so an invitation turned down on the laptop is not
+    // offered again on the phone. Without it in the comparison this is a no-op.
+    const peer = peerFrom({ dismissedInvitations: ['chan-x'] })
+    const next = decidePeerSettings(peer, EMPTY, true, 'rounded')
+    expect(next?.dismissedInvitations).toEqual(['chan-x'])
   })
 })
 
@@ -89,5 +99,24 @@ describe('fingerprintOf', () => {
     const c: SettingsFields = { ...EMPTY, myChannels: [channel('b')] }
     expect(fingerprintOf(a)).toBe(fingerprintOf(b))
     expect(fingerprintOf(a)).not.toBe(fingerprintOf(c))
+  })
+
+  it('reads no dismissals exactly as it did before the field existed', () => {
+    // A device that mirrored before `dismissedInvitations` existed holds this string. A
+    // different one would read as local being ahead of the mirror on the next boot, and
+    // the load would skip the doc for a field nobody had used.
+    expect(fingerprintOf(EMPTY)).toBe(
+      JSON.stringify({
+        myChannels: [],
+        subscriptions: [],
+        theme: 'rounded',
+        follows: [],
+        handleFollows: [],
+        profile: null,
+      }),
+    )
+    expect(
+      fingerprintOf({ ...EMPTY, dismissedInvitations: ['chan-x'] }),
+    ).not.toBe(fingerprintOf(EMPTY))
   })
 })

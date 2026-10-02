@@ -99,6 +99,7 @@ export type SettingsFields = {
   follows: FollowEdge[]
   handleFollows: string[]
   profile: ProfileRecord | null
+  dismissedInvitations: string[]
 }
 
 export function fingerprintOf(f: SettingsFields): string {
@@ -109,6 +110,12 @@ export function fingerprintOf(f: SettingsFields): string {
     follows: f.follows,
     handleFollows: f.handleFollows,
     profile: f.profile,
+    // Only when there is one, so a device that never dismissed anything keeps the
+    // fingerprint it mirrored under before the field existed, rather than reading as
+    // ahead of its own mirror on the first boot after.
+    ...(f.dismissedInvitations.length > 0
+      ? { dismissedInvitations: f.dismissedInvitations }
+      : {}),
   })
 }
 
@@ -163,6 +170,7 @@ export function decidePeerSettings(
     follows: peer.follows ?? [],
     handleFollows: peer.handleFollows ?? [],
     profile: peer.profile ?? null,
+    dismissedInvitations: peer.dismissedInvitations ?? [],
   }
   if (fingerprintOf(next) === fingerprintOf(current)) return null
   return next
@@ -261,6 +269,7 @@ export function useSettingsDocsMirror() {
           follows: state.follows,
           handleFollows: state.handleFollows,
           profile: state.profile,
+          dismissedInvitations: state.dismissedInvitations,
           updatedAt,
         }
         const key = await deriveSettingsKey(appKeyBytes)
@@ -307,7 +316,8 @@ export function useSettingsDocsMirror() {
         s.theme === p.theme &&
         s.follows === p.follows &&
         s.handleFollows === p.handleFollows &&
-        s.profile === p.profile
+        s.profile === p.profile &&
+        s.dismissedInvitations === p.dismissedInvitations
       ) {
         return
       }
@@ -370,6 +380,7 @@ export function useSettingsDocsMirror() {
             next.follows,
             next.handleFollows,
             next.profile,
+            next.dismissedInvitations,
           )
         // Mark this content as mirrored so the WRITE side (which the hydrate's store
         // change just triggered) short-circuits instead of bouncing it back out.

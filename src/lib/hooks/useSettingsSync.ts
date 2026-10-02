@@ -146,6 +146,7 @@ export function useSettingsSync() {
             s.follows ?? [],
             s.handleFollows ?? [],
             s.profile ?? null,
+            s.dismissedInvitations ?? [],
           )
       } catch (e) {
         if (cancelled) return

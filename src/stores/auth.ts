@@ -58,6 +58,10 @@ type AuthState = {
   // The user's own profile — canonical locally (settings-synced), published into
   // the identity-doc. Replaces the atproto dev.sia.pin.profile record.
   profile: ProfileRecord | null
+  // Invitations to members-only channels turned down, by channelID — settings-synced so
+  // a dismissal holds on every device. The membership itself is the Curator's record and
+  // stays; this is only whether the sidebar still offers it.
+  dismissedInvitations: string[]
   // This identity's own did:dht, derived from the Sia AppKey (HKDF, same as the
   // Curator / identity-doc). The self-sovereign "who am I" — used for isSelf and
   // profile navigation. Persisted for instant availability on boot; re-derived
@@ -123,6 +127,7 @@ type AuthState = {
   addHandleFollow: (didDht: string) => void
   removeHandleFollow: (didDht: string) => void
   setProfile: (patch: ProfilePatch) => void
+  dismissInvitation: (channelID: string) => void
   setMyDidDht: (did: string) => void
   setFeedSortOrder: (order: FeedSortOrder) => void
   setCurationEnabled: (enabled: boolean) => void
@@ -134,6 +139,7 @@ type AuthState = {
     follows: FollowEdge[],
     handleFollows: string[],
     profile: ProfileRecord | null,
+    dismissedInvitations: string[],
   ) => void
   setSettingsObjectID: (id: string) => void
   setSettingsLoaded: (loaded: boolean) => void
@@ -158,6 +164,7 @@ export const useAuthStore = create<AuthState>()(
       follows: [],
       handleFollows: [],
       profile: null,
+      dismissedInvitations: [],
       myDidDht: null,
       feedSortOrder: 'newest',
       curationEnabled: true,
@@ -272,6 +279,12 @@ export const useAuthStore = create<AuthState>()(
         })),
       setProfile: (patch) =>
         set((s) => ({ profile: applyProfilePatch(s.profile, patch) })),
+      dismissInvitation: (channelID) =>
+        set((s) =>
+          s.dismissedInvitations.includes(channelID)
+            ? s
+            : { dismissedInvitations: [...s.dismissedInvitations, channelID] },
+        ),
       setMyDidDht: (myDidDht) => set({ myDidDht }),
       setFeedSortOrder: (feedSortOrder) => set({ feedSortOrder }),
       setCurationEnabled: (curationEnabled) => set({ curationEnabled }),
@@ -283,6 +296,7 @@ export const useAuthStore = create<AuthState>()(
         follows,
         handleFollows,
         profile,
+        dismissedInvitations,
       ) =>
         set({
           myChannels,
@@ -291,6 +305,7 @@ export const useAuthStore = create<AuthState>()(
           follows,
           handleFollows,
           profile,
+          dismissedInvitations,
           settingsLoaded: true,
         }),
       setSettingsObjectID: (settingsObjectID) => set({ settingsObjectID }),
@@ -311,6 +326,7 @@ export const useAuthStore = create<AuthState>()(
           follows: [],
           handleFollows: [],
           profile: null,
+          dismissedInvitations: [],
           myDidDht: null,
           settingsObjectID: null,
           settingsLoaded: false,
@@ -331,6 +347,7 @@ export const useAuthStore = create<AuthState>()(
         follows: state.follows,
         handleFollows: state.handleFollows,
         profile: state.profile,
+        dismissedInvitations: state.dismissedInvitations,
         myDidDht: state.myDidDht,
         feedSortOrder: state.feedSortOrder,
         curationEnabled: state.curationEnabled,
