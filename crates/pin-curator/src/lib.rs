@@ -763,17 +763,26 @@ pub(crate) async fn held_content_key(
     membership::held_key(doc, blobs, author_id, channel_id, epoch).await
 }
 
-/// Open a channel object this identity holds K for, answering with its payload and the
-/// content key it opened with: by the read key in its head, or — for a channel only its
-/// members may read — by the key this identity climbed to for the epoch the head says.
+/// What a reader of a channel object may hold besides K.
 ///
-/// Verified either way: the head is checked against `author` before anything in it is
+/// The doc keeps the content keys this identity climbed to as a member; the AppKey derives
+/// an author's keys to their own channels. Either may be absent — a tab with no doc open, a
+/// caller that is not the author — and each only widens what opens.
+#[derive(Clone, Copy, Default)]
+pub struct Holdings<'a> {
+    pub doc: Option<(&'a Doc, &'a Store, AuthorId)>,
+    pub app_key: Option<&'a [u8; 32]>,
+}
+
+/// Open a channel object, answering with its payload and the content key it opened with:
+/// by the read key in its head; failing that as its author, when `author` is this identity;
+/// failing that by the key this identity climbed to as a member, for the epoch its head
+/// says.
+///
+/// Verified on every route: the head is checked against `author` before anything in it is
 /// believed, so a forged object fails here whichever route it would have taken.
-pub(crate) async fn open_held(
-    doc: &Doc,
-    blobs: &Store,
-    author_id: AuthorId,
-    channel_id: &str,
+pub async fn open_channel_object(
+    holdings: &Holdings<'_>,
     channel_key: &[u8; 32],
     blob: &str,
     kind: pin_channel::Kind,
@@ -782,17 +791,75 @@ pub(crate) async fn open_held(
     let signer = pin_channel::Signer::Author(author);
     let (payload, content) = match pin_channel::open(channel_key, blob, kind, signer) {
         Ok(opened) => (opened.payload, opened.content),
-        Err(_) => {
-            let epoch = pin_channel::head_epoch(channel_key, blob, kind, signer)?;
-            let content = membership::held_key(doc, blobs, author_id, channel_id, epoch)
-                .await
-                .ok_or_else(|| format!("no content key held for epoch {epoch}"))?;
-            let payload = pin_channel::open_with(channel_key, blob, &content, kind, signer)?;
-            (payload, content)
+        Err(no_read_key) => {
+            let own = holdings
+                .app_key
+                .filter(|k| bare_did(&own_did(k)) == bare_did(author));
+            if let Some(app_key) = own {
+                pin_channel::open_as_author(app_key, channel_key, blob, kind)?
+            } else {
+                let Some((doc, blobs, author_id)) = holdings.doc else {
+                    return Err(no_read_key);
+                };
+                let epoch = pin_channel::head_epoch(channel_key, blob, kind, signer)?;
+                let channel_id = pin_crypto::channel_id(channel_key);
+                let content = membership::held_key(doc, blobs, author_id, &channel_id, epoch)
+                    .await
+                    .ok_or_else(|| format!("no content key held for epoch {epoch}"))?;
+                let payload = pin_channel::open_with(channel_key, blob, &content, kind, signer)?;
+                (payload, content)
+            }
         }
     };
     let json = String::from_utf8(payload).map_err(|_| "payload is not UTF-8".to_string())?;
     Ok((json, content))
+}
+
+fn bare_did(did: &str) -> &str {
+    did.strip_prefix("did:dht:").unwrap_or(did)
+}
+
+/// Download a channel object and open it with what this identity holds, answering with its
+/// JSON, the blob exactly as fetched, and the key it opened with.
+pub async fn fetch_channel_object(
+    sia: &pin_sia::Session,
+    holdings: &Holdings<'_>,
+    channel_key: &[u8; 32],
+    item_url: &str,
+    kind: pin_channel::Kind,
+    author: &str,
+) -> Result<(String, String, pin_channel::ContentKey), String> {
+    let bytes = sia.download_item(item_url).await?;
+    let blob = String::from_utf8(bytes).map_err(|_| "object blob is not UTF-8".to_string())?;
+    let (json, content) = open_channel_object(holdings, channel_key, &blob, kind, author).await?;
+    Ok((json, blob, content))
+}
+
+/// Read a channel's manifest from K, opening it with what this identity holds. `None` when
+/// the locator resolves to nothing, which is ordinary.
+pub async fn resolve_channel(
+    sia: &pin_sia::Session,
+    holdings: &Holdings<'_>,
+    channel_key: &[u8; 32],
+    author: &str,
+) -> Result<Option<pin_channel::Resolved>, String> {
+    let Some(item_url) = pin_channel::resolve_url(channel_key).await? else {
+        return Ok(None);
+    };
+    let (manifest_json, blob, content) = fetch_channel_object(
+        sia,
+        holdings,
+        channel_key,
+        &item_url,
+        pin_channel::Kind::Manifest,
+        author,
+    )
+    .await?;
+    Ok(Some(pin_channel::Resolved {
+        manifest_json,
+        blob,
+        content,
+    }))
 }
 
 /// Whether one of this identity's channels is one only its members may read.
@@ -1203,20 +1270,19 @@ async fn fetch_held(
     item_url: &str,
     author: &str,
 ) -> Result<(String, String, pin_channel::ContentKey), String> {
-    let bytes = ctx.sia.download_item(item_url).await?;
-    let blob = String::from_utf8(bytes).map_err(|_| "manifest blob is not UTF-8".to_string())?;
-    let (json, content) = open_held(
-        &ctx.doc,
-        &ctx.blobs,
-        ctx.author_id,
-        channel_id,
+    let _ = channel_id;
+    fetch_channel_object(
+        &ctx.sia,
+        &Holdings {
+            doc: Some((&ctx.doc, &ctx.blobs, ctx.author_id)),
+            app_key: Some(&ctx.app_key),
+        },
         channel_key,
-        &blob,
+        item_url,
         pin_channel::Kind::Manifest,
         author,
     )
-    .await?;
-    Ok((json, blob, content))
+    .await
 }
 
 /// One pass: refresh every subscribed channel's cached manifest and published counts, and

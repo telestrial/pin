@@ -766,11 +766,11 @@ mod tests {
             let bob = &bob;
             let channel = &channel;
             async move {
-                crate::open_held(
-                    &bob.doc,
-                    &bob.blobs,
-                    bob.author_id,
-                    &channel.id,
+                crate::open_channel_object(
+                    &crate::Holdings {
+                        doc: Some((&bob.doc, &bob.blobs, bob.author_id)),
+                        app_key: Some(&bob.app_key),
+                    },
                     &channel.key,
                     &blob,
                     pin_channel::Kind::Manifest,
@@ -783,18 +783,14 @@ mod tests {
         let err = open(members_only.clone()).await.unwrap_err();
         assert!(err.contains("no content key held"), "{err}");
         pass(&bob).await;
-        let (json, content) = open(members_only).await.unwrap();
+        let (json, content) = open(members_only.clone()).await.unwrap();
         assert_eq!(json, "{\"items\":[]}");
         assert_eq!(content.key, channel.c(0));
 
         // A channel anyone holding K may read opens with no membership at all.
         let public = pin_channel::seal(&sealing, pin_channel::Kind::Manifest, b"{}").unwrap();
-        let carol = Identity::new(&world, 3).await;
-        let opened = crate::open_held(
-            &carol.doc,
-            &carol.blobs,
-            carol.author_id,
-            &channel.id,
+        let opened = crate::open_channel_object(
+            &crate::Holdings::default(),
             &channel.key,
             &public,
             pin_channel::Kind::Manifest,
@@ -803,6 +799,39 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(opened.0, "{}");
+
+        // Its author opens a members-only manifest with nothing but their AppKey — no doc,
+        // no climb — and nobody else's AppKey stands in for theirs.
+        let a = &channel.author;
+        let as_author = |app_key: &[u8; 32]| {
+            let channel = &channel;
+            let members_only = members_only.clone();
+            let app_key = *app_key;
+            async move {
+                crate::open_channel_object(
+                    &crate::Holdings {
+                        doc: None,
+                        app_key: Some(&app_key),
+                    },
+                    &channel.key,
+                    &members_only,
+                    pin_channel::Kind::Manifest,
+                    &channel.author.did,
+                )
+                .await
+            }
+        };
+        assert_eq!(as_author(&a.app_key).await.unwrap().1.key, channel.c(0));
+        assert!(as_author(&bob.app_key).await.is_err());
+        assert!(crate::open_channel_object(
+            &crate::Holdings::default(),
+            &channel.key,
+            &members_only,
+            pin_channel::Kind::Manifest,
+            &a.did,
+        )
+        .await
+        .is_err());
     }
 
     async fn boxes(channel: &Channel) -> Vec<String> {
