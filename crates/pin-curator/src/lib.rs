@@ -832,6 +832,51 @@ pub(crate) async fn channel_sealing<'a>(
     ))
 }
 
+/// Whether a manifest says its channel is one only its members may read.
+///
+/// Read from the manifest being sealed rather than from settings, because a new channel's
+/// settings entry is written only after its first manifest is published — and that first
+/// manifest must already go out without a read key.
+pub fn manifest_is_members_only(manifest_json: &str) -> bool {
+    #[derive(serde::Deserialize)]
+    struct Visibility {
+        #[serde(default)]
+        visibility: Option<pin_manifest::ChannelVisibility>,
+    }
+    serde_json::from_str::<Visibility>(manifest_json)
+        .ok()
+        .and_then(|v| v.visibility)
+        == Some(pin_manifest::ChannelVisibility::Secret)
+}
+
+/// How its author seals a manifest: the public way, or — for a channel only its members may
+/// read — at its member tree's current epoch with no read key.
+///
+/// The doc is needed only for the second, to read the roster, and a members-only manifest
+/// with no doc to read it from is refused rather than sealed the public way, which would
+/// hand its posts to anyone holding K.
+pub async fn manifest_sealing<'a>(
+    doc: Option<(&Doc, &Store, AuthorId)>,
+    app_key: &[u8; 32],
+    channel_key: &'a [u8; 32],
+    manifest_json: &str,
+) -> Result<pin_channel::Sealing<'a>, String> {
+    if !manifest_is_members_only(manifest_json) {
+        return Ok(pin_channel::author_sealing(app_key, channel_key));
+    }
+    let (doc, blobs, author_id) =
+        doc.ok_or("a members-only channel is sealed at its roster's epoch, and no doc is open")?;
+    let seats =
+        members::roster(doc, blobs, author_id, &pin_crypto::channel_id(channel_key)).await?;
+    let epoch = pin_channel::tree::Tree::from_roster(&seats).epoch();
+    Ok(pin_channel::author_sealing_at(
+        app_key,
+        channel_key,
+        epoch,
+        true,
+    ))
+}
+
 /// A value in one of this identity's own channel docs, opened at whatever epoch it was
 /// sealed: the author derives every epoch's key, so a value written before a rotation reads
 /// as readily as one written after. Reading it with the current key alone would drop every

@@ -23,15 +23,24 @@ fn key32(channel_key: &[u8]) -> Result<[u8; 32], String> {
 #[tauri::command]
 pub async fn channel_publish(
     state: tauri::State<'_, SiaState>,
+    curator: tauri::State<'_, crate::curator::CuratorState>,
     app_key_hex: String,
     channel_key: Vec<u8>,
     manifest_json: String,
 ) -> Result<pin_channel::Published, String> {
     let app_key = pin_derive::decode_app_key(&app_key_hex).ok_or("app key must be 64 hex chars")?;
     let key = key32(&channel_key)?;
+    // The doc is read only for a members-only channel, whose epoch is its roster's.
+    let engine = crate::curator::current_engine(&curator).ok();
     state
         .run(move |s| async move {
-            let sealing = pin_channel::author_sealing(&app_key, &key);
+            let blobs = engine.as_ref().map(|e| (*e.blobs).clone());
+            let doc = engine
+                .as_ref()
+                .zip(blobs.as_ref())
+                .map(|(e, b)| (&e.doc, b, e.author_id));
+            let sealing =
+                pin_curator::manifest_sealing(doc, &app_key, &key, &manifest_json).await?;
             pin_channel::publish(&s, &sealing, &manifest_json).await
         })
         .await

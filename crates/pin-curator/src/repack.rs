@@ -394,13 +394,11 @@ async fn read_own_manifest(
     .ok()
     .flatten()?;
     let blob = String::from_utf8(raw).ok()?;
-    let json = pin_channel::open_blob(
-        k,
-        &blob,
-        pin_channel::Signer::Author(&crate::own_did(&ctx.app_key)),
-    )
-    .ok()?;
-    serde_json::from_str(&json).ok()
+    // As its author, at whatever epoch it was sealed: a members-only channel's manifest
+    // carries no read key.
+    let (json, _) =
+        pin_channel::open_as_author(&ctx.app_key, k, &blob, pin_channel::Kind::Manifest).ok()?;
+    serde_json::from_slice(&json).ok()
 }
 
 /// Put the rewritten manifest back, so the screen sees what the Curator did. This is
@@ -561,12 +559,14 @@ async fn rewrite_channels(
         // timestamps, so nothing reorders.
         manifest.published_at = now_iso.to_string();
         let json = serde_json::to_string(&manifest).map_err(|e| e.to_string())?;
-        let published = pin_channel::publish(
-            &ctx.sia,
-            &pin_channel::author_sealing(&ctx.app_key, &k),
+        let sealing = crate::manifest_sealing(
+            Some((&ctx.doc, &ctx.blobs, ctx.author_id)),
+            &ctx.app_key,
+            &k,
             &json,
         )
         .await?;
+        let published = pin_channel::publish(&ctx.sia, &sealing, &json).await?;
         write_own_manifest(ctx, channel_id, published.blob).await?;
         count += 1;
     }

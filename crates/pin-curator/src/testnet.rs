@@ -2770,6 +2770,76 @@ mod content_keys {
         assert_eq!(held(&john, &channel_id, &k, "unused").await, None);
     }
 
+    #[test]
+    fn a_manifest_says_whether_only_members_may_read_it() {
+        assert!(crate::manifest_is_members_only(
+            r#"{"visibility":"secret","items":[]}"#
+        ));
+        assert!(!crate::manifest_is_members_only(
+            r#"{"visibility":"public"}"#
+        ));
+        assert!(!crate::manifest_is_members_only(
+            r#"{"visibility":"obscure"}"#
+        ));
+        assert!(!crate::manifest_is_members_only(r#"{"items":[]}"#));
+        assert!(!crate::manifest_is_members_only("not json"));
+    }
+
+    #[tokio::test]
+    async fn a_secret_manifest_is_sealed_at_the_roster_s_epoch_and_never_without_one() {
+        let world = World::new();
+        let john = Identity::new(&world, 1).await;
+        let k = john.channel_key();
+        let channel_id = pin_crypto::channel_id(&k);
+        for did in ["did:dht:bob", "did:dht:carol"] {
+            crate::members::invite(
+                &john.doc,
+                &john.blobs,
+                john.author_id,
+                &john.app_key,
+                &k,
+                did,
+                &pin_crypto::enc_public(&[2u8; 32]),
+                "2026-10-01T00:00:00Z",
+            )
+            .await
+            .unwrap();
+        }
+        crate::members::remove(
+            &john.doc,
+            &john.blobs,
+            john.author_id,
+            &channel_id,
+            "did:dht:bob",
+            "2026-10-02T00:00:00Z",
+        )
+        .await
+        .unwrap();
+        let secret = r#"{"visibility":"secret","items":[]}"#;
+        let doc = Some((&john.doc, &john.blobs, john.author_id));
+
+        let sealing = crate::manifest_sealing(doc, &john.app_key, &k, secret)
+            .await
+            .unwrap();
+        assert!(!sealing.publish_read_key);
+        assert_eq!(sealing.content.epoch, 1);
+
+        // No doc to read the roster from: refused, never sealed the public way.
+        assert!(crate::manifest_sealing(None, &john.app_key, &k, secret)
+            .await
+            .is_err());
+
+        // A public manifest needs no doc at all.
+        let public = crate::manifest_sealing(None, &john.app_key, &k, r#"{"visibility":"public"}"#)
+            .await
+            .unwrap();
+        assert!(public.publish_read_key);
+        assert_eq!(
+            public.content,
+            pin_channel::author_sealing(&john.app_key, &k).content
+        );
+    }
+
     #[tokio::test]
     async fn an_own_doc_value_from_before_a_rotation_still_reads() {
         // Read with the current key alone, a floor republished after a removal would drop

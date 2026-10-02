@@ -413,7 +413,7 @@ pub fn curator_doc_ticket(state: tauri::State<CuratorState>) -> Option<String> {
 
 /// Clone out the running engine handle without holding the state lock across an await.
 /// `Err` when curation is off / the engine hasn't come up.
-fn current_engine(state: &CuratorState) -> Result<Arc<DocEngine>, String> {
+pub(crate) fn current_engine(state: &CuratorState) -> Result<Arc<DocEngine>, String> {
     let slot = state.0.lock().unwrap().doc_slot.clone();
     let engine = slot.lock().unwrap().clone();
     engine.ok_or_else(|| "Curator is not running".to_string())

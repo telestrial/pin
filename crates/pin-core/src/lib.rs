@@ -1406,7 +1406,16 @@ pub async fn channel_publish(
     let app_key = decode_app_key(&app_key_hex)
         .ok_or_else(|| JsValue::from_str("app key must be 64 hex chars"))?;
     let key = key32(channel_key)?;
-    let sealing = pin_channel::author_sealing(&app_key, &key);
+    // The doc is read only for a members-only channel, whose epoch is its roster's.
+    let eng = engine().ok();
+    let blobs = eng.as_ref().map(|e| (*e.blobs).clone());
+    let doc = eng
+        .as_ref()
+        .zip(blobs.as_ref())
+        .map(|(e, b)| (&e.doc, b, e.author_id));
+    let sealing = pin_curator::manifest_sealing(doc, &app_key, &key, &manifest_json)
+        .await
+        .map_err(je)?;
     let published = pin_channel::publish(&sia(), &sealing, &manifest_json)
         .await
         .map_err(je)?;
