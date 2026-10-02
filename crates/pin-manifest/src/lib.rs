@@ -58,7 +58,6 @@ pub enum ItemType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ChannelVisibility {
-    Obscure,
     Public,
     Secret,
 }
@@ -760,7 +759,6 @@ mod tests {
     #[test]
     fn a_visibility_crosses_as_its_lowercase_name() {
         for (v, name) in [
-            (ChannelVisibility::Obscure, "obscure"),
             (ChannelVisibility::Public, "public"),
             (ChannelVisibility::Secret, "secret"),
         ] {
@@ -1093,15 +1091,15 @@ mod tests {
     }
 
     #[test]
-    fn a_new_channel_can_be_obscure() {
+    fn a_new_channel_can_be_secret() {
         let m = create_channel(
             NewChannel {
-                visibility: Some(ChannelVisibility::Obscure),
+                visibility: Some(ChannelVisibility::Secret),
                 ..Default::default()
             },
             NOW,
         );
-        assert_eq!(m.visibility, Some(ChannelVisibility::Obscure));
+        assert_eq!(m.visibility, Some(ChannelVisibility::Secret));
     }
 
     #[test]

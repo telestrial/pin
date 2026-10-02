@@ -67,7 +67,7 @@ describe('repostTargetFor', () => {
     // subscribers, which is the one property that tier has — and the portal could not
     // resolve anyway, since its key comes from a directory an unlisted channel is
     // deliberately absent from.
-    expect(repostTargetFor(entry(), manifest('obscure'))).toBeNull()
+    expect(repostTargetFor(entry(), manifest('secret'))).toBeNull()
   })
 
   it('refuses a channel whose visibility is unknown', () => {

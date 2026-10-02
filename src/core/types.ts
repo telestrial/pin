@@ -159,10 +159,10 @@ export type ChannelImage = {
 // Watch-only: subscribers save (handle, channelID, K) locally; nothing
 // public ties the follower to the channel. Public channels can be
 // followed via a dev.sia.pin.subscription stand-off record under the
-// follower's repo. Set at creation, sticky — a public channel can't
-// later be obscured because existing Follow records would become orphan
-// pointers, and going obscure means a new channel + migration.
-export type ChannelVisibility = 'obscure' | 'public'
+// follower's repo. A secret channel is readable by the people its author
+// invites and nobody else: it is in no directory, and its objects carry no
+// read key, so holding its K finds it and reads nothing. Set at creation.
+export type ChannelVisibility = 'public' | 'secret'
 
 export type ChannelManifest = {
   version: typeof CHANNEL_MANIFEST_VERSION
@@ -179,7 +179,7 @@ export type ChannelManifest = {
   authorDidDht?: string
   publishedAt: string
   // Absent on manifests written before this field existed; readers treat
-  // missing as 'obscure' (the safer default — Follow is opt-in).
+  // missing as not public (the safer default — Follow is opt-in).
   visibility?: ChannelVisibility
   // avatar = round channel image; cover = wide banner. (Both optional; the
   // header falls back to a hash-derived mark / gradient when absent.)
@@ -241,16 +241,16 @@ export type OwnedChannel = {
   // Set at creation and sticky thereafter, like channelID and channelKey — a
   // public channel can't be retroactively obscured, so this is a fact about the
   // channel rather than a setting. Recorded here so the identity publisher can
-  // tell public from obscure without opening the manifest.
+  // tell public from secret without opening the manifest.
   //
   // ABSENT MEANS UNKNOWN, AND UNKNOWN MUST NOT BE ADVERTISED: channels created
   // before this field existed carry no value, and guessing 'public' would
-  // enumerate an obscure channel in the directory — the one thing that must
+  // enumerate a channel that is not in the directory — the one thing that must
   // never happen. It backfills the next time the channel is edited.
   visibility?: ChannelVisibility
   // Whether this public channel is advertised in your identity-doc (shows under
   // "Voices"). Undefined = advertised — the default, "claimed at birth". Set
-  // false by Unclaim. Obscure channels are never advertised regardless.
+  // false by Unclaim. Secret channels are never advertised regardless.
   advertised?: boolean
   // Whether this channel's posts appear in your profile's feed. Undefined = yes.
   //

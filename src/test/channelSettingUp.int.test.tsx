@@ -298,7 +298,7 @@ describe('integration: the link to a channel you own', () => {
     )
   }
 
-  it.each(['public', 'obscure'] as const)(
+  it.each(['public', 'secret'] as const)(
     'copies the link to an owned %s channel',
     async (visibility) => {
       // Unlisted is the case that needs it most: no directory names the channel, so the

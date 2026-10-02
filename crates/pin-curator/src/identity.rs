@@ -1899,7 +1899,7 @@ mod tests {
         let settings: SettingsView = serde_json::from_str(
             r#"{"myChannels":[
                 {"channelID":"pub","channelKey":"KP","name":"Public","visibility":"public"},
-                {"channelID":"obs","channelKey":"KO","name":"Obscure","visibility":"obscure"},
+                {"channelID":"obs","channelKey":"KO","name":"Secret","visibility":"secret"},
                 {"channelID":"unc","channelKey":"KU","name":"Unclaimed","visibility":"public","advertised":false},
                 {"channelID":"old","channelKey":"KL","name":"Legacy"},
                 {"channelID":"pub2","channelKey":"KP2","name":"Also public","visibility":"public"}

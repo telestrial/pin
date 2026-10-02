@@ -329,7 +329,7 @@ describe('integration: browsing a channel you do not hold', () => {
     // directory, where an unlisted channel is absent by construction, so the scan is
     // structurally empty forever and a number would state a fact about the channel where
     // the truth is that the relation does not apply. The same predicate hides Follow.
-    await published([post('a post', '2026-09-02T00:00:00.000Z')], 'obscure')
+    await published([post('a post', '2026-09-02T00:00:00.000Z')], 'secret')
     holdFollower('did:dht:someone')
 
     view(KEY)
@@ -401,7 +401,7 @@ describe('integration: the relation you have with a channel', () => {
     // somebody could be granted.
     await published(
       [post('a post of theirs', '2026-09-02T00:00:00.000Z')],
-      'obscure',
+      'secret',
     )
 
     view(KEY)

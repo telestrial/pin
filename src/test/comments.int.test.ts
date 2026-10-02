@@ -65,7 +65,7 @@ async function sealMark(rkey: string) {
 }
 
 /** Put a manifest in the store, which is where the visibility a seal turns on is read from. */
-async function knownChannel(visibility: 'public' | 'obscure' | undefined) {
+async function knownChannel(visibility: 'public' | 'secret' | undefined) {
   const { useFeedStore } = await import('../stores/feed')
   useFeedStore.getState().setManifest(ITEM.channelID, {
     channelID: ITEM.channelID,
@@ -212,7 +212,7 @@ describe('integration: writing a comment', () => {
     // world-readable, so an unlisted post's conversation has to go in sealed. The mark is
     // how the composer, which knows the channel's visibility, tells the publish loop, which
     // knows how to seal.
-    await knownChannel('obscure')
+    await knownChannel('secret')
     await writeComment(FAKE_APP_KEY_HEX, ITEM, null, 'between us')
 
     // The same address the record itself is at, so the loop reading one finds the other.
@@ -246,7 +246,7 @@ describe('integration: writing a comment', () => {
 
   it('takes the mark back with the comment', async () => {
     // Or the next pass would look for a comment to seal that nobody holds any more.
-    await knownChannel('obscure')
+    await knownChannel('secret')
     const id = await writeComment(FAKE_APP_KEY_HEX, ITEM, null, 'regretted')
     expect(await sealMarks()).toHaveLength(1)
 

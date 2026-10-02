@@ -129,7 +129,7 @@ describe('integration: the follow claim on your own channel', () => {
     // Nobody can follow one: a FollowEdge carries no K and resolves through the author's
     // directory, where an unlisted channel is absent by construction. Absent rather than
     // disabled — there is nothing to enable.
-    owning('obscure')
+    owning('secret')
 
     view()
 

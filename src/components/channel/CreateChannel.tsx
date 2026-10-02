@@ -214,23 +214,21 @@ export function CreateChannel({
             <VisibilityChoice
               value="public"
               label="Public"
-              description="Anyone who knows the handle can find and follow this channel. The encryption key is published in the channel record."
+              description="Anyone can find it and read it."
               current={visibility}
               disabled={submitting}
               onChange={setVisibility}
             />
             <VisibilityChoice
-              value="obscure"
-              label="Obscure"
-              description="Only people you send the watch URL to can read it. The channel record exists publicly as ciphertext but nothing links it to your other channels."
+              value="secret"
+              label="Secret"
+              description="Only people you invite know it exists. Forwarding its link grants nothing."
               current={visibility}
               disabled={submitting}
               onChange={setVisibility}
             />
             <p className="text-xs text-neutral-400 pt-1">
-              Set at creation — can't be changed later. (Going public would
-              require giving readers a key; going obscure would orphan existing
-              watchers.)
+              Set at creation for now.
             </p>
           </fieldset>
 

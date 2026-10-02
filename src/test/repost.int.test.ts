@@ -570,7 +570,7 @@ describe('integration: what may be circulated', () => {
   // No default on `authorDidDht`: a default replaces an explicitly-passed `undefined`, so
   // the "no author to resolve through" case would silently become the ordinary one.
   function host(
-    visibility: 'public' | 'obscure' | undefined,
+    visibility: 'public' | 'secret' | undefined,
     authorDidDht: string | undefined,
   ) {
     return {
@@ -604,7 +604,7 @@ describe('integration: what may be circulated', () => {
     // to resolve through. Hiding the gesture is honesty about a refusal the mechanism
     // already makes.
     expect(
-      commentRepostTargetFor(SAID, POST, host('obscure', 'did:dht:host')),
+      commentRepostTargetFor(SAID, POST, host('secret', 'did:dht:host')),
     ).toBeNull()
     // Absent visibility reads as not-public, the safe direction every reader here takes.
     expect(

@@ -285,7 +285,7 @@ describe('integration: your own directory comes from local state', () => {
     signedInWith([
       owned(),
       owned({ channelID: 'chan2', name: 'Unclaimed', advertised: false }),
-      owned({ channelID: 'chan3', name: 'Unlisted', visibility: 'obscure' }),
+      owned({ channelID: 'chan3', name: 'Unlisted', visibility: 'secret' }),
       owned({ channelID: 'chan4', name: 'Older', visibility: undefined }),
     ])
     await inTheDoc('chan1', 'A channel')

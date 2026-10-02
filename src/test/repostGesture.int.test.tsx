@@ -72,7 +72,7 @@ const INPUT = {
 }
 
 /** The source channel as the reader knows it — public, so the gesture is offered. */
-function knowSourceIsPublic(visibility: 'public' | 'obscure' = 'public') {
+function knowSourceIsPublic(visibility: 'public' | 'secret' = 'public') {
   useFeedStore.getState().setManifest(SRC_CHANNEL, {
     version: 1,
     name: 'Their channel',
@@ -248,7 +248,7 @@ describe('integration: the repost gesture', () => {
     // Circulating it would publish the channel's existence, and the portal could not
     // resolve anyway. Hiding the gesture says out loud what the mechanism would do.
     await withOwnChannel(app)
-    knowSourceIsPublic('obscure')
+    knowSourceIsPublic('secret')
 
     render(<EngagementRow input={INPUT} entry={theirPost()} />)
     expect(screen.queryByRole('button', { name: 'Repost' })).toBeNull()

@@ -124,11 +124,17 @@ describe('integration: creating a channel through the journal', () => {
     // A `FollowEdge` carries no K and resolves through the author's directory, where an
     // unlisted channel is absent by construction. An edge naming one resolves to nothing
     // for everybody, in a blob the whole graph downloads.
-    const a = action({ visibility: 'obscure' })
+    const a = action({ visibility: 'secret' })
     await runChannelCreate(a, ctx(a))
 
     expect(useAuthStore.getState().myChannels).toHaveLength(1)
     expect(useAuthStore.getState().follows).toEqual([])
+    // Both say secret: the publish path seals from the manifest's, and the Curator's
+    // sealers from settings'.
+    expect(useAuthStore.getState().myChannels[0].visibility).toBe('secret')
+    expect(useFeedStore.getState().manifests[channelID].visibility).toBe(
+      'secret',
+    )
   })
 
   it('publishes the channel at the address the intent named', async () => {
