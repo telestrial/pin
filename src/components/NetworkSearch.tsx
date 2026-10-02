@@ -26,11 +26,14 @@ import { IdentityAvatar } from './IdentityAvatar'
 export function NetworkSearch({
   onPerson,
   onChannel,
+  placeholder = 'Search your network',
 }: {
   onPerson: (didDht: string) => void
   // The hit's K travels with the navigation: a corpus row holds it, and the page it
-  // opens has no other way to read a channel this device does not watch.
-  onChannel: (didDht: string, channelID: string, channelKey: string) => void
+  // opens has no other way to read a channel this device does not watch. Absent, the box
+  // finds people only — which is what picking somebody to invite needs.
+  onChannel?: (didDht: string, channelID: string, channelKey: string) => void
+  placeholder?: string
 }) {
   const storedKeyHex = useAuthStore((s) => s.storedKeyHex)
   const [query, setQuery] = useState('')
@@ -63,9 +66,10 @@ export function NetworkSearch({
     return () => document.removeEventListener('pointerdown', away)
   }, [open])
 
-  const hits = corpus
+  const found = corpus
     ? searchDirectories(query, corpus)
     : { people: [], channels: [] }
+  const hits = onChannel ? found : { ...found, channels: [] }
   const empty = hits.people.length === 0 && hits.channels.length === 0
 
   function close() {
@@ -80,7 +84,7 @@ export function NetworkSearch({
         <input
           type="search"
           value={query}
-          placeholder="Search your network"
+          placeholder={placeholder}
           onFocus={() => setOpen(true)}
           onChange={(e) => {
             setQuery(e.target.value)
@@ -116,7 +120,7 @@ export function NetworkSearch({
                       hit={c}
                       onPick={() => {
                         close()
-                        onChannel(c.didDht, c.channelID, c.key)
+                        onChannel?.(c.didDht, c.channelID, c.key)
                       }}
                     />
                   ))}
