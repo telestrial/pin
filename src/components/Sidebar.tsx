@@ -8,6 +8,7 @@ import {
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
 import { ChannelAvatar } from './channel/ChannelAvatar'
+import { Invitations } from './Invitations'
 
 const CAP = 10
 
@@ -296,6 +297,8 @@ export function Sidebar({
           </ul>
         )}
       </section>
+
+      <Invitations />
 
       <section className="space-y-2 mt-3">
         {/* Everything that reaches you, which is follows AND watches: a subscription is
