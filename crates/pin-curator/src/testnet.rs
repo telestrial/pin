@@ -1670,6 +1670,48 @@ mod visibility {
         assert_eq!(folded.knocks_refused, 1, "the refusal reaches the outcome");
     }
 
+    /// A pass publishes the member tree of an owned channel somebody is seated in, and of no
+    /// other. Through the real pass: the roster is written as `invite` writes it, and the
+    /// session is disconnected, so an attempt is visible as a failure and its absence as
+    /// nothing at all.
+    #[tokio::test]
+    async fn a_pass_publishes_the_member_tree_of_a_seated_channel_only() {
+        let world = World::new();
+        let alice = Identity::new(&world, 1).await;
+        let channel_id = pin_crypto::channel_id(&alice.channel_key());
+        alice.publishing_n(serde_json::json!({}), 1).await;
+        let ctx = alice.engagement_ctx();
+        let pass = || async {
+            crate::engagement_once(
+                &ctx,
+                &alice.did,
+                "2026-10-01T00:00:00.000Z".into(),
+                false,
+                false,
+            )
+            .await
+            .expect("engagement pass")
+        };
+
+        let unseated = pass().await;
+        assert_eq!(unseated.members_failed, 0, "no roster, no attempt");
+
+        crate::members::invite(
+            &alice.doc,
+            &alice.blobs,
+            alice.author_id,
+            &channel_id,
+            "did:dht:member",
+            &pin_crypto::enc_public(&[9u8; 32]),
+            "2026-10-01T00:00:00.000Z",
+        )
+        .await
+        .expect("invite");
+        let seated = pass().await;
+        assert_eq!(seated.members_failed, 1, "one channel, one attempt");
+        assert_eq!(seated.members_published, 0);
+    }
+
     /// A FOLLOW OF A CHANNEL IS COUNTED ON THE CHANNEL, one to one.
     ///
     /// A follow names the channel rather than any post in it, and a public channel is a

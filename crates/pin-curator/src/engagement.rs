@@ -165,6 +165,11 @@ pub struct EngagementOutcome {
     /// Channels whose floor publish failed. Retried next pass, and it will be: the
     /// fingerprint doesn't advance until one succeeds.
     pub publish_failed: usize,
+    /// Bands of member trees uploaded: the ones a join or a removal moved.
+    pub members_published: usize,
+    /// Channels whose member tree failed to publish. Retried next pass: a band's
+    /// fingerprint is recorded only once it lands, and the pointer moves only after.
+    pub members_failed: usize,
     /// What the comment lane did with its half of the same drain.
     pub comments: crate::comments::CommentsOutcome,
 }
@@ -1341,6 +1346,7 @@ pub async fn engagement_once<N: crate::net::Network>(
     // is what makes a failed upload self-healing: the fingerprint doesn't advance until
     // a publish lands, so the next pass retries on its own rather than waiting for some
     // unrelated endorsement to mark the channel dirty again.
+    let seated = crate::members::seated_channels(&ctx.doc, ctx.author_id).await?;
     for owned in &settings.my_channels {
         let Some(k) = pin_crypto::channel_key_from_base64(&owned.channel_key) else {
             continue;
@@ -1354,6 +1360,25 @@ pub async fn engagement_once<N: crate::net::Network>(
             Ok(true) => outcome.published += 1,
             Ok(false) => {}
             Err(_) => outcome.publish_failed += 1,
+        }
+        // The member tree, for a channel anyone has been seated in, on the same terms: an
+        // unchanged tree costs reads and fingerprints and uploads nothing.
+        if seated.contains(&owned.channel_id) {
+            let sink = crate::members::LiveMembersSink::new(ctx.sia.clone());
+            match crate::members::publish_members(
+                &sink,
+                &ctx.doc,
+                &ctx.blobs,
+                ctx.author_id,
+                &ctx.app_key,
+                &owned.channel_id,
+                &k,
+            )
+            .await
+            {
+                Ok(done) => outcome.members_published += done.uploaded,
+                Err(_) => outcome.members_failed += 1,
+            }
         }
     }
 
@@ -1790,6 +1815,10 @@ fn crawl_this_pass(ticks: u32, crawl_every: u32, out_of_band: bool) -> bool {
 ///   the next pass writes nothing.
 /// - `settings` is where a follow lands. A woken pass reads a newly followed person, whose
 ///   profile feed is empty on screen until their record is held — see `unread_follows`.
+/// - `members` is where an invitation or a removal lands. A woken pass publishes the
+///   channel's member tree, so a removal locks its member out in seconds rather than at
+///   the next cadence. The pass writes only the tree's publish state, which is in
+///   `published` and wakes nothing.
 ///
 /// DELIBERATELY ABSENT: `engagement-log`, `crawl`, `tally` and `thread`, which this pass
 /// writes as a consequence of running. All four are gated on substance and so would settle
@@ -1810,6 +1839,7 @@ fn fold_input_moved(event: &LiveEvent) -> bool {
         pin_derive::ENDORSE_COLLECTION,
         pin_derive::COMMENT_COLLECTION,
         crate::SETTINGS_COLLECTION,
+        pin_derive::MEMBERS_COLLECTION,
     ]
     .iter()
     .any(|c| key.starts_with(&pin_derive::collection_prefix(c)))
@@ -2639,6 +2669,8 @@ mod tests {
         // A follow lands in settings, and a woken pass is what reads the person followed.
         assert!(fold_input_moved(&wrote("settings/self")));
         assert!(!fold_input_moved(&wrote("settings-pointer/x")));
+        // An invitation or a removal, which republishes the member tree.
+        assert!(fold_input_moved(&wrote("members/chan:abc")));
 
         // Both directions of write. A remote one is another instance of this identity
         // syncing in a gesture it made while it was the one that happened to be up, and
@@ -2658,6 +2690,11 @@ mod tests {
         assert!(!fold_input_moved(&wrote("crawl/did:dht:x")));
         assert!(!fold_input_moved(&wrote("tally/chan:abc")));
         assert!(!fold_input_moved(&wrote("thread/chan:abc")));
+        // The member tree's publish state, written by the pass that published it.
+        assert!(!fold_input_moved(&wrote(
+            "published/members-band:chan:0:0;"
+        )));
+        assert!(!fold_input_moved(&wrote("published/members-top:chan")));
     }
 
     #[test]

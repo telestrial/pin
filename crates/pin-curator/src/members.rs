@@ -53,6 +53,22 @@ pub async fn roster(
     Ok(seats)
 }
 
+/// The channels anyone has ever been seated in, from one scan of the roster collection.
+///
+/// So a pass that publishes every owned channel's tree pays one scan rather than one per
+/// channel: most channels have no roster at all, and asking each for its own would scan
+/// the whole doc for every one of them, every pass.
+pub async fn seated_channels(
+    doc: &Doc,
+    author_id: AuthorId,
+) -> Result<std::collections::BTreeSet<String>, String> {
+    Ok(list_rkeys(doc, author_id, MEMBERS_COLLECTION)
+        .await?
+        .into_iter()
+        .filter_map(|rkey| rkey.split_once(':').map(|(channel, _)| channel.to_string()))
+        .collect())
+}
+
 /// Seat a member in one of this identity's channels, answering with their seating.
 ///
 /// A member already standing in the roster is answered with the seating they have rather
@@ -754,6 +770,36 @@ mod tests {
             .unwrap();
         assert_eq!(mine.len(), 1);
         assert_eq!(mine[0].did, member(1).0);
+    }
+
+    #[tokio::test]
+    async fn seated_channels_names_each_channel_with_a_roster_once() {
+        let world = World::new();
+        let me = Identity::new(&world, 1).await;
+        assert!(seated_channels(&me.doc, me.author_id)
+            .await
+            .unwrap()
+            .is_empty());
+        seat(&me, 1, "2026-10-01T00:00:01Z").await;
+        seat(&me, 2, "2026-10-01T00:00:02Z").await;
+        let (did, key) = member(3);
+        invite(
+            &me.doc,
+            &me.blobs,
+            me.author_id,
+            "other",
+            &did,
+            &key,
+            "2026-10-01T00:00:03Z",
+        )
+        .await
+        .unwrap();
+        let seated: Vec<String> = seated_channels(&me.doc, me.author_id)
+            .await
+            .unwrap()
+            .into_iter()
+            .collect();
+        assert_eq!(seated, [CHANNEL, "other"]);
     }
 
     #[tokio::test]
