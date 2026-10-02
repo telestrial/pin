@@ -168,6 +168,8 @@ pub struct PullOutcome {
     pub tallies: usize,
     /// Channels whose tallies pointer hadn't moved, so their counts weren't downloaded.
     pub tallies_skipped: usize,
+    /// What climbing this identity's memberships did, before anything was read.
+    pub climb: membership::ClimbOutcome,
 }
 
 /// What the pull loop last cached for one channel: where it came from, and what it wrote.
@@ -718,7 +720,8 @@ pub(crate) fn own_did(app_key: &[u8; 32]) -> String {
 
 /// The content key a channel this identity reads is sealed under, from what it already
 /// holds: derived for a channel it owns, read from the head of the cached manifest for any
-/// other.
+/// other — or, when that head carries no read key, the key this identity climbed to as a
+/// member for the epoch the head says it was sealed at.
 ///
 /// `author` is whose signature the cached head must carry, and is not consulted for a
 /// channel this identity owns. `None` when no manifest is cached yet, which is the ordinary state of a channel
@@ -746,13 +749,15 @@ pub(crate) async fn held_content_key(
         .ok()
         .flatten()?;
     let blob = String::from_utf8(raw).ok()?;
-    pin_channel::content_key(
-        channel_key,
-        &blob,
-        pin_channel::Kind::Manifest,
-        pin_channel::Signer::Author(author),
-    )
-    .ok()
+    let signer = pin_channel::Signer::Author(author);
+    if let Ok(content) =
+        pin_channel::content_key(channel_key, &blob, pin_channel::Kind::Manifest, signer)
+    {
+        return Some(content);
+    }
+    let epoch =
+        pin_channel::head_epoch(channel_key, &blob, pin_channel::Kind::Manifest, signer).ok()?;
+    membership::held_key(doc, blobs, author_id, channel_id, epoch).await
 }
 
 /// How this identity seals a value it writes into one of its own channel docs: under the
@@ -1048,6 +1053,21 @@ pub async fn pull_once(ctx: &PullContext) -> Result<PullOutcome, String> {
     let reading = reading::read_now(&ctx.doc, &ctx.blobs, ctx.author_id, &settings).await;
     let wanted = wanted_channels(&settings, &reading);
     let mut outcome = PullOutcome::default();
+
+    // Climb every membership first, so a rotation lands before this pass reads anything
+    // sealed under the new key. A climb that cannot run costs the members-only channels
+    // this pass and nothing else, so it never stops the pull.
+    if let Ok(climb) = membership::climb_once(
+        &net::LiveNetwork::new(ctx.sia.clone()),
+        &ctx.doc,
+        &ctx.blobs,
+        ctx.author_id,
+        &ctx.app_key,
+    )
+    .await
+    {
+        outcome.climb = climb;
+    }
 
     for (channel_id, channel_key_b64, author) in &wanted {
         let Some(k) = pin_crypto::channel_key_from_base64(channel_key_b64) else {

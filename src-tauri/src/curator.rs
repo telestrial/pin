@@ -728,13 +728,24 @@ pub async fn curator_start_pull(
     let loop_handle = sia.detach(async move {
         pin_curator::run_pull_loop(ctx, PULL_CADENCE, |result| match result {
             Ok(o) => {
-                if o.cached > 0 || o.dropped > 0 || o.failed > 0 {
+                let c = &o.climb;
+                if o.cached > 0
+                    || o.dropped > 0
+                    || o.failed > 0
+                    || c.climbed > 0
+                    || c.refused > 0
+                    || c.failed > 0
+                {
                     log::info!(
-                        "curator pull: cached {} unresolved {} failed {} dropped {}",
+                        "curator pull: cached {} unresolved {} failed {} dropped {} | climb: climbed {} refused {} failed {} unreachable {}",
                         o.cached,
                         o.unresolved,
                         o.failed,
-                        o.dropped
+                        o.dropped,
+                        c.climbed,
+                        c.refused,
+                        c.failed,
+                        c.unreachable
                     );
                 }
             }

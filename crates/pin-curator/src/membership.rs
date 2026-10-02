@@ -110,6 +110,32 @@ pub async fn content_keys(
     Ok(out)
 }
 
+/// The content key this identity holds for one channel at one epoch, or `None` when it
+/// holds none — not a member, or not climbed that far yet. A direct read, not a scan.
+pub(crate) async fn held_key(
+    doc: &Doc,
+    blobs: &Store,
+    author_id: AuthorId,
+    channel_id: &str,
+    epoch: u32,
+) -> Option<pin_channel::ContentKey> {
+    let bytes = read_record(
+        doc,
+        blobs,
+        author_id,
+        CONTENT_KEY_COLLECTION,
+        &content_key_rkey(channel_id, epoch),
+    )
+    .await
+    .ok()
+    .flatten()?;
+    let held: HeldKey = serde_json::from_slice(&bytes).ok()?;
+    Some(pin_channel::ContentKey {
+        epoch,
+        key: pin_crypto::channel_key_from_base64(&held.key)?,
+    })
+}
+
 /// What one pass over this identity's memberships did.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ClimbOutcome {
@@ -569,6 +595,80 @@ mod tests {
             }
         );
         assert!(keys(&bob, &channel).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_members_only_manifest_opens_with_the_key_climbed_to() {
+        // Its head carries no read key, so the only route to C is the climb, and the head's
+        // epoch says which of the member's keys to use.
+        let world = World::new();
+        let channel = Channel::new(&world).await;
+        let bob = Identity::new(&world, 2).await;
+        let carol = Identity::new(&world, 3).await;
+        channel.seat(&bob).await;
+        channel.seat(&carol).await;
+        channel.publish().await;
+
+        let manifest_at = |epoch: u32| {
+            let a = &channel.author;
+            pin_channel::seal(
+                &pin_channel::Sealing {
+                    channel_key: &channel.key,
+                    content: pin_channel::ContentKey {
+                        epoch,
+                        key: channel.c(epoch),
+                    },
+                    publish_read_key: false,
+                    signer: pin_derive::did_dht_seed(&a.app_key),
+                },
+                pin_channel::Kind::Manifest,
+                b"{}",
+            )
+            .unwrap()
+        };
+        let cache = |blob: String| async {
+            crate::write_record(
+                &bob.doc,
+                bob.author_id,
+                crate::SUB_COLLECTION,
+                &channel.id,
+                blob.into_bytes(),
+            )
+            .await
+            .unwrap()
+        };
+        let settings: crate::SettingsView = serde_json::from_str("{}").unwrap();
+        let held = || {
+            crate::held_content_key(
+                &bob.doc,
+                &bob.blobs,
+                bob.author_id,
+                &bob.app_key,
+                &settings,
+                &channel.id,
+                &channel.key,
+                &channel.author.did,
+            )
+        };
+
+        cache(manifest_at(0)).await;
+        assert_eq!(held().await, None, "not climbed yet");
+        pass(&bob).await;
+        assert_eq!(
+            held().await.map(|c| (c.epoch, c.key)),
+            Some((0, channel.c(0)))
+        );
+
+        // A rotation: the manifest moves to the new epoch, and so does the key it takes.
+        channel.unseat(&carol).await;
+        channel.publish().await;
+        cache(manifest_at(1)).await;
+        assert_eq!(held().await, None, "the new epoch is not climbed yet");
+        pass(&bob).await;
+        assert_eq!(
+            held().await.map(|c| (c.epoch, c.key)),
+            Some((1, channel.c(1)))
+        );
     }
 
     #[tokio::test]
