@@ -920,6 +920,8 @@ pub async fn start_deliver_loop(
                         "retracted": o.retracted,
                         "retractFailed": o.retract_failed,
                         "dropped": o.dropped,
+                        "invitations": o.invitations,
+                        "invitationsUnreachable": o.invitations_unreachable,
                     })
                     .to_string(),
                     Err(e) => serde_json::json!({ "error": e }).to_string(),

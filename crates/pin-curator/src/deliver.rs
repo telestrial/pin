@@ -167,6 +167,11 @@ pub struct DeliverOutcome {
     /// Delivery marks forgotten without telling anyone: written before marks recorded a
     /// target, so there is nobody to tell.
     pub dropped: usize,
+    /// Invitations knocked through to their invitee this pass.
+    pub invitations: usize,
+    /// Invitations whose invitee could not be reached. Retried next pass; meanwhile the
+    /// directory carries the box for an invitee who reads this identity.
+    pub invitations_unreachable: usize,
     /// One entry per endorsement considered, for when the counts aren't enough to say
     /// what went wrong.
     pub steps: Vec<DeliverStep>,
@@ -480,7 +485,91 @@ pub async fn deliver_once(
         )
         .await;
     }
+    deliver_invitations(ctx, own_did, &mut outcome).await;
     Ok(outcome)
+}
+
+/// An invitation still to be knocked through: where its mark goes, who it is for, the box.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct Undelivered {
+    pub rkey: String,
+    pub invitee: String,
+    pub sealed: String,
+}
+
+/// The invitations whose invitee has not yet taken the box as it stands: every standing
+/// seating's box, less the ones already knocked through unchanged, and less any to this
+/// identity itself.
+///
+/// A removed seating is not here, and nothing is sent about it: a member learns of a
+/// removal by failing to climb, and a box they already hold opens only a tree they can no
+/// longer climb.
+pub(crate) async fn invitations_to_deliver(
+    ctx: &DeliverContext,
+    own_did: &str,
+) -> Vec<Undelivered> {
+    let standing = crate::members::standing_invitations(&ctx.doc, &ctx.blobs, ctx.author_id)
+        .await
+        .unwrap_or_default();
+    let mut out = Vec::new();
+    for invitation in standing {
+        if invitation.seat.did == own_did {
+            continue;
+        }
+        let rkey = pin_derive::member_rkey(&invitation.channel_id, &invitation.seat.id);
+        let sent = read_record(
+            &ctx.doc,
+            &ctx.blobs,
+            ctx.author_id,
+            pin_derive::INVITE_DELIVER_COLLECTION,
+            &rkey,
+        )
+        .await
+        .ok()
+        .flatten();
+        if sent.as_deref() == Some(box_hash(&invitation.sealed).as_bytes()) {
+            continue;
+        }
+        out.push(Undelivered {
+            rkey,
+            invitee: invitation.seat.did,
+            sealed: invitation.sealed,
+        });
+    }
+    out
+}
+
+/// What a delivery mark holds: the box's content hash.
+fn box_hash(sealed: &str) -> String {
+    pin_crypto::content_hash(sealed.as_bytes())
+}
+
+/// Record that a box reached its invitee.
+pub(crate) async fn mark_invitation_delivered(ctx: &DeliverContext, invitation: &Undelivered) {
+    let _ = crate::write_record(
+        &ctx.doc,
+        ctx.author_id,
+        pin_derive::INVITE_DELIVER_COLLECTION,
+        &invitation.rkey,
+        box_hash(&invitation.sealed).into_bytes(),
+    )
+    .await;
+}
+
+/// Knock every undelivered invitation through to its invitee, marking each that lands.
+///
+/// The knock is the fast road and the directory the floor: an invitee who cannot be reached
+/// now still finds the box whenever they read this identity, and this pass tries again.
+async fn deliver_invitations(ctx: &DeliverContext, own_did: &str, outcome: &mut DeliverOutcome) {
+    for invitation in invitations_to_deliver(ctx, own_did).await {
+        let knock = crate::membership::invitation_knock(&invitation.sealed);
+        if reach_target(ctx, &invitation.invitee, &knock).await.sent {
+            mark_invitation_delivered(ctx, &invitation).await;
+            outcome.invitations += 1;
+        } else {
+            outcome.invitations_unreachable += 1;
+        }
+    }
 }
 
 /// One lane's pass: deliver what is undelivered, then tell people about what went.
@@ -686,6 +775,8 @@ fn deliverable_written(event: &LiveEvent) -> bool {
     Lane::ALL
         .iter()
         .any(|lane| key.starts_with(&pin_derive::collection_prefix(lane.records())))
+        // An invitation: the seating is written after its box, so the seating is the wake.
+        || key.starts_with(&pin_derive::collection_prefix(pin_derive::MEMBERS_COLLECTION))
 }
 
 /// What ended a wait.
@@ -785,6 +876,88 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn an_invitation_is_delivered_until_it_lands_and_never_after_a_removal() {
+        let world = crate::testnet::World::new();
+        let me = crate::testnet::Identity::new(&world, 1).await;
+        let endpoint = iroh::Endpoint::bind(iroh::endpoint::presets::Minimal)
+            .await
+            .expect("bind");
+        let ctx = DeliverContext {
+            doc: me.doc.clone(),
+            blobs: me.blobs.clone(),
+            author_id: me.author_id,
+            endpoint,
+            app_key: me.app_key,
+        };
+        let k = me.channel_key();
+        let invite = |did: &'static str| {
+            let me = &me;
+            async move {
+                crate::members::invite(
+                    &me.doc,
+                    &me.blobs,
+                    me.author_id,
+                    &me.app_key,
+                    &k,
+                    did,
+                    &pin_crypto::enc_public(&[2u8; 32]),
+                    "2026-10-01T00:00:00Z",
+                )
+                .await
+                .unwrap()
+            }
+        };
+        let undelivered = || invitations_to_deliver(&ctx, &me.did);
+
+        let seat = invite("did:dht:bob").await;
+        // Seating oneself is nobody to tell.
+        crate::members::invite(
+            &me.doc,
+            &me.blobs,
+            me.author_id,
+            &me.app_key,
+            &k,
+            &me.did,
+            &pin_crypto::enc_public(&pin_derive::enc_key_seed(&me.app_key)),
+            "2026-10-01T00:00:00Z",
+        )
+        .await
+        .unwrap();
+        let pending = undelivered().await;
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].invitee, "did:dht:bob");
+        // Landed: not sent again.
+        mark_invitation_delivered(&ctx, &pending[0]).await;
+        assert!(undelivered().await.is_empty());
+
+        // A box put back after going missing is a new box, and goes again.
+        let channel_id = pin_crypto::channel_id(&k);
+        crate::delete_record(
+            &me.doc,
+            me.author_id,
+            pin_derive::INVITE_BOX_COLLECTION,
+            &pin_derive::member_rkey(&channel_id, &seat.id),
+        )
+        .await
+        .unwrap();
+        invite("did:dht:bob").await;
+        assert_eq!(undelivered().await.len(), 1);
+
+        // Removed before it landed: nothing to send.
+        crate::members::remove(
+            &me.doc,
+            &me.blobs,
+            me.author_id,
+            &channel_id,
+            "did:dht:bob",
+            "2026-10-02T00:00:00Z",
+        )
+        .await
+        .unwrap();
+        assert!(undelivered().await.is_empty());
+    }
+
     #[test]
     fn only_a_deliverable_record_wakes_delivery() {
         assert!(deliverable_written(&wrote("endorse/like:abc")));
@@ -792,6 +965,10 @@ mod tests {
         // thing a person just wrote, sitting on somebody else's post.
         assert!(deliverable_written(&wrote("comment/abc:def")));
         assert!(!deliverable_written(&wrote("comment-deliver/abc:def")));
+        // An invitation lands as a seating; its own delivery marks must not wake the loop.
+        assert!(deliverable_written(&wrote("members/chan:seat")));
+        assert!(!deliverable_written(&wrote("invite-deliver/chan:seat")));
+        assert!(!deliverable_written(&wrote("invite-box/chan:seat")));
 
         // The one that would feed the loop itself: a pass writes a mark for everything it
         // delivers, so waking on those means a knock schedules the pass that follows it,

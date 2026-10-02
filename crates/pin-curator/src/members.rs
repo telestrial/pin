@@ -184,6 +184,29 @@ pub async fn invitation_boxes(
     blobs: &Store,
     author_id: AuthorId,
 ) -> Result<Vec<String>, String> {
+    let mut out: Vec<String> = standing_invitations(doc, blobs, author_id)
+        .await?
+        .into_iter()
+        .map(|i| i.sealed)
+        .collect();
+    out.sort();
+    Ok(out)
+}
+
+/// One standing seating's invitation: which channel, who for, and the box.
+pub(crate) struct StandingInvitation {
+    pub channel_id: String,
+    pub seat: Seat,
+    pub sealed: String,
+}
+
+/// Every standing seating in every roster this identity keeps, with its invitation. A
+/// seating whose box is missing is left out until `invite` puts it back.
+pub(crate) async fn standing_invitations(
+    doc: &Doc,
+    blobs: &Store,
+    author_id: AuthorId,
+) -> Result<Vec<StandingInvitation>, String> {
     let mut out = Vec::new();
     for channel_id in seated_channels(doc, author_id).await? {
         for seat in roster(doc, blobs, author_id, &channel_id).await? {
@@ -192,11 +215,14 @@ pub async fn invitation_boxes(
             }
             if let Some(sealed) = invitation_box(doc, blobs, author_id, &channel_id, &seat.id).await
             {
-                out.push(sealed);
+                out.push(StandingInvitation {
+                    channel_id: channel_id.clone(),
+                    seat,
+                    sealed,
+                });
             }
         }
     }
-    out.sort();
     Ok(out)
 }
 

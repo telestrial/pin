@@ -720,6 +720,11 @@ pub const MEMBERS_COLLECTION: &str = "members";
 /// seating never is.
 pub const INVITE_BOX_COLLECTION: &str = "invite-box";
 
+/// The collection recording which invitations have been knocked through to their invitee,
+/// keyed like the box (`member_rkey`), each holding the content hash of the box that was
+/// sent — so a box sealed again, to repair one that went missing, is sent again.
+pub const INVITE_DELIVER_COLLECTION: &str = "invite-deliver";
+
 /// The collection recording each channel this identity is a MEMBER of: the channel's key,
 /// its author, the author's encryption key and this identity's leaf in the member tree —
 /// everything a climb to the content key needs. Keyed by channel, written when this identity

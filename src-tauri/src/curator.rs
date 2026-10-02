@@ -1489,9 +1489,11 @@ pub async fn curator_start_deliver(
                         || o.no_target > 0
                         || o.retracted > 0
                         || o.retract_failed > 0
+                        || o.invitations > 0
+                        || o.invitations_unreachable > 0
                     {
                         log::info!(
-                            "curator deliver: delivered {} already {} unreachable {} no-target {} own {} | withdrawn: told {} unreachable {} forgotten {}",
+                            "curator deliver: delivered {} already {} unreachable {} no-target {} own {} | withdrawn: told {} unreachable {} forgotten {} | invitations: delivered {} unreachable {}",
                             o.delivered,
                             o.already,
                             o.unreachable,
@@ -1499,7 +1501,9 @@ pub async fn curator_start_deliver(
                             o.own,
                             o.retracted,
                             o.retract_failed,
-                            o.dropped
+                            o.dropped,
+                            o.invitations,
+                            o.invitations_unreachable
                         );
                     }
                 }
