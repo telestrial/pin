@@ -753,6 +753,25 @@ pub fn published_conversation_rkey(channel_id: &str) -> String {
     format!("conversation:{channel_id}")
 }
 
+/// The rkey for the publish state of one band of a channel's member tree: its object, the
+/// generation before it, and the fingerprint of what it said. One per band, because each
+/// band supersedes on its own — a removal moves one band per tier and leaves the rest.
+///
+/// Ends in a terminator, and shares no head with [`published_members_rkey`], because an
+/// iroh-docs insert PRUNES by prefix: a newer entry removes every older entry whose key
+/// starts with its own, and an entry under a newer prefix is refused. Band `…:1:1` would
+/// otherwise be a prefix of band `…:1:10`, and the pointer's key a prefix of every band's.
+pub fn published_members_band_rkey(channel_id: &str, tier: u8, pos: u64) -> String {
+    format!("members-band:{channel_id}:{tier}:{pos};")
+}
+
+/// The rkey for the URL a channel's member-tree pointer names. Written by the publish pass
+/// and read by the keep-alive, which re-signs it — so it lives here rather than beside
+/// either, where a divergence would leave the pointer unrefreshed with no error anywhere.
+pub fn published_members_rkey(channel_id: &str) -> String {
+    format!("members-top:{channel_id}")
+}
+
 /// The rkey for the settings snapshot's publish state — which Sia object the settings
 /// locator currently names, and the generation before it.
 ///
@@ -1467,6 +1486,26 @@ mod tests {
             hex(&members_locator_seed(&[0u8; 32])),
             "dcf33f14c4a24a2d44bf1be979b32c160a11cfcaec07903028fb13578970e73e"
         );
+    }
+
+    #[test]
+    fn no_member_tree_publish_key_is_a_prefix_of_another() {
+        // iroh-docs prunes by prefix, so one of these being a prefix of another would have
+        // each write delete the other's record, or be refused under it.
+        let mut keys = vec![published_members_rkey("chan")];
+        for tier in [0u8, 1, 2, 11] {
+            for pos in [0u64, 1, 2, 10, 11, 100, 101] {
+                keys.push(published_members_band_rkey("chan", tier, pos));
+            }
+        }
+        for a in &keys {
+            for b in &keys {
+                assert!(
+                    a == b || !b.starts_with(a.as_str()),
+                    "{a} is a prefix of {b}"
+                );
+            }
+        }
     }
 
     #[test]

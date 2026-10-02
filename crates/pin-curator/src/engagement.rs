@@ -1711,7 +1711,10 @@ fn nothing_to_publish(
 /// Never the generation just superseded — that is the grace copy a reader mid-resolve
 /// still needs — and never one that is somehow current again, which a republish of
 /// identical bytes would produce.
-fn reclaimable(previous: Option<&crate::PublishedState>, current: &str) -> Option<String> {
+pub(crate) fn reclaimable(
+    previous: Option<&crate::PublishedState>,
+    current: &str,
+) -> Option<String> {
     let previous = previous?;
     let stale = previous.older_id.as_deref()?;
     if stale.is_empty() || stale == current || stale == previous.id {
