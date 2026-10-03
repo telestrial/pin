@@ -987,6 +987,108 @@ pub const EV_ERROR: &str = "error";
 mod tests {
     use super::*;
 
+    /// NO RECORD KEY IN A DOC MAY BE A PREFIX OF ANOTHER: iroh-docs prunes by prefix, so a
+    /// newer insert deletes every older entry whose key starts with its own, and an insert
+    /// under a newer prefix is refused — silently, either way. Every rkey constructor here,
+    /// fed the inputs that vary in length in practice (a subject that is a hash, a channelID
+    /// or a did; numbers past one digit; both timestamp spellings), and no key may begin
+    /// another. A new key shape belongs in this list.
+    #[test]
+    fn no_record_key_is_a_prefix_of_another() {
+        // Distinct, realistic-length stand-ins: a 16-char channelID, a 52-char hash, a did.
+        let b32 = |seed: u8, len: usize| -> String {
+            const ALPHABET: &[u8] = b"abcdefghijklmnopqrstuvwxyz234567";
+            let mut x = (seed as u32).wrapping_mul(2654435761).wrapping_add(1);
+            (0..len)
+                .map(|_| {
+                    x = x.wrapping_mul(1103515245).wrapping_add(12345);
+                    ALPHABET[((x >> 16) % 32) as usize] as char
+                })
+                .collect()
+        };
+        let channels = [b32(1, 16), b32(2, 16)];
+        let hashes = [b32(3, 52), b32(4, 52)];
+        let dids = [
+            format!("did:dht:{}", b32(5, 52)),
+            format!("did:dht:{}", b32(6, 52)),
+        ];
+        let subjects: Vec<String> = hashes
+            .iter()
+            .chain(&channels)
+            .chain(&dids)
+            .cloned()
+            .collect();
+        let stamps = ["2026-10-01T00:00:00.000Z", "2026-10-01T00:00:00Z"];
+        let seats = [
+            "0d2563529303cbd20a35eb16da1e4c0a",
+            "ffeeddccbbaa99887766554433221100",
+        ];
+        let kinds = ["like", "pin", "repost", "comment", "follow"];
+
+        let mut keys: Vec<(String, String)> = Vec::new();
+        let mut add = |collection: &str, rkey: String| keys.push((collection.into(), rkey));
+        for ch in &channels {
+            for s in &subjects {
+                add(TALLY_COLLECTION, tally_rkey(ch, s));
+                add(THREAD_COLLECTION, thread_rkey(ch, s));
+            }
+            for at in stamps {
+                add(PINNED_COLLECTION, pinned_rkey(ch, at));
+            }
+            for epoch in [1, 10, 100] {
+                add(CONTENT_KEY_COLLECTION, content_key_rkey(ch, epoch));
+            }
+            for seat in seats {
+                add(MEMBERS_COLLECTION, member_rkey(ch, seat));
+                add(INVITE_BOX_COLLECTION, member_rkey(ch, seat));
+            }
+            add(PUBLISHED_COLLECTION, published_channel_rkey(ch));
+            add(PUBLISHED_COLLECTION, published_engagement_rkey(ch));
+            add(PUBLISHED_COLLECTION, published_conversation_rkey(ch));
+            add(PUBLISHED_COLLECTION, published_members_rkey(ch));
+            for (tier, pos) in [(0, 0), (0, 1), (0, 10), (1, 1), (1, 10), (10, 1)] {
+                add(
+                    PUBLISHED_COLLECTION,
+                    published_members_band_rkey(ch, tier, pos),
+                );
+            }
+            add(MEMBERSHIP_COLLECTION, ch.clone());
+        }
+        add(PUBLISHED_COLLECTION, PUBLISHED_SETTINGS_RKEY.into());
+        add(PUBLISHED_COLLECTION, "directory".into());
+        add(PUBLISHED_COLLECTION, "comments".into());
+        for s in &subjects {
+            for kind in kinds {
+                add(ENDORSE_COLLECTION, endorse_rkey(kind, s));
+                for actor in &dids {
+                    add(
+                        ENGAGEMENT_LOG_COLLECTION,
+                        engagement_log_rkey(s, kind, actor),
+                    );
+                }
+            }
+            for id in &hashes {
+                add(COMMENT_COLLECTION, comment_rkey(s, id));
+                for actor in &dids {
+                    add(COMMENT_LOG_COLLECTION, comment_log_rkey(s, id, actor));
+                }
+            }
+        }
+
+        let full: Vec<Vec<u8>> = keys.iter().map(|(c, r)| record_key(c, r)).collect();
+        for (i, a) in full.iter().enumerate() {
+            for (j, b) in full.iter().enumerate() {
+                if i != j && a != b && b.starts_with(a) {
+                    panic!(
+                        "{} is a prefix of {}",
+                        String::from_utf8_lossy(a),
+                        String::from_utf8_lossy(b)
+                    );
+                }
+            }
+        }
+    }
+
     #[test]
     fn hex32_round_trips() {
         let bytes: [u8; 32] = core::array::from_fn(|i| (i as u8).wrapping_mul(7).wrapping_add(3));
