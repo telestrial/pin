@@ -75,6 +75,12 @@ export function channel_open(channel_key: Uint8Array, kind: string, author: stri
 export function channel_open_blob(channel_key: Uint8Array, author: string, blob: string, app_key_hex?: string | null): Promise<string>;
 
 /**
+ * The profile a sealed manifest blob shows to somebody holding only K, or `undefined` when
+ * its tier keeps the profile under the content key. Pure: for a blob already in hand.
+ */
+export function channel_open_profile(channel_key: Uint8Array, author: string, blob: string): string | undefined;
+
+/**
  * Seal a manifest as its author, upload it, and publish the pointer. Returns
  * `Published` as JSON — the caller needs the object id to reclaim the generation it
  * superseded, and the blob to record the same bytes in the doc.
@@ -105,6 +111,12 @@ export function channel_resolve(channel_key: Uint8Array, author: string, app_key
  * skips the download.
  */
 export function channel_resolve_conversations_url(channel_key: Uint8Array): Promise<string | undefined>;
+
+/**
+ * What a channel's page shows to somebody holding only K: its profile JSON, or `undefined`
+ * when nothing is published or the channel shows no page to non-members.
+ */
+export function channel_resolve_profile(channel_key: Uint8Array, author: string): Promise<string | undefined>;
 
 export function channel_resolve_tallies_url(channel_key: Uint8Array): Promise<string | undefined>;
 
@@ -1042,10 +1054,12 @@ export interface InitOutput {
     readonly channel_id: (a: number, b: number) => [number, number, number, number];
     readonly channel_open: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
     readonly channel_open_blob: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => any;
+    readonly channel_open_profile: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
     readonly channel_publish: (a: number, b: number, c: number, d: number, e: number, f: number) => any;
     readonly channel_republish_pointer: (a: number, b: number, c: number, d: number) => any;
     readonly channel_resolve: (a: number, b: number, c: number, d: number, e: number, f: number) => any;
     readonly channel_resolve_conversations_url: (a: number, b: number) => any;
+    readonly channel_resolve_profile: (a: number, b: number, c: number, d: number) => any;
     readonly channel_resolve_tallies_url: (a: number, b: number) => any;
     readonly channel_seal: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
     readonly comment_collection: () => [number, number];

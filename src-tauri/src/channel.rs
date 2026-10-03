@@ -70,6 +70,20 @@ pub async fn channel_resolve(
         .await
 }
 
+/// What a channel's page shows to somebody holding only K: its profile JSON, or `None` when
+/// nothing is published or the channel shows no page to non-members.
+#[tauri::command]
+pub async fn channel_resolve_profile(
+    state: tauri::State<'_, SiaState>,
+    channel_key: Vec<u8>,
+    author: String,
+) -> Result<Option<String>, String> {
+    let key = key32(&channel_key)?;
+    state
+        .run(move |s| async move { pin_curator::resolve_channel_profile(&s, &key, &author).await })
+        .await
+}
+
 /// Open a sealed manifest blob — the path a cached copy takes — with what the Curator
 /// holds for one whose head carries no read key.
 ///

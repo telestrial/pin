@@ -170,6 +170,7 @@ pub fn run() {
             sia::sia_prune_slabs,
             channel::channel_publish,
             channel::channel_resolve,
+            channel::channel_resolve_profile,
             channel::channel_open_blob,
             curator::members_invite,
             curator::members_remove,

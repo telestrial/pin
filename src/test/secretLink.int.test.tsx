@@ -27,6 +27,8 @@ vi.mock('../lib/channelLocator', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../lib/channelLocator')>()),
   resolveChannelViaLocator: (key: string, author: string) =>
     resolveChannelViaLocator(key, author),
+  // A secret channel shows no page to a non-member.
+  resolveChannelProfile: async () => null,
 }))
 
 import {

@@ -37,6 +37,7 @@ import {
   channel_republish_pointer,
   channel_resolve,
   channel_resolve_conversations_url,
+  channel_resolve_profile,
   channel_resolve_tallies_url,
 } from '../../crates/pin-core/pkg/pin_core.js'
 import { ensureWasm } from '../core/wasm'
@@ -75,6 +76,7 @@ interface ChannelLocatorTransport {
     blob: string,
     appKeyHex: string | undefined,
   ): Promise<string>
+  resolveProfile(channelKey: Uint8Array, author: string): Promise<string | null>
   republishPointer(channelKey: Uint8Array, itemURL: string): Promise<void>
   resolveTalliesUrl(channelKey: Uint8Array): Promise<string | null>
   fetchTallies(
@@ -129,6 +131,10 @@ async function buildTransport(): Promise<ChannelLocatorTransport> {
       await ensureWasm()
       return channel_open_blob(channelKey, author, blob, appKeyHex)
     },
+    resolveProfile: async (channelKey, author) => {
+      await ensureWasm()
+      return (await channel_resolve_profile(channelKey, author)) ?? null
+    },
     republishPointer: async (channelKey, itemURL) => {
       await ensureWasm()
       return channel_republish_pointer(channelKey, itemURL)
@@ -176,6 +182,16 @@ export async function resolveLocator(
     author,
     await appKeyHex(),
   )
+}
+
+/** What a channel's page shows to somebody holding only K: its profile JSON, checked
+ *  against `author`. Null when nothing is published, or when the channel shows no page to
+ *  anyone who is not a member. */
+export async function resolveProfile(
+  channelKey: Uint8Array,
+  author: string,
+): Promise<string | null> {
+  return (await transport()).resolveProfile(channelKey, author)
 }
 
 /** Re-sign a channel's current pointer to refresh its TTL, minting no new object. */

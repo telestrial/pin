@@ -1440,8 +1440,13 @@ pub fn channel_seal(
     let key = key32(channel_key)?;
     let kind = pin_channel::Kind::parse(kind)
         .ok_or_else(|| JsValue::from_str(&format!("unknown object kind {kind}")))?;
+    // A manifest seals as the publish path seals it: no read key for a channel only its
+    // members may read. At the first epoch, because a fake world has no roster and nobody
+    // in it has been removed — what `manifest_sealing` would work out from an empty tree.
+    let members_only =
+        kind == pin_channel::Kind::Manifest && pin_curator::manifest_is_members_only(&payload_json);
     pin_channel::seal(
-        &pin_channel::author_sealing(&app_key, &key),
+        &pin_channel::author_sealing_at(&app_key, &key, 0, members_only),
         kind,
         payload_json.as_bytes(),
     )
@@ -1475,6 +1480,31 @@ pub async fn channel_resolve(
                 .map_err(|e| JsValue::from_str(&format!("encode: {e}")))?,
         )),
     }
+}
+
+/// What a channel's page shows to somebody holding only K: its profile JSON, or `undefined`
+/// when nothing is published or the channel shows no page to non-members.
+#[wasm_bindgen]
+pub async fn channel_resolve_profile(
+    channel_key: &[u8],
+    author: String,
+) -> Result<Option<String>, JsValue> {
+    let key = key32(channel_key)?;
+    pin_curator::resolve_channel_profile(&sia(), &key, &author)
+        .await
+        .map_err(je)
+}
+
+/// The profile a sealed manifest blob shows to somebody holding only K, or `undefined` when
+/// its tier keeps the profile under the content key. Pure: for a blob already in hand.
+#[wasm_bindgen]
+pub fn channel_open_profile(
+    channel_key: &[u8],
+    author: String,
+    blob: String,
+) -> Result<Option<String>, JsValue> {
+    let key = key32(channel_key)?;
+    pin_channel::open_profile(&key, &blob, pin_channel::Signer::Author(&author)).map_err(je)
 }
 
 /// What this tab holds for opening channel objects: its doc, when one is open, and the

@@ -20,6 +20,7 @@
 import {
   channel_open,
   channel_open_blob,
+  channel_open_profile,
   channel_seal,
   derive_did_dht_seed,
   pkarr_chunk_txt,
@@ -138,6 +139,23 @@ export function fakeChannelLocatorNativeModule() {
         ),
         blob,
       }
+    },
+
+    resolveProfile: async (channelKey: Uint8Array, author: string) => {
+      const world = getCurrentWorld()
+      const itemURL = world.pkarr
+        .get(locatorKeyFor(channelKey))
+        ?.find((r) => r.name === '_c0')?.value
+      if (!itemURL) return null
+      const bytes = world.objects.get(fakeObjectID(itemURL) ?? '')?.bytes
+      if (!bytes) throw new Error(`Object not found: ${itemURL}`)
+      return (
+        channel_open_profile(
+          channelKey,
+          author,
+          new TextDecoder().decode(bytes),
+        ) ?? null
+      )
     },
 
     republishPointer: async (channelKey: Uint8Array, itemURL: string) => {

@@ -34,6 +34,12 @@ export async function makeTauriChannelLocator() {
         appKeyHex,
       })) ?? null,
 
+    resolveProfile: async (channelKey: Uint8Array, author: string) =>
+      (await invoke<string | null>('channel_resolve_profile', {
+        channelKey: Array.from(channelKey),
+        author,
+      })) ?? null,
+
     openBlob: (
       channelKey: Uint8Array,
       author: string,

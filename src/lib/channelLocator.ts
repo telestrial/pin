@@ -19,6 +19,7 @@ import {
   openBlob,
   publishLocator,
   resolveLocator,
+  resolveProfile,
 } from './channelLocatorNative'
 import { warmChannelTallies } from './channelTallies'
 import { deleteRecord, getRecord, openDocs, putRecord } from './docs'
@@ -110,6 +111,23 @@ async function resolveChannelBytes(
     // it is ASCII base64.
     ciphertext: new TextEncoder().encode(resolved.blob),
   }
+}
+
+/** What a channel's page shows to somebody who may not read its posts. */
+export type ChannelProfile = Pick<
+  ChannelManifest,
+  'name' | 'description' | 'avatar' | 'cover' | 'visibility'
+>
+
+/** A channel's profile, read with K alone: what its page shows to somebody who is not a
+ *  member. Null when nothing is published or the channel shows no page — a secret one.
+ *  Throws when the read fails, which is not the same as there being nothing to show. */
+export async function resolveChannelProfile(
+  channelKeyB64: string,
+  author: string,
+): Promise<ChannelProfile | null> {
+  const json = await resolveProfile(channelKeyFromBase64(channelKeyB64), author)
+  return json === null ? null : (JSON.parse(json) as ChannelProfile)
 }
 
 /** Whether a resolve failed because this identity holds no key for a members-only

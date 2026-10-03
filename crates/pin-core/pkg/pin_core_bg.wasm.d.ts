@@ -7,10 +7,12 @@ export const channel_fetch_tallies: (a: number, b: number, c: number, d: number,
 export const channel_id: (a: number, b: number) => [number, number, number, number];
 export const channel_open: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
 export const channel_open_blob: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => any;
+export const channel_open_profile: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
 export const channel_publish: (a: number, b: number, c: number, d: number, e: number, f: number) => any;
 export const channel_republish_pointer: (a: number, b: number, c: number, d: number) => any;
 export const channel_resolve: (a: number, b: number, c: number, d: number, e: number, f: number) => any;
 export const channel_resolve_conversations_url: (a: number, b: number) => any;
+export const channel_resolve_profile: (a: number, b: number, c: number, d: number) => any;
 export const channel_resolve_tallies_url: (a: number, b: number) => any;
 export const channel_seal: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
 export const comment_collection: () => [number, number];
