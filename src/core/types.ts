@@ -162,7 +162,7 @@ export type ChannelImage = {
 // follower's repo. A secret channel is readable by the people its author
 // invites and nobody else: it is in no directory, and its objects carry no
 // read key, so holding its K finds it and reads nothing. Set at creation.
-export type ChannelVisibility = 'public' | 'secret'
+export type ChannelVisibility = 'public' | 'private' | 'secret'
 
 export type ChannelManifest = {
   version: typeof CHANNEL_MANIFEST_VERSION

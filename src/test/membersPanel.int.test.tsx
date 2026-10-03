@@ -158,6 +158,14 @@ describe('integration: the members of a Secret channel you own', () => {
     expect(screen.queryByRole('button', { name: 'Members' })).toBeNull()
   })
 
+  it('offers Members on a private channel too', async () => {
+    owning('private')
+    view()
+    expect(
+      await screen.findByRole('button', { name: 'Members' }),
+    ).toBeInTheDocument()
+  })
+
   it('lists the standing members, leaving a removed seating out', async () => {
     hold(ALICE, 'alice', ENC)
     hold(BOB, 'bob', ENC)

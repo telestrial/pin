@@ -220,6 +220,14 @@ export function CreateChannel({
               onChange={setVisibility}
             />
             <VisibilityChoice
+              value="private"
+              label="Private"
+              description="Anyone can see the page; only people you approve can read it."
+              current={visibility}
+              disabled={submitting}
+              onChange={setVisibility}
+            />
+            <VisibilityChoice
               value="secret"
               label="Secret"
               description="Only people you invite know it exists. Forwarding its link grants nothing."

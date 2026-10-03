@@ -444,7 +444,11 @@ export async function parseSubscribeURL(url: string): Promise<{
 export function advertisedChannels(
   owned: readonly OwnedChannel[],
 ): OwnedChannel[] {
+  // Public and private both list: a private channel's page is open to anyone and its posts
+  // are not. Mirrors `advertised_channels` in the identity loop.
   return owned.filter(
-    (c) => c.advertised !== false && c.visibility === 'public',
+    (c) =>
+      c.advertised !== false &&
+      (c.visibility === 'public' || c.visibility === 'private'),
   )
 }

@@ -31,6 +31,8 @@ export type DirectoryChannel = {
   name: string
   /** Whether its posts belong on the author's profile feed. Absent means yes. */
   showOnProfile?: boolean
+  /** `'private'` when its page is open and its posts are for members. Absent means public. */
+  visibility?: 'private'
 }
 
 /** Where an identity can be dialed: an endpoint, and the relay it is reachable through.

@@ -10,7 +10,9 @@ import {
 } from '../../core/feed'
 import type { ChannelImage, ChannelManifest } from '../../core/types'
 import {
+  type ChannelProfile,
   isKeyNotHeld,
+  resolveChannelProfile,
   resolveChannelViaLocator,
 } from '../../lib/channelLocator'
 import { subscribeDocChanges } from '../../lib/docs'
@@ -42,8 +44,10 @@ import { MembersPanel } from './MembersPanel'
 /** Why a browsed channel cannot be read, when the reason is a key rather than the network.
  *
  *  `not-invited` is a Secret channel this identity holds no membership in; `opening` is
- *  one it was invited to whose key the Curator has not climbed to yet. */
-type Locked = 'not-invited' | 'opening'
+ *  one it was invited to whose key the Curator has not climbed to yet; `members-only` is a
+ *  Private channel this identity is not a member of, whose page — its profile — anyone may
+ *  see. */
+type Locked = 'not-invited' | 'opening' | 'members-only'
 
 /** A channel this device holds nothing for, read with the key the navigation carried.
  *
@@ -64,6 +68,7 @@ function useBrowsedChannel(
   const [manifest, setManifest] = useState<ChannelManifest | null>(null)
   const [loading, setLoading] = useState(false)
   const [locked, setLocked] = useState<Locked | null>(null)
+  const [profile, setProfile] = useState<ChannelProfile | null>(null)
   // Bumped when a key for this channel is climbed to, which is what reads it again.
   const [attempt, setAttempt] = useState(0)
 
@@ -72,6 +77,7 @@ function useBrowsedChannel(
     let cancelled = false
     setManifest(null)
     setLocked(null)
+    setProfile(null)
     if (!enabled || !channelKey) return
     setLoading(true)
     resolveChannelViaLocator(channelKey, author)
@@ -85,11 +91,18 @@ function useBrowsedChannel(
         if (!isKeyNotHeld(err)) return
         const memberships = await readMemberships().catch(() => null)
         if (cancelled || !memberships) return
-        setLocked(
-          memberships.some((m) => m.channelID === channelID)
-            ? 'opening'
-            : 'not-invited',
+        if (memberships.some((m) => m.channelID === channelID)) {
+          setLocked('opening')
+          return
+        }
+        // Not a member. A private channel still shows its page; a secret one shows
+        // nothing, and neither does one whose profile will not read — the safe direction.
+        const shown = await resolveChannelProfile(channelKey, author).catch(
+          () => null,
         )
+        if (cancelled) return
+        setProfile(shown)
+        setLocked(shown ? 'members-only' : 'not-invited')
       })
       .finally(() => {
         if (!cancelled) setLoading(false)
@@ -110,7 +123,7 @@ function useBrowsedChannel(
     })
   }, [locked, channelID])
 
-  return { manifest, loading, locked }
+  return { manifest, loading, locked, profile }
 }
 
 export function ChannelView({
@@ -233,7 +246,15 @@ export function ChannelView({
   const [showFollowers, setShowFollowers] = useState(false)
   // Who can read a Secret channel you own, and where you invite and remove them. Folded
   // away like the Followers list, for the same reason.
-  const isOwnSecret = isOwned && manifest?.visibility === 'secret'
+  const isOwnSecret =
+    isOwned &&
+    (manifest?.visibility === 'secret' || manifest?.visibility === 'private')
+  // A private channel this identity may see the page of and not read: the header comes from
+  // its profile, and in place of the posts the page says who may read them.
+  const profileOnly =
+    browsing && !manifest && browsed.locked === 'members-only'
+      ? browsed.profile
+      : null
   const [showMembers, setShowMembers] = useState(false)
 
   // Backfill the manifest cache on cold-mount (e.g. empty channel that
@@ -309,17 +330,18 @@ export function ChannelView({
 
   const channelName =
     manifest?.name ??
+    profileOnly?.name ??
     sub?.cachedName ??
     channelEntries[0]?.channel.name ??
     channelID
-  const avatar = manifest?.avatar
-  const coverImage = manifest?.cover
-  const description = manifest?.description ?? ''
+  const avatar = manifest?.avatar ?? profileOnly?.avatar
+  const coverImage = manifest?.cover ?? profileOnly?.cover
+  const description = manifest?.description ?? profileOnly?.description ?? ''
 
   // A Secret channel this identity cannot read says that and nothing else: no name, no
   // picture, no button to ask. A request button would turn Secret into Private-but-unlisted
   // and hand part of who-knows-it-exists to whoever forwarded the link.
-  if (browsing && !manifest && browsed.locked) {
+  if (browsing && !manifest && browsed.locked && !profileOnly) {
     return (
       <div className="flex-1 p-6 lg:min-h-0">
         <div className="flex flex-col gap-6 lg:h-full lg:min-h-0 lg:flex-row lg:items-start">
@@ -579,8 +601,14 @@ export function ChannelView({
                 />
               )}
               <p className="text-xs text-neutral-500 mt-2">
-                {channelEntries.length} item
-                {channelEntries.length === 1 ? '' : 's'}
+                {profileOnly ? (
+                  'Private'
+                ) : (
+                  <>
+                    {channelEntries.length} item
+                    {channelEntries.length === 1 ? '' : 's'}
+                  </>
+                )}
               </p>
             </div>
           </div>
@@ -666,7 +694,11 @@ export function ChannelView({
               </div>
             </div>
 
-            {channelEntries.length === 0 && deadReposts.length === 0 ? (
+            {profileOnly ? (
+              <p className="text-neutral-500 text-sm">
+                Only approved members can read this channel.
+              </p>
+            ) : channelEntries.length === 0 && deadReposts.length === 0 ? (
               <p className="text-neutral-500 text-sm">No items yet.</p>
             ) : (
               <ul className="divide-y divide-neutral-200/80">

@@ -5,10 +5,17 @@ import type { FeedEntry } from '../core/feed'
 import { followsOfOthers } from '../core/followers'
 import type { PersonTally } from '../core/identityDoc'
 import { buildProfileFeed, includedOnProfile } from '../core/profileFeed'
-import type { ChannelManifest, FollowEdge } from '../core/types'
 import {
+  CHANNEL_MANIFEST_VERSION,
+  type ChannelManifest,
+  type FollowEdge,
+} from '../core/types'
+import {
+  type ChannelProfile,
+  isKeyNotHeld,
   readCachedManifest,
   readOwnManifest,
+  resolveChannelProfile,
   resolveChannelViaLocator,
 } from '../lib/channelLocator'
 import { readDirectory, request } from '../lib/directories'
@@ -40,6 +47,32 @@ type ChannelEntry = {
    *  (settings for your own, the crawl's record and the author's directory for somebody
    *  else's) and the feed is built from whichever one answered. */
   showOnProfile?: boolean
+  /** A private channel this identity may see the page of and not read: `manifest` then
+   *  holds its profile and no posts. */
+  membersOnly?: boolean
+}
+
+/** A card for a channel whose page is all this identity may see: its profile, with no
+ *  posts behind it, so the feed takes nothing from it. */
+function profileEntry(
+  channelID: string,
+  channelKey: string,
+  author: string,
+  profile: ChannelProfile,
+  showOnProfile?: boolean,
+): ChannelEntry {
+  const manifest = {
+    version: CHANNEL_MANIFEST_VERSION,
+    authorPubkey: '',
+    authorDidDht: author,
+    publishedAt: '',
+    items: [],
+    ...profile,
+  } as ChannelManifest
+  return {
+    ...entry(channelID, channelKey, manifest, showOnProfile),
+    membersOnly: true,
+  }
 }
 
 /** The profile fields this page renders.
@@ -127,8 +160,23 @@ async function resolveChannels(
         const manifest = await resolveChannelViaLocator(c.key, author)
         if (manifest)
           return entry(c.channelID, c.key, manifest, c.showOnProfile)
-      } catch {
-        // Fall through: an unreadable locator is a read failure, never an absence.
+      } catch (err) {
+        // A private channel this identity is not a member of still has a page to show.
+        // Anything else falls through: an unreadable locator is a read failure, never an
+        // absence.
+        if (isKeyNotHeld(err)) {
+          const profile = await resolveChannelProfile(c.key, author).catch(
+            () => null,
+          )
+          if (profile)
+            return profileEntry(
+              c.channelID,
+              c.key,
+              author,
+              profile,
+              c.showOnProfile,
+            )
+        }
       }
       return onScreen.get(c.channelID) ?? null
     }),
@@ -586,7 +634,9 @@ function LoadedDirectory({
         <div className="grid gap-3 sm:grid-cols-2">
           {ownChannels.map((c) => {
             const count = c.manifest.items.length
-            const items = `${count} ${count === 1 ? 'item' : 'items'}`
+            const items = c.membersOnly
+              ? 'Private'
+              : `${count} ${count === 1 ? 'item' : 'items'}`
             const badge = isSelf
               ? `${items} · ${formatBytes(channelContentBytes(c.manifest))}`
               : items

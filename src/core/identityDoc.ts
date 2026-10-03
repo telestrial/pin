@@ -23,6 +23,9 @@ export type DirectoryChannelRef = {
   // means yes, and it is only ever published when false — an ordinary channel
   // adds nothing to a blob the whole graph downloads to read a display name.
   showOnProfile?: boolean
+  // 'private' for a channel whose page anyone may see and whose posts only its members may
+  // read. Absent means public, which every entry published before private channels is.
+  visibility?: 'private'
 }
 
 export type DirectoryDoc = {

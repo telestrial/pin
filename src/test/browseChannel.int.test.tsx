@@ -324,18 +324,45 @@ describe('integration: browsing a channel you do not hold', () => {
     expect(list.getAllByRole('button')).toHaveLength(1)
   })
 
-  it('offers no follower count on an unlisted channel', async () => {
-    // Not zero — absent. A `FollowEdge` carries no K and resolves through the author's
-    // directory, where an unlisted channel is absent by construction, so the scan is
-    // structurally empty forever and a number would state a fact about the channel where
-    // the truth is that the relation does not apply. The same predicate hides Follow.
+  it('shows a non-member of a secret channel only that they are not invited', async () => {
+    // Sealed as the publish path seals it, so the key finds the channel and reads nothing:
+    // no posts, no count, and no relation to offer — there is nothing to watch or follow
+    // through without an invitation.
     await published([post('a post', '2026-09-02T00:00:00.000Z')], 'secret')
     holdFollower('did:dht:someone')
 
     view(KEY)
 
-    await waitFor(() => expect(screen.getByText('a post')).toBeInTheDocument())
+    expect(await screen.findByText('You’re not invited.')).toBeInTheDocument()
+    expect(screen.queryByText('a post')).toBeNull()
     expect(screen.queryByText('Followers')).toBeNull()
+    expect(screen.queryByText('Watch')).toBeNull()
+    expect(screen.queryByText('Follow')).toBeNull()
+  })
+
+  it('shows a non-member of a private channel its page and not its posts', async () => {
+    // The profile rides in the manifest's head, readable with the key; the posts are sealed
+    // for members. So the page names the channel and says who may read it, and offers no
+    // relation yet — asking to be let in is a request, not a watch.
+    await published(
+      [post('a members post', '2026-09-02T00:00:00.000Z')],
+      'private',
+    )
+
+    view(KEY)
+
+    expect(
+      await screen.findByText('Only approved members can read this channel.'),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('heading', { name: 'Their channel' }),
+    ).toBeInTheDocument()
+    expect(screen.getByText('theirs')).toBeInTheDocument()
+    expect(screen.getByText('Private')).toBeInTheDocument()
+    expect(screen.queryByText('a members post')).toBeNull()
+    expect(screen.queryByText('You’re not invited.')).toBeNull()
+    expect(screen.queryByText('Watch')).toBeNull()
+    expect(screen.queryByText('Follow')).toBeNull()
   })
 
   it('leaves a channel you watch to the feed store', async () => {
@@ -392,22 +419,6 @@ describe('integration: the relation you have with a channel', () => {
 
     await waitFor(() => expect(screen.getByText('Watch')).toBeInTheDocument())
     expect(screen.getByText('Follow')).toBeInTheDocument()
-  })
-
-  it('offers only Watch on an unlisted one', async () => {
-    // Absent rather than disabled. A FollowEdge carries no K and resolves through the
-    // author's directory, where an unlisted channel is absent by construction — so there
-    // is nothing to follow THROUGH, and a disabled button would imply a permission
-    // somebody could be granted.
-    await published(
-      [post('a post of theirs', '2026-09-02T00:00:00.000Z')],
-      'secret',
-    )
-
-    view(KEY)
-
-    await waitFor(() => expect(screen.getByText('Watch')).toBeInTheDocument())
-    expect(screen.queryByText('Follow')).toBeNull()
   })
 
   it('starts watching from the key in hand, with no second fetch', async () => {
