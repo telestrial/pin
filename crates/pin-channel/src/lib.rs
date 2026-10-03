@@ -26,6 +26,7 @@
 pub mod band;
 pub mod invite;
 mod object;
+pub mod request;
 pub mod tree;
 
 pub use object::{
