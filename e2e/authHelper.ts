@@ -285,13 +285,16 @@ export async function drainE2EChannels(
   await yourChannels.waitFor({ state: 'visible', timeout: 30_000 }).catch(() => {})
 
   const start = Date.now()
+  const candidates = yourChannels.getByRole('button', { name: /e2e test/i })
   let drained = 0
+  // Candidates that failed this run, skipped past rather than retried: one channel that
+  // will not retract would otherwise take every pass, the same first entry each time.
+  let skipped = 0
   for (let i = 0; i < max; i++) {
     if (Date.now() - start > budgetMs) break // wall-clock guard — never blow the budget
-    const candidates = yourChannels.getByRole('button', { name: /e2e test/i })
-    if ((await candidates.count()) === 0) break
+    if ((await candidates.count()) <= skipped) break
     try {
-      await candidates.first().click({ timeout: 30_000 })
+      await candidates.nth(skipped).click({ timeout: 30_000 })
       // window.prompt() is a native dialog in Playwright — accept with the
       // required typed DELETE before the click that triggers it.
       page.once('dialog', (d) => d.accept('DELETE'))
@@ -304,9 +307,11 @@ export async function drainE2EChannels(
       // taints the test result even when the throw is caught — so cleanup, where
       // a slow/failed retract must stay non-fatal, must never assert.
       await unpin.waitFor({ state: 'hidden', timeout: 45_000 }).catch(() => {})
-      if (!(await unpin.isVisible().catch(() => false))) drained++
+      if (await unpin.isVisible().catch(() => false)) skipped++
+      else drained++
     } catch (e) {
       console.warn(`[drainE2EChannels] pass ${i} failed, recovering:`, e)
+      skipped++
       await page
         .getByRole('button', { name: 'Home', exact: true })
         .first()
@@ -314,7 +319,15 @@ export async function drainE2EChannels(
         .catch(() => {})
     }
   }
+  await reportLeft('drainE2EChannels', candidates)
   return drained
+}
+
+// What a drain left behind, said out loud. A drain that reports only what it removed
+// lets a backlog build silently run after run; this is the line that shows it growing.
+async function reportLeft(label: string, candidates: Locator): Promise<void> {
+  const left = await candidates.count().catch(() => 0)
+  if (left > 0) console.warn(`[${label}] ${left} e2e entries remain`)
 }
 
 // Sibling of drainE2EChannels for subscribed channels — a subscriber (bob)
@@ -335,13 +348,15 @@ export async function drainE2ESubscriptions(
   const subscribed = followingList(page)
 
   const start = Date.now()
+  const candidates = subscribed.getByRole('button', { name: /e2e test/i })
   let drained = 0
+  // Skipped past rather than retried — see drainE2EChannels.
+  let skipped = 0
   for (let i = 0; i < max; i++) {
     if (Date.now() - start > budgetMs) break
-    const candidates = subscribed.getByRole('button', { name: /e2e test/i })
-    if ((await candidates.count()) === 0) break
+    if ((await candidates.count()) <= skipped) break
     try {
-      await candidates.first().click({ timeout: 30_000 })
+      await candidates.nth(skipped).click({ timeout: 30_000 })
       // The relation pill, which replaced the "Unsubscribe" button. It carries
       // the state rather than the action, so the one to click is whichever of
       // the two ON labels is showing — and dropping the relation now takes no
@@ -358,8 +373,10 @@ export async function drainE2ESubscriptions(
         .waitFor({ state: 'visible', timeout: 45_000 })
         .catch(() => {})
       if (await dropped.isVisible().catch(() => false)) drained++
+      else skipped++
     } catch (e) {
       console.warn(`[drainE2ESubscriptions] pass ${i} failed, recovering:`, e)
+      skipped++
       await page
         .getByRole('button', { name: 'Home', exact: true })
         .first()
@@ -367,6 +384,7 @@ export async function drainE2ESubscriptions(
         .catch(() => {})
     }
   }
+  await reportLeft('drainE2ESubscriptions', candidates)
   return drained
 }
 
