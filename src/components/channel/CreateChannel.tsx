@@ -234,27 +234,33 @@ export function CreateChannel({
 
           {/* Separate from visibility, and deliberately below it: this decides
               where the channel's posts SHOW, not who can read them. A channel
-              kept off the profile is still findable and followable. */}
-          <label className="flex items-start gap-2 pt-1 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={showOnProfile}
-              disabled={submitting}
-              onChange={(e) => setShowOnProfile(e.target.checked)}
-              className="mt-0.5 cursor-pointer"
-            />
-            <span className="min-w-0">
-              <span className="block text-sm text-neutral-900">
-                Include on your profile
+              kept off the profile is still findable and followable.
+
+              Public only. A Secret channel is in no directory, so nothing of it
+              reaches a profile whatever this says — offering it ticked would read
+              as a promise that its posts go to your followers. */}
+          {visibility === 'public' && (
+            <label className="flex items-start gap-2 pt-1 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={showOnProfile}
+                disabled={submitting}
+                onChange={(e) => setShowOnProfile(e.target.checked)}
+                className="mt-0.5 cursor-pointer"
+              />
+              <span className="min-w-0">
+                <span className="block text-sm text-neutral-900">
+                  Include on your profile
+                </span>
+                <span className="block text-xs text-neutral-500">
+                  Its posts appear in your profile's feed, which is what people
+                  who follow you receive. Turn this off for a channel you'd
+                  rather keep findable without it reaching your followers.
+                  Changeable later.
+                </span>
               </span>
-              <span className="block text-xs text-neutral-500">
-                Its posts appear in your profile's feed, which is what people
-                who follow you receive. Turn this off for a channel you'd rather
-                keep findable without it reaching your followers. Changeable
-                later.
-              </span>
-            </span>
-          </label>
+            </label>
+          )}
         </div>
 
         {error && (
