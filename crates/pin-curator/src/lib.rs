@@ -68,6 +68,7 @@ use iroh_docs::{api::Doc, AuthorId};
 use pin_derive::{record_key, settings_key};
 use pin_engagement::Aggregate;
 
+pub mod access;
 mod channeldoc;
 mod channelsync;
 mod comments;

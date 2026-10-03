@@ -731,6 +731,26 @@ pub const INVITE_DELIVER_COLLECTION: &str = "invite-deliver";
 /// joins.
 pub const MEMBERSHIP_COLLECTION: &str = "membership";
 
+/// The collection holding this identity's own request to read each private channel it has
+/// asked about, keyed by channelID: the newest one, request or withdrawal, which is what the
+/// deliver loop knocks to the author and what a screen reads to say "Requested".
+pub const JOIN_REQUEST_COLLECTION: &str = "join-request";
+
+/// The collection holding the requests to read this identity's private channels, the newest
+/// per person per channel, withdrawals included so an older request replayed after one
+/// cannot bring it back. Keyed by [`join_inbox_rkey`]; written only by the knock drain.
+pub const JOIN_INBOX_COLLECTION: &str = "join-inbox";
+
+/// The collection recording which of this identity's requests reached their author, keyed
+/// by channelID and holding the request's content hash, so a new request or a withdrawal
+/// goes again and an unchanged one does not.
+pub const JOIN_DELIVER_COLLECTION: &str = "join-deliver";
+
+/// The rkey for one person's request to read one channel.
+pub fn join_inbox_rkey(channel_id: &str, did: &str) -> String {
+    format!("{channel_id}:{did}")
+}
+
 /// The collection holding each content key this identity has climbed to, one record per
 /// channel and epoch. Written only by the member pass, which is why it is apart from
 /// `membership`: one writer to a record. Every epoch is kept, because an object sealed
@@ -1053,6 +1073,11 @@ mod tests {
                 );
             }
             add(MEMBERSHIP_COLLECTION, ch.clone());
+            add(JOIN_REQUEST_COLLECTION, ch.clone());
+            add(JOIN_DELIVER_COLLECTION, ch.clone());
+            for did in &dids {
+                add(JOIN_INBOX_COLLECTION, join_inbox_rkey(ch, did));
+            }
         }
         add(PUBLISHED_COLLECTION, PUBLISHED_SETTINGS_RKEY.into());
         add(PUBLISHED_COLLECTION, "directory".into());

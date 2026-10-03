@@ -172,6 +172,12 @@ pub struct DeliverOutcome {
     /// Invitations whose invitee could not be reached. Retried next pass; meanwhile the
     /// directory carries the box for an invitee who reads this identity.
     pub invitations_unreachable: usize,
+    /// Requests to read a private channel, or withdrawals of one, knocked through to the
+    /// channel's author this pass.
+    pub requests: usize,
+    /// Requests whose author could not be reached. Retried next pass: the mark is written
+    /// only once a knock lands, and a request has no other road.
+    pub requests_unreachable: usize,
     /// One entry per endorsement considered, for when the counts aren't enough to say
     /// what went wrong.
     pub steps: Vec<DeliverStep>,
@@ -496,6 +502,7 @@ pub async fn deliver_once(
         .await;
     }
     deliver_invitations(ctx, own_did, &mut outcome).await;
+    deliver_requests(ctx, &mut outcome).await;
     Ok(outcome)
 }
 
@@ -578,6 +585,43 @@ async fn deliver_invitations(ctx: &DeliverContext, own_did: &str, outcome: &mut 
             outcome.invitations += 1;
         } else {
             outcome.invitations_unreachable += 1;
+        }
+    }
+}
+
+/// Knock every request this identity has made, or withdrawn, that its author has not had.
+///
+/// The knock is the only road: nothing about a request is published, so an author who
+/// cannot be reached now gets it on a later pass, and a request is never lost for it.
+async fn deliver_requests(ctx: &DeliverContext, outcome: &mut DeliverOutcome) {
+    for request in crate::access::own_requests(&ctx.doc, &ctx.blobs, ctx.author_id).await {
+        let hash = crate::access::request_hash(&request);
+        let sent = read_record(
+            &ctx.doc,
+            &ctx.blobs,
+            ctx.author_id,
+            pin_derive::JOIN_DELIVER_COLLECTION,
+            &request.channel_id,
+        )
+        .await
+        .ok()
+        .flatten();
+        if sent.as_deref() == Some(hash.as_bytes()) {
+            continue;
+        }
+        let knock = crate::access::request_knock(&request);
+        if reach_target(ctx, &request.author, &knock).await.sent {
+            let _ = crate::write_record(
+                &ctx.doc,
+                ctx.author_id,
+                pin_derive::JOIN_DELIVER_COLLECTION,
+                &request.channel_id,
+                hash.into_bytes(),
+            )
+            .await;
+            outcome.requests += 1;
+        } else {
+            outcome.requests_unreachable += 1;
         }
     }
 }
@@ -787,6 +831,10 @@ fn deliverable_written(event: &LiveEvent) -> bool {
         .any(|lane| key.starts_with(&pin_derive::collection_prefix(lane.records())))
         // An invitation: the seating is written after its box, so the seating is the wake.
         || key.starts_with(&pin_derive::collection_prefix(pin_derive::MEMBERS_COLLECTION))
+        // A request, or its withdrawal, made on a screen a moment ago.
+        || key.starts_with(&pin_derive::collection_prefix(
+            pin_derive::JOIN_REQUEST_COLLECTION,
+        ))
 }
 
 /// What ended a wait.

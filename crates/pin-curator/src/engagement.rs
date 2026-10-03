@@ -187,6 +187,9 @@ pub struct EngagementOutcome {
     /// Invitations to this identity, by knock or found in a directory read this pass, that
     /// recorded a new membership.
     pub invitations: usize,
+    /// Requests to read this identity's private channels, or withdrawals of them, taken
+    /// into its inbox this pass.
+    pub requests: usize,
     /// What the comment lane did with its half of the same drain.
     pub comments: crate::comments::CommentsOutcome,
 }
@@ -903,8 +906,20 @@ pub async fn engagement_once<N: crate::net::Network>(
         .into_iter()
         .map(|k| k.record)
         .partition(crate::membership::is_invitation_knock);
+    let (request_knocks, knocks): (Vec<_>, Vec<_>) = knocks
+        .into_iter()
+        .partition(crate::access::is_request_knock);
     let (comment_knocks, knocks): (Vec<_>, Vec<_>) =
         knocks.into_iter().partition(crate::comments::is_comment);
+    outcome.requests += crate::access::take_requests(
+        &ctx.doc,
+        &ctx.blobs,
+        ctx.author_id,
+        &settings,
+        own_did,
+        &request_knocks,
+    )
+    .await;
     let knocked_boxes: Vec<String> = invitation_knocks
         .iter()
         .filter_map(|r| r["invite"].as_str().map(str::to_string))
