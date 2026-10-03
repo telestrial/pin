@@ -345,6 +345,9 @@ pub async fn start_pull_loop(
                         "climbed": o.climb.climbed,
                         "climbRefused": o.climb.refused,
                         "climbFailed": o.climb.failed,
+                        "climbUnreachable": o.climb.unreachable,
+                        "climbUnpublished": o.climb.unpublished,
+                        "climbProblems": o.climb.problems,
                     })
                     .to_string(),
                     Err(e) => serde_json::json!({ "error": e }).to_string(),

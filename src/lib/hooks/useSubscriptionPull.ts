@@ -81,7 +81,18 @@ export function useSubscriptionPull() {
       // Whatever a previous session left cached is current enough to show immediately,
       // rather than waiting out the first pass.
       applyAllCached()
-      await startPullLoop(key)
+      // A climb that reaches no key says why, every pass it keeps failing — the desktop log
+      // line's counterpart. Silent otherwise, like the rest of the pass report.
+      await startPullLoop(key, (report) => {
+        try {
+          const problems = (JSON.parse(report) as { climbProblems?: string[] })
+            .climbProblems
+          if (problems?.length)
+            console.warn('curator climb:', problems.join('; '))
+        } catch {
+          // A report that will not parse is a diagnostic lost, nothing more.
+        }
+      })
     })()
 
     return () => {

@@ -230,6 +230,9 @@ pub struct ClimbOutcome {
     /// identity's path, or a leaf this identity no longer holds — which is what being
     /// removed looks like from the inside.
     pub failed: usize,
+    /// Why each channel that did not reach a key did not, as `<channelID>: <reason>`. For a
+    /// log line, so a climb that keeps coming back empty says which step it stops at.
+    pub problems: Vec<String>,
 }
 
 /// One pass: climb every membership whose tree has moved.
@@ -255,10 +258,30 @@ pub async fn climb_once<N: Network>(
         {
             Ok(Climbed::New) => outcome.climbed += 1,
             Ok(Climbed::Unchanged) => outcome.unchanged += 1,
-            Ok(Climbed::Older) => outcome.refused += 1,
-            Ok(Climbed::Unpublished) => outcome.unpublished += 1,
-            Err(Failure::Unreachable) => outcome.unreachable += 1,
-            Err(Failure::Refused) => outcome.failed += 1,
+            Ok(Climbed::Older) => {
+                outcome.refused += 1;
+                outcome.problems.push(format!(
+                    "{channel_id}: pointer names an older tree than one held"
+                ));
+            }
+            Ok(Climbed::Unpublished) => {
+                outcome.unpublished += 1;
+                outcome
+                    .problems
+                    .push(format!("{channel_id}: no member tree published"));
+            }
+            Err(Failure::Unreachable(why)) => {
+                outcome.unreachable += 1;
+                outcome
+                    .problems
+                    .push(format!("{channel_id}: {}", short(&why)));
+            }
+            Err(Failure::Refused(why)) => {
+                outcome.failed += 1;
+                outcome
+                    .problems
+                    .push(format!("{channel_id}: {}", short(&why)));
+            }
         }
     }
     Ok(outcome)
@@ -272,10 +295,21 @@ enum Climbed {
 }
 
 /// Why a climb did not finish. Kept apart because one is retried as a matter of course and
-/// the other says something is wrong with what was published.
+/// the other says something is wrong with what was published. Each carries the step it
+/// stopped at, for the log.
 enum Failure {
-    Unreachable,
-    Refused,
+    Unreachable(String),
+    Refused(String),
+}
+
+/// A reason cut to a log line's worth. A transport error can run to several hundred
+/// characters, and the step it names is in the first few.
+fn short(why: &str) -> String {
+    const MAX: usize = 160;
+    match why.char_indices().nth(MAX) {
+        Some((at, _)) => format!("{}…", &why[..at]),
+        None => why.to_string(),
+    }
 }
 
 async fn climb<N: Network>(
@@ -287,27 +321,33 @@ async fn climb<N: Network>(
     channel_id: &str,
     membership: &Membership,
 ) -> Result<Climbed, Failure> {
-    let channel_key =
-        pin_crypto::channel_key_from_base64(&membership.channel_key).ok_or(Failure::Refused)?;
-    let locator = pin_channel::members_locator_key(&channel_key).map_err(|_| Failure::Refused)?;
+    let channel_key = pin_crypto::channel_key_from_base64(&membership.channel_key)
+        .ok_or_else(|| Failure::Refused("membership's channel key is malformed".into()))?;
+    let locator = pin_channel::members_locator_key(&channel_key)
+        .map_err(|e| Failure::Refused(format!("member-tree locator: {e}")))?;
     let records = net
         .resolve(&locator)
         .await
-        .map_err(|_| Failure::Unreachable)?;
+        .map_err(|e| Failure::Unreachable(format!("resolve member-tree pointer: {e}")))?;
     let Some(top_url) = pin_channel::members_url_in(&records) else {
         return Ok(Climbed::Unpublished);
     };
     let signer = pin_channel::Signer::Author(&membership.author);
     let fetch = |url: String| async move {
-        let bytes = net.download(&url).await.map_err(|_| Failure::Unreachable)?;
-        let blob = String::from_utf8(bytes).map_err(|_| Failure::Refused)?;
-        Band::open(&channel_key, &blob, signer).map_err(|_| Failure::Refused)
+        let bytes = net
+            .download(&url)
+            .await
+            .map_err(|e| Failure::Unreachable(format!("download band: {e}")))?;
+        let blob =
+            String::from_utf8(bytes).map_err(|_| Failure::Refused("band is not text".into()))?;
+        Band::open(&channel_key, &blob, signer)
+            .map_err(|e| Failure::Refused(format!("open band: {e}")))
     };
 
     let (epoch, top) = fetch(top_url).await?;
     let held = content_keys(doc, blobs, author_id, channel_id)
         .await
-        .map_err(|_| Failure::Unreachable)?;
+        .map_err(|e| Failure::Unreachable(format!("read held keys: {e}")))?;
     match held.keys().next_back() {
         Some(&highest) if epoch < highest => return Ok(Climbed::Older),
         Some(&highest) if epoch == highest => return Ok(Climbed::Unchanged),
@@ -317,35 +357,40 @@ async fn climb<N: Network>(
     // Down the path, each band from the URL the band above it names. Only the top's epoch is
     // checked: a band below it is reached through a URL the author signed, and one a removal
     // elsewhere left alone keeps the epoch it was published at.
-    let height = top.height().ok_or(Failure::Refused)?;
+    let height = top
+        .height()
+        .ok_or_else(|| Failure::Refused("top band has no height".into()))?;
     let mut bands = vec![top];
     for next in &path(membership.leaf, height)[1..] {
         let url = bands
             .last()
             .and_then(|b| b.child_url(*next))
-            .ok_or(Failure::Refused)?
+            .ok_or_else(|| Failure::Refused("a band names no child on this leaf's path".into()))?
             .to_string();
         bands.push(fetch(url).await?.1);
     }
 
     let author_enc = pin_crypto::b64_decode(&membership.author_enc_key)
         .and_then(|b| <[u8; 32]>::try_from(b).ok())
-        .ok_or(Failure::Refused)?;
+        .ok_or_else(|| Failure::Refused("author's encryption key is malformed".into()))?;
     let shared = pin_crypto::enc_shared(&pin_derive::enc_key_seed(app_key), &author_enc)
-        .map_err(|_| Failure::Refused)?;
+        .map_err(|e| Failure::Refused(format!("agree leaf key: {e}")))?;
     let leaf_key = pin_channel::tree::leaf_key(&shared, channel_id);
-    let content =
-        climb_bands(&bands, membership.leaf, leaf_key, channel_id).map_err(|_| Failure::Refused)?;
+    let content = climb_bands(&bands, membership.leaf, leaf_key, channel_id)
+        .map_err(|e| Failure::Refused(format!("climb from leaf {}: {e}", membership.leaf)))?;
     // The root's version is the epoch, and the head says which epoch the tree was published
     // at; a disagreement is a tree that is not what its head claims.
     if content.epoch != epoch {
-        return Err(Failure::Refused);
+        return Err(Failure::Refused(format!(
+            "root is at epoch {} but the top band says {epoch}",
+            content.epoch
+        )));
     }
 
     let bytes = serde_json::to_vec(&HeldKey {
         key: pin_crypto::b64_encode(&content.key),
     })
-    .map_err(|_| Failure::Refused)?;
+    .map_err(|e| Failure::Refused(format!("encode key: {e}")))?;
     write_record(
         doc,
         author_id,
@@ -354,7 +399,7 @@ async fn climb<N: Network>(
         bytes,
     )
     .await
-    .map_err(|_| Failure::Unreachable)?;
+    .map_err(|e| Failure::Unreachable(format!("write key: {e}")))?;
     Ok(Climbed::New)
 }
 
@@ -483,7 +528,15 @@ mod tests {
         }
     }
 
+    /// One climb, counts only: what each problem says is `a_climb_that_stops_says_where`'s.
     async fn pass(member: &Identity) -> ClimbOutcome {
+        ClimbOutcome {
+            problems: Vec::new(),
+            ..climb_with_reasons(member).await
+        }
+    }
+
+    async fn climb_with_reasons(member: &Identity) -> ClimbOutcome {
         climb_once(
             &member.net,
             &member.doc,
@@ -493,6 +546,54 @@ mod tests {
         )
         .await
         .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_climb_that_stops_says_where() {
+        // Two of a climb's outcomes used to say nothing at all, so a member waiting on a key
+        // could not tell an author who had not published from a band that would not download.
+        let world = World::new();
+        let channel = Channel::new(&world).await;
+        let bob = Identity::new(&world, 2).await;
+        let carol = Identity::new(&world, 3).await;
+        channel.seat(&bob).await;
+        channel.seat(&carol).await;
+
+        // Nothing at the pointer's key at all reads as a failed lookup here; an empty answer
+        // is what the DHT gives for a key nobody has published to.
+        let unreached = climb_with_reasons(&bob).await;
+        assert_eq!(unreached.unreachable, 1);
+        assert!(
+            unreached.problems[0]
+                .starts_with(&format!("{}: resolve member-tree pointer:", channel.id)),
+            "{:?}",
+            unreached.problems
+        );
+        world.put_packet(
+            &pin_channel::members_locator_key(&channel.key).unwrap(),
+            Vec::new(),
+        );
+        let unpublished = climb_with_reasons(&bob).await;
+        assert_eq!(unpublished.unpublished, 1);
+        assert_eq!(
+            unpublished.problems,
+            [format!("{}: no member tree published", channel.id)]
+        );
+
+        channel.publish().await;
+        climb_with_reasons(&carol).await;
+        channel.unseat(&carol).await;
+        channel.publish().await;
+        let removed = climb_with_reasons(&carol).await;
+        assert_eq!(removed.failed, 1);
+        assert_eq!(removed.problems.len(), 1);
+        assert!(
+            removed.problems[0].starts_with(&format!("{}: climb from leaf", channel.id)),
+            "{:?}",
+            removed.problems
+        );
+
+        assert!(climb_with_reasons(&bob).await.problems.is_empty());
     }
 
     async fn keys(member: &Identity, channel: &Channel) -> BTreeMap<u32, [u8; 32]> {

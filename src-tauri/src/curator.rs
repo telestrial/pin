@@ -782,15 +782,17 @@ pub async fn curator_start_pull(
         pin_curator::run_pull_loop(ctx, PULL_CADENCE, |result| match result {
             Ok(o) => {
                 let c = &o.climb;
+                // A climb that reaches no key prints every pass it keeps failing, with why:
+                // a member waiting on a key is otherwise indistinguishable from one whose
+                // climb has nothing to do.
                 if o.cached > 0
                     || o.dropped > 0
                     || o.failed > 0
                     || c.climbed > 0
-                    || c.refused > 0
-                    || c.failed > 0
+                    || !c.problems.is_empty()
                 {
                     log::info!(
-                        "curator pull: cached {} unresolved {} failed {} dropped {} | climb: climbed {} refused {} failed {} unreachable {}",
+                        "curator pull: cached {} unresolved {} failed {} dropped {} | climb: climbed {} refused {} failed {} unreachable {} unpublished {}{}",
                         o.cached,
                         o.unresolved,
                         o.failed,
@@ -798,7 +800,13 @@ pub async fn curator_start_pull(
                         c.climbed,
                         c.refused,
                         c.failed,
-                        c.unreachable
+                        c.unreachable,
+                        c.unpublished,
+                        if c.problems.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" | {}", c.problems.join("; "))
+                        }
                     );
                 }
             }
