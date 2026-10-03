@@ -458,6 +458,33 @@ pub async fn members_invite(
     .await
 }
 
+/// Ask to read a private channel, or withdraw the request, as this identity.
+#[tauri::command]
+pub async fn access_request(
+    state: tauri::State<'_, CuratorState>,
+    app_key_hex: String,
+    channel_key: Vec<u8>,
+    author: String,
+    withdrawn: bool,
+    now_iso: String,
+) -> Result<pin_channel::request::Request, String> {
+    let app_key = pin_derive::decode_app_key(&app_key_hex).ok_or("app key must be 64 hex chars")?;
+    let key: [u8; 32] = channel_key
+        .try_into()
+        .map_err(|_| "channel key must be 32 bytes".to_string())?;
+    let engine = current_engine(&state)?;
+    pin_curator::access::request_access(
+        &engine.doc,
+        engine.author_id,
+        &app_key,
+        &key,
+        &author,
+        withdrawn,
+        &now_iso,
+    )
+    .await
+}
+
 /// Take a person out of one of this identity's members-only channels.
 #[tauri::command]
 pub async fn members_remove(
@@ -1368,16 +1395,17 @@ pub async fn curator_start_engagement(
                         || o.members_published > 0
                         || o.members_failed > 0
                         || o.invitations > 0
+                        || o.requests > 0
                         || comments > 0
                         || comment_withdrawals > 0
                         || !o.problems.is_empty()
                     {
                         log::info!(
-                            "curator engagement: reached {} unreachable {} added {} withdrawn {} folded {} tallies {} cleared {} rejected {} not-ours {} published {} publish-failed {} member-bands {} members-failed {} invitations {} | knocks: accepted {} rejected {} not-ours {} stale {} refused {} | withdrawals: applied {} rejected {} not-ours {} ignored {}{}{}",
+                            "curator engagement: reached {} unreachable {} added {} withdrawn {} folded {} tallies {} cleared {} rejected {} not-ours {} published {} publish-failed {} member-bands {} members-failed {} invitations {} requests {} | knocks: accepted {} rejected {} not-ours {} stale {} refused {} | withdrawals: applied {} rejected {} not-ours {} ignored {}{}{}",
                             o.reached, o.unreachable, o.added, o.withdrawn, o.folded, o.tallies,
                             o.cleared, o.rejected, o.not_ours, o.published,
                             o.publish_failed, o.members_published, o.members_failed,
-                            o.invitations,
+                            o.invitations, o.requests,
                             o.knocked, o.knocks_rejected,
                             o.knocks_not_ours, o.stale_knocks, o.knocks_refused,
                             o.retractions_applied,
@@ -1567,9 +1595,11 @@ pub async fn curator_start_deliver(
                         || o.retract_failed > 0
                         || o.invitations > 0
                         || o.invitations_unreachable > 0
+                        || o.requests > 0
+                        || o.requests_unreachable > 0
                     {
                         log::info!(
-                            "curator deliver: delivered {} already {} unreachable {} no-target {} own {} | withdrawn: told {} unreachable {} forgotten {} | invitations: delivered {} unreachable {}",
+                            "curator deliver: delivered {} already {} unreachable {} no-target {} own {} | withdrawn: told {} unreachable {} forgotten {} | invitations: delivered {} unreachable {} | requests: delivered {} unreachable {}",
                             o.delivered,
                             o.already,
                             o.unreachable,
@@ -1579,7 +1609,9 @@ pub async fn curator_start_deliver(
                             o.retract_failed,
                             o.dropped,
                             o.invitations,
-                            o.invitations_unreachable
+                            o.invitations_unreachable,
+                            o.requests,
+                            o.requests_unreachable
                         );
                         let stranded: Vec<&str> = o
                             .steps

@@ -2103,6 +2103,46 @@ pub fn members_collection() -> String {
     pin_derive::MEMBERS_COLLECTION.to_string()
 }
 
+/// Ask to read a private channel, or withdraw the request, as this identity — answering
+/// with the signed request as JSON. The Curator's deliver loop knocks it to `author`.
+#[wasm_bindgen]
+pub async fn access_request(
+    app_key_hex: String,
+    channel_key: &[u8],
+    author: String,
+    withdrawn: bool,
+    now_iso: String,
+) -> Result<String, JsValue> {
+    let app_key = decode_app_key(&app_key_hex)
+        .ok_or_else(|| JsValue::from_str("app key must be 64 hex chars"))?;
+    let key = key32(channel_key)?;
+    let eng = engine()?;
+    let request = pin_curator::access::request_access(
+        &eng.doc,
+        eng.author_id,
+        &app_key,
+        &key,
+        &author,
+        withdrawn,
+        &now_iso,
+    )
+    .await
+    .map_err(je)?;
+    serde_json::to_string(&request).map_err(|e| JsValue::from_str(&format!("encode: {e}")))
+}
+
+/// The collection this identity's own requests to read private channels live in.
+#[wasm_bindgen]
+pub fn join_request_collection() -> String {
+    pin_derive::JOIN_REQUEST_COLLECTION.to_string()
+}
+
+/// The collection the requests to read this identity's private channels live in.
+#[wasm_bindgen]
+pub fn join_inbox_collection() -> String {
+    pin_derive::JOIN_INBOX_COLLECTION.to_string()
+}
+
 /// The collection this identity's memberships live in.
 #[wasm_bindgen]
 pub fn membership_collection() -> String {

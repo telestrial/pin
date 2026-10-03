@@ -173,6 +173,7 @@ pub fn run() {
             channel::channel_resolve_profile,
             channel::channel_open_blob,
             curator::members_invite,
+            curator::access_request,
             curator::members_remove,
             channel::channel_republish_pointer,
             channel::channel_resolve_conversations_url,
