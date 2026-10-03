@@ -342,8 +342,8 @@ describe('integration: browsing a channel you do not hold', () => {
 
   it('shows a non-member of a private channel its page and not its posts', async () => {
     // The profile rides in the manifest's head, readable with the key; the posts are sealed
-    // for members. So the page names the channel and says who may read it, and offers no
-    // relation yet — asking to be let in is a request, not a watch.
+    // for members. So the page names the channel and says who may read it, and the one
+    // relation it offers is asking to be let in.
     await published(
       [post('a members post', '2026-09-02T00:00:00.000Z')],
       'private',
@@ -361,8 +361,9 @@ describe('integration: browsing a channel you do not hold', () => {
     expect(screen.getByText('Private')).toBeInTheDocument()
     expect(screen.queryByText('a members post')).toBeNull()
     expect(screen.queryByText('You’re not invited.')).toBeNull()
+    // Asking to be let in, and not watching: there is nothing to watch without leave.
+    expect(screen.getByRole('button', { name: 'Follow' })).toBeInTheDocument()
     expect(screen.queryByText('Watch')).toBeNull()
-    expect(screen.queryByText('Follow')).toBeNull()
   })
 
   it('leaves a channel you watch to the feed store', async () => {

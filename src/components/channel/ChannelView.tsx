@@ -34,6 +34,7 @@ import { FeedRow } from '../HomeFeed'
 import { PersonRow } from '../PersonRow'
 import { ChannelPinButton } from '../pin/ChannelPinButton'
 import { PinIcon } from '../pin/PinIcon'
+import { RequestButton } from '../RequestButton'
 import { Stat } from '../ui/Stat'
 import { WatchButton } from '../WatchButton'
 import { ChannelAvatar } from './ChannelAvatar'
@@ -451,7 +452,12 @@ export function ChannelView({
                   </div>
                   {/* Actions: below the cover, upper-right, even with the
                       name/Unclaimed row. */}
-                  {(onEdit || onUnpin || manifest || watching || following) && (
+                  {(onEdit ||
+                    onUnpin ||
+                    manifest ||
+                    watching ||
+                    following ||
+                    profileOnly) && (
                     <div className="shrink-0 flex items-center gap-1.5">
                       {onEdit || onUnpin ? (
                         // Owned channel: Edit channel · ⋯ context menu · pin.
@@ -572,6 +578,15 @@ export function ChannelView({
                               }
                               channelID={channelID}
                               channelName={channelName}
+                            />
+                          )}
+                          {/* A private channel's page offers a non-member one relation:
+                              asking to be let in. */}
+                          {profileOnly && channelKey && authorDid && (
+                            <RequestButton
+                              channelID={channelID}
+                              channelKey={channelKey}
+                              author={authorDid}
                             />
                           )}
                           {/* Whole-channel pin (snapshot/catch-up/unpin) —
