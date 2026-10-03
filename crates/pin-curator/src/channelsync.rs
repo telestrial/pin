@@ -159,7 +159,9 @@ async fn reconcile(
                 // What a replica already holds is not re-emitted when it is re-imported,
                 // so an instance that restarts would otherwise learn a channel's counts
                 // only when the floor rung next ran.
-                outcome.tallies += scan_tallies(ctx, channel_id, &w).await;
+                let (tallies, threads) = scan_values(ctx, channel_id, &w).await;
+                outcome.tallies += tallies;
+                outcome.threads += threads;
                 watched.insert((*channel_id).to_string(), w);
                 outcome.imported += 1;
             }
@@ -366,7 +368,7 @@ async fn push_conversation(
     ctx: &ChannelSyncContext,
     channel_id: &str,
     watched: &Watched,
-    content: &pin_channel::ContentKey,
+    content: Option<&pin_channel::ContentKey>,
     subject: &str,
 ) -> TallyPush {
     let Ok(Some(entry)) = watched
@@ -379,14 +381,14 @@ async fn push_conversation(
     let Ok(bytes) = ctx.blobs.get_bytes(entry.content_hash()).await else {
         return TallyPush::NotReady;
     };
-    let Some(conversation) = crate::open_doc_value::<pin_engagement::Conversation>(
-        &watched.key,
-        content,
-        &watched.author,
-        &bytes,
-    ) else {
-        return TallyPush::Nothing;
-    };
+    let conversation =
+        match open_value::<pin_engagement::Conversation>(ctx, channel_id, watched, content, &bytes)
+            .await
+        {
+            Opened::Value(c) => c,
+            Opened::NotReady => return TallyPush::NotReady,
+            Opened::Nothing => return TallyPush::Nothing,
+        };
     if crate::cache_thread(
         &ctx.doc,
         &ctx.blobs,
@@ -407,7 +409,7 @@ async fn push_tally(
     ctx: &ChannelSyncContext,
     channel_id: &str,
     watched: &Watched,
-    content: &pin_channel::ContentKey,
+    content: Option<&pin_channel::ContentKey>,
     subject: &str,
 ) -> TallyPush {
     let Ok(Some(entry)) = watched
@@ -422,10 +424,10 @@ async fn push_tally(
     let Ok(bytes) = ctx.blobs.get_bytes(entry.content_hash()).await else {
         return TallyPush::NotReady;
     };
-    let Some(aggregate) =
-        crate::open_doc_value::<Aggregate>(&watched.key, content, &watched.author, &bytes)
-    else {
-        return TallyPush::Nothing;
+    let aggregate = match open_value::<Aggregate>(ctx, channel_id, watched, content, &bytes).await {
+        Opened::Value(a) => a,
+        Opened::NotReady => return TallyPush::NotReady,
+        Opened::Nothing => return TallyPush::Nothing,
     };
     if cache_tally(
         &ctx.doc,
@@ -447,6 +449,53 @@ enum TallyPush {
     Cached,
     NotReady,
     Nothing,
+}
+
+/// One channel-doc value, opened or not, and whether trying again could change that.
+enum Opened<T> {
+    Value(T),
+    /// Sealed at an epoch whose key this identity has not climbed to yet. Retried when one
+    /// lands, where treating it as absent would drop the value until it is next rewritten.
+    NotReady,
+    Nothing,
+}
+
+/// Open a value out of a watched replica.
+///
+/// With the key the cached manifest names first, and failing that by the epoch the value
+/// itself says it was sealed at. The two differ around a removal: the manifest a member has
+/// cached can still be at the old epoch while the author is already writing at the new one,
+/// and a value is only ever readable at its own.
+async fn open_value<T: serde::de::DeserializeOwned>(
+    ctx: &ChannelSyncContext,
+    channel_id: &str,
+    watched: &Watched,
+    content: Option<&pin_channel::ContentKey>,
+    bytes: &[u8],
+) -> Opened<T> {
+    if let Some(c) = content {
+        if let Some(value) = crate::open_doc_value(&watched.key, c, &watched.author, bytes) {
+            return Opened::Value(value);
+        }
+    }
+    let Ok(blob) = std::str::from_utf8(bytes) else {
+        return Opened::Nothing;
+    };
+    let signer = pin_channel::Signer::Author(&watched.author);
+    let Ok(epoch) =
+        pin_channel::head_epoch(&watched.key, blob, pin_channel::Kind::DocValue, signer)
+    else {
+        return Opened::Nothing;
+    };
+    let Some(key) =
+        crate::membership::held_key(&ctx.doc, &ctx.blobs, ctx.author_id, channel_id, epoch).await
+    else {
+        return Opened::NotReady;
+    };
+    match crate::open_doc_value(&watched.key, &key, &watched.author, bytes) {
+        Some(value) => Opened::Value(value),
+        None => Opened::Nothing,
+    }
 }
 
 /// The content key a watched channel's values are sealed under, asked afresh.
@@ -475,12 +524,53 @@ async fn content_for(
     .await
 }
 
-/// Cache every tally a watched replica currently holds. Used at import, where there is no
-/// event to route from.
-async fn scan_tallies(ctx: &ChannelSyncContext, channel_id: &str, watched: &Watched) -> usize {
-    let Some(content) = content_for(ctx, channel_id, watched).await else {
+/// Cache every tally and conversation a watched replica currently holds, answering how many
+/// of each. Used where there is no event to route from: at import, and when a key for the
+/// channel lands, which can make readable what arrived before it.
+async fn scan_values(
+    ctx: &ChannelSyncContext,
+    channel_id: &str,
+    watched: &Watched,
+) -> (usize, usize) {
+    let content = content_for(ctx, channel_id, watched).await;
+    let tallies = scan_tallies(ctx, channel_id, watched, content.as_ref()).await;
+    let threads = scan_conversations(ctx, channel_id, watched, content.as_ref()).await;
+    (tallies, threads)
+}
+
+async fn scan_conversations(
+    ctx: &ChannelSyncContext,
+    channel_id: &str,
+    watched: &Watched,
+    content: Option<&pin_channel::ContentKey>,
+) -> usize {
+    let Ok(subjects) = crate::list_rkeys(
+        &watched.doc,
+        ctx.author_id,
+        pin_derive::CONVERSATION_COLLECTION,
+    )
+    .await
+    else {
         return 0;
     };
+    let mut cached = 0;
+    for subject in subjects {
+        if matches!(
+            push_conversation(ctx, channel_id, watched, content, &subject).await,
+            TallyPush::Cached
+        ) {
+            cached += 1;
+        }
+    }
+    cached
+}
+
+async fn scan_tallies(
+    ctx: &ChannelSyncContext,
+    channel_id: &str,
+    watched: &Watched,
+    content: Option<&pin_channel::ContentKey>,
+) -> usize {
     let Ok(subjects) = crate::list_rkeys(
         &watched.doc,
         ctx.author_id,
@@ -494,13 +584,39 @@ async fn scan_tallies(ctx: &ChannelSyncContext, channel_id: &str, watched: &Watc
     for subject in subjects {
         // A value that hasn't downloaded yet is left to the event that says it has.
         if matches!(
-            push_tally(ctx, channel_id, watched, &content, &subject).await,
+            push_tally(ctx, channel_id, watched, content, &subject).await,
             TallyPush::Cached
         ) {
             cached += 1;
         }
     }
     cached
+}
+
+/// The tag a key wake carries in place of a channel id. `:` is never in a channelID, which is
+/// base32, so a wake cannot be read as a replica's event.
+const KEY_WAKE: &str = "key:";
+
+/// This identity's own doc, as the channels a content key was just written for.
+async fn key_wakes(doc: &Doc) -> Option<BoxStream<(String, LiveEvent)>> {
+    let stream = doc.subscribe().await.ok()?;
+    let prefix = pin_derive::collection_prefix(pin_derive::CONTENT_KEY_COLLECTION);
+    Some(Box::pin(stream.filter_map(move |ev| {
+        let ev = ev.ok()?;
+        let channel = key_wake_channel(&ev, &prefix)?;
+        Some((format!("{KEY_WAKE}{channel}"), ev))
+    })))
+}
+
+/// The channel a write of a content key names, from its rkey `<channelID>:<epoch>;`.
+fn key_wake_channel(event: &LiveEvent, prefix: &str) -> Option<String> {
+    let entry = match event {
+        LiveEvent::InsertLocal { entry } | LiveEvent::InsertRemote { entry, .. } => entry,
+        _ => return None,
+    };
+    let key = std::str::from_utf8(entry.key()).ok()?;
+    let rkey = key.strip_prefix(prefix)?;
+    Some(rkey.split(':').next()?.to_string())
 }
 
 /// Reconcile subscriptions, then pump pushed manifests until the next reconcile is due —
@@ -532,6 +648,12 @@ pub async fn run_channel_sync_loop(
     // Subjects whose entry has arrived but whose value hasn't downloaded, by channel.
     // Retried when content lands, because nothing else would come back for them.
     let mut pending: HashMap<String, HashSet<String>> = HashMap::new();
+    // A content key landing in this identity's own doc — the climb — is what makes values
+    // sealed at that epoch readable, so it rescans the channel's replica. Joined into the
+    // same pump, tagged so it cannot be mistaken for a replica's own event.
+    if let Some(wakes) = key_wakes(&ctx.doc).await {
+        events.push(wakes);
+    }
 
     loop {
         let result = reconcile(&ctx, &mut watched, &mut events).await;
@@ -559,6 +681,14 @@ pub async fn run_channel_sync_loop(
         // with no live channels sleeps rather than spinning.
         let pump = async {
             while let Some((channel_id, event)) = events.next().await {
+                if let Some(id) = channel_id.strip_prefix(KEY_WAKE) {
+                    if let Some(w) = watched.get(id) {
+                        let (t, c) = scan_values(&ctx, id, w).await;
+                        tallies += t;
+                        threads += c;
+                    }
+                    continue;
+                }
                 if !is_remote_arrival(&event) {
                     continue;
                 }
@@ -576,10 +706,8 @@ pub async fn run_channel_sync_loop(
                     // A count landed and the event named it, so nothing else is re-read.
                     Some(Named::Tally(subject)) => {
                         let subject = subject.to_string();
-                        let pushed = match &content {
-                            Some(c) => push_tally(&ctx, &channel_id, w, c, &subject).await,
-                            None => TallyPush::NotReady,
-                        };
+                        let pushed =
+                            push_tally(&ctx, &channel_id, w, content.as_ref(), &subject).await;
                         match pushed {
                             TallyPush::Cached => tallies += 1,
                             TallyPush::NotReady => {
@@ -593,10 +721,9 @@ pub async fn run_channel_sync_loop(
                     }
                     Some(Named::Conversation(subject)) => {
                         let subject = subject.to_string();
-                        let pushed = match &content {
-                            Some(c) => push_conversation(&ctx, &channel_id, w, c, &subject).await,
-                            None => TallyPush::NotReady,
-                        };
+                        let pushed =
+                            push_conversation(&ctx, &channel_id, w, content.as_ref(), &subject)
+                                .await;
                         match pushed {
                             TallyPush::Cached => threads += 1,
                             TallyPush::NotReady => {
@@ -622,15 +749,13 @@ pub async fn run_channel_sync_loop(
                             Some(c) => Some(c),
                             None => content_for(&ctx, &channel_id, w).await,
                         };
-                        let Some(content) = content else {
-                            continue;
-                        };
+                        let content = content.as_ref();
                         for subject in pending.get(&channel_id).cloned().unwrap_or_default() {
                             // Both, because a pending subject records that SOMETHING for it
                             // wasn't downloadable yet and not which. Each retry is a local
                             // lookup that answers Nothing when there is nothing there.
                             let mut settled =
-                                match push_tally(&ctx, &channel_id, w, &content, &subject).await {
+                                match push_tally(&ctx, &channel_id, w, content, &subject).await {
                                     TallyPush::Cached => {
                                         tallies += 1;
                                         true
@@ -639,7 +764,7 @@ pub async fn run_channel_sync_loop(
                                     TallyPush::NotReady => false,
                                 };
                             settled &=
-                                match push_conversation(&ctx, &channel_id, w, &content, &subject)
+                                match push_conversation(&ctx, &channel_id, w, content, &subject)
                                     .await
                                 {
                                     TallyPush::Cached => {
@@ -667,6 +792,98 @@ pub async fn run_channel_sync_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_value_sealed_past_the_cached_epoch_waits_for_its_key_then_caches() {
+        // Around a removal a member's cached manifest can still be at the old epoch while the
+        // author writes at the new one. A conversation opened only with the manifest's key was
+        // read as absent and dropped; it is opened by its own epoch, and waits for that key.
+        let world = crate::testnet::World::new();
+        let author = crate::testnet::Identity::new(&world, 1).await;
+        let bob = crate::testnet::Identity::new(&world, 2).await;
+        let k = author.channel_key();
+        let channel_id = pin_crypto::channel_id(&k);
+        let at = |epoch| pin_channel::ContentKey {
+            epoch,
+            key: pin_derive::channel_content_key(&author.app_key, &channel_id, epoch),
+        };
+        let value = crate::seal_doc_value(
+            &pin_channel::Sealing {
+                channel_key: &k,
+                content: at(1),
+                publish_read_key: false,
+                signer: pin_derive::did_dht_seed(&author.app_key),
+            },
+            &pin_engagement::Conversation {
+                comments: Vec::new(),
+                updated_at: "2026-10-02T00:00:00Z".into(),
+            },
+        )
+        .unwrap();
+        let replica = bob.docs.create().await.unwrap();
+        replica
+            .set_bytes(bob.author_id, conversation_key("subject-1"), value)
+            .await
+            .unwrap();
+        let ctx = ChannelSyncContext {
+            doc: bob.doc.clone(),
+            blobs: bob.blobs.clone(),
+            author_id: bob.author_id,
+            docs: bob.docs.clone(),
+            app_key: bob.app_key,
+        };
+        let watched = Watched {
+            key: k,
+            author: author.did.clone(),
+            doc: replica,
+        };
+        let cached_epoch = at(0);
+        let push = || {
+            push_conversation(
+                &ctx,
+                &channel_id,
+                &watched,
+                Some(&cached_epoch),
+                "subject-1",
+            )
+        };
+
+        assert!(matches!(push().await, TallyPush::NotReady));
+
+        // The climb lands the key for the value's own epoch.
+        crate::write_record(
+            &bob.doc,
+            bob.author_id,
+            pin_derive::CONTENT_KEY_COLLECTION,
+            &pin_derive::content_key_rkey(&channel_id, 1),
+            serde_json::to_vec(&serde_json::json!({
+                "key": pin_crypto::channel_key_to_base64(&at(1).key),
+            }))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(push().await, TallyPush::Cached));
+    }
+
+    #[test]
+    fn a_content_key_write_names_its_channel() {
+        let id = iroh_docs::sync::RecordIdentifier::new(
+            iroh_docs::NamespaceId::from(&[1u8; 32]),
+            iroh_docs::AuthorId::from(&[2u8; 32]),
+            "content-key/yuq7aw4ke7u4pngi:1;",
+        );
+        let record = iroh_docs::sync::Record::new(iroh_blobs::Hash::from([3u8; 32]), 1, 0);
+        let event = LiveEvent::InsertLocal {
+            entry: iroh_docs::sync::Entry::new(id, record),
+        };
+        let prefix = pin_derive::collection_prefix(pin_derive::CONTENT_KEY_COLLECTION);
+        assert_eq!(
+            key_wake_channel(&event, &prefix).as_deref(),
+            Some("yuq7aw4ke7u4pngi")
+        );
+        assert_eq!(key_wake_channel(&event, "membership/"), None);
+    }
 
     #[test]
     fn content_arriving_late_still_wakes_a_re_read() {
