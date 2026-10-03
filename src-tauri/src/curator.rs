@@ -786,6 +786,7 @@ pub async fn curator_start_pull(
                 // a member waiting on a key is otherwise indistinguishable from one whose
                 // climb has nothing to do.
                 if o.cached > 0
+                    || o.unresolved > 0
                     || o.dropped > 0
                     || o.failed > 0
                     || c.climbed > 0
@@ -908,6 +909,7 @@ pub async fn curator_start_keep_alive(
         pin_curator::run_keep_alive_loop(ctx, KEEP_ALIVE_CADENCE, |result| match result {
             Ok(o) => {
                 let quiet = o.refreshed == 0
+                    && o.unknown == 0
                     && o.failed == 0
                     && o.tallies_refreshed == 0
                     && o.tallies_failed == 0
@@ -1027,10 +1029,19 @@ pub async fn curator_start_channel_sync(
             Ok(o) => {
                 // Quiet when nothing changed and nothing arrived — the steady state of a
                 // subscriber whose authors are idle.
-                if o.imported > 0 || o.pushed > 0 || o.failed > 0 || o.stale > 0 || o.tallies > 0 {
+                // A channel that cannot be imported is printed every pass it stays that way:
+                // a members-only channel with no key yet looks exactly like this.
+                if o.imported > 0
+                    || o.unavailable > 0
+                    || o.pushed > 0
+                    || o.failed > 0
+                    || o.stale > 0
+                    || o.tallies > 0
+                    || o.threads > 0
+                {
                     log::info!(
-                        "curator channel sync: imported {} watching {} unavailable {} failed {} pushed {} stale {} tallies {}",
-                        o.imported, o.watching, o.unavailable, o.failed, o.pushed, o.stale, o.tallies
+                        "curator channel sync: imported {} watching {} unavailable {} failed {} pushed {} stale {} tallies {} threads {}",
+                        o.imported, o.watching, o.unavailable, o.failed, o.pushed, o.stale, o.tallies, o.threads
                     );
                 }
             }
@@ -1359,6 +1370,7 @@ pub async fn curator_start_engagement(
                         || o.invitations > 0
                         || comments > 0
                         || comment_withdrawals > 0
+                        || !o.problems.is_empty()
                     {
                         log::info!(
                             "curator engagement: reached {} unreachable {} added {} withdrawn {} folded {} tallies {} cleared {} rejected {} not-ours {} published {} publish-failed {} member-bands {} members-failed {} invitations {} | knocks: accepted {} rejected {} not-ours {} stale {} refused {} | withdrawals: applied {} rejected {} not-ours {} ignored {}{}{}",
@@ -1373,6 +1385,9 @@ pub async fn curator_start_engagement(
                             o.retractions_ignored, comment_section,
                             comment_withdrawal_section
                         );
+                        if !o.problems.is_empty() {
+                            log::warn!("curator engagement: {}", o.problems.join("; "));
+                        }
                     }
                 }
                 Err(e) => log::warn!("curator engagement: {e}"),
@@ -1566,6 +1581,15 @@ pub async fn curator_start_deliver(
                             o.invitations,
                             o.invitations_unreachable
                         );
+                        let stranded: Vec<&str> = o
+                            .steps
+                            .iter()
+                            .filter(|s| s.result == "no target")
+                            .map(|s| s.rkey.as_str())
+                            .collect();
+                        if !stranded.is_empty() {
+                            log::warn!("curator deliver: no target for {}", stranded.join(", "));
+                        }
                     }
                 }
                 Err(e) => log::warn!("curator deliver: {e}"),

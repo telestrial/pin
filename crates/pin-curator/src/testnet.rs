@@ -1426,6 +1426,36 @@ mod visibility {
     /// The crawling half is the self-healing the old seeding gave for free, and the last
     /// step is what it is for: a tally lost from the channel doc is invisible to a pass
     /// that only folds what moved, because nothing moved. A crawling pass puts it back.
+    /// A floor publish that fails says what failed, not only that something did. This
+    /// harness's Sia session is disconnected, so the tallies floor fails for real.
+    #[tokio::test]
+    async fn a_failed_floor_publish_says_what_failed() {
+        let world = World::new();
+        let john = Identity::new(&world, 1).await;
+        john.publishes_posts(1).await;
+        john.endorses_own_posts(1).await;
+
+        let pass = crate::engagement_once(
+            &john.engagement_ctx(),
+            &john.did,
+            "2026-09-12T00:00:00.000Z".to_string(),
+            false,
+            false,
+        )
+        .await
+        .expect("engagement pass");
+
+        assert_eq!(pass.publish_failed, 1);
+        let channel_id = pin_crypto::channel_id(&john.channel_key());
+        assert!(
+            pass.problems
+                .iter()
+                .any(|p| p.starts_with(&format!("{channel_id}: tallies floor: "))),
+            "{:?}",
+            pass.problems
+        );
+    }
+
     #[tokio::test]
     async fn a_fold_only_pass_folds_what_moved_and_a_crawl_folds_everything() {
         async fn fold(who: &Identity, crawl: bool) -> crate::EngagementOutcome {

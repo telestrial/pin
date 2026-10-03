@@ -84,6 +84,17 @@ pub struct EngagementContext<N: crate::net::Network> {
     pub inbox: pin_rpc::HeyInbox,
 }
 
+/// One failed publish, cut to a log line's worth: a transport error can run to several
+/// hundred characters, and what failed is in the first few.
+fn problem(channel_id: &str, what: &str, error: &str) -> String {
+    const MAX: usize = 160;
+    let error = match error.char_indices().nth(MAX) {
+        Some((at, _)) => format!("{}…", &error[..at]),
+        None => error.to_string(),
+    };
+    format!("{channel_id}: {what}: {error}")
+}
+
 /// What one pass did. Reported rather than summarised, because "reached nobody" and "found
 /// nothing" are different states and an instance that can't tell you which is not much use.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -170,6 +181,9 @@ pub struct EngagementOutcome {
     /// Channels whose member tree failed to publish. Retried next pass: a band's
     /// fingerprint is recorded only once it lands, and the pointer moves only after.
     pub members_failed: usize,
+    /// What each failed publish said, as `<channelID>: <what>: <error>`, for the log line —
+    /// a count says something keeps failing, and this says what.
+    pub problems: Vec<String>,
     /// Invitations to this identity, by knock or found in a directory read this pass, that
     /// recorded a new membership.
     pub invitations: usize,
@@ -1440,12 +1454,22 @@ pub async fn engagement_once<N: crate::net::Network>(
         match publish_channel_conversations(ctx, &owned.channel_id, &k).await {
             Ok(true) => outcome.comments.published_floor += 1,
             Ok(false) => {}
-            Err(_) => outcome.comments.floor_failed += 1,
+            Err(e) => {
+                outcome.comments.floor_failed += 1;
+                outcome
+                    .problems
+                    .push(problem(&owned.channel_id, "conversations floor", &e));
+            }
         }
         match publish_channel_tallies(ctx, &owned.channel_id, &k).await {
             Ok(true) => outcome.published += 1,
             Ok(false) => {}
-            Err(_) => outcome.publish_failed += 1,
+            Err(e) => {
+                outcome.publish_failed += 1;
+                outcome
+                    .problems
+                    .push(problem(&owned.channel_id, "tallies floor", &e));
+            }
         }
         // The member tree, for a channel anyone has been seated in, on the same terms: an
         // unchanged tree costs reads and fingerprints and uploads nothing.
@@ -1463,7 +1487,12 @@ pub async fn engagement_once<N: crate::net::Network>(
             .await
             {
                 Ok(done) => outcome.members_published += done.uploaded,
-                Err(_) => outcome.members_failed += 1,
+                Err(e) => {
+                    outcome.members_failed += 1;
+                    outcome
+                        .problems
+                        .push(problem(&owned.channel_id, "member tree", &e));
+                }
             }
         }
     }
