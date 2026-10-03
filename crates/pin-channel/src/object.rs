@@ -22,6 +22,15 @@
 //! the conversations — so a reader who can open one can open the others, and there is one
 //! place a head is read.
 //!
+//! A MANIFEST'S PROFILE CAN RIDE IN THE HEAD. Its name, description, pictures and
+//! visibility are what a page about the channel shows, and whether a finder of the channel
+//! may see them is the tier's decision, separate from whether they may read its posts: a
+//! private channel shows its page to anyone and its posts to members. So a manifest that is
+//! not secret is split at the seal — the profile into the head, readable with K, the rest
+//! into the body — and joined again at the open, so a reader holding C still gets the whole
+//! manifest it always did. A secret one keeps everything in the body. One object and one
+//! pointer on every tier; the tier decides only which key covers the profile.
+//!
 //! THE HEAD IS SIGNED BY THE AUTHOR, because K is no proof of authorship. Every pointer a
 //! channel publishes is signed by a key derived from K, so anyone holding K can repoint
 //! one, and an object sealed under K is just as easy for them to make. The signature is
@@ -80,6 +89,15 @@ impl Kind {
 }
 const HEAD_LEN_BYTES: usize = 4;
 
+/// The manifest fields that make up a channel's profile: what its page shows to anyone who
+/// can find it. Spelled as `pin_manifest::ChannelManifest` serializes them.
+const PROFILE_FIELDS: [&str; 5] = ["name", "description", "avatar", "cover", "visibility"];
+
+/// The visibilities whose profile goes in the head. Anything else — secret, or a manifest
+/// that names none — keeps its profile under C, the direction that cannot show a page that
+/// was meant to be hidden.
+const OPEN_PROFILE_VISIBILITIES: [&str; 2] = ["public", "private"];
+
 /// A channel's content key at one epoch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ContentKey {
@@ -132,6 +150,10 @@ struct Head {
     read_key: Option<String>,
     /// What the object is, as `Kind::as_str` spells it.
     kind: String,
+    /// A manifest's profile, as JSON text, when its tier lets a finder of the channel see
+    /// it. Text rather than a value so the bytes signed are the bytes stored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    profile: Option<String>,
     /// The author's signature over `signing_bytes`, base64.
     sig: String,
 }
@@ -149,6 +171,7 @@ fn signing_bytes(
     epoch: u32,
     read_key: Option<&str>,
     body: &[u8],
+    profile: Option<&str>,
 ) -> Vec<u8> {
     let mut out = Vec::with_capacity(SIGNING_DOMAIN.len() + 128);
     out.extend_from_slice(SIGNING_DOMAIN);
@@ -167,12 +190,64 @@ fn signing_bytes(
         None => out.push(0),
     }
     out.extend_from_slice(&pin_crypto::sha256(body));
+    // A tagged optional trailing field: absent, it appends nothing, so every object sealed
+    // before profiles existed still verifies; present, its name goes before its value.
+    if let Some(profile) = profile {
+        out.extend_from_slice(&(b"profile".len() as u32).to_be_bytes());
+        out.extend_from_slice(b"profile");
+        out.extend_from_slice(&pin_crypto::sha256(profile.as_bytes()));
+    }
     out
+}
+
+/// Split a manifest into the profile that goes in the head and the body that stays under
+/// C, when its visibility opens the profile. Anything else — another kind, a payload that
+/// is not a JSON object, a secret or unnamed visibility — is sealed whole.
+fn split_profile(kind: Kind, payload: &[u8]) -> Result<(Option<String>, Vec<u8>), String> {
+    if kind != Kind::Manifest {
+        return Ok((None, payload.to_vec()));
+    }
+    let Ok(serde_json::Value::Object(mut body)) = serde_json::from_slice(payload) else {
+        return Ok((None, payload.to_vec()));
+    };
+    let open = body
+        .get("visibility")
+        .and_then(|v| v.as_str())
+        .is_some_and(|v| OPEN_PROFILE_VISIBILITIES.contains(&v));
+    if !open {
+        return Ok((None, payload.to_vec()));
+    }
+    let mut profile = serde_json::Map::new();
+    for field in PROFILE_FIELDS {
+        if let Some(value) = body.remove(field) {
+            profile.insert(field.to_string(), value);
+        }
+    }
+    let profile = serde_json::to_string(&profile).map_err(|e| format!("profile: {e}"))?;
+    let body = serde_json::to_vec(&body).map_err(|e| format!("body: {e}"))?;
+    Ok((Some(profile), body))
+}
+
+/// Put a head's profile back into the body it was split from.
+fn join_profile(profile: Option<&str>, body: Vec<u8>) -> Result<Vec<u8>, String> {
+    let Some(profile) = profile else {
+        return Ok(body);
+    };
+    let profile: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_str(profile).map_err(|e| format!("profile: {e}"))?;
+    let serde_json::Value::Object(mut whole) =
+        serde_json::from_slice(&body).map_err(|e| format!("body: {e}"))?
+    else {
+        return Err("a body with a profile beside it is not a JSON object".into());
+    };
+    whole.extend(profile);
+    serde_json::to_vec(&whole).map_err(|e| format!("manifest: {e}"))
 }
 
 /// Seal a payload into an object, signed by its author.
 pub fn seal(sealing: &Sealing, kind: Kind, payload: &[u8]) -> Result<String, String> {
-    let body = pin_crypto::seal_raw(&sealing.content.key, payload)?;
+    let (profile, payload) = split_profile(kind, payload)?;
+    let body = pin_crypto::seal_raw(&sealing.content.key, &payload)?;
     let read_key = sealing
         .publish_read_key
         .then(|| pin_crypto::b64_encode(&sealing.content.key));
@@ -185,12 +260,14 @@ pub fn seal(sealing: &Sealing, kind: Kind, payload: &[u8]) -> Result<String, Str
             sealing.content.epoch,
             read_key.as_deref(),
             &body,
+            profile.as_deref(),
         ),
     )?;
     let head = Head {
         epoch: sealing.content.epoch,
         read_key,
         kind: kind.as_str().to_string(),
+        profile,
         sig,
     };
     let head_json = serde_json::to_vec(&head).map_err(|e| format!("head: {e}"))?;
@@ -264,9 +341,13 @@ pub fn open(
     let bytes = pin_crypto::b64_decode(blob).ok_or("object is not base64")?;
     match bytes.first() {
         Some(&OBJECT_VERSION) => {
-            let (content, body) = read_head(channel_key, &bytes[1..], kind, signer)?;
+            let (head, body) = split_head(channel_key, &bytes[1..], kind, signer)?;
+            let content = read_key_of(&head)?;
             Ok(Opened {
-                payload: pin_crypto::open_raw(&content.key, body)?,
+                payload: join_profile(
+                    head.profile.as_deref(),
+                    pin_crypto::open_raw(&content.key, body)?,
+                )?,
                 content,
             })
         }
@@ -337,6 +418,23 @@ pub fn fingerprint(sealing: &Sealing, substance: &str) -> String {
     )
 }
 
+/// A manifest's profile, from its verified head alone: what a finder of the channel may
+/// see of it, holding K and nothing else. `None` for a manifest whose tier keeps its profile
+/// under C, which a caller holding K alone cannot read.
+pub fn open_profile(
+    channel_key: &[u8; 32],
+    blob: &str,
+    signer: Signer,
+) -> Result<Option<String>, String> {
+    let bytes = pin_crypto::b64_decode(blob).ok_or("object is not base64")?;
+    match bytes.first() {
+        Some(&OBJECT_VERSION) => split_head(channel_key, &bytes[1..], Kind::Manifest, signer)
+            .map(|(head, _)| head.profile),
+        Some(v) => Err(format!("unsupported object version {v}")),
+        None => Err("object is empty".into()),
+    }
+}
+
 /// Open an object whose head carries no read key, with a content key the caller holds.
 ///
 /// The path for a reader who learned C some other way — the author, who derives it, or a
@@ -361,7 +459,10 @@ pub fn open_with(
                     head.epoch, content.epoch
                 ));
             }
-            pin_crypto::open_raw(&content.key, body)
+            join_profile(
+                head.profile.as_deref(),
+                pin_crypto::open_raw(&content.key, body)?,
+            )
         }
         Some(v) => Err(format!("unsupported object version {v}")),
         None => Err("object is empty".into()),
@@ -377,18 +478,20 @@ fn read_head<'b>(
     signer: Signer,
 ) -> Result<(ContentKey, &'b [u8]), String> {
     let (head, body) = split_head(channel_key, rest, kind, signer)?;
+    Ok((read_key_of(&head)?, body))
+}
+
+/// The content key a verified head carries.
+fn read_key_of(head: &Head) -> Result<ContentKey, String> {
     let key = head
         .read_key
         .as_deref()
         .ok_or_else(|| format!("no read key for epoch {}", head.epoch))?;
     let key = pin_crypto::channel_key_from_base64(key).ok_or("head read key is malformed")?;
-    Ok((
-        ContentKey {
-            epoch: head.epoch,
-            key,
-        },
-        body,
-    ))
+    Ok(ContentKey {
+        epoch: head.epoch,
+        key,
+    })
 }
 
 /// Open a layered object's head and check it, answering with it and the still-sealed body.
@@ -417,6 +520,7 @@ fn split_head<'b>(
         head.epoch,
         head.read_key.as_deref(),
         body,
+        head.profile.as_deref(),
     );
     pin_pkarr::verify_detached(author, &message, &head.sig)
         .map_err(|_| "object is not signed by its channel's author".to_string())?;
@@ -557,23 +661,165 @@ mod tests {
         let blob = seal(&sealing(true), Kind::Tallies, b"payload").unwrap();
         let (head, body) = head_and_body(&blob);
         assert_eq!(head.kind, "tallies");
-        let message = signing_bytes(&channel, "tallies", 3, head.read_key.as_deref(), &body);
+        let message = signing_bytes(
+            &channel,
+            "tallies",
+            3,
+            head.read_key.as_deref(),
+            &body,
+            None,
+        );
         assert!(pin_pkarr::verify_detached(&author, &message, &head.sig).is_ok());
 
         // Each thing the signature covers moves it: another kind, epoch, channel, read key
         // or body all fail against the same signature.
         for wrong in [
-            signing_bytes(&channel, "manifest", 3, head.read_key.as_deref(), &body),
-            signing_bytes(&channel, "tallies", 4, head.read_key.as_deref(), &body),
-            signing_bytes("elsewhere", "tallies", 3, head.read_key.as_deref(), &body),
-            signing_bytes(&channel, "tallies", 3, None, &body),
-            signing_bytes(&channel, "tallies", 3, head.read_key.as_deref(), b"other"),
+            signing_bytes(
+                &channel,
+                "manifest",
+                3,
+                head.read_key.as_deref(),
+                &body,
+                None,
+            ),
+            signing_bytes(
+                &channel,
+                "tallies",
+                4,
+                head.read_key.as_deref(),
+                &body,
+                None,
+            ),
+            signing_bytes(
+                "elsewhere",
+                "tallies",
+                3,
+                head.read_key.as_deref(),
+                &body,
+                None,
+            ),
+            signing_bytes(&channel, "tallies", 3, None, &body, None),
+            signing_bytes(
+                &channel,
+                "tallies",
+                3,
+                head.read_key.as_deref(),
+                b"other",
+                None,
+            ),
         ] {
             assert!(pin_pkarr::verify_detached(&author, &wrong, &head.sig).is_err());
         }
         // And somebody else's key does not verify it.
         let stranger = pin_pkarr::public_key_from_seed(&[12u8; 32]).unwrap();
         assert!(pin_pkarr::verify_detached(&stranger, &message, &head.sig).is_err());
+    }
+
+    fn manifest(visibility: Option<&str>) -> Vec<u8> {
+        let mut m = serde_json::json!({
+            "version": 1,
+            "name": "The back room",
+            "description": "where it happens",
+            "avatar": {"itemURL": "sia://a"},
+            "publishedAt": "2026-10-02T00:00:00.000Z",
+            "items": [{"publishedAt": "2026-10-02T00:00:01.000Z"}],
+        });
+        if let Some(v) = visibility {
+            m["visibility"] = serde_json::json!(v);
+        }
+        serde_json::to_vec(&m).unwrap()
+    }
+
+    fn json(bytes: &[u8]) -> serde_json::Value {
+        serde_json::from_slice(bytes).unwrap()
+    }
+
+    #[test]
+    fn a_public_manifests_profile_rides_in_the_head_and_the_whole_comes_back_on_open() {
+        let whole = manifest(Some("public"));
+        let blob = seal(&sealing(true), Kind::Manifest, &whole).unwrap();
+        let profile = open_profile(&K, &blob, Signer::Author(&author()))
+            .unwrap()
+            .expect("a public manifest's profile is in its head");
+        assert_eq!(
+            json(profile.as_bytes()),
+            serde_json::json!({
+                "name": "The back room",
+                "description": "where it happens",
+                "avatar": {"itemURL": "sia://a"},
+                "visibility": "public",
+            })
+        );
+        // The body holds the rest and only the rest.
+        let (head, _) = head_and_body(&blob);
+        assert!(head.profile.is_some());
+        let opened = open(&K, &blob, Kind::Manifest, Signer::Author(&author())).unwrap();
+        assert_eq!(json(&opened.payload), json(&whole));
+    }
+
+    #[test]
+    fn a_private_manifest_shows_its_profile_with_k_and_its_posts_only_with_c() {
+        let whole = manifest(Some("private"));
+        let blob = seal(&sealing(false), Kind::Manifest, &whole).unwrap();
+        let profile = open_profile(&K, &blob, Signer::Author(&author()))
+            .unwrap()
+            .expect("a private manifest's profile is in its head");
+        assert_eq!(json(profile.as_bytes())["name"], "The back room");
+        assert!(json(profile.as_bytes()).get("items").is_none());
+        // K alone does not reach the posts.
+        let err = open(&K, &blob, Kind::Manifest, Signer::Author(&author())).unwrap_err();
+        assert!(err.contains("no read key"), "{err}");
+        // C does, and gets the whole manifest back.
+        let payload = open_with(&K, &blob, &C, Kind::Manifest, Signer::Author(&author())).unwrap();
+        assert_eq!(json(&payload), json(&whole));
+    }
+
+    #[test]
+    fn a_secret_or_unnamed_manifest_keeps_its_profile_under_c() {
+        for visibility in [Some("secret"), None] {
+            let whole = manifest(visibility);
+            let blob = seal(&sealing(false), Kind::Manifest, &whole).unwrap();
+            assert_eq!(
+                open_profile(&K, &blob, Signer::Author(&author())).unwrap(),
+                None,
+                "{visibility:?}"
+            );
+            let payload =
+                open_with(&K, &blob, &C, Kind::Manifest, Signer::Author(&author())).unwrap();
+            assert_eq!(json(&payload), json(&whole));
+        }
+        // Another kind is never split, whatever it carries.
+        let tallies = seal(&sealing(true), Kind::Tallies, &manifest(Some("public"))).unwrap();
+        assert!(head_and_body(&tallies).0.profile.is_none());
+    }
+
+    #[test]
+    fn the_profile_is_signed_and_an_object_without_one_signs_as_before() {
+        let blob = seal(&sealing(true), Kind::Manifest, &manifest(Some("public"))).unwrap();
+        let (head, body) = head_and_body(&blob);
+        let channel = pin_crypto::channel_id(&K);
+        let profile = head.profile.as_deref().unwrap();
+        let signed = |profile| {
+            signing_bytes(
+                &channel,
+                "manifest",
+                3,
+                head.read_key.as_deref(),
+                &body,
+                profile,
+            )
+        };
+        assert!(pin_pkarr::verify_detached(&author(), &signed(Some(profile)), &head.sig).is_ok());
+        // A profile swapped for another, or dropped, does not verify.
+        assert!(
+            pin_pkarr::verify_detached(&author(), &signed(Some(r#"{"name":"x"}"#)), &head.sig)
+                .is_err()
+        );
+        assert!(pin_pkarr::verify_detached(&author(), &signed(None), &head.sig).is_err());
+        // Absent, it appends nothing: the bytes end at the body's digest, as they did before
+        // profiles existed, so every object already published still verifies.
+        let bare = signed(None);
+        assert!(bare.ends_with(&pin_crypto::sha256(&body)));
     }
 
     #[test]
