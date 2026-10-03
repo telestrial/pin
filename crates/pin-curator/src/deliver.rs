@@ -242,7 +242,7 @@ fn dialable(addr: &InstanceAddr) -> Option<EndpointAddr> {
 /// passes have nothing undelivered at all. A subscription with no did:dht names nobody to
 /// knock, and a channel with no cached manifest has no subjects to compute yet; both are
 /// ordinary and contribute nothing.
-async fn subscribed_subjects(
+pub(crate) async fn subscribed_subjects(
     ctx: &DeliverContext,
     settings: &SettingsView,
 ) -> HashMap<String, String> {
@@ -268,7 +268,17 @@ async fn subscribed_subjects(
         let Ok(blob) = String::from_utf8(sealed) else {
             continue;
         };
-        let Ok(json) = pin_channel::open_blob(&k, &blob, pin_channel::Signer::Author(did)) else {
+        // With whatever this identity holds, not K alone: a members-only channel's head
+        // carries no read key, and opening it with K would leave its posts without a target,
+        // so a comment on one would never be knocked.
+        let holdings = crate::Holdings {
+            doc: Some((&ctx.doc, &ctx.blobs, ctx.author_id)),
+            app_key: Some(&ctx.app_key),
+        };
+        let Ok((json, _)) =
+            crate::open_channel_object(&holdings, &k, &blob, pin_channel::Kind::Manifest, did)
+                .await
+        else {
             continue;
         };
         let Ok(manifest) = serde_json::from_str::<pin_manifest::ChannelManifest>(&json) else {

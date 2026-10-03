@@ -744,6 +744,85 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_members_only_channels_posts_name_their_author_to_deliver_to() {
+        // A comment is knocked to whoever published the post it is about, and that is
+        // learned from the subscribed channel's cached manifest. A members-only manifest
+        // carries no read key, so opening it with K alone left its posts with no target and
+        // a member's comment was never sent.
+        let world = World::new();
+        let channel = Channel::new(&world).await;
+        let bob = Identity::new(&world, 2).await;
+        channel.seat(&bob).await;
+        channel.publish().await;
+        pass(&bob).await;
+
+        let a = &channel.author;
+        let manifest = serde_json::json!({
+            "version": 1,
+            "name": "The back room",
+            "description": "",
+            "authorPubkey": "ed25519:testnet",
+            "publishedAt": "2026-10-02T00:00:00.000Z",
+            "visibility": "secret",
+            "items": [{
+                "id": "item-0",
+                "itemURL": "sia://item-0",
+                "type": "text",
+                "title": "",
+                "publishedAt": "2026-10-02T00:00:01.000Z",
+                "mimeType": "text/markdown",
+                "byteSize": 32,
+            }],
+        });
+        let members_only = pin_channel::seal(
+            &pin_channel::Sealing {
+                publish_read_key: false,
+                ..pin_channel::author_sealing(&a.app_key, &channel.key)
+            },
+            pin_channel::Kind::Manifest,
+            &serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+        crate::write_record(
+            &bob.doc,
+            bob.author_id,
+            crate::SUB_COLLECTION,
+            &channel.id,
+            members_only.into_bytes(),
+        )
+        .await
+        .unwrap();
+        let settings: crate::SettingsView = serde_json::from_value(serde_json::json!({
+            "subscriptions": [{
+                "channelID": channel.id,
+                "channelKey": pin_crypto::channel_key_to_base64(&channel.key),
+                "didDht": a.did,
+            }],
+        }))
+        .unwrap();
+        let ctx = crate::deliver::DeliverContext {
+            doc: bob.doc.clone(),
+            blobs: bob.blobs.clone(),
+            author_id: bob.author_id,
+            endpoint: iroh::Endpoint::bind(iroh::endpoint::presets::Minimal)
+                .await
+                .expect("bind"),
+            app_key: bob.app_key,
+        };
+
+        let subjects = crate::deliver::subscribed_subjects(&ctx, &settings).await;
+        assert_eq!(
+            subjects
+                .get(&pin_crypto::engagement_subject(
+                    &channel.id,
+                    "2026-10-02T00:00:01.000Z"
+                ))
+                .map(String::as_str),
+            Some(a.did.as_str())
+        );
+    }
+
+    #[tokio::test]
     async fn a_members_only_object_opens_once_its_key_is_climbed_to() {
         let world = World::new();
         let channel = Channel::new(&world).await;
