@@ -32,7 +32,9 @@ export function WatchButton({
   /** K, from the navigation that opened this page or from the subscription itself. */
   channelKey: string
   channelName: string
-  manifest: ChannelManifest
+  /** What starting a watch seeds the feed from. Absent on a channel that cannot be read,
+   *  where the only thing to do is stop watching it. */
+  manifest?: ChannelManifest
 }) {
   const watching = useAuthStore((s) =>
     s.subscriptions.some((x) => x.channelID === channelID),
@@ -46,6 +48,7 @@ export function WatchButton({
       await unwatchOneChannel(channelID)
       addToast(`Stopped watching “${channelName}”`)
     } else {
+      if (!manifest) return
       // No fetch: the manifest is the one this page is already rendering, so starting to
       // watch costs a settings write and nothing else.
       await startWatching({

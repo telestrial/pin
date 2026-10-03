@@ -183,8 +183,15 @@ export function ChannelView({
   )
   // Whether this channel is one of your public follows. Watching is hidden behind it
   // because following already watches.
-  const following = useAuthStore((s) =>
-    s.follows.some((f) => f.channelID === channelID),
+  const followEdge = useAuthStore((s) =>
+    s.follows.find((f) => f.channelID === channelID),
+  )
+  const following = followEdge !== undefined
+  // A watch this identity holds, as distinct from a channel it reads because somebody it
+  // follows shows it. Only a held relation can be dropped from a page that cannot read the
+  // channel — see the controls below.
+  const watching = useAuthStore((s) =>
+    s.subscriptions.some((x) => x.channelID === channelID),
   )
   // K, from whichever side has it: the subscription when you watch it, the navigation
   // when you are only looking. Without one there is nothing to start a watch from.
@@ -422,7 +429,7 @@ export function ChannelView({
                   </div>
                   {/* Actions: below the cover, upper-right, even with the
                       name/Unclaimed row. */}
-                  {(onEdit || onUnpin || manifest) && (
+                  {(onEdit || onUnpin || manifest || watching || following) && (
                     <div className="shrink-0 flex items-center gap-1.5">
                       {onEdit || onUnpin ? (
                         // Owned channel: Edit channel · ⋯ context menu · pin.
@@ -516,20 +523,31 @@ export function ChannelView({
                         // through the author's directory, where an unlisted channel is
                         // absent by construction. Absent rather than disabled — there is
                         // nothing to enable.
+                        //
+                        // A relation you hold stays droppable when the channel cannot be
+                        // read — retracted by its author, or a locator that no longer
+                        // resolves. Dropping needs only the relation; starting one needs
+                        // the manifest, which is why a channel you do not hold still shows
+                        // nothing until it reads.
                         <>
-                          {!following && manifest && watchKey && (
+                          {!following && watchKey && (manifest || watching) && (
                             <WatchButton
                               authorHandle={authorHandle}
-                              didDht={manifest.authorDidDht}
+                              didDht={manifest?.authorDidDht ?? sub?.didDht}
                               channelID={channelID}
                               channelKey={watchKey}
                               channelName={channelName}
-                              manifest={manifest}
+                              manifest={manifest ?? undefined}
                             />
                           )}
-                          {isPublic && manifest.authorDidDht && (
+                          {((isPublic && manifest?.authorDidDht) ||
+                            (following && !manifest)) && (
                             <FollowButton
-                              authorDidDht={manifest.authorDidDht}
+                              authorDidDht={
+                                manifest?.authorDidDht ??
+                                followEdge?.didDht ??
+                                ''
+                              }
                               channelID={channelID}
                               channelName={channelName}
                             />
@@ -537,12 +555,14 @@ export function ChannelView({
                           {/* Whole-channel pin (snapshot/catch-up/unpin) —
                               visibility-agnostic, so it shows for obscure
                               channels too. Rightmost, mirroring the owned row. */}
-                          <ChannelPinButton
-                            manifest={manifest}
-                            authorHandle={authorHandle}
-                            channelID={channelID}
-                            channelName={channelName}
-                          />
+                          {manifest && (
+                            <ChannelPinButton
+                              manifest={manifest}
+                              authorHandle={authorHandle}
+                              channelID={channelID}
+                              channelName={channelName}
+                            />
+                          )}
                         </>
                       )}
                     </div>
