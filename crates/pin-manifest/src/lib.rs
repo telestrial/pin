@@ -55,10 +55,14 @@ pub enum ItemType {
 /// `Secret` is readable by its members alone: its objects carry no read key, so holding K
 /// finds the channel and reads nothing, and a member reads with the content key they climb
 /// to through its member tree.
+///
+/// `Private` is listed and shows its page to anyone — its profile rides in the object's head,
+/// readable with K — while its posts, like a secret channel's, are readable by members alone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ChannelVisibility {
     Public,
+    Private,
     Secret,
 }
 

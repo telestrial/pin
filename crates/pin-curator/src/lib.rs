@@ -862,12 +862,31 @@ pub async fn resolve_channel(
     }))
 }
 
+/// What a channel's page shows to somebody holding only K: its profile, as JSON, read from
+/// the head of its current manifest and checked against `author`.
+///
+/// `None` when nothing is published at the locator, or when the channel's tier keeps its
+/// profile under the content key — a secret channel, whose page shows nothing to anyone
+/// who is not a member. Both read as "no page here", which is what a caller shows.
+pub async fn resolve_channel_profile(
+    sia: &pin_sia::Session,
+    channel_key: &[u8; 32],
+    author: &str,
+) -> Result<Option<String>, String> {
+    let Some(item_url) = pin_channel::resolve_url(channel_key).await? else {
+        return Ok(None);
+    };
+    let bytes = sia.download_item(&item_url).await?;
+    let blob = String::from_utf8(bytes).map_err(|_| "manifest is not text".to_string())?;
+    pin_channel::open_profile(channel_key, &blob, pin_channel::Signer::Author(author))
+}
+
 /// Whether one of this identity's channels is one only its members may read.
 pub(crate) fn members_only(settings: &SettingsView, channel_id: &str) -> bool {
-    settings
-        .my_channels
-        .iter()
-        .any(|c| c.channel_id == channel_id && c.visibility.as_deref() == Some("secret"))
+    settings.my_channels.iter().any(|c| {
+        c.channel_id == channel_id
+            && matches!(c.visibility.as_deref(), Some("private") | Some("secret"))
+    })
 }
 
 /// How this identity seals one of its own channels NOW: at the initial epoch with the read
@@ -910,10 +929,12 @@ pub fn manifest_is_members_only(manifest_json: &str) -> bool {
         #[serde(default)]
         visibility: Option<pin_manifest::ChannelVisibility>,
     }
-    serde_json::from_str::<Visibility>(manifest_json)
-        .ok()
-        .and_then(|v| v.visibility)
-        == Some(pin_manifest::ChannelVisibility::Secret)
+    matches!(
+        serde_json::from_str::<Visibility>(manifest_json)
+            .ok()
+            .and_then(|v| v.visibility),
+        Some(pin_manifest::ChannelVisibility::Private | pin_manifest::ChannelVisibility::Secret)
+    )
 }
 
 /// How its author seals a manifest: the public way, or — for a channel only its members may

@@ -2705,6 +2705,29 @@ mod content_keys {
         (k, channel_id)
     }
 
+    #[tokio::test]
+    async fn a_private_channel_seals_its_posts_for_members_alone() {
+        // Private shows its page to anyone and its posts to members, so its objects carry no
+        // read key — the same as secret. What differs, the profile in the head, is decided
+        // by the manifest at the seal.
+        let world = World::new();
+        let john = Identity::new(&world, 1).await;
+        let (k, _) = owning(&john, "private").await;
+        let settings = settings_of(&john).await;
+        let sealing = crate::channel_sealing(
+            &john.doc,
+            &john.blobs,
+            john.author_id,
+            &john.app_key,
+            &settings,
+            &k,
+        )
+        .await
+        .unwrap();
+        assert!(!sealing.publish_read_key);
+        assert_eq!(sealing.content.epoch, 0);
+    }
+
     async fn sealing_of(john: &Identity, k: &[u8; 32]) -> Result<pin_channel::ContentKey, String> {
         let settings = settings_of(john).await;
         crate::channel_sealing(
@@ -2804,6 +2827,9 @@ mod content_keys {
     fn a_manifest_says_whether_only_members_may_read_it() {
         assert!(crate::manifest_is_members_only(
             r#"{"visibility":"secret","items":[]}"#
+        ));
+        assert!(crate::manifest_is_members_only(
+            r#"{"visibility":"private","items":[]}"#
         ));
         assert!(!crate::manifest_is_members_only(
             r#"{"visibility":"public"}"#

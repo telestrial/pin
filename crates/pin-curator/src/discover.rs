@@ -86,6 +86,11 @@ pub struct DirectoryChannel {
         skip_serializing_if = "Option::is_none"
     )]
     pub show_on_profile: Option<bool>,
+    /// `"private"` for a channel whose page anyone may see and whose posts only its members
+    /// may read. Absent means public: every entry published before private channels existed
+    /// is one, and an entry for a secret channel is never published at all.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visibility: Option<String>,
 }
 
 /// How much of an identity is still kept.
@@ -1175,6 +1180,7 @@ mod tests {
                 key: "AAAA".into(),
                 name: "First".into(),
                 show_on_profile: None,
+                visibility: None,
             }],
             reach: vec![InstanceAddr {
                 node_id: "n1".into(),
@@ -1257,12 +1263,14 @@ mod tests {
                     key: "AAAA".into(),
                     name: "First".into(),
                     show_on_profile: None,
+                    visibility: None,
                 },
                 DirectoryChannel {
                     channel_id: "chan-two".into(),
                     key: "BBBB".into(),
                     name: "Second".into(),
                     show_on_profile: None,
+                    visibility: None,
                 },
             ]
         );
@@ -1975,6 +1983,7 @@ mod tests {
                         key: "CCCC".into(),
                         name: "Second".into(),
                         show_on_profile: None,
+                        visibility: None,
                     })
                 }),
             ),

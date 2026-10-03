@@ -91,7 +91,12 @@ pub(crate) fn reading(
             }
         };
         for c in &record.channels {
-            if c.show_on_profile == Some(false) || !seen.insert(c.channel_id.clone()) {
+            // A private channel is listed for its page and readable only by its members,
+            // so following its author does not read it.
+            if c.show_on_profile == Some(false)
+                || c.visibility.as_deref() == Some("private")
+                || !seen.insert(c.channel_id.clone())
+            {
                 continue;
             }
             out.channels.push(ReadChannel {
@@ -166,10 +171,12 @@ mod tests {
                 "full",
                 r#"[{"channelID":"a1","key":"k1","name":"One"},
                     {"channelID":"a2","key":"k2","name":"Off","showOnProfile":false},
-                    {"channelID":"a3","key":"k3","name":"Three","showOnProfile":true}]"#,
+                    {"channelID":"a3","key":"k3","name":"Three","showOnProfile":true},
+                    {"channelID":"a4","key":"k4","name":"Members","visibility":"private"}]"#,
             ),
         )]);
         let r = reading(&s, &held);
+        // A private channel is listed for its page, and following its author does not read it.
         assert_eq!(ids(&r), vec!["w", "a1", "a3"]);
         assert!(r.settled());
         assert_eq!(r.channels[1].did_dht.as_deref(), Some(ALICE));

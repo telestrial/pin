@@ -234,7 +234,12 @@ fn advertised_channels(settings: &SettingsView) -> Vec<DirectoryChannel> {
         .my_channels
         .iter()
         .filter(|owned| owned.advertised != Some(false))
-        .filter(|owned| owned.visibility.as_deref() == Some("public"))
+        .filter(|owned| {
+            matches!(
+                owned.visibility.as_deref(),
+                Some("public") | Some("private")
+            )
+        })
         .map(|owned| DirectoryChannel {
             channel_id: owned.channel_id.clone(),
             key: owned.channel_key.clone(),
@@ -245,6 +250,9 @@ fn advertised_channels(settings: &SettingsView) -> Vec<DirectoryChannel> {
                 Some(false) => Some(false),
                 _ => None,
             },
+            // Named only when private, so a public entry reads exactly as it always has.
+            visibility: (owned.visibility.as_deref() == Some("private"))
+                .then(|| "private".to_string()),
         })
         .collect()
 }
@@ -1556,12 +1564,14 @@ mod tests {
                     key: "AAAA".into(),
                     name: "First".into(),
                     show_on_profile: None,
+                    visibility: None,
                 },
                 DirectoryChannel {
                     channel_id: "chan-two".into(),
                     key: "BBBB".into(),
                     name: "Second".into(),
                     show_on_profile: None,
+                    visibility: None,
                 },
             ],
             follows: vec![
@@ -1887,6 +1897,7 @@ mod tests {
                 key: "k".into(),
                 name: "n".into(),
                 show_on_profile: None,
+                visibility: None,
             }]
         )));
     }
@@ -1902,7 +1913,8 @@ mod tests {
                 {"channelID":"obs","channelKey":"KO","name":"Secret","visibility":"secret"},
                 {"channelID":"unc","channelKey":"KU","name":"Unclaimed","visibility":"public","advertised":false},
                 {"channelID":"old","channelKey":"KL","name":"Legacy"},
-                {"channelID":"pub2","channelKey":"KP2","name":"Also public","visibility":"public"}
+                {"channelID":"pub2","channelKey":"KP2","name":"Also public","visibility":"public"},
+                {"channelID":"pri","channelKey":"KR","name":"Private","visibility":"private"}
             ]}"#,
         )
         .unwrap();
@@ -1910,9 +1922,16 @@ mod tests {
         let got = advertised_channels(&settings);
         let ids: Vec<&str> = got.iter().map(|c| c.channel_id.as_str()).collect();
         // Order follows settings, and the name comes from settings too.
-        assert_eq!(ids, vec!["pub", "pub2"]);
+        assert_eq!(ids, vec!["pub", "pub2", "pri"]);
         assert_eq!(got[0].name, "Public");
         assert_eq!(got[0].key, "KP");
+        // A private channel is listed, and says so; a public one says nothing, so its entry
+        // reads as every entry has.
+        assert_eq!(got[2].visibility.as_deref(), Some("private"));
+        assert_eq!(got[0].visibility, None);
+        assert!(!serde_json::to_string(&got[0])
+            .unwrap()
+            .contains("visibility"));
 
         // The one that matters: a channel whose visibility settings doesn't record is
         // UNKNOWN, and unknown is not published. Guessing 'public' for "old" would
