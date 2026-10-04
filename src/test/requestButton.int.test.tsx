@@ -61,6 +61,7 @@ vi.mock('../lib/access', async (importOriginal) => ({
     requestAccess(...args),
 }))
 
+import { join_denied_collection } from '../../crates/pin-core/pkg/pin_core.js'
 import { ChannelView } from '../components/channel/ChannelView'
 import { channelKeyFromBase64 } from '../core/crypto'
 import { useAuthStore } from '../stores/auth'
@@ -140,5 +141,37 @@ describe('integration: asking to read a private channel', () => {
     expect(
       await screen.findByRole('button', { name: 'Follow' }),
     ).toBeInTheDocument()
+  })
+  it('says Not approved when the standing request was turned down, and withdraws it', async () => {
+    await publishedPrivate()
+    render(
+      <ChannelView
+        authorHandle=""
+        channelID={CHANNEL}
+        channelKey={KEY}
+        authorDid={THEM}
+        onItemClick={() => {}}
+        onChannelClick={() => {}}
+        onHandleClick={() => {}}
+        onBack={() => {}}
+        sidebar={null}
+        rightSidebar={null}
+      />,
+    )
+    await userEvent.click(await screen.findByRole('button', { name: 'Follow' }))
+    const asked = await requestAccess.mock.results[0].value
+    // The denial lands, naming the request it answers.
+    const { putRecord } = await import('../lib/docs')
+    await putRecord(
+      join_denied_collection(),
+      CHANNEL,
+      new TextEncoder().encode(asked.createdAt),
+    )
+
+    await userEvent.click(
+      await screen.findByRole('button', { name: 'Not approved' }),
+    )
+    await waitFor(() => expect(requestAccess).toHaveBeenCalledTimes(2))
+    expect(requestAccess.mock.calls[1][3]).toBe(true)
   })
 })

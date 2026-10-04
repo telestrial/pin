@@ -25,8 +25,11 @@ export function RequestButton({
 }) {
   const storedKeyHex = useAuthStore((s) => s.storedKeyHex)
   const addToast = useToastStore((s) => s.addToast)
-  const request = useMyRequest(channelID, true)
-  const standing = isStanding(request ?? null)
+  const mine = useMyRequest(channelID, true)
+  const standing = isStanding(mine?.request ?? null)
+  // Turned down: still standing until taken back, which is what pressing it does — and
+  // what leaves room to ask again.
+  const denied = standing && !!mine?.denied
 
   async function handleClick() {
     if (!storedKeyHex) return
@@ -41,7 +44,7 @@ export function RequestButton({
 
   return (
     <RelationButton
-      onLabel="Requested"
+      onLabel={denied ? 'Not approved' : 'Requested'}
       offLabel="Follow"
       turningOnLabel="Requesting…"
       turningOffLabel="Withdrawing…"
