@@ -2131,6 +2131,67 @@ pub async fn access_request(
     serde_json::to_string(&request).map_err(|e| JsValue::from_str(&format!("encode: {e}")))
 }
 
+/// Approve a standing request to read one of this identity's private channels, seating its
+/// asker. Answers with the seating as JSON.
+#[wasm_bindgen]
+pub async fn access_approve(
+    app_key_hex: String,
+    channel_key: &[u8],
+    did: String,
+    now_iso: String,
+) -> Result<String, JsValue> {
+    let app_key = decode_app_key(&app_key_hex)
+        .ok_or_else(|| JsValue::from_str("app key must be 64 hex chars"))?;
+    let key = key32(channel_key)?;
+    let eng = engine()?;
+    let seat = pin_curator::access::approve(
+        &eng.doc,
+        &eng.blobs,
+        eng.author_id,
+        &app_key,
+        &key,
+        &did,
+        &now_iso,
+    )
+    .await
+    .map_err(je)?;
+    serde_json::to_string(&seat).map_err(|e| JsValue::from_str(&format!("encode: {e}")))
+}
+
+/// Deny a standing request to read one of this identity's private channels.
+#[wasm_bindgen]
+pub async fn access_deny(
+    app_key_hex: String,
+    channel_id: String,
+    did: String,
+) -> Result<(), JsValue> {
+    let app_key = decode_app_key(&app_key_hex)
+        .ok_or_else(|| JsValue::from_str("app key must be 64 hex chars"))?;
+    let eng = engine()?;
+    pin_curator::access::deny(
+        &eng.doc,
+        &eng.blobs,
+        eng.author_id,
+        &app_key,
+        &channel_id,
+        &did,
+    )
+    .await
+    .map_err(je)
+}
+
+/// The collection the author's answers to requests live in.
+#[wasm_bindgen]
+pub fn join_decision_collection() -> String {
+    pin_derive::JOIN_DECISION_COLLECTION.to_string()
+}
+
+/// The collection recording which of this identity's requests were turned down.
+#[wasm_bindgen]
+pub fn join_denied_collection() -> String {
+    pin_derive::JOIN_DENIED_COLLECTION.to_string()
+}
+
 /// The collection this identity's own requests to read private channels live in.
 #[wasm_bindgen]
 pub fn join_request_collection() -> String {

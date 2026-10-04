@@ -485,6 +485,55 @@ pub async fn access_request(
     .await
 }
 
+/// Approve a standing request to read one of this identity's private channels.
+#[tauri::command]
+pub async fn access_approve(
+    state: tauri::State<'_, CuratorState>,
+    app_key_hex: String,
+    channel_key: Vec<u8>,
+    did: String,
+    now_iso: String,
+) -> Result<pin_channel::tree::Seat, String> {
+    let app_key = pin_derive::decode_app_key(&app_key_hex).ok_or("app key must be 64 hex chars")?;
+    let key: [u8; 32] = channel_key
+        .try_into()
+        .map_err(|_| "channel key must be 32 bytes".to_string())?;
+    let engine = current_engine(&state)?;
+    let blobs = (*engine.blobs).clone();
+    pin_curator::access::approve(
+        &engine.doc,
+        &blobs,
+        engine.author_id,
+        &app_key,
+        &key,
+        &did,
+        &now_iso,
+    )
+    .await
+}
+
+/// Deny a standing request to read one of this identity's private channels.
+#[tauri::command]
+pub async fn access_deny(
+    state: tauri::State<'_, CuratorState>,
+    app_key_hex: String,
+    channel_id: String,
+    did: String,
+) -> Result<(), String> {
+    let app_key = pin_derive::decode_app_key(&app_key_hex).ok_or("app key must be 64 hex chars")?;
+    let engine = current_engine(&state)?;
+    let blobs = (*engine.blobs).clone();
+    pin_curator::access::deny(
+        &engine.doc,
+        &blobs,
+        engine.author_id,
+        &app_key,
+        &channel_id,
+        &did,
+    )
+    .await
+}
+
 /// Take a person out of one of this identity's members-only channels.
 #[tauri::command]
 pub async fn members_remove(
@@ -1396,16 +1445,17 @@ pub async fn curator_start_engagement(
                         || o.members_failed > 0
                         || o.invitations > 0
                         || o.requests > 0
+                        || o.denials > 0
                         || comments > 0
                         || comment_withdrawals > 0
                         || !o.problems.is_empty()
                     {
                         log::info!(
-                            "curator engagement: reached {} unreachable {} added {} withdrawn {} folded {} tallies {} cleared {} rejected {} not-ours {} published {} publish-failed {} member-bands {} members-failed {} invitations {} requests {} | knocks: accepted {} rejected {} not-ours {} stale {} refused {} | withdrawals: applied {} rejected {} not-ours {} ignored {}{}{}",
+                            "curator engagement: reached {} unreachable {} added {} withdrawn {} folded {} tallies {} cleared {} rejected {} not-ours {} published {} publish-failed {} member-bands {} members-failed {} invitations {} requests {} denials {} | knocks: accepted {} rejected {} not-ours {} stale {} refused {} | withdrawals: applied {} rejected {} not-ours {} ignored {}{}{}",
                             o.reached, o.unreachable, o.added, o.withdrawn, o.folded, o.tallies,
                             o.cleared, o.rejected, o.not_ours, o.published,
                             o.publish_failed, o.members_published, o.members_failed,
-                            o.invitations, o.requests,
+                            o.invitations, o.requests, o.denials,
                             o.knocked, o.knocks_rejected,
                             o.knocks_not_ours, o.stale_knocks, o.knocks_refused,
                             o.retractions_applied,
@@ -1597,9 +1647,11 @@ pub async fn curator_start_deliver(
                         || o.invitations_unreachable > 0
                         || o.requests > 0
                         || o.requests_unreachable > 0
+                        || o.denials > 0
+                        || o.denials_unreachable > 0
                     {
                         log::info!(
-                            "curator deliver: delivered {} already {} unreachable {} no-target {} own {} | withdrawn: told {} unreachable {} forgotten {} | invitations: delivered {} unreachable {} | requests: delivered {} unreachable {}",
+                            "curator deliver: delivered {} already {} unreachable {} no-target {} own {} | withdrawn: told {} unreachable {} forgotten {} | invitations: delivered {} unreachable {} | requests: delivered {} unreachable {} | denials: delivered {} unreachable {}",
                             o.delivered,
                             o.already,
                             o.unreachable,
@@ -1611,7 +1663,9 @@ pub async fn curator_start_deliver(
                             o.invitations,
                             o.invitations_unreachable,
                             o.requests,
-                            o.requests_unreachable
+                            o.requests_unreachable,
+                            o.denials,
+                            o.denials_unreachable
                         );
                         let stranded: Vec<&str> = o
                             .steps

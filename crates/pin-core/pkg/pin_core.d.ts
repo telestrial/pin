@@ -37,6 +37,17 @@ export class IntoUnderlyingSource {
 }
 
 /**
+ * Approve a standing request to read one of this identity's private channels, seating its
+ * asker. Answers with the seating as JSON.
+ */
+export function access_approve(app_key_hex: string, channel_key: Uint8Array, did: string, now_iso: string): Promise<string>;
+
+/**
+ * Deny a standing request to read one of this identity's private channels.
+ */
+export function access_deny(app_key_hex: string, channel_id: string, did: string): Promise<void>;
+
+/**
  * Ask to read a private channel, or withdraw the request, as this identity — answering
  * with the signed request as JSON. The Curator's deliver loop knocks it to `author`.
  */
@@ -412,6 +423,16 @@ export function import_channel_doc(ticket: string, on_event: Function): Promise<
  * stop finding snapshots. See `pin_derive::is_snapshot_tag`.
  */
 export function is_snapshot_tag(metadata: string): boolean;
+
+/**
+ * The collection the author's answers to requests live in.
+ */
+export function join_decision_collection(): string;
+
+/**
+ * The collection recording which of this identity's requests were turned down.
+ */
+export function join_denied_collection(): string;
 
 /**
  * The collection the requests to read this identity's private channels live in.
@@ -1064,6 +1085,8 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
+    readonly access_approve: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => any;
+    readonly access_deny: (a: number, b: number, c: number, d: number, e: number, f: number) => any;
     readonly access_request: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => any;
     readonly channel_doc_namespaces: () => [number, number, number];
     readonly channel_fetch_conversations: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => any;
@@ -1119,6 +1142,8 @@ export interface InitOutput {
     readonly get_record: (a: number, b: number, c: number, d: number) => any;
     readonly import_channel_doc: (a: number, b: number, c: any) => any;
     readonly is_snapshot_tag: (a: number, b: number) => number;
+    readonly join_decision_collection: () => [number, number];
+    readonly join_denied_collection: () => [number, number];
     readonly join_inbox_collection: () => [number, number];
     readonly join_request_collection: () => [number, number];
     readonly list_all: () => any;
