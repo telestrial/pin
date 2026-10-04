@@ -24,6 +24,7 @@
 //! sealed on Sia, so it is what must be produced to stay readable.
 
 pub mod band;
+pub mod denial;
 pub mod invite;
 mod object;
 pub mod request;
