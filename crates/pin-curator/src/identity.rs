@@ -214,6 +214,11 @@ struct DirectoryDoc {
     /// theirs, or tell whose any other is. Absent while there are none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     invites: Vec<String>,
+    /// Denials of requests to read this identity's private channels, each a box sealed to
+    /// its asker, base64 — the floor under a knock, as invitations are. Only while the
+    /// request they answer still stands. Absent while there are none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    denials: Vec<String>,
     #[serde(rename = "updatedAt")]
     updated_at: String,
 }
@@ -788,6 +793,11 @@ async fn assemble_directory(
         invites: crate::members::invitation_boxes(&ctx.doc, &ctx.blobs, ctx.author_id)
             .await
             .unwrap_or_default(),
+        denials: crate::access::standing_denials(&ctx.doc, &ctx.blobs, ctx.author_id)
+            .await
+            .into_iter()
+            .map(|d| d.sealed)
+            .collect(),
         updated_at: now_iso,
     }
 }
@@ -1033,6 +1043,9 @@ fn directory_moved(event: &LiveEvent) -> bool {
         pin_derive::PERSON_TALLY_COLLECTION,
         // An invitation or a removal, which adds a box to the directory or takes one out.
         pin_derive::MEMBERS_COLLECTION,
+        // A denial, which adds a box; a newer request, which retires one.
+        pin_derive::JOIN_DECISION_COLLECTION,
+        pin_derive::JOIN_INBOX_COLLECTION,
     ]
     .iter()
     .any(|c| key.starts_with(&pin_derive::collection_prefix(c)))
@@ -1329,6 +1342,67 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_directory_carries_a_denial_while_its_request_stands() {
+        let world = crate::testnet::World::new();
+        let me = crate::testnet::Identity::new(&world, 1).await;
+        let bob = crate::testnet::Identity::new(&world, 2).await;
+        let k = me.channel_key();
+        let channel_id = pin_crypto::channel_id(&k);
+        me.set_settings(serde_json::json!({
+            "handleFollows": ["did:dht:x"],
+            "myChannels": [{
+                "channelID": channel_id,
+                "channelKey": pin_crypto::channel_key_to_base64(&k),
+                "visibility": "private",
+            }],
+        }))
+        .await;
+        let ctx = ctx_over(&me);
+        let settings = read_settings(&ctx.doc, &ctx.blobs, ctx.author_id, &ctx.app_key)
+            .await
+            .expect("settings");
+        let request = crate::access::request_access(
+            &bob.doc,
+            bob.author_id,
+            &bob.app_key,
+            &k,
+            &me.did,
+            false,
+            "2026-10-03T00:00:01Z",
+        )
+        .await
+        .unwrap();
+        crate::access::take_requests(
+            &me.doc,
+            &me.blobs,
+            me.author_id,
+            &settings,
+            &me.did,
+            &[crate::access::request_knock(&request)],
+        )
+        .await;
+        crate::access::deny(
+            &me.doc,
+            &me.blobs,
+            me.author_id,
+            &me.app_key,
+            &channel_id,
+            &bob.did,
+        )
+        .await
+        .unwrap();
+
+        let doc = assemble_directory(&ctx, &settings, None, "now".into()).await;
+        let v = serde_json::to_value(&doc).unwrap();
+        let boxes = v["denials"].as_array().expect("a denials field");
+        assert_eq!(boxes.len(), 1);
+        let opened =
+            pin_channel::denial::open_denial(&bob.app_key, &bob.did, boxes[0].as_str().unwrap())
+                .unwrap();
+        assert_eq!(opened.channel_id, channel_id);
+    }
+
+    #[tokio::test]
     async fn the_directory_carries_the_invitations_of_standing_members() {
         let world = crate::testnet::World::new();
         let me = crate::testnet::Identity::new(&world, 1).await;
@@ -1523,6 +1597,7 @@ mod tests {
             followers: None,
             enc_key: None,
             invites: Vec::new(),
+            denials: Vec::new(),
             endorsements: Vec::new(),
             comments_url: None,
             updated_at: "2026-08-06T12:00:00.000Z".into(),
@@ -1585,6 +1660,7 @@ mod tests {
             followers: None,
             enc_key: None,
             invites: Vec::new(),
+            denials: Vec::new(),
             updated_at: "2026-08-06T12:00:00.000Z".into(),
         };
         // Compared as parsed values, not as bytes. A directory document is PARSED by

@@ -73,6 +73,28 @@ pub(crate) fn is_invitation_knock(record: &serde_json::Value) -> bool {
     record.get("invite").and_then(|v| v.as_str()).is_some()
 }
 
+/// Take every box a directory blob carries for this identity: invitations, and denials of
+/// requests it made. Answers with how many invitations were new. One call for the three
+/// places a directory is read, so a new kind of box cannot be taken at one and missed at
+/// another.
+pub(crate) async fn take_from_directory(
+    doc: &Doc,
+    blobs: &Store,
+    author_id: AuthorId,
+    app_key: &[u8; 32],
+    blob: &serde_json::Value,
+) -> usize {
+    crate::access::take_denials(
+        doc,
+        blobs,
+        author_id,
+        app_key,
+        &crate::access::denial_boxes_in(blob),
+    )
+    .await;
+    take_invitations(doc, blobs, author_id, app_key, &boxes_in(blob)).await
+}
+
 /// The sealed boxes a directory blob publishes.
 pub(crate) fn boxes_in(blob: &serde_json::Value) -> Vec<String> {
     blob.get("invites")

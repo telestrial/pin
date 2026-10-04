@@ -178,6 +178,11 @@ pub struct DeliverOutcome {
     /// Requests whose author could not be reached. Retried next pass: the mark is written
     /// only once a knock lands, and a request has no other road.
     pub requests_unreachable: usize,
+    /// Denials knocked through to their asker this pass.
+    pub denials: usize,
+    /// Denials whose asker could not be reached. Retried next pass; meanwhile the directory
+    /// carries the box.
+    pub denials_unreachable: usize,
     /// One entry per endorsement considered, for when the counts aren't enough to say
     /// what went wrong.
     pub steps: Vec<DeliverStep>,
@@ -503,6 +508,7 @@ pub async fn deliver_once(
     }
     deliver_invitations(ctx, own_did, &mut outcome).await;
     deliver_requests(ctx, &mut outcome).await;
+    deliver_denials(ctx, &mut outcome).await;
     Ok(outcome)
 }
 
@@ -622,6 +628,40 @@ async fn deliver_requests(ctx: &DeliverContext, outcome: &mut DeliverOutcome) {
             outcome.requests += 1;
         } else {
             outcome.requests_unreachable += 1;
+        }
+    }
+}
+
+/// Knock every standing denial its asker has not had, marking each that lands by its box.
+async fn deliver_denials(ctx: &DeliverContext, outcome: &mut DeliverOutcome) {
+    for denial in crate::access::standing_denials(&ctx.doc, &ctx.blobs, ctx.author_id).await {
+        let hash = box_hash(&denial.sealed);
+        let sent = read_record(
+            &ctx.doc,
+            &ctx.blobs,
+            ctx.author_id,
+            pin_derive::JOIN_DENIAL_DELIVER_COLLECTION,
+            &denial.rkey,
+        )
+        .await
+        .ok()
+        .flatten();
+        if sent.as_deref() == Some(hash.as_bytes()) {
+            continue;
+        }
+        let knock = crate::access::denial_knock(&denial.sealed);
+        if reach_target(ctx, &denial.requester, &knock).await.sent {
+            let _ = crate::write_record(
+                &ctx.doc,
+                ctx.author_id,
+                pin_derive::JOIN_DENIAL_DELIVER_COLLECTION,
+                &denial.rkey,
+                hash.into_bytes(),
+            )
+            .await;
+            outcome.denials += 1;
+        } else {
+            outcome.denials_unreachable += 1;
         }
     }
 }
@@ -834,6 +874,10 @@ fn deliverable_written(event: &LiveEvent) -> bool {
         // A request, or its withdrawal, made on a screen a moment ago.
         || key.starts_with(&pin_derive::collection_prefix(
             pin_derive::JOIN_REQUEST_COLLECTION,
+        ))
+        // A denial, written when the author answers.
+        || key.starts_with(&pin_derive::collection_prefix(
+            pin_derive::JOIN_DECISION_COLLECTION,
         ))
 }
 

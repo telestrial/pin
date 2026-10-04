@@ -746,6 +746,20 @@ pub const JOIN_INBOX_COLLECTION: &str = "join-inbox";
 /// goes again and an unchanged one does not.
 pub const JOIN_DELIVER_COLLECTION: &str = "join-deliver";
 
+/// The collection holding the author's answer to each request, keyed like the inbox: whether
+/// it was approved or denied, which request it answered, and for a denial the sealed box
+/// that tells the asker.
+pub const JOIN_DECISION_COLLECTION: &str = "join-decision";
+
+/// The collection recording which denials reached their asker, keyed like the inbox and
+/// holding the box's content hash.
+pub const JOIN_DENIAL_DELIVER_COLLECTION: &str = "join-denial-deliver";
+
+/// The collection holding, per channel, the `createdAt` of this identity's request that its
+/// author turned down. A denial of an older request says nothing about a newer one, which is
+/// why the request it answered is what is kept.
+pub const JOIN_DENIED_COLLECTION: &str = "join-denied";
+
 /// The rkey for one person's request to read one channel.
 pub fn join_inbox_rkey(channel_id: &str, did: &str) -> String {
     format!("{channel_id}:{did}")
@@ -1075,8 +1089,11 @@ mod tests {
             add(MEMBERSHIP_COLLECTION, ch.clone());
             add(JOIN_REQUEST_COLLECTION, ch.clone());
             add(JOIN_DELIVER_COLLECTION, ch.clone());
+            add(JOIN_DENIED_COLLECTION, ch.clone());
             for did in &dids {
                 add(JOIN_INBOX_COLLECTION, join_inbox_rkey(ch, did));
+                add(JOIN_DECISION_COLLECTION, join_inbox_rkey(ch, did));
+                add(JOIN_DENIAL_DELIVER_COLLECTION, join_inbox_rkey(ch, did));
             }
         }
         add(PUBLISHED_COLLECTION, PUBLISHED_SETTINGS_RKEY.into());

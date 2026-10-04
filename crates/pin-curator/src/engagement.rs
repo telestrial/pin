@@ -190,6 +190,8 @@ pub struct EngagementOutcome {
     /// Requests to read this identity's private channels, or withdrawals of them, taken
     /// into its inbox this pass.
     pub requests: usize,
+    /// Denials of this identity's own requests, taken from a knock this pass.
+    pub denials: usize,
     /// What the comment lane did with its half of the same drain.
     pub comments: crate::comments::CommentsOutcome,
 }
@@ -909,6 +911,20 @@ pub async fn engagement_once<N: crate::net::Network>(
     let (request_knocks, knocks): (Vec<_>, Vec<_>) = knocks
         .into_iter()
         .partition(crate::access::is_request_knock);
+    let (denial_knocks, knocks): (Vec<_>, Vec<_>) =
+        knocks.into_iter().partition(crate::access::is_denial_knock);
+    let knocked_denials: Vec<String> = denial_knocks
+        .iter()
+        .filter_map(|r| r["denial"].as_str().map(str::to_string))
+        .collect();
+    outcome.denials += crate::access::take_denials(
+        &ctx.doc,
+        &ctx.blobs,
+        ctx.author_id,
+        &ctx.app_key,
+        &knocked_denials,
+    )
+    .await;
     let (comment_knocks, knocks): (Vec<_>, Vec<_>) =
         knocks.into_iter().partition(crate::comments::is_comment);
     outcome.requests += crate::access::take_requests(
@@ -1050,12 +1066,12 @@ pub async fn engagement_once<N: crate::net::Network>(
                 .await;
                 // And any invitation it carries for us: the floor under a knock that could
                 // not land.
-                outcome.invitations += crate::membership::take_invitations(
+                outcome.invitations += crate::membership::take_from_directory(
                     &ctx.doc,
                     &ctx.blobs,
                     ctx.author_id,
                     &ctx.app_key,
-                    &crate::membership::boxes_in(&blob),
+                    &blob,
                 )
                 .await;
                 reached.insert(did.clone());

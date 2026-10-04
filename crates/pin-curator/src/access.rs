@@ -175,6 +175,277 @@ async fn standing(doc: &Doc, blobs: &Store, author_id: AuthorId, channel_id: &st
     count
 }
 
+/// The author's answer to one request.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Decision {
+    /// `"approved"` or `"denied"`.
+    pub decision: String,
+    /// The `createdAt` of the request it answered. A newer request from the same person is
+    /// a new question, and this says nothing about it.
+    pub request_created_at: String,
+    /// For a denial, the box that tells the asker, sealed to them.
+    #[serde(rename = "box", default, skip_serializing_if = "Option::is_none")]
+    pub sealed: Option<String>,
+}
+
+/// The standing request one person has made to read one of this identity's channels: in the
+/// inbox and not withdrawn. An error otherwise, because approving or denying anything else
+/// would answer a question nobody is asking.
+async fn standing_request(
+    doc: &Doc,
+    blobs: &Store,
+    author_id: AuthorId,
+    channel_id: &str,
+    did: &str,
+) -> Result<Request, String> {
+    match held_request(
+        doc,
+        blobs,
+        author_id,
+        &pin_derive::join_inbox_rkey(channel_id, did),
+    )
+    .await
+    {
+        Some(r) if !r.withdrawn => Ok(r),
+        _ => Err(format!(
+            "no standing request from {did} to read {channel_id}"
+        )),
+    }
+}
+
+async fn write_decision(
+    doc: &Doc,
+    author_id: AuthorId,
+    channel_id: &str,
+    did: &str,
+    decision: &Decision,
+) -> Result<(), String> {
+    let bytes = serde_json::to_vec(decision).map_err(|e| format!("encode decision: {e}"))?;
+    write_record(
+        doc,
+        author_id,
+        pin_derive::JOIN_DECISION_COLLECTION,
+        &pin_derive::join_inbox_rkey(channel_id, did),
+        bytes,
+    )
+    .await
+}
+
+/// Approve a standing request: seat its asker, sealing their invitation to the key the
+/// request carries, and record the answer. The invitation then travels as any other does.
+#[allow(clippy::too_many_arguments)]
+pub async fn approve(
+    doc: &Doc,
+    blobs: &Store,
+    author_id: AuthorId,
+    app_key: &[u8; 32],
+    channel_key: &[u8; 32],
+    did: &str,
+    now_iso: &str,
+) -> Result<pin_channel::tree::Seat, String> {
+    let channel_id = pin_crypto::channel_id(channel_key);
+    let request = standing_request(doc, blobs, author_id, &channel_id, did).await?;
+    let seat = crate::members::invite(
+        doc,
+        blobs,
+        author_id,
+        app_key,
+        channel_key,
+        &request.actor,
+        &request.enc_key_bytes()?,
+        now_iso,
+    )
+    .await?;
+    write_decision(
+        doc,
+        author_id,
+        &channel_id,
+        did,
+        &Decision {
+            decision: "approved".into(),
+            request_created_at: request.created_at,
+            sealed: None,
+        },
+    )
+    .await?;
+    Ok(seat)
+}
+
+/// Deny a standing request: seal the answer to its asker and record it, box and all. The box
+/// is knocked to them and published in this identity's directory until they ask again.
+pub async fn deny(
+    doc: &Doc,
+    blobs: &Store,
+    author_id: AuthorId,
+    app_key: &[u8; 32],
+    channel_id: &str,
+    did: &str,
+) -> Result<(), String> {
+    let request = standing_request(doc, blobs, author_id, channel_id, did).await?;
+    let sealed = pin_channel::denial::seal_denial(
+        app_key,
+        channel_id,
+        &request.actor,
+        &request.enc_key_bytes()?,
+        &request.created_at,
+    )?;
+    write_decision(
+        doc,
+        author_id,
+        channel_id,
+        did,
+        &Decision {
+            decision: "denied".into(),
+            request_created_at: request.created_at,
+            sealed: Some(sealed),
+        },
+    )
+    .await
+}
+
+/// A denial still answering the request it was made for: who it is for and its box.
+pub(crate) struct StandingDenial {
+    pub rkey: String,
+    pub requester: String,
+    pub sealed: String,
+}
+
+/// The denials whose request still stands unchanged. Once the asker withdraws or asks again
+/// the inbox holds a newer record, the denial no longer answers anything, and its box stops
+/// being published or knocked.
+pub(crate) async fn standing_denials(
+    doc: &Doc,
+    blobs: &Store,
+    author_id: AuthorId,
+) -> Vec<StandingDenial> {
+    let rkeys = crate::list_rkeys(doc, author_id, pin_derive::JOIN_DECISION_COLLECTION)
+        .await
+        .unwrap_or_default();
+    let mut out = Vec::new();
+    for rkey in rkeys {
+        let Ok(Some(bytes)) = read_record(
+            doc,
+            blobs,
+            author_id,
+            pin_derive::JOIN_DECISION_COLLECTION,
+            &rkey,
+        )
+        .await
+        else {
+            continue;
+        };
+        let Ok(decision) = serde_json::from_slice::<Decision>(&bytes) else {
+            continue;
+        };
+        let Some(sealed) = decision.sealed else {
+            continue;
+        };
+        let Some(request) = held_request(doc, blobs, author_id, &rkey).await else {
+            continue;
+        };
+        if request.created_at == decision.request_created_at {
+            out.push(StandingDenial {
+                rkey,
+                requester: request.actor,
+                sealed,
+            });
+        }
+    }
+    out.sort_by(|a, b| a.rkey.cmp(&b.rkey));
+    out
+}
+
+/// The knock a denial travels as.
+pub fn denial_knock(sealed: &str) -> serde_json::Value {
+    serde_json::json!({ "denial": sealed })
+}
+
+/// Whether a knocked record is a denial.
+pub(crate) fn is_denial_knock(record: &serde_json::Value) -> bool {
+    record.get("denial").and_then(|v| v.as_str()).is_some()
+}
+
+/// The denial boxes a directory blob publishes.
+pub(crate) fn denial_boxes_in(blob: &serde_json::Value) -> Vec<String> {
+    blob.get("denials")
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Take denials meant for this identity, answering with how many were new. One is kept only
+/// when it answers the request this identity has standing for that channel now: a denial of
+/// a request since withdrawn or replaced says nothing.
+pub(crate) async fn take_denials(
+    doc: &Doc,
+    blobs: &Store,
+    author_id: AuthorId,
+    app_key: &[u8; 32],
+    boxes: &[String],
+) -> usize {
+    if boxes.is_empty() {
+        return 0;
+    }
+    let me = crate::own_did(app_key);
+    let mut taken = 0;
+    for sealed in boxes {
+        let Ok(denial) = pin_channel::denial::open_denial(app_key, &me, sealed) else {
+            continue;
+        };
+        let Ok(Some(bytes)) = read_record(
+            doc,
+            blobs,
+            author_id,
+            pin_derive::JOIN_REQUEST_COLLECTION,
+            &denial.channel_id,
+        )
+        .await
+        else {
+            continue;
+        };
+        let Ok(mine) = serde_json::from_slice::<Request>(&bytes) else {
+            continue;
+        };
+        if mine.withdrawn
+            || mine.created_at != denial.request_created_at
+            || bare(&mine.author) != bare(&denial.author)
+        {
+            continue;
+        }
+        let held = read_record(
+            doc,
+            blobs,
+            author_id,
+            pin_derive::JOIN_DENIED_COLLECTION,
+            &denial.channel_id,
+        )
+        .await
+        .ok()
+        .flatten();
+        if held.as_deref() == Some(denial.request_created_at.as_bytes()) {
+            continue;
+        }
+        if write_record(
+            doc,
+            author_id,
+            pin_derive::JOIN_DENIED_COLLECTION,
+            &denial.channel_id,
+            denial.request_created_at.into_bytes(),
+        )
+        .await
+        .is_ok()
+        {
+            taken += 1;
+        }
+    }
+    taken
+}
+
 /// This identity's own requests, each with the content hash its delivery mark compares.
 pub(crate) async fn own_requests(doc: &Doc, blobs: &Store, author_id: AuthorId) -> Vec<Request> {
     let rkeys = crate::list_rkeys(doc, author_id, pin_derive::JOIN_REQUEST_COLLECTION)
@@ -304,6 +575,240 @@ mod tests {
         let own = own_requests(&bob.doc, &bob.blobs, bob.author_id).await;
         assert_eq!(own.len(), 1);
         assert!(own[0].withdrawn);
+    }
+
+    async fn decided(author: &Identity, k: &[u8; 32], asker: &Identity) -> Option<Decision> {
+        let bytes = read_record(
+            &author.doc,
+            &author.blobs,
+            author.author_id,
+            pin_derive::JOIN_DECISION_COLLECTION,
+            &pin_derive::join_inbox_rkey(&pin_crypto::channel_id(k), &asker.did),
+        )
+        .await
+        .ok()
+        .flatten()?;
+        serde_json::from_slice(&bytes).ok()
+    }
+
+    async fn denied_mark(asker: &Identity, k: &[u8; 32]) -> Option<String> {
+        read_record(
+            &asker.doc,
+            &asker.blobs,
+            asker.author_id,
+            pin_derive::JOIN_DENIED_COLLECTION,
+            &pin_crypto::channel_id(k),
+        )
+        .await
+        .ok()
+        .flatten()
+        .map(|b| String::from_utf8(b).unwrap())
+    }
+
+    #[tokio::test]
+    async fn approving_seats_the_asker_with_the_key_their_request_carried() {
+        let world = World::new();
+        let author = Identity::new(&world, 1).await;
+        let bob = Identity::new(&world, 2).await;
+        let (k, settings) = owning(&author, "private").await;
+        let knock = asks(&bob, &k, &author.did, false, "2026-10-03T00:00:01Z").await;
+        take(&author, &settings, &[knock]).await;
+
+        let seat = approve(
+            &author.doc,
+            &author.blobs,
+            author.author_id,
+            &author.app_key,
+            &k,
+            &bob.did,
+            "2026-10-03T00:00:02Z",
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(seat.did, bob.did);
+        assert_eq!(
+            pin_crypto::b64_decode(&seat.enc_key).unwrap(),
+            pin_crypto::enc_public(&pin_derive::enc_key_seed(&bob.app_key))
+        );
+        assert_eq!(
+            decided(&author, &k, &bob).await.unwrap().decision,
+            "approved"
+        );
+        assert!(
+            standing_denials(&author.doc, &author.blobs, author.author_id)
+                .await
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_denial_reaches_the_asker_and_retires_when_they_ask_again() {
+        let world = World::new();
+        let author = Identity::new(&world, 1).await;
+        let bob = Identity::new(&world, 2).await;
+        let (k, settings) = owning(&author, "private").await;
+        let first = asks(&bob, &k, &author.did, false, "2026-10-03T00:00:01Z").await;
+        take(&author, &settings, &[first]).await;
+
+        let channel_id = pin_crypto::channel_id(&k);
+        deny(
+            &author.doc,
+            &author.blobs,
+            author.author_id,
+            &author.app_key,
+            &channel_id,
+            &bob.did,
+        )
+        .await
+        .unwrap();
+        let standing = standing_denials(&author.doc, &author.blobs, author.author_id).await;
+        assert_eq!(standing.len(), 1);
+        assert_eq!(standing[0].requester, bob.did);
+        let sealed = standing[0].sealed.clone();
+
+        // Through the directory floor, as a reader of the author's blob takes it.
+        let blob = serde_json::json!({ "denials": [sealed.clone()] });
+        crate::membership::take_from_directory(
+            &bob.doc,
+            &bob.blobs,
+            bob.author_id,
+            &bob.app_key,
+            &blob,
+        )
+        .await;
+        assert_eq!(
+            denied_mark(&bob, &k).await.as_deref(),
+            Some("2026-10-03T00:00:01Z")
+        );
+        // Taking it again changes nothing.
+        assert_eq!(
+            take_denials(
+                &bob.doc,
+                &bob.blobs,
+                bob.author_id,
+                &bob.app_key,
+                &[sealed.clone()]
+            )
+            .await,
+            0
+        );
+
+        // Bob withdraws and asks again: a new question. The old denial no longer stands on
+        // the author's side, and bob no longer takes it as an answer.
+        asks(&bob, &k, &author.did, true, "2026-10-03T00:00:02Z").await;
+        let again = asks(&bob, &k, &author.did, false, "2026-10-03T00:00:03Z").await;
+        take(&author, &settings, &[again]).await;
+        assert!(
+            standing_denials(&author.doc, &author.blobs, author.author_id)
+                .await
+                .is_empty()
+        );
+        let other = Identity::new(&world, 3).await;
+        assert_eq!(
+            take_denials(
+                &other.doc,
+                &other.blobs,
+                other.author_id,
+                &other.app_key,
+                &[sealed.clone()]
+            )
+            .await,
+            0,
+            "nobody else opens it"
+        );
+        crate::delete_record(
+            &bob.doc,
+            bob.author_id,
+            pin_derive::JOIN_DENIED_COLLECTION,
+            &channel_id,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            take_denials(&bob.doc, &bob.blobs, bob.author_id, &bob.app_key, &[sealed]).await,
+            0,
+            "a denial of an older request says nothing about the newer one"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_knocked_denial_reaches_the_asker_through_an_engagement_pass() {
+        let world = World::new();
+        let author = Identity::new(&world, 1).await;
+        let bob = Identity::new(&world, 2).await;
+        let (k, settings) = owning(&author, "private").await;
+        let knock = asks(&bob, &k, &author.did, false, "2026-10-03T00:00:01Z").await;
+        take(&author, &settings, &[knock]).await;
+        deny(
+            &author.doc,
+            &author.blobs,
+            author.author_id,
+            &author.app_key,
+            &pin_crypto::channel_id(&k),
+            &bob.did,
+        )
+        .await
+        .unwrap();
+        let sealed = standing_denials(&author.doc, &author.blobs, author.author_id)
+            .await
+            .remove(0)
+            .sealed;
+
+        // Bob's pass needs a settings record of his own to run at all.
+        bob.set_settings(serde_json::json!({ "handleFollows": [] }))
+            .await;
+        let ctx = bob.engagement_ctx();
+        assert!(pin_rpc::HeyHandler::new(ctx.inbox.clone())
+            .accept_knock(&pin_rpc::hey_request(&denial_knock(&sealed))));
+        let pass = crate::engagement_once(
+            &ctx,
+            &bob.did,
+            "2026-10-03T00:00:02Z".to_string(),
+            false,
+            false,
+        )
+        .await
+        .expect("engagement pass");
+
+        assert_eq!(pass.denials, 1);
+        assert_eq!(
+            denied_mark(&bob, &k).await.as_deref(),
+            Some("2026-10-03T00:00:01Z")
+        );
+    }
+
+    #[tokio::test]
+    async fn nothing_but_a_standing_request_can_be_answered() {
+        let world = World::new();
+        let author = Identity::new(&world, 1).await;
+        let bob = Identity::new(&world, 2).await;
+        let (k, settings) = owning(&author, "private").await;
+        let channel_id = pin_crypto::channel_id(&k);
+        let answer = || {
+            deny(
+                &author.doc,
+                &author.blobs,
+                author.author_id,
+                &author.app_key,
+                &channel_id,
+                &bob.did,
+            )
+        };
+        assert!(answer().await.is_err(), "never asked");
+        take(
+            &author,
+            &settings,
+            &[asks(&bob, &k, &author.did, false, "2026-10-03T00:00:01Z").await],
+        )
+        .await;
+        take(
+            &author,
+            &settings,
+            &[asks(&bob, &k, &author.did, true, "2026-10-03T00:00:02Z").await],
+        )
+        .await;
+        assert!(answer().await.is_err(), "withdrawn");
     }
 
     #[tokio::test]

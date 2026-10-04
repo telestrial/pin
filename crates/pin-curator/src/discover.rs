@@ -922,12 +922,12 @@ async fn read_new<N: crate::net::Network>(
     let fresh = parse_directory(&blob, &resolved.txt, &resolved.url, now_iso);
     // An invitation to us among this identity's boxes is recorded as we pass: a stranger
     // who invited us is read here or not at all, unless their knock landed.
-    crate::membership::take_invitations(
+    crate::membership::take_from_directory(
         &ctx.doc,
         &ctx.blobs,
         ctx.author_id,
         &ctx.app_key,
-        &crate::membership::boxes_in(&blob),
+        &blob,
     )
     .await;
     record_directory(
@@ -1057,12 +1057,12 @@ pub async fn discover_once<N: crate::net::Network>(
             continue;
         };
         let fresh = parse_directory(&blob, &resolved.txt, &resolved.url, &now_iso);
-        crate::membership::take_invitations(
+        crate::membership::take_from_directory(
             &ctx.doc,
             &ctx.blobs,
             ctx.author_id,
             &ctx.app_key,
-            &crate::membership::boxes_in(&blob),
+            &blob,
         )
         .await;
         // A new edge only WIDENS anything if it points at somebody neither held nor covered
