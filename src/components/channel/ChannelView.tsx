@@ -23,6 +23,7 @@ import {
 } from '../../lib/hooks/useFollowers'
 import { useIdentityName } from '../../lib/hooks/useIdentityName'
 import { useItemBlobURL } from '../../lib/hooks/useItemBytes'
+import { usePendingRequests } from '../../lib/hooks/usePendingRequests'
 import { renderMarkdown } from '../../lib/markdown'
 import { readMemberships } from '../../lib/members'
 import { useAuthStore } from '../../stores/auth'
@@ -41,6 +42,7 @@ import { ChannelAvatar } from './ChannelAvatar'
 import { ChannelOwnerMenu } from './ChannelOwnerMenu'
 import { DeadRepost } from './DeadRepost'
 import { MembersPanel } from './MembersPanel'
+import { RequestsPanel } from './RequestsPanel'
 
 /** Why a browsed channel cannot be read, when the reason is a key rather than the network.
  *
@@ -257,6 +259,10 @@ export function ChannelView({
       ? browsed.profile
       : null
   const [showMembers, setShowMembers] = useState(false)
+  // Who is asking to read a private channel you own, and where you answer them.
+  const isOwnPrivate = isOwned && manifest?.visibility === 'private'
+  const [showRequests, setShowRequests] = useState(false)
+  const pending = usePendingRequests()?.get(channelID) ?? []
 
   // Backfill the manifest cache on cold-mount (e.g. empty channel that
   // contributed no feed entries to the initial refresh). Updates arrive on
@@ -497,6 +503,22 @@ export function ChannelView({
                               Members
                             </button>
                           )}
+                          {isOwnPrivate && (
+                            <button
+                              type="button"
+                              onClick={() => setShowRequests((v) => !v)}
+                              aria-expanded={showRequests}
+                              className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors cursor-pointer ${
+                                showRequests
+                                  ? 'text-neutral-900 bg-neutral-200'
+                                  : 'text-neutral-700 hover:text-neutral-900 bg-neutral-100 hover:bg-neutral-200'
+                              }`}
+                            >
+                              {pending.length > 0
+                                ? `Requests · ${pending.length}`
+                                : 'Requests'}
+                            </button>
+                          )}
                           {/* Context menu — only the claim toggle, so it
                               shows for public channels only (claim doesn't
                               apply to obscure ones). */}
@@ -627,6 +649,15 @@ export function ChannelView({
               </p>
             </div>
           </div>
+
+          {isOwnPrivate && showRequests && owned && (
+            <RequestsPanel
+              channelID={channelID}
+              channelKey={owned.channelKey}
+              pending={pending}
+              onHandleClick={onHandleClick}
+            />
+          )}
 
           {isOwnSecret && showMembers && owned && (
             <MembersPanel

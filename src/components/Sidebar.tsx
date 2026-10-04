@@ -1,4 +1,5 @@
 import { Plus, RotateCw, X } from 'lucide-react'
+import { usePendingRequests } from '../lib/hooks/usePendingRequests'
 import {
   type Action,
   type ChannelCreateAction,
@@ -109,6 +110,9 @@ export function Sidebar({
   const removeAction = useActionStore((s) => s.remove)
 
   const ownedChannelIDs = new Set(myChannels.map((c) => c.channelID))
+  // People waiting on your answer, per private channel: a count on its row, which is the
+  // whole of how a request draws attention — no notification.
+  const pending = usePendingRequests()
   // Channels still being set up, drawn from the journal rather than from settings. A
   // channel enters settings only once its manifest is published, because settings is
   // what the identity loop advertises — so without this the sidebar would say nothing
@@ -284,6 +288,14 @@ export function Sidebar({
                       size="xs"
                     />
                     <span className="truncate flex-1">{c.name}</span>
+                    {(pending?.get(c.channelID)?.length ?? 0) > 0 && (
+                      <span
+                        title="People asking to read this channel"
+                        className="shrink-0 min-w-4 px-1 text-[10px] font-medium text-center text-white bg-neutral-900 rounded-full"
+                      >
+                        {pending?.get(c.channelID)?.length}
+                      </span>
+                    )}
                     {active && (
                       <span
                         aria-hidden="true"
