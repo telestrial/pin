@@ -120,6 +120,17 @@ describe('integration: creating a channel through the journal', () => {
     ])
   })
 
+  it('follows a private channel it creates', async () => {
+    // Listed in the author's directory like a public one, so the edge resolves; the
+    // author is among its followers though they hold no seat in it.
+    const a = action({ visibility: 'private' })
+    await runChannelCreate(a, ctx(a))
+
+    expect(useAuthStore.getState().follows).toEqual([
+      { didDht: 'did:dht:alice', channelID, name: 'A channel' },
+    ])
+  })
+
   it('follows nothing when the channel is unlisted', async () => {
     // A `FollowEdge` carries no K and resolves through the author's directory, where an
     // unlisted channel is absent by construction. An edge naming one resolves to nothing
