@@ -1831,7 +1831,7 @@ pub async fn publish_channel_tallies<N: crate::net::Network>(
     }
 
     let json = serde_json::to_string(&map).map_err(|e| format!("encode tallies: {e}"))?;
-    let published = pin_channel::publish_tallies(&ctx.sia, &sealing, &json).await?;
+    let published = pin_channel::publish_tallies(&ctx.sia, &sealing, &json, None).await?;
 
     // Record before reclaiming, and keep the generation just superseded alive: a pointer
     // takes seconds to propagate, so a reader can still be resolving the object it

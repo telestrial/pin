@@ -154,6 +154,12 @@ struct Head {
     /// it. Text rather than a value so the bytes signed are the bytes stored.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     profile: Option<String>,
+    /// A tallies object's follower count for the channel itself, when its tier lets a
+    /// finder of the channel see how many follow it but not who: a private channel, whose
+    /// tallies are under C. Only the number — the aggregate it comes from names sample
+    /// actors, and on a private channel those are members.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    followers: Option<u64>,
     /// The author's signature over `signing_bytes`, base64.
     sig: String,
 }
@@ -172,6 +178,7 @@ fn signing_bytes(
     read_key: Option<&str>,
     body: &[u8],
     profile: Option<&str>,
+    followers: Option<u64>,
 ) -> Vec<u8> {
     let mut out = Vec::with_capacity(SIGNING_DOMAIN.len() + 128);
     out.extend_from_slice(SIGNING_DOMAIN);
@@ -196,6 +203,12 @@ fn signing_bytes(
         out.extend_from_slice(&(b"profile".len() as u32).to_be_bytes());
         out.extend_from_slice(b"profile");
         out.extend_from_slice(&pin_crypto::sha256(profile.as_bytes()));
+    }
+    // Tagged the same way, and named, so it can never sign the same bytes as a profile.
+    if let Some(followers) = followers {
+        out.extend_from_slice(&(b"followers".len() as u32).to_be_bytes());
+        out.extend_from_slice(b"followers");
+        out.extend_from_slice(&followers.to_be_bytes());
     }
     out
 }
@@ -246,6 +259,29 @@ fn join_profile(profile: Option<&str>, body: Vec<u8>) -> Result<Vec<u8>, String>
 
 /// Seal a payload into an object, signed by its author.
 pub fn seal(sealing: &Sealing, kind: Kind, payload: &[u8]) -> Result<String, String> {
+    seal_counted(sealing, kind, payload, None)
+}
+
+/// Seal a channel's tallies with its follower count in the head, where a finder of the
+/// channel holding K alone can read it.
+///
+/// The publisher decides whether to, by tier, rather than the seal: a tallies payload says
+/// nothing about its channel's visibility, and a secret channel's finder must learn nothing
+/// about it at all.
+pub fn seal_tallies(
+    sealing: &Sealing,
+    payload: &[u8],
+    followers: Option<u64>,
+) -> Result<String, String> {
+    seal_counted(sealing, Kind::Tallies, payload, followers)
+}
+
+fn seal_counted(
+    sealing: &Sealing,
+    kind: Kind,
+    payload: &[u8],
+    followers: Option<u64>,
+) -> Result<String, String> {
     let (profile, payload) = split_profile(kind, payload)?;
     let body = pin_crypto::seal_raw(&sealing.content.key, &payload)?;
     let read_key = sealing
@@ -261,6 +297,7 @@ pub fn seal(sealing: &Sealing, kind: Kind, payload: &[u8]) -> Result<String, Str
             read_key.as_deref(),
             &body,
             profile.as_deref(),
+            followers,
         ),
     )?;
     let head = Head {
@@ -268,6 +305,7 @@ pub fn seal(sealing: &Sealing, kind: Kind, payload: &[u8]) -> Result<String, Str
         read_key,
         kind: kind.as_str().to_string(),
         profile,
+        followers,
         sig,
     };
     let head_json = serde_json::to_vec(&head).map_err(|e| format!("head: {e}"))?;
@@ -435,6 +473,24 @@ pub fn open_profile(
     }
 }
 
+/// A tallies object's follower count for its channel, from its verified head alone: what a
+/// finder of a private channel may know of who follows it, holding K and nothing else.
+/// `None` for an object that carries none, which on a channel anyone may read is every one
+/// of them — its whole tally opens with K.
+pub fn open_follower_count(
+    channel_key: &[u8; 32],
+    blob: &str,
+    signer: Signer,
+) -> Result<Option<u64>, String> {
+    let bytes = pin_crypto::b64_decode(blob).ok_or("object is not base64")?;
+    match bytes.first() {
+        Some(&OBJECT_VERSION) => split_head(channel_key, &bytes[1..], Kind::Tallies, signer)
+            .map(|(head, _)| head.followers),
+        Some(v) => Err(format!("unsupported object version {v}")),
+        None => Err("object is empty".into()),
+    }
+}
+
 /// Open an object whose head carries no read key, with a content key the caller holds.
 ///
 /// The path for a reader who learned C some other way — the author, who derives it, or a
@@ -521,6 +577,7 @@ fn split_head<'b>(
         head.read_key.as_deref(),
         body,
         head.profile.as_deref(),
+        head.followers,
     );
     pin_pkarr::verify_detached(author, &message, &head.sig)
         .map_err(|_| "object is not signed by its channel's author".to_string())?;
@@ -668,6 +725,7 @@ mod tests {
             head.read_key.as_deref(),
             &body,
             None,
+            None,
         );
         assert!(pin_pkarr::verify_detached(&author, &message, &head.sig).is_ok());
 
@@ -681,6 +739,7 @@ mod tests {
                 head.read_key.as_deref(),
                 &body,
                 None,
+                None,
             ),
             signing_bytes(
                 &channel,
@@ -688,6 +747,7 @@ mod tests {
                 4,
                 head.read_key.as_deref(),
                 &body,
+                None,
                 None,
             ),
             signing_bytes(
@@ -697,14 +757,16 @@ mod tests {
                 head.read_key.as_deref(),
                 &body,
                 None,
+                None,
             ),
-            signing_bytes(&channel, "tallies", 3, None, &body, None),
+            signing_bytes(&channel, "tallies", 3, None, &body, None, None),
             signing_bytes(
                 &channel,
                 "tallies",
                 3,
                 head.read_key.as_deref(),
                 b"other",
+                None,
                 None,
             ),
         ] {
@@ -807,6 +869,7 @@ mod tests {
                 head.read_key.as_deref(),
                 &body,
                 profile,
+                None,
             )
         };
         assert!(pin_pkarr::verify_detached(&author(), &signed(Some(profile)), &head.sig).is_ok());
@@ -820,6 +883,52 @@ mod tests {
         // profiles existed, so every object already published still verifies.
         let bare = signed(None);
         assert!(bare.ends_with(&pin_crypto::sha256(&body)));
+    }
+
+    #[test]
+    fn a_private_channels_follower_count_opens_with_k_and_its_tallies_only_with_c() {
+        let blob = seal_tallies(&sealing(false), br#"{"x":1}"#, Some(42)).unwrap();
+        assert_eq!(
+            open_follower_count(&K, &blob, Signer::Author(&author())).unwrap(),
+            Some(42)
+        );
+        // The rest of the tally stays sealed for whoever holds K alone.
+        assert!(open(&K, &blob, Kind::Tallies, Signer::Author(&author())).is_err());
+        assert_eq!(
+            open_with(&K, &blob, &C, Kind::Tallies, Signer::Author(&author())).unwrap(),
+            br#"{"x":1}"#
+        );
+        // An object sealed without one answers none.
+        let plain = seal(&sealing(false), Kind::Tallies, b"payload").unwrap();
+        assert_eq!(
+            open_follower_count(&K, &plain, Signer::Author(&author())).unwrap(),
+            None
+        );
+        // Read only from a tallies object, and only one its author signed.
+        let manifest = seal(&sealing(true), Kind::Manifest, b"payload").unwrap();
+        assert!(open_follower_count(&K, &manifest, Signer::Author(&author())).is_err());
+        let stranger = pin_pkarr::public_key_from_seed(&[12u8; 32]).unwrap();
+        assert!(open_follower_count(&K, &blob, Signer::Author(&stranger)).is_err());
+    }
+
+    #[test]
+    fn the_follower_count_is_signed_and_an_object_without_one_signs_as_before() {
+        let blob = seal_tallies(&sealing(false), b"payload", Some(42)).unwrap();
+        let (head, body) = head_and_body(&blob);
+        let channel = pin_crypto::channel_id(&K);
+        let signed =
+            |followers| signing_bytes(&channel, "tallies", 3, None, &body, None, followers);
+        assert!(pin_pkarr::verify_detached(&author(), &signed(Some(42)), &head.sig).is_ok());
+        // Another count, or none, does not verify.
+        assert!(pin_pkarr::verify_detached(&author(), &signed(Some(43)), &head.sig).is_err());
+        assert!(pin_pkarr::verify_detached(&author(), &signed(None), &head.sig).is_err());
+        // Absent, it appends nothing, so every object already published still verifies.
+        assert!(signed(None).ends_with(&pin_crypto::sha256(&body)));
+        // Named, so a count and a profile never sign the same bytes.
+        assert_ne!(
+            signing_bytes(&channel, "tallies", 3, None, &body, Some(""), None),
+            signed(Some(0))
+        );
     }
 
     #[test]
@@ -938,6 +1047,16 @@ mod tests {
         let mut keys: Vec<&String> = head.as_object().unwrap().keys().collect();
         keys.sort();
         assert_eq!(keys, ["epoch", "kind", "sig"]);
+
+        // A count is the one other thing a tallies head may carry, and only by asking.
+        let blob = seal_tallies(&sealing(false), b"payload", Some(7)).unwrap();
+        let bytes = pin_crypto::b64_decode(&blob).unwrap();
+        let len = u32::from_be_bytes(bytes[1..5].try_into().unwrap()) as usize;
+        let head = pin_crypto::open_raw(&K, &bytes[5..5 + len]).unwrap();
+        let head: serde_json::Value = serde_json::from_slice(&head).unwrap();
+        let mut keys: Vec<&String> = head.as_object().unwrap().keys().collect();
+        keys.sort();
+        assert_eq!(keys, ["epoch", "followers", "kind", "sig"]);
     }
 
     #[test]

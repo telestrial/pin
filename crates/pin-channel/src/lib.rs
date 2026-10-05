@@ -31,8 +31,8 @@ pub mod request;
 pub mod tree;
 
 pub use object::{
-    content_key, fingerprint, head_epoch, open, open_members, open_profile, open_with, seal,
-    seal_members, ContentKey, Kind, Opened, Sealing, Signer,
+    content_key, fingerprint, head_epoch, open, open_follower_count, open_members, open_profile,
+    open_with, seal, seal_members, seal_tallies, ContentKey, Kind, Opened, Sealing, Signer,
 };
 
 /// How an author seals a channel anyone holding K may read: C derived from the AppKey at
@@ -206,6 +206,15 @@ async fn seal_and_point(
     payload_json: &str,
 ) -> Result<Published, String> {
     let sealed = object::seal(sealing, pointer.kind, payload_json.as_bytes())?;
+    upload_and_point(sia, pointer, sealed).await
+}
+
+/// Upload an object already sealed and sign a pointer to it, in that order.
+async fn upload_and_point(
+    sia: &pin_sia::Session,
+    pointer: Pointer,
+    sealed: String,
+) -> Result<Published, String> {
     let uploaded = sia
         .upload_item(sealed.clone().into_bytes(), None, None)
         .await?;
@@ -325,18 +334,17 @@ pub async fn fetch(
 /// channel opened from a directory, a subscriber whose author is asleep. Derived state
 /// has to travel the same road as authored state or it reaches a fraction of its
 /// audience.
+///
+/// `followers` is the channel's own follower count for the head, for a tier whose tallies
+/// only members may read; see `seal_tallies`.
 pub async fn publish_tallies(
     sia: &pin_sia::Session,
     sealing: &Sealing<'_>,
     tallies_json: &str,
+    followers: Option<u64>,
 ) -> Result<Published, String> {
-    seal_and_point(
-        sia,
-        sealing,
-        tallies_pointer(sealing.channel_key),
-        tallies_json,
-    )
-    .await
+    let sealed = object::seal_tallies(sealing, tallies_json.as_bytes(), followers)?;
+    upload_and_point(sia, tallies_pointer(sealing.channel_key), sealed).await
 }
 
 /// Seal a channel's conversations, upload them, and point at them.
