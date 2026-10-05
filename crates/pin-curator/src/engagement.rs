@@ -1497,7 +1497,13 @@ pub async fn engagement_once<N: crate::net::Network>(
             .into_iter()
             .chain(commented.iter().cloned())
             .collect();
-        let aggregate = pin_engagement::fold(&records, retention, now_iso.clone())?;
+        let mut aggregate = pin_engagement::fold(&records, retention, now_iso.clone())?;
+        // A private channel's own follows are its members, and its members are the only
+        // ones who read its tallies, so the whole set is published for them to see each
+        // other and check the count against.
+        if subject == channel_id && matches!(audience, Audience::Members(_)) {
+            pin_engagement::publish_set(&mut aggregate, pin_engagement::KIND_FOLLOW, &records);
+        }
         // Published only when what it ASSERTS moved — the gate `cache_tally` below
         // already has, on the entry it caches. `fold` stamps `updated_at` with the time
         // it ran, so these bytes differ on every pass whether a count moved or not, and
@@ -1927,7 +1933,13 @@ pub async fn publish_channel_tallies<N: crate::net::Network>(
     }
 
     let json = serde_json::to_string(&map).map_err(|e| format!("encode tallies: {e}"))?;
-    let published = pin_channel::publish_tallies(&ctx.sia, &sealing, &json, None).await?;
+    let published = pin_channel::publish_tallies(
+        &ctx.sia,
+        &sealing,
+        &json,
+        head_followers(&settings, channel_id, &map),
+    )
+    .await?;
 
     // Record before reclaiming, and keep the generation just superseded alive: a pointer
     // takes seconds to propagate, so a reader can still be resolving the object it
@@ -1951,6 +1963,28 @@ pub async fn publish_channel_tallies<N: crate::net::Network>(
         let _ = ctx.sia.delete_object(&stale).await;
     }
     Ok(true)
+}
+
+/// The follower count a channel's tallies carry in their head, readable with K alone.
+///
+/// A private channel's only: its finder may know how many follow it and not who, and the
+/// body that says who is under C. A public channel's whole tally opens with K, so its head
+/// carries nothing, and a secret channel's finder must learn nothing at all.
+fn head_followers(
+    settings: &SettingsView,
+    channel_id: &str,
+    map: &BTreeMap<String, Aggregate>,
+) -> Option<u64> {
+    let private = settings
+        .my_channels
+        .iter()
+        .find(|c| c.channel_id == channel_id)
+        .is_some_and(|c| c.visibility.as_deref() == Some("private"));
+    private.then(|| {
+        map.get(channel_id)
+            .and_then(|a| a.kinds.get(pin_engagement::KIND_FOLLOW))
+            .map_or(0, |t| t.count as u64)
+    })
 }
 
 /// Whether there is anything worth publishing at all.
@@ -2170,6 +2204,52 @@ pub async fn run_engagement_loop<N: crate::net::Network>(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_a_private_channels_tallies_carry_a_follower_count_in_their_head() {
+        let settings = |visibility: &str| -> super::SettingsView {
+            serde_json::from_value(serde_json::json!({
+                "myChannels": [{ "channelID": "chan", "channelKey": "", "visibility": visibility }],
+            }))
+            .unwrap()
+        };
+        let follows = |count: usize| {
+            let mut kinds = std::collections::BTreeMap::new();
+            kinds.insert(
+                pin_engagement::KIND_FOLLOW.to_string(),
+                pin_engagement::KindTally {
+                    count,
+                    ..Default::default()
+                },
+            );
+            let mut map = std::collections::BTreeMap::new();
+            map.insert(
+                "chan".to_string(),
+                super::Aggregate {
+                    kinds,
+                    updated_at: String::new(),
+                },
+            );
+            map
+        };
+        assert_eq!(
+            super::head_followers(&settings("private"), "chan", &follows(7)),
+            Some(7)
+        );
+        assert_eq!(
+            super::head_followers(&settings("private"), "chan", &Default::default()),
+            Some(0),
+            "followed by nobody is a count too"
+        );
+        assert_eq!(
+            super::head_followers(&settings("public"), "chan", &follows(7)),
+            None
+        );
+        assert_eq!(
+            super::head_followers(&settings("secret"), "chan", &follows(7)),
+            None
+        );
+    }
+
     use super::*;
     use crate::testnet::{synced, wrote};
 
@@ -2732,6 +2812,7 @@ mod tests {
                 set_root: root.to_string(),
                 sample_actors: vec![ALICE.to_string()],
                 retention_checked_at: retention.map(str::to_string),
+                records: None,
             },
         );
         let mut map = BTreeMap::new();

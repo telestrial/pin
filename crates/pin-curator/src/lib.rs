@@ -1875,6 +1875,7 @@ mod tests {
                 set_root: root.to_string(),
                 sample_actors: vec!["did:dht:alice".to_string()],
                 retention_checked_at: retention.map(str::to_string),
+                records: None,
             },
         );
         Aggregate {

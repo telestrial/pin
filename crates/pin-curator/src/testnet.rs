@@ -1835,6 +1835,10 @@ mod visibility {
             .await
             .expect("the channel has a tally of its own");
         assert_eq!(tally.kinds[pin_engagement::KIND_FOLLOW].count, 2);
+        assert!(
+            tally.kinds[pin_engagement::KIND_FOLLOW].records.is_none(),
+            "a public channel's followers are found by reading them, not published as a list"
+        );
 
         // And what sits in the doc is sealed under the content key. The doc stays put
         // across a rotation, so a value readable as it stands — or with K, which every
@@ -1902,6 +1906,15 @@ mod visibility {
 
     /// The count of one kind `author`'s channel publishes for a subject, if any.
     async fn channel_count(author: &Identity, subject: &str, kind: &str) -> Option<usize> {
+        channel_tally(author, subject)
+            .await?
+            .kinds
+            .get(kind)
+            .map(|k| k.count)
+    }
+
+    /// The tally `author`'s channel publishes for a subject, if any.
+    async fn channel_tally(author: &Identity, subject: &str) -> Option<crate::Aggregate> {
         let ctx = author.engagement_ctx();
         let k = author.channel_key();
         let channel_id = pin_crypto::channel_id(&k);
@@ -1926,14 +1939,8 @@ mod visibility {
         )
         .await
         .expect("sealing");
-        let tally = crate::engagement::read_tally(
-            &ctx,
-            &channel_doc,
-            &crate::doc_sealing(sealing),
-            subject,
-        )
-        .await?;
-        tally.kinds.get(kind).map(|k| k.count)
+        crate::engagement::read_tally(&ctx, &channel_doc, &crate::doc_sealing(sealing), subject)
+            .await
     }
 
     /// The follow count `author`'s channel publishes for itself, if any.
@@ -1979,6 +1986,17 @@ mod visibility {
             "both are about her channel, so both are held"
         );
         assert_eq!(channel_follows(&alice).await, Some(1), "only bob is seated");
+        let set = channel_tally(&alice, &pin_crypto::channel_id(&alice.channel_key()))
+            .await
+            .unwrap()
+            .kinds[pin_engagement::KIND_FOLLOW]
+            .records
+            .clone()
+            .expect("a private channel publishes who follows it, for its members");
+        assert_eq!(
+            set.iter().map(|r| r.actor.as_str()).collect::<Vec<_>>(),
+            vec![bob.did.as_str()]
+        );
 
         // The same for what they say: a comment held from each, and only bob's is counted.
         let subject = own_post_subject(&alice);

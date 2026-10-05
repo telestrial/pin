@@ -1073,6 +1073,12 @@ pub struct KindTally {
     /// been re-checked at source.
     #[serde(rename = "retentionCheckedAt", skip_serializing_if = "Option::is_none")]
     pub retention_checked_at: Option<String>,
+    /// The whole backing set, in the order its root is built over. Published only where the
+    /// set is bounded and everyone who can read the tally may know who is in it: a private
+    /// channel's follows, which are its members, read by its members. Anywhere else the set
+    /// is unbounded or not the reader's to know, and the root stands in for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub records: Option<Vec<Endorsement>>,
 }
 
 /// Everything published about one subject: a tally per kind, so rendering a row is one
@@ -1155,11 +1161,7 @@ pub fn fold(
         // key, but an actor can leave several comments on one subject, and two instances of
         // the same identity ordering them differently would publish two different roots for
         // one set.
-        group.sort_by(|a, b| {
-            a.actor
-                .cmp(&b.actor)
-                .then_with(|| a.created_at.cmp(&b.created_at))
-        });
+        group.sort_by(|a, b| fold_order(a, b));
         let leaves: Vec<[u8; 32]> = group.iter().map(|r| r.leaf()).collect::<Result<_, _>>()?;
         kinds.insert(
             kind,
@@ -1179,6 +1181,7 @@ pub fn fold(
                     },
                 ),
                 retention_checked_at: retention_checked_at.clone(),
+                records: None,
             },
         );
     }
@@ -1186,6 +1189,26 @@ pub fn fold(
         kinds,
         updated_at: now,
     })
+}
+
+/// The order a kind's records are folded in: by actor, then by timestamp.
+fn fold_order(a: &Endorsement, b: &Endorsement) -> std::cmp::Ordering {
+    a.actor
+        .cmp(&b.actor)
+        .then_with(|| a.created_at.cmp(&b.created_at))
+}
+
+/// Put one kind's backing set into a folded tally, in the order its root was built over, so
+/// a reader holding the set can rebuild the root and check it against the one published.
+///
+/// `records` is what the tally was folded from; only those of `kind` are kept.
+pub fn publish_set(aggregate: &mut Aggregate, kind: &str, records: &[Endorsement]) {
+    let Some(tally) = aggregate.kinds.get_mut(kind) else {
+        return;
+    };
+    let mut set: Vec<Endorsement> = records.iter().filter(|r| r.kind == kind).cloned().collect();
+    set.sort_by(fold_order);
+    tally.records = Some(set);
 }
 
 /// Lowercase hex. Roots travel as text in a JSON record both implementations read.
@@ -2332,6 +2355,32 @@ mod tests {
             agg.kinds[KIND_LIKE].retention_checked_at,
             Some(WHEN.to_string())
         );
+    }
+
+    #[test]
+    fn a_published_set_rebuilds_the_root_it_is_published_beside() {
+        // Out of order on the way in: the set is put in the fold's order, or a reader rebuilding
+        // the root from it gets a different one and reads an honest count as a forged one.
+        let mut records = set(4, KIND_FOLLOW);
+        records.sort_by(|a, b| b.actor.cmp(&a.actor));
+        records.extend(set(2, KIND_LIKE));
+        let mut agg = fold(&records, None, WHEN.into()).unwrap();
+        assert!(agg.kinds[KIND_FOLLOW].records.is_none(), "never by default");
+
+        publish_set(&mut agg, KIND_FOLLOW, &records);
+        let published = agg.kinds[KIND_FOLLOW].records.as_ref().unwrap();
+        assert_eq!(published.len(), 4);
+        assert!(published.iter().all(|r| r.kind == KIND_FOLLOW));
+        let leaves: Vec<[u8; 32]> = published.iter().map(|r| r.leaf().unwrap()).collect();
+        assert_eq!(hex(&merkle_root(&leaves)), agg.kinds[KIND_FOLLOW].set_root);
+        assert!(
+            agg.kinds[KIND_LIKE].records.is_none(),
+            "only the kind asked for"
+        );
+
+        // Absent, it is not on the wire at all, so a tally reads as it always has.
+        let bare = fold(&records, None, WHEN.into()).unwrap();
+        assert!(!serde_json::to_string(&bare).unwrap().contains("records"));
     }
 
     #[test]
