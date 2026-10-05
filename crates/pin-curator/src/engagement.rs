@@ -192,6 +192,9 @@ pub struct EngagementOutcome {
     pub requests: usize,
     /// Denials of this identity's own requests, taken from a knock this pass.
     pub denials: usize,
+    /// Members of this identity's private channels who left by withdrawing their follow,
+    /// and whose seat was removed this pass.
+    pub members_left: usize,
     /// What the comment lane did with its half of the same drain.
     pub comments: crate::comments::CommentsOutcome,
 }
@@ -292,6 +295,39 @@ async fn own_subjects<N: crate::net::Network>(
         table.insert(id, channel_id);
     }
     Ok(table)
+}
+
+/// Whether a withdrawal is a member leaving one of this identity's private channels: a
+/// follow, of a channel it owns that is private, where following and membership are one.
+fn leaves_private_channel(record: &Retraction, settings: &SettingsView) -> bool {
+    record.kind == pin_engagement::KIND_FOLLOW
+        && settings
+            .my_channels
+            .iter()
+            .any(|c| c.channel_id == record.subject && c.visibility.as_deref() == Some("private"))
+}
+
+/// A fingerprint of a channel's standing members.
+fn audience_fingerprint(members: &BTreeSet<String>) -> String {
+    let joined: Vec<&str> = members.iter().map(String::as_str).collect();
+    pin_crypto::content_hash(joined.join("\n").as_bytes())
+}
+
+/// The audience fingerprint a channel's counts were last folded under.
+async fn read_audience_mark<N: crate::net::Network>(
+    ctx: &EngagementContext<N>,
+    channel_id: &str,
+) -> Option<String> {
+    let raw = read_record(
+        &ctx.doc,
+        &ctx.blobs,
+        ctx.author_id,
+        pin_derive::AUDIENCE_COLLECTION,
+        channel_id,
+    )
+    .await
+    .ok()??;
+    String::from_utf8(raw).ok()
 }
 
 /// Whose records a channel's counts may be folded from.
@@ -1226,6 +1262,25 @@ pub async fn engagement_once<N: crate::net::Network>(
                         {
                             retracted.insert(key, record.subject.clone());
                             outcome.retractions_applied += 1;
+                            if leaves_private_channel(&record, &settings) {
+                                match crate::members::remove(
+                                    &ctx.doc,
+                                    &ctx.blobs,
+                                    ctx.author_id,
+                                    &record.subject,
+                                    &record.actor,
+                                    &now_iso,
+                                )
+                                .await
+                                {
+                                    Ok(removed) => outcome.members_left += removed.min(1),
+                                    Err(e) => outcome.problems.push(problem(
+                                        &record.subject,
+                                        "remove a member who left",
+                                        &e,
+                                    )),
+                                }
+                            }
                         } else {
                             outcome.retractions_ignored += 1;
                         }
@@ -1377,8 +1432,33 @@ pub async fn engagement_once<N: crate::net::Network>(
         );
     }
 
-    // Republish every tally that moved.
+    // A channel whose members changed: every count in it moves, though no record behind
+    // them did. After the drain, so a member who left this pass is already out.
     let mut audiences: HashMap<String, Audience> = HashMap::new();
+    let mut moved_audiences: Vec<(String, String)> = Vec::new();
+    for owned in &settings.my_channels {
+        let Ok(audience) = audience_of(ctx, &settings, &owned.channel_id).await else {
+            // The fold below reports it, and folds nothing in the channel.
+            continue;
+        };
+        if let Audience::Members(members) = &audience {
+            let fingerprint = audience_fingerprint(members);
+            if read_audience_mark(ctx, &owned.channel_id).await.as_deref()
+                != Some(fingerprint.as_str())
+            {
+                touched.extend(
+                    subjects
+                        .iter()
+                        .filter(|(_, channel)| *channel == &owned.channel_id)
+                        .map(|(subject, _)| subject.clone()),
+                );
+                moved_audiences.push((owned.channel_id.clone(), fingerprint));
+            }
+        }
+        audiences.insert(owned.channel_id.clone(), audience);
+    }
+
+    // Republish every tally that moved.
     for subject in &touched {
         if subject == own_did {
             outcome.folded += 1;
@@ -1572,6 +1652,19 @@ pub async fn engagement_once<N: crate::net::Network>(
             )
             .await;
         }
+    }
+
+    // After the fold, so a pass that failed partway leaves the old mark and the next pass
+    // folds the channel again.
+    for (channel_id, fingerprint) in moved_audiences {
+        let _ = crate::write_record(
+            &ctx.doc,
+            ctx.author_id,
+            pin_derive::AUDIENCE_COLLECTION,
+            &channel_id,
+            fingerprint.into_bytes(),
+        )
+        .await;
     }
 
     // Then the floor, for every owned channel rather than only the ones that moved.

@@ -1446,16 +1446,17 @@ pub async fn curator_start_engagement(
                         || o.invitations > 0
                         || o.requests > 0
                         || o.denials > 0
+                        || o.members_left > 0
                         || comments > 0
                         || comment_withdrawals > 0
                         || !o.problems.is_empty()
                     {
                         log::info!(
-                            "curator engagement: reached {} unreachable {} added {} withdrawn {} folded {} tallies {} cleared {} rejected {} not-ours {} published {} publish-failed {} member-bands {} members-failed {} invitations {} requests {} denials {} | knocks: accepted {} rejected {} not-ours {} stale {} refused {} | withdrawals: applied {} rejected {} not-ours {} ignored {}{}{}",
+                            "curator engagement: reached {} unreachable {} added {} withdrawn {} folded {} tallies {} cleared {} rejected {} not-ours {} published {} publish-failed {} member-bands {} members-failed {} invitations {} requests {} denials {} left {} | knocks: accepted {} rejected {} not-ours {} stale {} refused {} | withdrawals: applied {} rejected {} not-ours {} ignored {}{}{}",
                             o.reached, o.unreachable, o.added, o.withdrawn, o.folded, o.tallies,
                             o.cleared, o.rejected, o.not_ours, o.published,
                             o.publish_failed, o.members_published, o.members_failed,
-                            o.invitations, o.requests, o.denials,
+                            o.invitations, o.requests, o.denials, o.members_left,
                             o.knocked, o.knocks_rejected,
                             o.knocks_not_ours, o.stale_knocks, o.knocks_refused,
                             o.retractions_applied,

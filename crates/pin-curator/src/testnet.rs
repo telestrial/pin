@@ -2049,11 +2049,13 @@ mod visibility {
         )
         .await
         .expect("remove");
+        // A FOLD-ONLY pass, which folds only what moved: a removal moves no record, so it is
+        // the changed membership that has to bring the channel's counts round.
         crate::engagement_once(
             &ctx,
             &alice.did,
             "2026-10-05T00:00:04.000Z".to_string(),
-            true,
+            false,
             false,
         )
         .await
@@ -2063,6 +2065,90 @@ mod visibility {
             None,
             "nobody seated follows it now"
         );
+        assert_eq!(
+            channel_count(&alice, &subject, pin_engagement::KIND_COMMENT).await,
+            None,
+            "nor is anything a removed member said counted"
+        );
+    }
+
+    /// WITHDRAWING A FOLLOW OF A PRIVATE CHANNEL IS LEAVING IT.
+    ///
+    /// Following and membership are one relation there, so a knocked withdrawal of a held
+    /// follow takes the member's seat away — which rotates the channel's key past them. Only
+    /// a withdrawal the author can apply does: one of a follow it holds. Withdrawing anything
+    /// else, a like say, leaves the seat alone.
+    #[tokio::test]
+    async fn a_withdrawn_follow_of_a_private_channel_removes_the_seat() {
+        let world = World::new();
+        let alice = Identity::new(&world, 1).await;
+        let bob = Identity::new(&world, 2).await;
+        alice.publishing_private(serde_json::json!({})).await;
+        seat(&alice, &bob).await;
+        let channel_id = pin_crypto::channel_id(&alice.channel_key());
+        let ctx = alice.engagement_ctx();
+        let handler = pin_rpc::HeyHandler::new(ctx.inbox.clone());
+        let knock =
+            |value: serde_json::Value| assert!(handler.accept_knock(&pin_rpc::hey_request(&value)));
+        let pass = |at: &'static str| async {
+            crate::engagement_once(&ctx, &alice.did, at.to_string(), false, false)
+                .await
+                .expect("engagement pass")
+        };
+        let standing = || async {
+            crate::members::roster(&alice.doc, &alice.blobs, alice.author_id, &channel_id)
+                .await
+                .unwrap()
+                .into_iter()
+                .filter(|s| s.removed_at.is_none())
+                .map(|s| s.did)
+                .collect::<Vec<_>>()
+        };
+        let bob_seed = pin_derive::did_dht_seed(&bob.app_key);
+
+        knock(serde_json::to_value(follow_of(&alice, &bob, "2026-10-05T00:00:01.000Z")).unwrap());
+        let post = own_post_subject(&alice);
+        let like = pin_engagement::Endorsement::sign(
+            &bob_seed,
+            pin_engagement::KIND_LIKE,
+            &post,
+            "version-1",
+            "2026-10-05T00:00:01.000Z",
+            None,
+        )
+        .unwrap();
+        knock(serde_json::to_value(&like).unwrap());
+        pass("2026-10-05T00:00:02.000Z").await;
+        assert_eq!(
+            pass("2026-10-05T00:00:02.500Z").await.folded,
+            0,
+            "an unchanged membership folds nothing again"
+        );
+
+        let unlike = pin_engagement::Retraction::sign(
+            &bob_seed,
+            pin_engagement::KIND_LIKE,
+            &post,
+            "2026-10-05T00:00:03.000Z",
+        )
+        .unwrap();
+        knock(serde_json::to_value(&unlike).unwrap());
+        let unliked = pass("2026-10-05T00:00:04.000Z").await;
+        assert_eq!(unliked.retractions_applied, 1);
+        assert_eq!(unliked.members_left, 0, "an unlike is not leaving");
+        assert_eq!(standing().await, vec![bob.did.clone()]);
+
+        let unfollow = pin_engagement::Retraction::sign(
+            &bob_seed,
+            pin_engagement::KIND_FOLLOW,
+            &channel_id,
+            "2026-10-05T00:00:05.000Z",
+        )
+        .unwrap();
+        knock(serde_json::to_value(&unfollow).unwrap());
+        let left = pass("2026-10-05T00:00:06.000Z").await;
+        assert_eq!(left.members_left, 1);
+        assert!(standing().await.is_empty());
     }
 
     /// A MEMBER'S FOLLOW IS FOUND IN THEIR DIRECTORY, boxed to the author.

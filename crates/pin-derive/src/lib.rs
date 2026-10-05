@@ -675,6 +675,15 @@ pub const COMMENT_SEAL_COLLECTION: &str = "comment-seal";
 /// ordering in which a private follow exists unclassified.
 pub const FOLLOW_SEAL_COLLECTION: &str = "follow-seal";
 
+/// The collection recording, per members-only channel this identity owns, a fingerprint of
+/// who its counts were last folded from — the members standing then. Keyed by channelID.
+///
+/// A seating changing moves every count in the channel without moving any record behind
+/// them: a member removed still has their likes and comments in the log, and they stop
+/// counting. Nothing marks those subjects as moved, so the engagement pass compares the
+/// standing set with this and re-folds the channel when it differs.
+pub const AUDIENCE_COLLECTION: &str = "audience";
+
 /// The collection naming the Sia objects one of this identity's comments uploaded for its
 /// files, keyed by that comment's own rkey.
 ///
@@ -1102,6 +1111,7 @@ mod tests {
                 );
             }
             add(FOLLOW_SEAL_COLLECTION, endorse_rkey("follow", ch));
+            add(AUDIENCE_COLLECTION, ch.clone());
             add(MEMBERSHIP_COLLECTION, ch.clone());
             add(JOIN_REQUEST_COLLECTION, ch.clone());
             add(JOIN_DELIVER_COLLECTION, ch.clone());
