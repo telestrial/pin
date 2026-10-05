@@ -660,6 +660,21 @@ pub const COMMENT_OBJECT_COLLECTION: &str = "comment-object";
 /// belongs to, so there is no ordering in which a comment exists unclassified.
 pub const COMMENT_SEAL_COLLECTION: &str = "comment-seal";
 
+/// The collection holding the sealed form of a follow of a PRIVATE channel, keyed by the
+/// follow's own `endorse` rkey.
+///
+/// On a private channel a follow is membership, and who is a member is something only the
+/// channel's author and its members may know — so the record cannot ride in the
+/// world-readable directory as it stands. Its sealed form is made once, when the record is
+/// written, and kept here: a seal draws a fresh nonce, so sealing on every publish would move
+/// the directory's fingerprint every pass. It names the record's signature, so a sealed form
+/// left behind by an older record is told from the current one.
+///
+/// Presence is the instruction, as with comments: a follow with a seal here is published
+/// sealed, one without is published as it stands. Written BEFORE the record, so there is no
+/// ordering in which a private follow exists unclassified.
+pub const FOLLOW_SEAL_COLLECTION: &str = "follow-seal";
+
 /// The collection naming the Sia objects one of this identity's comments uploaded for its
 /// files, keyed by that comment's own rkey.
 ///
@@ -1086,6 +1101,7 @@ mod tests {
                     published_members_band_rkey(ch, tier, pos),
                 );
             }
+            add(FOLLOW_SEAL_COLLECTION, endorse_rkey("follow", ch));
             add(MEMBERSHIP_COLLECTION, ch.clone());
             add(JOIN_REQUEST_COLLECTION, ch.clone());
             add(JOIN_DELIVER_COLLECTION, ch.clone());

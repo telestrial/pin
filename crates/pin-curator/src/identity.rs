@@ -262,7 +262,7 @@ fn advertised_channels(settings: &SettingsView) -> Vec<DirectoryChannel> {
         .collect()
 }
 
-/// Keep one signed `follow` record per public follow, derived from settings.
+/// Keep one signed `follow` record per follow, derived from settings and memberships.
 ///
 /// A follow lives in the FOLLOWER's settings and nothing writes into the followed identity's
 /// scope, so without a record that can be knocked, being followed is invisible to the person
@@ -270,11 +270,21 @@ fn advertised_channels(settings: &SettingsView) -> Vec<DirectoryChannel> {
 /// knocks and what the followed person folds into a count, one to one with the thing
 /// followed: a channel-follow names the channel, a person-follow names the person.
 ///
+/// A PRIVATE channel is followed by being a member of it and watching it: there, following
+/// and membership are one relation, so the follow is derived from the membership rather
+/// than from `settings.follows`, whose edges are published in the clear and would publish
+/// the member list. Its record is the same channel-follow as a public one, and is published
+/// sealed — see `FOLLOW_SEAL_COLLECTION`.
+///
 /// THE ONLY WRITER of `follow:` records, which is what lets it delete as well as fill: a
 /// derived record with one authority can be reconciled against its truth, and settings is
 /// read whole or not at all. Watches are private and never become one. A deletion is picked
 /// up by delivery as a withdrawal to knock, and runs here because this loop waits on the
 /// doc restore — so a tab never withdraws a follow its restore had yet to put back.
+///
+/// A follow whose standing cannot be read this pass is neither written nor withdrawn. That
+/// matters most for a private one, because withdrawing it is leaving: the author removes the
+/// seat when the follow goes.
 ///
 /// A record already held is left alone rather than re-signed, so `createdAt` stays when the
 /// follow was made and nothing rewrites itself every pass.
@@ -289,6 +299,7 @@ async fn reconcile_follows(
     enum Follow<'a> {
         Channel { author: &'a str, channel: &'a str },
         Person(&'a str),
+        Private(PrivateFollow),
     }
 
     let mut wanted: BTreeMap<String, Follow> = BTreeMap::new();
@@ -310,6 +321,20 @@ async fn reconcile_follows(
             Follow::Person(did),
         );
     }
+    // After the public edges, so a private channel's follow is the sealed one whatever a
+    // stale edge says.
+    let (private, unsettled) = match private_follows(ctx, settings).await {
+        Ok((private, unsettled)) => (private, Some(unsettled)),
+        // Memberships that will not list say nothing about which follows are private, so
+        // nothing is withdrawn on this pass at all.
+        Err(_) => (Vec::new(), None),
+    };
+    for follow in private {
+        wanted.insert(
+            pin_derive::endorse_rkey(KIND_FOLLOW, &follow.channel),
+            Follow::Private(follow),
+        );
+    }
 
     let Ok(held) = crate::list_rkeys(&ctx.doc, ctx.author_id, pin_derive::ENDORSE_COLLECTION).await
     else {
@@ -326,6 +351,11 @@ async fn reconcile_follows(
     let mut written = 0;
     for (rkey, follow) in &wanted {
         if held.contains(rkey) {
+            // Held already. A private one still needs its seal, which a pass that stopped
+            // between the two writes would have left missing.
+            if let Follow::Private(follow) = follow {
+                ensure_follow_seal(ctx, rkey, follow).await;
+            }
             continue;
         }
         let signed = match follow {
@@ -333,11 +363,23 @@ async fn reconcile_follows(
                 Endorsement::sign_channel_follow(&seed, author, channel, now_iso)
             }
             Follow::Person(did) => Endorsement::sign_person_follow(&seed, did, now_iso),
+            Follow::Private(f) => {
+                Endorsement::sign_channel_follow(&seed, &f.author, &f.channel, now_iso)
+            }
         };
         let Ok(record) = signed else { continue };
         let Ok(bytes) = serde_json::to_vec(&record) else {
             continue;
         };
+        // The seal before the record, so a private follow is never published in the clear.
+        if let Follow::Private(follow) = follow {
+            if write_follow_seal(ctx, rkey, follow, &record.sig, &bytes)
+                .await
+                .is_err()
+            {
+                continue;
+            }
+        }
         if crate::write_record(
             &ctx.doc,
             ctx.author_id,
@@ -351,8 +393,17 @@ async fn reconcile_follows(
             written += 1;
         }
     }
+    let keep = |rkey: &str| {
+        wanted.contains_key(rkey)
+            || match &unsettled {
+                Some(unsettled) => pin_derive::parse_endorse_rkey(rkey)
+                    .is_some_and(|(_, subject)| unsettled.contains(subject)),
+                // Nothing is known about which held follows are private.
+                None => true,
+            }
+    };
     let mut withdrawn = 0;
-    for rkey in held.iter().filter(|r| !wanted.contains_key(*r)) {
+    for rkey in held.iter().filter(|r| !keep(r)) {
         if crate::delete_record(
             &ctx.doc,
             ctx.author_id,
@@ -365,7 +416,209 @@ async fn reconcile_follows(
             withdrawn += 1;
         }
     }
+    // A seal whose follow is gone and not wanted back. After the records, so a seal never
+    // goes before the follow it covers.
+    if let (Ok(seals), Ok(remaining)) = (
+        crate::list_rkeys(&ctx.doc, ctx.author_id, pin_derive::FOLLOW_SEAL_COLLECTION).await,
+        crate::list_rkeys(&ctx.doc, ctx.author_id, pin_derive::ENDORSE_COLLECTION).await,
+    ) {
+        for rkey in seals {
+            if !wanted.contains_key(&rkey) && !remaining.contains(&rkey) {
+                let _ = crate::delete_record(
+                    &ctx.doc,
+                    ctx.author_id,
+                    pin_derive::FOLLOW_SEAL_COLLECTION,
+                    &rkey,
+                )
+                .await;
+            }
+        }
+    }
     (written, withdrawn)
+}
+
+/// A private channel this identity follows: whose channel it is, and the key its follow is
+/// sealed to.
+struct PrivateFollow {
+    channel: String,
+    author: String,
+    author_enc_key: [u8; 32],
+}
+
+/// The private channels this identity follows — every one it is seated in and watches —
+/// and the channels whose standing this pass could not settle.
+///
+/// Private rather than secret is read from the author-signed head of the manifest cached for
+/// it: a private manifest puts its profile there, a secret one does not. A channel with no
+/// cached manifest yet, or one that will not open, is UNSETTLED rather than not followed,
+/// since withdrawing its follow would be leaving it.
+async fn private_follows(
+    ctx: &IdentityContext,
+    settings: &SettingsView,
+) -> Result<(Vec<PrivateFollow>, std::collections::BTreeSet<String>), String> {
+    let mut follows = Vec::new();
+    let mut unsettled = std::collections::BTreeSet::new();
+    for (channel, membership) in
+        crate::membership::memberships(&ctx.doc, &ctx.blobs, ctx.author_id).await?
+    {
+        // Not watched is positively not followed: on a private channel, stopping watching
+        // is leaving it.
+        if !settings
+            .subscriptions
+            .iter()
+            .any(|s| s.channel_id == channel)
+        {
+            continue;
+        }
+        match is_private(ctx, &channel, &membership).await {
+            Some(true) => {}
+            Some(false) => continue,
+            None => {
+                unsettled.insert(channel);
+                continue;
+            }
+        }
+        let Some(author_enc_key) = pin_crypto::b64_decode(&membership.author_enc_key)
+            .and_then(|k| <[u8; 32]>::try_from(k).ok())
+        else {
+            unsettled.insert(channel);
+            continue;
+        };
+        follows.push(PrivateFollow {
+            channel,
+            author: membership.author,
+            author_enc_key,
+        });
+    }
+    Ok((follows, unsettled))
+}
+
+/// Whether a channel this identity is a member of is private, from its cached manifest's
+/// verified head. `None` when that cannot be read.
+async fn is_private(
+    ctx: &IdentityContext,
+    channel: &str,
+    membership: &crate::membership::Membership,
+) -> Option<bool> {
+    let k = pin_crypto::channel_key_from_base64(&membership.channel_key)?;
+    let raw = read_record(
+        &ctx.doc,
+        &ctx.blobs,
+        ctx.author_id,
+        crate::SUB_COLLECTION,
+        channel,
+    )
+    .await
+    .ok()??;
+    let blob = String::from_utf8(raw).ok()?;
+    let profile =
+        pin_channel::open_profile(&k, &blob, pin_channel::Signer::Author(&membership.author))
+            .ok()?;
+    // A head with no profile is a secret channel's, which nobody follows.
+    let Some(profile) = profile else {
+        return Some(false);
+    };
+    let profile: serde_json::Value = serde_json::from_str(&profile).ok()?;
+    Some(profile.get("visibility").and_then(|v| v.as_str()) == Some("private"))
+}
+
+/// The sealed form of a private follow, as kept beside it.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct FollowSeal {
+    /// The signature of the record this seals, so a seal of an older record is not taken
+    /// for the current one's.
+    sig: String,
+    /// The record, sealed to the channel author's encryption key, base64.
+    #[serde(rename = "box")]
+    sealed: String,
+}
+
+/// The field a sealed follow is published under in the directory.
+pub(crate) const BOXED_FIELD: &str = "box";
+
+/// Seal a private follow to its channel's author and keep the sealed form beside it.
+///
+/// To the AUTHOR, not under the channel's content key: the author is the one reader a
+/// follow has — they fold it and publish who follows — so nothing needs it under C, and a
+/// box to a key that does not move with the epoch never has to be resealed.
+async fn write_follow_seal(
+    ctx: &IdentityContext,
+    rkey: &str,
+    follow: &PrivateFollow,
+    record_sig: &str,
+    bytes: &[u8],
+) -> Result<(), String> {
+    let sealed = pin_crypto::seal_to(&follow.author_enc_key, bytes)?;
+    let seal = FollowSeal {
+        sig: record_sig.to_string(),
+        sealed: pin_crypto::b64_encode(&sealed),
+    };
+    let json = serde_json::to_vec(&seal).map_err(|e| format!("encode follow seal: {e}"))?;
+    crate::write_record(
+        &ctx.doc,
+        ctx.author_id,
+        pin_derive::FOLLOW_SEAL_COLLECTION,
+        rkey,
+        json,
+    )
+    .await
+}
+
+/// What the seal kept for one follow says about publishing it.
+enum SealState {
+    /// No seal: the follow is published as it stands.
+    Clear,
+    /// Sealed, and the seal names this record.
+    Sealed(String),
+    /// A seal is there and will not read, or names another record. It still says the
+    /// follow is private.
+    Unusable,
+}
+
+async fn follow_seal_of(ctx: &IdentityContext, rkey: &str, record_sig: &str) -> SealState {
+    let Ok(raw) = read_record(
+        &ctx.doc,
+        &ctx.blobs,
+        ctx.author_id,
+        pin_derive::FOLLOW_SEAL_COLLECTION,
+        rkey,
+    )
+    .await
+    else {
+        return SealState::Unusable;
+    };
+    let Some(raw) = raw else {
+        return SealState::Clear;
+    };
+    match serde_json::from_slice::<FollowSeal>(&raw) {
+        Ok(seal) if seal.sig == record_sig => SealState::Sealed(seal.sealed),
+        _ => SealState::Unusable,
+    }
+}
+
+/// Make sure a held private follow has a seal naming it.
+async fn ensure_follow_seal(ctx: &IdentityContext, rkey: &str, follow: &PrivateFollow) {
+    let Ok(Some(bytes)) = read_record(
+        &ctx.doc,
+        &ctx.blobs,
+        ctx.author_id,
+        pin_derive::ENDORSE_COLLECTION,
+        rkey,
+    )
+    .await
+    else {
+        return;
+    };
+    let Ok(record) = serde_json::from_slice::<pin_engagement::Endorsement>(&bytes) else {
+        return;
+    };
+    if matches!(
+        follow_seal_of(ctx, rkey, &record.sig).await,
+        SealState::Sealed(_)
+    ) {
+        return;
+    }
+    let _ = write_follow_seal(ctx, rkey, follow, &record.sig, &bytes).await;
 }
 
 /// This identity's own endorsement records, as published.
@@ -398,8 +651,19 @@ async fn own_endorsements(ctx: &IdentityContext) -> Vec<serde_json::Value> {
         };
         // Skip anything unreadable rather than failing the publish: one bad record must not
         // cost an identity its whole directory.
-        if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&raw) {
-            out.push(value);
+        let Ok(value) = serde_json::from_slice::<serde_json::Value>(&raw) else {
+            continue;
+        };
+        let sig = value
+            .get("sig")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+        match follow_seal_of(ctx, &rkey, sig).await {
+            SealState::Clear => out.push(value),
+            SealState::Sealed(sealed) => out.push(serde_json::json!({ BOXED_FIELD: sealed })),
+            // Still says this follow is private, so it is left out rather than published in
+            // the clear.
+            SealState::Unusable => {}
         }
     }
     out
@@ -1046,6 +1310,11 @@ fn directory_moved(event: &LiveEvent) -> bool {
         // A denial, which adds a box; a newer request, which retires one.
         pin_derive::JOIN_DECISION_COLLECTION,
         pin_derive::JOIN_INBOX_COLLECTION,
+        // Becoming a member, which can make a private follow. Written by other loops, and
+        // only on change. Not `sub`, though a private follow also waits on its channel being
+        // cached there: every watched channel's every post rewrites it, and each wake signs
+        // a DHT packet, so the follow waits out a cadence instead.
+        pin_derive::MEMBERSHIP_COLLECTION,
     ]
     .iter()
     .any(|c| key.starts_with(&pin_derive::collection_prefix(c)))
@@ -1159,6 +1428,7 @@ mod tests {
         assert!(directory_moved(&wrote("comment/abc:def")));
         assert!(directory_moved(&wrote("comment-seal/abc:def")));
         assert!(directory_moved(&wrote("members/chan:abc")));
+        assert!(directory_moved(&wrote("membership/chan")));
 
         // A neighbouring collection is not the same collection. `comment-object` is a
         // reclaim mark, written while minting a body, and prefix-matching it would wake a
@@ -1339,6 +1609,206 @@ mod tests {
             .is_some(),
             "a like is somebody else's record to manage"
         );
+    }
+
+    /// Make `me` a member of `author`'s channel under K, with the channel's manifest cached
+    /// the way the pull loop leaves it, at `visibility`. Answers the channelID.
+    async fn member_of(
+        me: &crate::testnet::Identity,
+        author: &crate::testnet::Identity,
+        k: &[u8; 32],
+        visibility: &str,
+    ) -> String {
+        let channel_id = pin_crypto::channel_id(k);
+        let manifest = serde_json::json!({ "name": "Back room", "visibility": visibility });
+        let sealing = pin_channel::author_sealing_at(&author.app_key, k, 1, true);
+        let blob = pin_channel::seal(
+            &sealing,
+            pin_channel::Kind::Manifest,
+            manifest.to_string().as_bytes(),
+        )
+        .unwrap();
+        crate::write_record(
+            &me.doc,
+            me.author_id,
+            crate::SUB_COLLECTION,
+            &channel_id,
+            blob.into_bytes(),
+        )
+        .await
+        .unwrap();
+        crate::membership::join(
+            &me.doc,
+            me.author_id,
+            &channel_id,
+            &crate::membership::Membership {
+                channel_key: pin_crypto::channel_key_to_base64(k),
+                author: author.did.clone(),
+                author_enc_key: pin_crypto::b64_encode(&pin_crypto::enc_public(
+                    &pin_derive::enc_key_seed(&author.app_key),
+                )),
+                leaf: 0,
+                seat_id: "seat".into(),
+            },
+        )
+        .await
+        .unwrap();
+        channel_id
+    }
+
+    /// Settings that watch each of `channels`, authored by `author`.
+    fn watching(channels: &[(&str, &[u8; 32])], author: &str) -> serde_json::Value {
+        serde_json::json!({
+            "subscriptions": channels
+                .iter()
+                .map(|(id, k)| serde_json::json!({
+                    "channelID": id,
+                    "channelKey": pin_crypto::channel_key_to_base64(k),
+                    "didDht": author,
+                }))
+                .collect::<Vec<_>>(),
+        })
+    }
+
+    async fn directory_endorsements(id: &crate::testnet::Identity) -> Vec<serde_json::Value> {
+        let ctx = ctx_over(id);
+        let settings = read_settings(&ctx.doc, &ctx.blobs, ctx.author_id, &ctx.app_key)
+            .await
+            .expect("settings");
+        assemble_directory(&ctx, &settings, None, "now".into())
+            .await
+            .endorsements
+    }
+
+    #[tokio::test]
+    async fn a_watched_private_channel_is_followed_and_the_follow_is_published_sealed_to_its_author(
+    ) {
+        let world = crate::testnet::World::new();
+        let me = crate::testnet::Identity::new(&world, 1).await;
+        let alice = crate::testnet::Identity::new(&world, 2).await;
+        let k = alice.channel_key();
+        let channel = member_of(&me, &alice, &k, "private").await;
+        me.set_settings(watching(&[(&channel, &k)], &alice.did))
+            .await;
+
+        assert_eq!(reconcile(&me, "2026-10-05T10:00:00.000Z").await, (1, 0));
+        let held = follow_records(&me).await;
+        assert_eq!(held.len(), 1);
+        let record = &held[0].1;
+        assert!(record.verify().is_ok());
+        assert_eq!(record.subject, channel);
+        assert_eq!(
+            record.reference.as_ref().map(|r| r.did_dht.as_str()),
+            Some(alice.did.as_str()),
+            "delivery knocks it to the channel's author"
+        );
+
+        // In the directory only as a box, and only the author opens it.
+        let published = directory_endorsements(&me).await;
+        assert_eq!(published.len(), 1);
+        assert!(published[0].get("sig").is_none(), "never in the clear");
+        let sealed = pin_crypto::b64_decode(published[0][BOXED_FIELD].as_str().unwrap()).unwrap();
+        let opened =
+            pin_crypto::open_sealed(&pin_derive::enc_key_seed(&alice.app_key), &sealed).unwrap();
+        let opened: pin_engagement::Endorsement = serde_json::from_slice(&opened).unwrap();
+        assert_eq!(&opened, record);
+        assert!(pin_crypto::open_sealed(&pin_derive::enc_key_seed(&me.app_key), &sealed).is_err());
+
+        // Converges, and the box is the one made at the write: sealing again on every
+        // publish would move the directory's fingerprint every pass.
+        assert_eq!(reconcile(&me, "2026-10-05T11:00:00.000Z").await, (0, 0));
+        assert_eq!(directory_endorsements(&me).await, published);
+    }
+
+    #[tokio::test]
+    async fn a_secret_channel_or_one_not_watched_is_not_followed() {
+        let world = crate::testnet::World::new();
+        let me = crate::testnet::Identity::new(&world, 1).await;
+        let alice = crate::testnet::Identity::new(&world, 2).await;
+        let secret_k = alice.channel_key();
+        let secret = member_of(&me, &alice, &secret_k, "secret").await;
+        let unwatched_k = [42u8; 32];
+        member_of(&me, &alice, &unwatched_k, "private").await;
+        me.set_settings(watching(&[(&secret, &secret_k)], &alice.did))
+            .await;
+
+        assert_eq!(reconcile(&me, "2026-10-05T10:00:00.000Z").await, (0, 0));
+        assert!(follow_records(&me).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn unwatching_a_private_channel_withdraws_its_follow_and_its_seal() {
+        let world = crate::testnet::World::new();
+        let me = crate::testnet::Identity::new(&world, 1).await;
+        let alice = crate::testnet::Identity::new(&world, 2).await;
+        let k = alice.channel_key();
+        let channel = member_of(&me, &alice, &k, "private").await;
+        me.set_settings(watching(&[(&channel, &k)], &alice.did))
+            .await;
+        reconcile(&me, "2026-10-05T10:00:00.000Z").await;
+
+        me.set_settings(serde_json::json!({})).await;
+        assert_eq!(reconcile(&me, "2026-10-05T11:00:00.000Z").await, (0, 1));
+        assert!(follow_records(&me).await.is_empty());
+        assert!(
+            crate::list_rkeys(&me.doc, me.author_id, pin_derive::FOLLOW_SEAL_COLLECTION)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_private_follow_whose_channel_cannot_be_read_is_kept_rather_than_withdrawn() {
+        // Withdrawing it is leaving: the author takes the seat away when the follow goes. So
+        // a pass that cannot tell whether the channel is private must not act.
+        let world = crate::testnet::World::new();
+        let me = crate::testnet::Identity::new(&world, 1).await;
+        let alice = crate::testnet::Identity::new(&world, 2).await;
+        let k = alice.channel_key();
+        let channel = member_of(&me, &alice, &k, "private").await;
+        me.set_settings(watching(&[(&channel, &k)], &alice.did))
+            .await;
+        reconcile(&me, "2026-10-05T10:00:00.000Z").await;
+
+        crate::delete_record(&me.doc, me.author_id, crate::SUB_COLLECTION, &channel)
+            .await
+            .unwrap();
+        assert_eq!(reconcile(&me, "2026-10-05T11:00:00.000Z").await, (0, 0));
+        assert_eq!(follow_records(&me).await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_follow_whose_seal_names_another_record_is_not_published_at_all() {
+        let world = crate::testnet::World::new();
+        let me = crate::testnet::Identity::new(&world, 1).await;
+        let alice = crate::testnet::Identity::new(&world, 2).await;
+        let k = alice.channel_key();
+        let channel = member_of(&me, &alice, &k, "private").await;
+        me.set_settings(watching(&[(&channel, &k)], &alice.did))
+            .await;
+        reconcile(&me, "2026-10-05T10:00:00.000Z").await;
+
+        let rkey = pin_derive::endorse_rkey(pin_engagement::KIND_FOLLOW, &channel);
+        crate::write_record(
+            &me.doc,
+            me.author_id,
+            pin_derive::FOLLOW_SEAL_COLLECTION,
+            &rkey,
+            serde_json::to_vec(&serde_json::json!({ "sig": "older", "box": "x" })).unwrap(),
+        )
+        .await
+        .unwrap();
+        assert!(
+            directory_endorsements(&me).await.is_empty(),
+            "a seal that does not match still says the follow is private"
+        );
+
+        // And the next pass seals it again.
+        reconcile(&me, "2026-10-05T11:00:00.000Z").await;
+        let published = directory_endorsements(&me).await;
+        assert_eq!(published.len(), 1);
+        assert!(published[0].get(BOXED_FIELD).is_some());
     }
 
     #[tokio::test]
