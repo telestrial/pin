@@ -219,13 +219,13 @@ async fn own_subjects<N: crate::net::Network>(
     // at one that has never posted, and has to be taken rather than dropped as not ours.
     table.insert(own_did.to_string(), own_did.to_string());
     for owned in &settings.my_channels {
-        // A public channel is a subject of its own, because it can be followed — and a
-        // follow names the channel, not any post in it, so its tally sits beside the posts'
-        // in the channel's doc. Public only: a follow resolves K through the author's
-        // directory, where no other channel can appear, and unknown visibility is not
-        // public. Before the manifest check, since a channel with no posts yet is still one
-        // somebody can follow.
-        if owned.visibility.as_deref() == Some("public") {
+        // A public or private channel is a subject of its own, because it can be followed —
+        // and a follow names the channel, not any post in it, so its tally sits beside the
+        // posts' in the channel's doc. Those two only: they are the tiers listed in the
+        // author's directory, a private one being followed by its members, and unknown
+        // visibility is neither. Before the manifest check, since a channel with no posts
+        // yet is still one somebody can follow.
+        if matches!(owned.visibility.as_deref(), Some("public" | "private")) {
             table.insert(owned.channel_id.clone(), owned.channel_id.clone());
         }
         let Some(k) = pin_crypto::channel_key_from_base64(&owned.channel_key) else {
@@ -292,6 +292,53 @@ async fn own_subjects<N: crate::net::Network>(
         table.insert(id, channel_id);
     }
     Ok(table)
+}
+
+/// Whose records a channel's counts may be folded from.
+#[derive(Clone)]
+enum Audience {
+    /// Anyone's: a public channel, read by whoever holds K.
+    Anyone,
+    /// The members standing now, and the author. On a channel only members may read, a
+    /// record from anybody else is not from its audience — somebody removed, whose own
+    /// Curator still holds the old key and goes on endorsing, or a stranger who knocked.
+    Members(BTreeSet<String>),
+}
+
+impl Audience {
+    fn admits(&self, actor: &str, own_did: &str) -> bool {
+        match self {
+            Audience::Anyone => true,
+            Audience::Members(members) => actor == own_did || members.contains(actor),
+        }
+    }
+}
+
+/// The audience of one channel this identity owns, from its tier and its roster.
+///
+/// An error when the roster will not read, never an empty audience: an unreadable seating
+/// might be a removal, and folding without it would count somebody out, or in, on a guess.
+async fn audience_of<N: crate::net::Network>(
+    ctx: &EngagementContext<N>,
+    settings: &SettingsView,
+    channel_id: &str,
+) -> Result<Audience, String> {
+    let members_only = settings
+        .my_channels
+        .iter()
+        .find(|c| c.channel_id == channel_id)
+        .is_some_and(|c| matches!(c.visibility.as_deref(), Some("private" | "secret")));
+    if !members_only {
+        return Ok(Audience::Anyone);
+    }
+    let seats = crate::members::roster(&ctx.doc, &ctx.blobs, ctx.author_id, channel_id).await?;
+    Ok(Audience::Members(
+        seats
+            .into_iter()
+            .filter(|s| s.removed_at.is_none())
+            .map(|s| s.did)
+            .collect(),
+    ))
 }
 
 /// Fold the people following this identity as a PERSON into its person tally.
@@ -662,6 +709,29 @@ async fn held_created_at<N: crate::net::Network>(
         .map(|e| e.created_at)
 }
 
+/// One endorsement as a directory carries it: in the clear, or boxed to whoever it is for.
+///
+/// A box is a follow of a private channel, sealed to that channel's author because who
+/// follows it is who belongs to it. `None` for a box this identity cannot open, which is the
+/// ordinary case — most boxes in somebody's directory are for other authors — and nothing
+/// about the box says whose it is, so every one is tried.
+fn open_published_endorsement(
+    value: &serde_json::Value,
+    enc_seed: &[u8; 32],
+) -> Option<Endorsement> {
+    match value
+        .get(crate::identity::BOXED_FIELD)
+        .and_then(|v| v.as_str())
+    {
+        Some(sealed) => {
+            let sealed = pin_crypto::b64_decode(sealed)?;
+            let plain = pin_crypto::open_sealed(enc_seed, &sealed).ok()?;
+            serde_json::from_slice(&plain).ok()
+        }
+        None => serde_json::from_value(value.clone()).ok(),
+    }
+}
+
 /// One actor's current endorsements, plus where their comments are, from one download of
 /// their published directory.
 ///
@@ -698,9 +768,10 @@ async fn download_directory<N: crate::net::Network>(
     };
     // Skip anything that won't parse rather than failing the actor: one malformed record
     // must not make everything else they endorsed unreadable.
+    let enc_seed = pin_derive::enc_key_seed(&ctx.app_key);
     let endorsements = list
         .iter()
-        .filter_map(|v| serde_json::from_value::<Endorsement>(v.clone()).ok())
+        .filter_map(|v| open_published_endorsement(v, &enc_seed))
         .collect();
     // The whole document travels back too. This pass came for the endorsements, but the
     // same bytes carry the profile, the advertised channels and the follows — everything
@@ -1307,6 +1378,7 @@ pub async fn engagement_once<N: crate::net::Network>(
     }
 
     // Republish every tally that moved.
+    let mut audiences: HashMap<String, Audience> = HashMap::new();
     for subject in &touched {
         if subject == own_did {
             outcome.folded += 1;
@@ -1329,14 +1401,38 @@ pub async fn engagement_once<N: crate::net::Network>(
         // The log IS the backing set a count asserts, so it is what a count is folded from.
         // `found` keeps its job of deciding what the log should say; it just stops standing
         // in for the log afterwards.
-        let gestures = log_records_for(ctx, &log_rkeys, subject).await;
+        let audience = match audiences.get(channel_id) {
+            Some(audience) => audience.clone(),
+            None => match audience_of(ctx, &settings, channel_id).await {
+                Ok(audience) => {
+                    audiences.insert(channel_id.clone(), audience.clone());
+                    audience
+                }
+                // A roster that will not read could be hiding a removal, so this subject's
+                // count stands as it was rather than being folded from a set that might
+                // include somebody no longer in it.
+                Err(e) => {
+                    outcome.problems.push(problem(channel_id, "roster", &e));
+                    continue;
+                }
+            },
+        };
+        let gestures: Vec<Endorsement> = log_records_for(ctx, &log_rkeys, subject)
+            .await
+            .into_iter()
+            .filter(|r| audience.admits(&r.actor, own_did))
+            .collect();
         // Comments are counted by the same fold: `kind` drives it, so a `comment` tally
         // appears beside the others with its own set and its own root, and a row reads one
         // record for every number it shows.
         // Asked before the cap, so the same set answers both: what is published is what is
         // counted, and a tally claiming more than its conversation shows would be a number
         // whose backing set the holder had in part chosen not to produce.
-        let held = crate::comments::held_for(ctx, &comment_rkeys, subject).await;
+        let held: Vec<Endorsement> = crate::comments::held_for(ctx, &comment_rkeys, subject)
+            .await
+            .into_iter()
+            .filter(|c| audience.admits(&c.actor, own_did))
+            .collect();
         let before = held.len();
         let allowed: Vec<Endorsement> = held
             .into_iter()

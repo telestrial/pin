@@ -382,14 +382,24 @@ impl Identity {
     }
 
     /// The same, with the post count as a lever.
-    async fn publishing_n(&self, mut settings: serde_json::Value, posts: usize) {
+    async fn publishing_n(&self, settings: serde_json::Value, posts: usize) {
+        self.publishing_as(settings, posts, "public").await;
+    }
+
+    /// Publish one post on this identity's channel, made PRIVATE: its manifest sealed for
+    /// members only, as the commit seals one.
+    pub async fn publishing_private(&self, settings: serde_json::Value) {
+        self.publishing_as(settings, 1, "private").await;
+    }
+
+    async fn publishing_as(&self, mut settings: serde_json::Value, posts: usize, visibility: &str) {
         let k = self.channel_key();
         let channel_id = pin_crypto::channel_id(&k);
         settings["myChannels"] = serde_json::json!([{
             "channelID": channel_id,
             "channelKey": pin_crypto::channel_key_to_base64(&k),
             "name": "A channel",
-            "visibility": "public",
+            "visibility": visibility,
         }]);
         self.set_settings(settings).await;
 
@@ -418,7 +428,12 @@ impl Identity {
                 .collect::<Vec<_>>(),
         });
         let sealed = pin_channel::seal(
-            &pin_channel::author_sealing(&self.app_key, &k),
+            &pin_channel::author_sealing_at(
+                &self.app_key,
+                &k,
+                pin_derive::INITIAL_EPOCH,
+                visibility != "public",
+            ),
             pin_channel::Kind::Manifest,
             &serde_json::to_vec(&manifest).expect("serialize"),
         )
@@ -1856,6 +1871,222 @@ mod visibility {
             signer
         )
         .is_ok());
+    }
+
+    /// Seat `member` in `author`'s channel, as the author's Members panel does.
+    async fn seat(author: &Identity, member: &Identity) {
+        crate::members::invite(
+            &author.doc,
+            &author.blobs,
+            author.author_id,
+            &author.app_key,
+            &author.channel_key(),
+            &member.did,
+            &pin_crypto::enc_public(&pin_derive::enc_key_seed(&member.app_key)),
+            "2026-10-05T00:00:00.000Z",
+        )
+        .await
+        .expect("invite");
+    }
+
+    /// A follow of `author`'s channel, signed by `who`.
+    fn follow_of(author: &Identity, who: &Identity, at: &str) -> pin_engagement::Endorsement {
+        pin_engagement::Endorsement::sign_channel_follow(
+            &pin_derive::did_dht_seed(&who.app_key),
+            &author.did,
+            &pin_crypto::channel_id(&author.channel_key()),
+            at,
+        )
+        .expect("sign")
+    }
+
+    /// The count of one kind `author`'s channel publishes for a subject, if any.
+    async fn channel_count(author: &Identity, subject: &str, kind: &str) -> Option<usize> {
+        let ctx = author.engagement_ctx();
+        let k = author.channel_key();
+        let channel_id = pin_crypto::channel_id(&k);
+        let channel_doc = crate::engagement::open_channel_doc(&ctx, &channel_id)
+            .await
+            .expect("channel doc");
+        let settings = crate::read_settings(
+            &author.doc,
+            &author.blobs,
+            author.author_id,
+            &author.app_key,
+        )
+        .await
+        .expect("settings");
+        let sealing = crate::channel_sealing(
+            &author.doc,
+            &author.blobs,
+            author.author_id,
+            &author.app_key,
+            &settings,
+            &k,
+        )
+        .await
+        .expect("sealing");
+        let tally = crate::engagement::read_tally(
+            &ctx,
+            &channel_doc,
+            &crate::doc_sealing(sealing),
+            subject,
+        )
+        .await?;
+        tally.kinds.get(kind).map(|k| k.count)
+    }
+
+    /// The follow count `author`'s channel publishes for itself, if any.
+    async fn channel_follows(author: &Identity) -> Option<usize> {
+        let channel_id = pin_crypto::channel_id(&author.channel_key());
+        channel_count(author, &channel_id, pin_engagement::KIND_FOLLOW).await
+    }
+
+    /// A PRIVATE CHANNEL COUNTS ITS MEMBERS' FOLLOWS AND NOBODY ELSE'S.
+    ///
+    /// On a private channel following is membership, so a follow from somebody not seated
+    /// is not from its audience — a stranger who knocked one, or a member since removed,
+    /// whose Curator still holds the old key. Removing a member takes their follow out of
+    /// the count on the next pass that folds the channel.
+    #[tokio::test]
+    async fn a_private_channel_counts_its_members_follows_and_nobody_elses() {
+        let world = World::new();
+        let alice = Identity::new(&world, 1).await;
+        let bob = Identity::new(&world, 2).await;
+        let carol = Identity::new(&world, 3).await;
+        alice.publishing_private(serde_json::json!({})).await;
+        seat(&alice, &bob).await;
+
+        let ctx = alice.engagement_ctx();
+        let handler = pin_rpc::HeyHandler::new(ctx.inbox.clone());
+        for who in [&bob, &carol] {
+            let record = follow_of(&alice, who, "2026-10-05T00:00:01.000Z");
+            assert!(handler.accept_knock(&pin_rpc::hey_request(
+                &serde_json::to_value(&record).expect("encode")
+            )));
+        }
+        let folded = crate::engagement_once(
+            &ctx,
+            &alice.did,
+            "2026-10-05T00:00:02.000Z".to_string(),
+            false,
+            false,
+        )
+        .await
+        .expect("engagement pass");
+        assert_eq!(
+            folded.knocked, 2,
+            "both are about her channel, so both are held"
+        );
+        assert_eq!(channel_follows(&alice).await, Some(1), "only bob is seated");
+
+        // The same for what they say: a comment held from each, and only bob's is counted.
+        let subject = own_post_subject(&alice);
+        for (who, at) in [
+            (&bob, "2026-10-05T00:00:01.000Z"),
+            (&carol, "2026-10-05T00:00:01.500Z"),
+        ] {
+            let comment = pin_engagement::Endorsement::sign_comment(
+                &pin_derive::did_dht_seed(&who.app_key),
+                &subject,
+                "version-1",
+                at,
+                None,
+                "a remark",
+                Vec::new(),
+                Vec::new(),
+            )
+            .expect("sign comment");
+            crate::write_record(
+                &alice.doc,
+                alice.author_id,
+                pin_derive::COMMENT_LOG_COLLECTION,
+                &pin_derive::comment_log_rkey(&subject, &comment.comment_id(), &who.did),
+                serde_json::to_vec(&comment).expect("encode"),
+            )
+            .await
+            .expect("hold comment");
+        }
+        crate::engagement_once(
+            &ctx,
+            &alice.did,
+            "2026-10-05T00:00:02.500Z".to_string(),
+            true,
+            false,
+        )
+        .await
+        .expect("engagement pass");
+        assert_eq!(
+            channel_count(&alice, &subject, pin_engagement::KIND_COMMENT).await,
+            Some(1)
+        );
+
+        crate::members::remove(
+            &alice.doc,
+            &alice.blobs,
+            alice.author_id,
+            &pin_crypto::channel_id(&alice.channel_key()),
+            &bob.did,
+            "2026-10-05T00:00:03.000Z",
+        )
+        .await
+        .expect("remove");
+        crate::engagement_once(
+            &ctx,
+            &alice.did,
+            "2026-10-05T00:00:04.000Z".to_string(),
+            true,
+            false,
+        )
+        .await
+        .expect("engagement pass");
+        assert_eq!(
+            channel_follows(&alice).await,
+            None,
+            "nobody seated follows it now"
+        );
+    }
+
+    /// A MEMBER'S FOLLOW IS FOUND IN THEIR DIRECTORY, boxed to the author.
+    ///
+    /// The crawl's half of delivery, for a follow whose knock never landed: the record rides
+    /// in the follower's world-readable directory sealed to the channel's author, so only the
+    /// author can tell it is there or what it is about.
+    #[tokio::test]
+    async fn a_members_boxed_follow_is_read_from_their_directory() {
+        let world = World::new();
+        let alice = Identity::new(&world, 1).await;
+        let bob = Identity::new(&world, 2).await;
+        alice
+            .publishing_private(serde_json::json!({ "handleFollows": [bob.did] }))
+            .await;
+        seat(&alice, &bob).await;
+
+        let record = follow_of(&alice, &bob, "2026-10-05T00:00:01.000Z");
+        let boxed = pin_crypto::seal_to(
+            &pin_crypto::enc_public(&pin_derive::enc_key_seed(&alice.app_key)),
+            &serde_json::to_vec(&record).expect("encode"),
+        )
+        .expect("seal");
+        world.publish(
+            &bob.did,
+            "sia://bob-directory",
+            serde_json::json!({
+                "version": crate::DIRECTORY_DOC_VERSION,
+                "endorsements": [{ crate::identity::BOXED_FIELD: pin_crypto::b64_encode(&boxed) }],
+            }),
+        );
+
+        crate::engagement_once(
+            &alice.engagement_ctx(),
+            &alice.did,
+            "2026-10-05T00:00:02.000Z".into(),
+            true,
+            false,
+        )
+        .await
+        .expect("engagement pass");
+        assert_eq!(channel_follows(&alice).await, Some(1));
     }
 
     /// A FOLLOW OF A PERSON IS COUNTED ON THE PERSON, and a withdrawal takes it back out.
