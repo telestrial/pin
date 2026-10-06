@@ -93,6 +93,19 @@ export async function makeTauriChannelLocator() {
         appKeyHex,
       }),
 
+    auditFollowers: async (
+      channelKey: Uint8Array,
+      author: string,
+      appKeyHex: string | undefined,
+      viewer: string | undefined,
+    ) =>
+      (await invoke<string | null>('channel_audit_followers', {
+        channelKey: Array.from(channelKey),
+        author,
+        appKeyHex,
+        viewer,
+      })) ?? null,
+
     fetchFollowerCount: async (
       channelKey: Uint8Array,
       author: string,

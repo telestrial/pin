@@ -20,6 +20,7 @@ import { useChannelClaim } from '../../lib/hooks/useChannelClaim'
 import {
   useChannelFollowerCount,
   useChannelFollowers,
+  useFollowerAudit,
   usePrivateFollowerCount,
 } from '../../lib/hooks/useFollowers'
 import { useIdentityName } from '../../lib/hooks/useIdentityName'
@@ -44,6 +45,22 @@ import { ChannelOwnerMenu } from './ChannelOwnerMenu'
 import { DeadRepost } from './DeadRepost'
 import { MembersPanel } from './MembersPanel'
 import { RequestsPanel } from './RequestsPanel'
+
+/** What a member is told about a follower list that did not check out, one line per
+ *  thing that failed — see pin-curator's `followers` module for the checks behind the codes. */
+function auditNotes(problems: string[]): string[] {
+  const notes = new Set<string>()
+  for (const p of problems) {
+    if (p === 'head') {
+      notes.add('People outside this channel are shown a different count.')
+    } else if (p === 'you') {
+      notes.add('You’re not on this list yet.')
+    } else {
+      notes.add('This list doesn’t match the count its author published.')
+    }
+  }
+  return [...notes]
+}
 
 /** Why a browsed channel cannot be read, when the reason is a key rather than the network.
  *
@@ -264,6 +281,17 @@ export function ChannelView({
     profileOnly ? channelKey : undefined,
     authorDid ?? '',
   )
+  // Who follows a private channel you can read — as a member, or as its author: the list
+  // its author published for its members, checked here before it is shown.
+  const readsPrivate = manifest?.visibility === 'private' && !profileOnly
+  const audit = useFollowerAudit(
+    channelID,
+    readsPrivate ? (owned?.channelKey ?? watchKey) : undefined,
+    manifest?.authorDidDht ?? '',
+  )
+  // The one Followers number and list this page shows, whichever tier answers it.
+  const shownFollowers = isPublic ? followers : (audit?.followers ?? null)
+  const shownFollowerCount = isPublic ? followerCount : (audit?.count ?? null)
   const [showMembers, setShowMembers] = useState(false)
   // Who is asking to read a private channel you own, and where you answer them.
   const isOwnPrivate = isOwned && manifest?.visibility === 'private'
@@ -449,12 +477,12 @@ export function ChannelView({
                           </button>
                         )}
                     </div>
-                    {isPublic && (
+                    {(isPublic || readsPrivate) && (
                       <Stat
-                        value={followerCount}
+                        value={shownFollowerCount}
                         label="Followers"
                         onClick={
-                          followers && followers.length > 0
+                          shownFollowers && shownFollowers.length > 0
                             ? () => setShowFollowers((v) => !v)
                             : undefined
                         }
@@ -676,7 +704,7 @@ export function ChannelView({
             />
           )}
 
-          {showFollowers && followers && followers.length > 0 && (
+          {showFollowers && shownFollowers && shownFollowers.length > 0 && (
             <section aria-label="Followers" className="space-y-2">
               <h2 className="text-xs font-medium text-neutral-500 uppercase tracking-wide px-1">
                 Followers
@@ -685,13 +713,23 @@ export function ChannelView({
                   read. The number above can be larger — it is the author's own tally,
                   which counts followers nobody here has read — and the list says so
                   rather than looking like the whole of it. */}
-              {followerCount !== null && followerCount > followers.length && (
-                <p className="text-xs text-neutral-500 px-1">
-                  The {followers.length} you know of
-                </p>
-              )}
+              {isPublic &&
+                followerCount !== null &&
+                followerCount > shownFollowers.length && (
+                  <p className="text-xs text-neutral-500 px-1">
+                    The {shownFollowers.length} you know of
+                  </p>
+                )}
+              {/* A private channel's list is the whole set its author published, checked
+                  on this machine. What did not hold up is said, not hidden. */}
+              {!isPublic &&
+                auditNotes(audit?.problems ?? []).map((note) => (
+                  <p key={note} className="text-xs text-amber-700 px-1">
+                    {note}
+                  </p>
+                ))}
               <div className="bg-white border border-neutral-200 rounded-lg divide-y divide-neutral-100">
-                {followers.map((did) => (
+                {shownFollowers.map((did) => (
                   <PersonRow
                     key={did}
                     didDht={did}

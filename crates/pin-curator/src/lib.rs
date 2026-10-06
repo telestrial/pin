@@ -75,6 +75,7 @@ mod comments;
 mod deliver;
 mod discover;
 mod engagement;
+pub mod followers;
 mod identity;
 mod instance;
 mod keepalive;

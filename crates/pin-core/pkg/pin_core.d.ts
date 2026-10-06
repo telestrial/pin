@@ -54,6 +54,22 @@ export function access_deny(app_key_hex: string, channel_id: string, did: string
 export function access_request(app_key_hex: string, channel_key: Uint8Array, author: string, withdrawn: boolean, now_iso: string): Promise<string>;
 
 /**
+ * Who follows a private channel, read from its published tallies and checked: the
+ * follower list a member is shown, and what in it did not hold up. JSON, or `undefined`
+ * when no tallies are published.
+ *
+ * `viewer` is this identity's did when it follows the channel, so it expects to be listed.
+ */
+export function channel_audit_followers(channel_key: Uint8Array, author: string, app_key_hex?: string | null, viewer?: string | null): Promise<string | undefined>;
+
+/**
+ * The checks `channel_audit_followers` makes, over tallies already opened and the count
+ * already read from their head. Pure: for the integration tier, whose fakes hold no
+ * member's key to open a body with.
+ */
+export function channel_check_followers(channel_id: string, head: number | null | undefined, tallies_json: string, viewer?: string | null): string;
+
+/**
  * The namespace ids of every channel doc currently open. Lets the app avoid
  * re-importing one it already holds, and gives the Curate page something to show.
  */
@@ -394,6 +410,13 @@ export function endorsement_verify(record_json: string): void;
  * custodian as a full one would overstate the redundancy the number reports.
  */
 export function engagement_subject(channel_id: string, published_at: string, attachment?: string | null): string;
+
+/**
+ * A private channel's tallies as its author's Curator publishes them: a follow signed by
+ * each of `follower_app_keys` (hex), folded, with the set beside the count. For the
+ * integration tier, as `channel_seal` is — what it puts in a fake world is the real format.
+ */
+export function fold_channel_follows(author: string, channel_id: string, follower_app_keys: string[], now: string): string;
 
 /**
  * Where this identity's follow of one subject lives — a channelID or a did.
@@ -1107,6 +1130,8 @@ export interface InitOutput {
     readonly access_approve: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => any;
     readonly access_deny: (a: number, b: number, c: number, d: number, e: number, f: number) => any;
     readonly access_request: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => any;
+    readonly channel_audit_followers: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => any;
+    readonly channel_check_followers: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
     readonly channel_doc_namespaces: () => [number, number, number];
     readonly channel_fetch_conversations: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => any;
     readonly channel_fetch_follower_count: (a: number, b: number, c: number, d: number, e: number, f: number) => any;
@@ -1159,6 +1184,7 @@ export interface InitOutput {
     readonly endorse_rkey: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number];
     readonly endorsement_verify: (a: number, b: number) => [number, number];
     readonly engagement_subject: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];
+    readonly fold_channel_follows: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
     readonly follow_rkey: (a: number, b: number) => [number, number];
     readonly get_channel_record: (a: number, b: number, c: number, d: number, e: number, f: number) => any;
     readonly get_record: (a: number, b: number, c: number, d: number) => any;

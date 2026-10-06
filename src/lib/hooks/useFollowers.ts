@@ -29,6 +29,8 @@ import type { PersonTally } from '../../core/identityDoc'
 import { ensureWasm } from '../../core/wasm'
 import { useAuthStore } from '../../stores/auth'
 import {
+  auditFollowers,
+  type FollowerAudit,
   readChannelTally,
   resolveFollowerCount,
   warmChannelTallies,
@@ -63,6 +65,55 @@ export function usePrivateFollowerCount(
     }
   }, [channelKey, author])
   return count
+}
+
+/** Who follows a private channel this identity can read — as a member, or as its author —
+ *  from the set its author published, checked on this machine. Null while unread, when
+ *  `channelKey` is absent, or when the read fails.
+ *
+ *  This identity expects to be on the list when it holds a follow of the channel, which the
+ *  Curator writes for a member who watches it and for an author who follows their own. Read
+ *  again whenever a tally for the channel lands, since a fold is when the set moves. */
+export function useFollowerAudit(
+  channelID: string,
+  channelKey: string | undefined,
+  author: string,
+): FollowerAudit | null {
+  const myDidDht = useAuthStore((s) => s.myDidDht)
+  const [audit, setAudit] = useState<FollowerAudit | null>(null)
+  const [attempt, setAttempt] = useState(0)
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: attempt is a re-read trigger — bumping it audits again
+  useEffect(() => {
+    setAudit(null)
+    if (!channelKey || !author) return
+    let cancelled = false
+    ;(async () => {
+      await ensureWasm()
+      const follows = await getRecord(
+        endorse_collection(),
+        follow_rkey(channelID),
+      ).catch(() => undefined)
+      const viewer = follows && myDidDht ? myDidDht : undefined
+      const next = await auditFollowers(channelKey, author, viewer)
+      if (!cancelled) setAudit(next)
+    })().catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [channelID, channelKey, author, myDidDht, attempt])
+
+  useEffect(() => {
+    if (!channelKey) return
+    const prefix = `${channelID}:`
+    return subscribeDocChanges(({ collection, rkey }) => {
+      if (collection === tally_collection() && rkey.startsWith(prefix)) {
+        setAttempt((n) => n + 1)
+      }
+    })
+  }, [channelID, channelKey])
+
+  return audit
 }
 
 /** One answer computed over the follower corpus — the held index plus your own edges —

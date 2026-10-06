@@ -42,6 +42,28 @@ describe('the channel commands over Tauri', () => {
     ])
   })
 
+  it('names the follower audit as Tauri spells it', async () => {
+    const { makeTauriChannelLocator } = await import('./tauriChannelLocator')
+    const locator = await makeTauriChannelLocator()
+    await locator.auditFollowers(
+      new Uint8Array([3]),
+      'did:dht:a',
+      'ab',
+      'did:dht:me',
+    )
+    expect(invoke.mock.calls).toEqual([
+      [
+        'channel_audit_followers',
+        {
+          channelKey: [3],
+          author: 'did:dht:a',
+          appKeyHex: 'ab',
+          viewer: 'did:dht:me',
+        },
+      ],
+    ])
+  })
+
   it('reads no count as null', async () => {
     const { makeTauriChannelLocator } = await import('./tauriChannelLocator')
     const locator = await makeTauriChannelLocator()

@@ -30,6 +30,7 @@
 // than from each caller, which would thread one value through every read path.
 
 import {
+  channel_audit_followers,
   channel_fetch_conversations,
   channel_fetch_follower_count,
   channel_fetch_tallies,
@@ -91,6 +92,12 @@ interface ChannelLocatorTransport {
     author: string,
     itemURL: string,
   ): Promise<number | null>
+  auditFollowers(
+    channelKey: Uint8Array,
+    author: string,
+    appKeyHex: string | undefined,
+    viewer: string | undefined,
+  ): Promise<string | null>
   resolveConversationsUrl(channelKey: Uint8Array): Promise<string | null>
   fetchConversations(
     channelKey: Uint8Array,
@@ -152,6 +159,17 @@ async function buildTransport(): Promise<ChannelLocatorTransport> {
     fetchTallies: async (channelKey, author, itemURL, appKeyHex) => {
       await ensureWasm()
       return channel_fetch_tallies(channelKey, author, itemURL, appKeyHex)
+    },
+    auditFollowers: async (channelKey, author, appKeyHex, viewer) => {
+      await ensureWasm()
+      return (
+        (await channel_audit_followers(
+          channelKey,
+          author,
+          appKeyHex,
+          viewer,
+        )) ?? null
+      )
     },
     fetchFollowerCount: async (channelKey, author, itemURL) => {
       await ensureWasm()
@@ -250,6 +268,22 @@ export async function fetchFollowerCount(
   itemURL: string,
 ): Promise<number | null> {
   return (await transport()).fetchFollowerCount(channelKey, author, itemURL)
+}
+
+/** Who follows a private channel, read from its published tallies and checked by
+ *  pin-curator's `followers::audit_followers`: JSON, or null when no tallies are
+ *  published. `viewer` is this identity's did when it follows the channel. */
+export async function auditFollowers(
+  channelKey: Uint8Array,
+  author: string,
+  viewer: string | undefined,
+): Promise<string | null> {
+  return (await transport()).auditFollowers(
+    channelKey,
+    author,
+    await appKeyHex(),
+    viewer,
+  )
 }
 
 /** Where a channel's conversations currently are, without fetching them. */

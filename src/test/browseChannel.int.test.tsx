@@ -41,11 +41,14 @@ vi.mock('../lib/channelLocatorNative', async () =>
 import userEvent from '@testing-library/user-event'
 import {
   directory_collection,
+  endorse_collection,
+  fold_channel_follows,
+  follow_rkey,
   tally_collection,
   tally_rkey,
 } from '../../crates/pin-core/pkg/pin_core.js'
 import { ChannelView } from '../components/channel/ChannelView'
-import { channelKeyFromBase64 } from '../core/crypto'
+import { channelKeyFromBase64, deriveChannelID } from '../core/crypto'
 import type { ChannelManifest, ItemRef } from '../core/types'
 import { startWatching } from '../lib/watch'
 import { useAuthStore } from '../stores/auth'
@@ -142,11 +145,11 @@ function stat(label: string): string {
   return ''
 }
 
-function view(channelKey?: string) {
+function view(channelKey?: string, channelID = CHANNEL) {
   return render(
     <ChannelView
       authorHandle=""
-      channelID={CHANNEL}
+      channelID={channelID}
       channelKey={channelKey}
       authorDid={THEM}
       onItemClick={() => {}}
@@ -428,6 +431,92 @@ describe('integration: browsing a channel you do not hold', () => {
     await waitFor(() =>
       expect(screen.getByText('From the store')).toBeInTheDocument(),
     )
+  })
+})
+
+describe('integration: who follows a private channel you belong to', () => {
+  const MY_APP_KEY = '33'.repeat(32)
+  const OTHER_APP_KEY = '44'.repeat(32)
+  // The channel K derives, which is what its follows name and what the checks hold them to.
+  let ID = ''
+
+  beforeEach(async () => {
+    ID = await deriveChannelID(channelKeyFromBase64(KEY))
+    resetAllStores()
+    docStore.clear()
+    const me = createFakeApp().createAccount({
+      did: 'did:plc:member',
+      handle: 'member.test',
+    })
+    mountAs(me)
+    useAuthStore.setState({
+      myDidDht: didOfSync(MY_APP_KEY),
+      subscriptions: [
+        {
+          authorHandle: '',
+          authorDID: '',
+          didDht: THEM,
+          channelID: ID,
+          channelKey: KEY,
+          addedAt: '2026-09-01T00:00:00.000Z',
+        },
+      ],
+    })
+    useFeedStore.setState({
+      manifests: {
+        [ID]: manifest('The back room', [], 'private'),
+      },
+    })
+    // This identity follows it: the record its Curator writes for a member who watches.
+    docStore.set(
+      `${endorse_collection()}/${follow_rkey(ID)}`,
+      new TextEncoder().encode('{}'),
+    )
+  })
+  afterEach(cleanup)
+
+  /** Their channel's tallies as published, following by these AppKeys, with `head` as the
+   *  count non-members are shown. */
+  function followedBy(appKeys: string[], head: number) {
+    publishFakeTallies(
+      THEIR_APP_KEY,
+      channelKeyFromBase64(KEY),
+      JSON.parse(
+        fold_channel_follows(THEM, ID, appKeys, '2026-10-05T00:00:00.000Z'),
+      ),
+      head,
+    )
+  }
+
+  it('lists every follower its author published, and raises nothing when it checks out', async () => {
+    followedBy([MY_APP_KEY, OTHER_APP_KEY], 2)
+
+    view(KEY, ID)
+
+    await waitFor(() => expect(stat('Followers')).toBe('2'))
+    await userEvent.click(screen.getByRole('button', { name: /Followers/ }))
+    const list = within(screen.getByRole('region', { name: 'Followers' }))
+    expect(list.getAllByRole('button')).toHaveLength(2)
+    expect(list.queryByText(/you know of/)).toBeNull()
+    expect(
+      list.queryByText(/not on this list|different count|doesn’t match/),
+    ).toBeNull()
+  })
+
+  it('says so when outsiders are shown another count, or you are left off', async () => {
+    followedBy([OTHER_APP_KEY], 40)
+
+    view(KEY, ID)
+
+    await waitFor(() => expect(stat('Followers')).toBe('1'))
+    await userEvent.click(screen.getByRole('button', { name: /Followers/ }))
+    const list = within(screen.getByRole('region', { name: 'Followers' }))
+    expect(
+      list.getByText(
+        'People outside this channel are shown a different count.',
+      ),
+    ).toBeInTheDocument()
+    expect(list.getByText('You’re not on this list yet.')).toBeInTheDocument()
   })
 })
 

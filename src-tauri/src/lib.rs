@@ -172,6 +172,7 @@ pub fn run() {
             channel::channel_resolve,
             channel::channel_resolve_profile,
             channel::channel_fetch_follower_count,
+            channel::channel_audit_followers,
             channel::channel_open_blob,
             curator::members_invite,
             curator::access_request,

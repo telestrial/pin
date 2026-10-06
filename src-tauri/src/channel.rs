@@ -208,6 +208,40 @@ pub async fn channel_resolve_tallies_url(
         .await
 }
 
+/// Who follows a private channel, read from its published tallies and checked, as JSON —
+/// or `None` when no tallies are published. Opened with what the Curator holds, since a
+/// member's climbed keys live in its doc.
+#[tauri::command]
+pub async fn channel_audit_followers(
+    state: tauri::State<'_, SiaState>,
+    curator: tauri::State<'_, crate::curator::CuratorState>,
+    channel_key: Vec<u8>,
+    author: String,
+    app_key_hex: Option<String>,
+    viewer: Option<String>,
+) -> Result<Option<String>, String> {
+    let key = key32(&channel_key)?;
+    let app_key = app_key_hex.as_deref().and_then(pin_derive::decode_app_key);
+    let engine = crate::curator::current_engine(&curator).ok();
+    state
+        .run(move |s| async move {
+            let blobs = engine.as_ref().map(|e| (*e.blobs).clone());
+            let holdings = holdings(engine.as_deref(), blobs.as_ref(), app_key.as_ref());
+            let audit = pin_curator::followers::audit_followers(
+                &s,
+                &holdings,
+                &key,
+                &author,
+                viewer.as_deref(),
+            )
+            .await?;
+            audit
+                .map(|a| serde_json::to_string(&a).map_err(|e| format!("encode: {e}")))
+                .transpose()
+        })
+        .await
+}
+
 /// A channel's follower count from the head of its tallies at a URL already resolved for
 /// it, or `None` when they carry none — every channel's but a private one's.
 #[tauri::command]

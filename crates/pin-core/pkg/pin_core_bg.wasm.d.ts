@@ -4,6 +4,8 @@ export const memory: WebAssembly.Memory;
 export const access_approve: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => any;
 export const access_deny: (a: number, b: number, c: number, d: number, e: number, f: number) => any;
 export const access_request: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => any;
+export const channel_audit_followers: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => any;
+export const channel_check_followers: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
 export const channel_doc_namespaces: () => [number, number, number];
 export const channel_fetch_conversations: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => any;
 export const channel_fetch_follower_count: (a: number, b: number, c: number, d: number, e: number, f: number) => any;
@@ -56,6 +58,7 @@ export const endorse_comment_rkey: (a: number, b: number, c: number, d: number, 
 export const endorse_rkey: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number];
 export const endorsement_verify: (a: number, b: number) => [number, number];
 export const engagement_subject: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];
+export const fold_channel_follows: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
 export const follow_rkey: (a: number, b: number) => [number, number];
 export const get_channel_record: (a: number, b: number, c: number, d: number, e: number, f: number) => any;
 export const get_record: (a: number, b: number, c: number, d: number) => any;

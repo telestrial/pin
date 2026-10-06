@@ -18,6 +18,7 @@
 // `SiaClient` seam instead, which is where the app's dependency always was.
 
 import {
+  channel_check_followers,
   channel_open,
   channel_open_blob,
   channel_open_follower_count,
@@ -34,6 +35,10 @@ import type { FakeWorld } from './fakeSia'
 import { fakeObjectID, fakeShareURL } from './shareURL'
 
 let currentWorld: FakeWorld | null = null
+
+/** What each fake tallies object was sealed from, by object id — what a member's key would
+ *  open it to. Kept beside the world rather than in it, since no real store holds it. */
+const sealedTallies = new Map<string, string>()
 
 export function setCurrentWorld(world: FakeWorld | null): void {
   currentWorld = world
@@ -191,6 +196,39 @@ export function fakeChannelLocatorNativeModule() {
       )
     },
 
+    // The real head reader and the real checks. The one thing faked is opening the body:
+    // no fake member holds a climbed key, so the plaintext the fake sealed stands in for
+    // what that key would open.
+    auditFollowers: async (
+      channelKey: Uint8Array,
+      author: string,
+      viewer: string | undefined,
+    ) => {
+      const world = getCurrentWorld()
+      const itemURL = world.pkarr
+        .get(talliesKeyFor(channelKey))
+        ?.find((r) => r.name === '_e0')?.value
+      if (!itemURL) return null
+      const id = fakeObjectID(itemURL) ?? ''
+      const bytes = world.objects.get(id)?.bytes
+      if (!bytes) throw new Error(`Object not found: ${itemURL}`)
+      const head =
+        channel_open_follower_count(
+          channelKey,
+          author,
+          new TextDecoder().decode(bytes),
+        ) ?? undefined
+      const json = sealedTallies.get(id)
+      if (json === undefined) throw new Error(`no read key for ${itemURL}`)
+      const { deriveChannelID } = await import('../core/crypto')
+      return channel_check_followers(
+        await deriveChannelID(channelKey),
+        head,
+        json,
+        viewer,
+      )
+    },
+
     fetchFollowerCount: async (
       channelKey: Uint8Array,
       author: string,
@@ -300,6 +338,7 @@ export function publishFakeTallies(
 ): void {
   const world = getCurrentWorld()
   const id = world.nextObjectID()
+  sealedTallies.set(id, JSON.stringify(tallies))
   world.objects.set(id, {
     id,
     bytes: new TextEncoder().encode(

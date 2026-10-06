@@ -1714,6 +1714,87 @@ pub async fn channel_fetch_follower_count(
     .map_err(je)
 }
 
+/// Who follows a private channel, read from its published tallies and checked: the
+/// follower list a member is shown, and what in it did not hold up. JSON, or `undefined`
+/// when no tallies are published.
+///
+/// `viewer` is this identity's did when it follows the channel, so it expects to be listed.
+#[wasm_bindgen]
+pub async fn channel_audit_followers(
+    channel_key: &[u8],
+    author: String,
+    app_key_hex: Option<String>,
+    viewer: Option<String>,
+) -> Result<Option<String>, JsValue> {
+    let key = key32(channel_key)?;
+    let app_key = app_key_hex.as_deref().and_then(decode_app_key);
+    let eng = engine().ok();
+    let blobs = eng.as_ref().map(|e| (*e.blobs).clone());
+    let holdings = holdings(eng.as_deref(), blobs.as_ref(), app_key.as_ref());
+    let audit = pin_curator::followers::audit_followers(
+        &sia(),
+        &holdings,
+        &key,
+        &author,
+        viewer.as_deref(),
+    )
+    .await
+    .map_err(je)?;
+    audit
+        .map(|a| serde_json::to_string(&a).map_err(|e| JsValue::from_str(&format!("encode: {e}"))))
+        .transpose()
+}
+
+/// A private channel's tallies as its author's Curator publishes them: a follow signed by
+/// each of `follower_app_keys` (hex), folded, with the set beside the count. For the
+/// integration tier, as `channel_seal` is — what it puts in a fake world is the real format.
+#[wasm_bindgen]
+pub fn fold_channel_follows(
+    author: String,
+    channel_id: String,
+    follower_app_keys: Vec<String>,
+    now: String,
+) -> Result<String, JsValue> {
+    let records = follower_app_keys
+        .iter()
+        .map(|hex| {
+            let app_key = decode_app_key(hex)
+                .ok_or_else(|| JsValue::from_str("app key must be 64 hex chars"))?;
+            pin_engagement::Endorsement::sign_channel_follow(
+                &pin_derive::did_dht_seed(&app_key),
+                &author,
+                &channel_id,
+                &now,
+            )
+            .map_err(je)
+        })
+        .collect::<Result<Vec<_>, JsValue>>()?;
+    let mut aggregate = pin_engagement::fold(&records, None, now).map_err(je)?;
+    pin_engagement::publish_set(&mut aggregate, pin_engagement::KIND_FOLLOW, &records);
+    serde_json::to_string(&serde_json::json!({ channel_id: aggregate }))
+        .map_err(|e| JsValue::from_str(&format!("encode: {e}")))
+}
+
+/// The checks `channel_audit_followers` makes, over tallies already opened and the count
+/// already read from their head. Pure: for the integration tier, whose fakes hold no
+/// member's key to open a body with.
+#[wasm_bindgen]
+pub fn channel_check_followers(
+    channel_id: String,
+    head: Option<u32>,
+    tallies_json: String,
+    viewer: Option<String>,
+) -> Result<String, JsValue> {
+    let audit = pin_curator::followers::check_followers(
+        &channel_id,
+        head.map(u64::from),
+        &tallies_json,
+        viewer.as_deref(),
+    )
+    .map_err(je)?;
+    serde_json::to_string(&audit).map_err(|e| JsValue::from_str(&format!("encode: {e}")))
+}
+
 // --- manifest transforms -------------------------------------------------------
 //
 // The rules for changing a channel, reached from the browser. Manifests and items cross

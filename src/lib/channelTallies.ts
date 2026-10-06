@@ -22,6 +22,7 @@ import {
 import { channelKeyFromBase64 } from '../core/crypto'
 import { ensureWasm } from '../core/wasm'
 import {
+  auditFollowers as auditFollowersAt,
   fetchFollowerCount,
   fetchTallies,
   resolveTalliesUrl,
@@ -127,6 +128,33 @@ export async function resolveFollowerCount(
   const itemURL = await resolveTalliesUrl(k)
   if (!itemURL) return null
   return fetchFollowerCount(k, author, itemURL)
+}
+
+/** Who follows a private channel, as a member or its author is shown it, and what in it
+ *  did not hold up — see pin-curator's `followers` module for the checks.
+ *
+ *  `problems` are short codes: `unsigned`, `set`, `head`, `you`, `no-list`. */
+export type FollowerAudit = {
+  count: number
+  followers: string[]
+  problems: string[]
+}
+
+/** Read a private channel's published follower set and check it. Null when no tallies are
+ *  published. Throws when the read fails, or when this identity holds no key to open them.
+ *
+ *  `viewer` is this identity's did when it follows the channel, so it expects to be listed. */
+export async function auditFollowers(
+  channelKeyB64: string,
+  author: string,
+  viewer?: string,
+): Promise<FollowerAudit | null> {
+  const json = await auditFollowersAt(
+    channelKeyFromBase64(channelKeyB64),
+    author,
+    viewer,
+  )
+  return json === null ? null : (JSON.parse(json) as FollowerAudit)
 }
 
 /** Read one channel's published counts and cache them, for a channel no pass has covered
