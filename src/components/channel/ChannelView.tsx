@@ -20,6 +20,7 @@ import { useChannelClaim } from '../../lib/hooks/useChannelClaim'
 import {
   useChannelFollowerCount,
   useChannelFollowers,
+  usePrivateFollowerCount,
 } from '../../lib/hooks/useFollowers'
 import { useIdentityName } from '../../lib/hooks/useIdentityName'
 import { useItemBlobURL } from '../../lib/hooks/useItemBytes'
@@ -258,6 +259,11 @@ export function ChannelView({
     browsing && !manifest && browsed.locked === 'members-only'
       ? browsed.profile
       : null
+  // How many follow a private channel you are not in: a number with no list behind it.
+  const privateFollowerCount = usePrivateFollowerCount(
+    profileOnly ? channelKey : undefined,
+    authorDid ?? '',
+  )
   const [showMembers, setShowMembers] = useState(false)
   // Who is asking to read a private channel you own, and where you answer them.
   const isOwnPrivate = isOwned && manifest?.visibility === 'private'
@@ -454,6 +460,9 @@ export function ChannelView({
                         }
                         expanded={showFollowers}
                       />
+                    )}
+                    {profileOnly && (
+                      <Stat value={privateFollowerCount} label="Followers" />
                     )}
                   </div>
                   {/* Actions: below the cover, upper-right, even with the

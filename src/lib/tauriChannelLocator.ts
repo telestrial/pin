@@ -92,5 +92,16 @@ export async function makeTauriChannelLocator() {
         itemUrl: itemURL,
         appKeyHex,
       }),
+
+    fetchFollowerCount: async (
+      channelKey: Uint8Array,
+      author: string,
+      itemURL: string,
+    ) =>
+      (await invoke<number | null>('channel_fetch_follower_count', {
+        channelKey: Array.from(channelKey),
+        author,
+        itemUrl: itemURL,
+      })) ?? null,
   }
 }

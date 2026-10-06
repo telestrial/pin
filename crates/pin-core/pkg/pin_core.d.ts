@@ -65,6 +65,12 @@ export function channel_doc_namespaces(): any;
 export function channel_fetch_conversations(channel_key: Uint8Array, author: string, item_url: string, app_key_hex?: string | null): Promise<string>;
 
 /**
+ * A channel's follower count from the head of its tallies at a URL already resolved for
+ * it, or `undefined` when they carry none — every channel's but a private one's.
+ */
+export function channel_fetch_follower_count(channel_key: Uint8Array, author: string, item_url: string): Promise<number | undefined>;
+
+/**
  * Download and open a channel's tallies at a URL already resolved for it. Returns the
  * subject-to-tally map as JSON.
  */
@@ -90,6 +96,12 @@ export function channel_open(channel_key: Uint8Array, kind: string, author: stri
  * whose head carries no read key.
  */
 export function channel_open_blob(channel_key: Uint8Array, author: string, blob: string, app_key_hex?: string | null): Promise<string>;
+
+/**
+ * A tallies blob's follower count, from its head alone, or `undefined` when it carries
+ * none. Pure: for a blob already in hand.
+ */
+export function channel_open_follower_count(channel_key: Uint8Array, author: string, blob: string): number | undefined;
 
 /**
  * The profile a sealed manifest blob shows to somebody holding only K, or `undefined` when
@@ -143,6 +155,13 @@ export function channel_resolve_tallies_url(channel_key: Uint8Array): Promise<st
  * format rather than a lookalike.
  */
 export function channel_seal(app_key_hex: string, channel_key: Uint8Array, kind: string, payload_json: string): string;
+
+/**
+ * Seal a channel's tallies as its author would, with `followers` in the head and the body
+ * for members only when it is given — a private channel's tallies — and the public way
+ * when it is not. For the integration tier's fakes, as `channel_seal` is.
+ */
+export function channel_seal_tallies(app_key_hex: string, channel_key: Uint8Array, payload_json: string, followers?: number | null): string;
 
 /**
  * The collection holding the comments this identity has written.
@@ -1090,10 +1109,12 @@ export interface InitOutput {
     readonly access_request: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => any;
     readonly channel_doc_namespaces: () => [number, number, number];
     readonly channel_fetch_conversations: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => any;
+    readonly channel_fetch_follower_count: (a: number, b: number, c: number, d: number, e: number, f: number) => any;
     readonly channel_fetch_tallies: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => any;
     readonly channel_id: (a: number, b: number) => [number, number, number, number];
     readonly channel_open: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
     readonly channel_open_blob: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => any;
+    readonly channel_open_follower_count: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number];
     readonly channel_open_profile: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
     readonly channel_publish: (a: number, b: number, c: number, d: number, e: number, f: number) => any;
     readonly channel_republish_pointer: (a: number, b: number, c: number, d: number) => any;
@@ -1102,6 +1123,7 @@ export interface InitOutput {
     readonly channel_resolve_profile: (a: number, b: number, c: number, d: number) => any;
     readonly channel_resolve_tallies_url: (a: number, b: number) => any;
     readonly channel_seal: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
+    readonly channel_seal_tallies: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
     readonly comment_collection: () => [number, number];
     readonly comment_files_collection: () => [number, number];
     readonly comment_rkey: (a: number, b: number, c: number, d: number) => [number, number];

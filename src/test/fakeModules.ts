@@ -20,8 +20,10 @@
 import {
   channel_open,
   channel_open_blob,
+  channel_open_follower_count,
   channel_open_profile,
   channel_seal,
+  channel_seal_tallies,
   derive_did_dht_seed,
   pkarr_chunk_txt,
   pkarr_public_key,
@@ -189,6 +191,24 @@ export function fakeChannelLocatorNativeModule() {
       )
     },
 
+    fetchFollowerCount: async (
+      channelKey: Uint8Array,
+      author: string,
+      itemURL: string,
+    ) => {
+      const bytes = getCurrentWorld().objects.get(
+        fakeObjectID(itemURL) ?? '',
+      )?.bytes
+      if (!bytes) throw new Error(`Object not found: ${itemURL}`)
+      return (
+        channel_open_follower_count(
+          channelKey,
+          author,
+          new TextDecoder().decode(bytes),
+        ) ?? null
+      )
+    },
+
     resolveConversationsUrl: async (channelKey: Uint8Array) =>
       getCurrentWorld()
         .pkarr.get(conversationsKeyFor(channelKey))
@@ -268,23 +288,34 @@ export function publishFakeConversations(
 
 /** Publish a channel's counts the way its author's Curator would, so a test can read
  *  them back through the path a screen uses. Sealed and signed for real, by the author whose
- *  AppKey is passed — only Sia and pkarr are faked. */
+ *  AppKey is passed — only Sia and pkarr are faked.
+ *
+ *  `followers`, when given, is a private channel's: the count goes in the head and the
+ *  tallies are sealed for members only. */
 export function publishFakeTallies(
   authorAppKeyHex: string,
   channelKey: Uint8Array,
   tallies: Record<string, unknown>,
+  followers?: number,
 ): void {
   const world = getCurrentWorld()
   const id = world.nextObjectID()
   world.objects.set(id, {
     id,
     bytes: new TextEncoder().encode(
-      channel_seal(
-        authorAppKeyHex,
-        channelKey,
-        'tallies',
-        JSON.stringify(tallies),
-      ),
+      followers === undefined
+        ? channel_seal(
+            authorAppKeyHex,
+            channelKey,
+            'tallies',
+            JSON.stringify(tallies),
+          )
+        : channel_seal_tallies(
+            authorAppKeyHex,
+            channelKey,
+            JSON.stringify(tallies),
+            followers,
+          ),
     ),
     createdAt: new Date(),
     metadata: '',

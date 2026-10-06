@@ -411,6 +411,20 @@ pub async fn fetch_tallies(
     open_payload(channel_key, &blob, Kind::Tallies, signer).map(|(json, _)| json)
 }
 
+/// A channel's follower count from the head of its tallies at a URL already resolved for
+/// it: what a finder of a private channel may know of who follows it, holding K alone.
+/// `None` for tallies that carry none — every channel's but a private one's.
+pub async fn fetch_follower_count(
+    sia: &pin_sia::Session,
+    channel_key: &[u8; 32],
+    item_url: &str,
+    signer: Signer<'_>,
+) -> Result<Option<u64>, String> {
+    let ciphertext = sia.download_item(item_url).await?;
+    let blob = String::from_utf8(ciphertext).map_err(|_| "tallies blob is not UTF-8")?;
+    object::open_follower_count(channel_key, &blob, signer)
+}
+
 /// Download and open a channel's conversations at a URL already resolved for it.
 pub async fn fetch_conversations(
     sia: &pin_sia::Session,

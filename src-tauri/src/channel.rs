@@ -208,6 +208,29 @@ pub async fn channel_resolve_tallies_url(
         .await
 }
 
+/// A channel's follower count from the head of its tallies at a URL already resolved for
+/// it, or `None` when they carry none — every channel's but a private one's.
+#[tauri::command]
+pub async fn channel_fetch_follower_count(
+    state: tauri::State<'_, SiaState>,
+    channel_key: Vec<u8>,
+    author: String,
+    item_url: String,
+) -> Result<Option<u64>, String> {
+    let key = key32(&channel_key)?;
+    state
+        .run(move |s| async move {
+            pin_channel::fetch_follower_count(
+                &s,
+                &key,
+                &item_url,
+                pin_channel::Signer::Author(&author),
+            )
+            .await
+        })
+        .await
+}
+
 /// Download and open a channel's tallies at a URL already resolved for it, returning the
 /// subject-to-tally map as JSON.
 #[tauri::command]

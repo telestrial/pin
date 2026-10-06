@@ -1454,6 +1454,47 @@ pub fn channel_seal(
     .map_err(je)
 }
 
+/// Seal a channel's tallies as its author would, with `followers` in the head and the body
+/// for members only when it is given — a private channel's tallies — and the public way
+/// when it is not. For the integration tier's fakes, as `channel_seal` is.
+#[wasm_bindgen]
+pub fn channel_seal_tallies(
+    app_key_hex: String,
+    channel_key: &[u8],
+    payload_json: String,
+    followers: Option<u32>,
+) -> Result<String, JsValue> {
+    let app_key = decode_app_key(&app_key_hex)
+        .ok_or_else(|| JsValue::from_str("app key must be 64 hex chars"))?;
+    let key = key32(channel_key)?;
+    pin_channel::seal_tallies(
+        &pin_channel::author_sealing_at(&app_key, &key, 0, followers.is_some()),
+        payload_json.as_bytes(),
+        followers.map(u64::from),
+    )
+    .map_err(je)
+}
+
+/// A tallies blob's follower count, from its head alone, or `undefined` when it carries
+/// none. Pure: for a blob already in hand.
+#[wasm_bindgen]
+pub fn channel_open_follower_count(
+    channel_key: &[u8],
+    author: String,
+    blob: String,
+) -> Result<Option<u32>, JsValue> {
+    let key = key32(channel_key)?;
+    pin_channel::open_follower_count(&key, &blob, pin_channel::Signer::Author(&author))
+        .map(|n| n.map(saturate))
+        .map_err(je)
+}
+
+/// A count as JavaScript takes it. Saturating: a count past four billion reads as the
+/// largest one representable rather than wrapping to a small one.
+fn saturate(n: u64) -> u32 {
+    u32::try_from(n).unwrap_or(u32::MAX)
+}
+
 /// Read a channel from K alone. `undefined` when the locator resolves to nothing, which
 /// is ordinary — unpublished, or aged off the DHT.
 ///
@@ -1651,6 +1692,26 @@ pub async fn channel_fetch_tallies(
         pin_channel::Kind::Tallies,
     )
     .await
+}
+
+/// A channel's follower count from the head of its tallies at a URL already resolved for
+/// it, or `undefined` when they carry none — every channel's but a private one's.
+#[wasm_bindgen]
+pub async fn channel_fetch_follower_count(
+    channel_key: &[u8],
+    author: String,
+    item_url: String,
+) -> Result<Option<u32>, JsValue> {
+    let key = key32(channel_key)?;
+    pin_channel::fetch_follower_count(
+        &sia(),
+        &key,
+        &item_url,
+        pin_channel::Signer::Author(&author),
+    )
+    .await
+    .map(|n| n.map(saturate))
+    .map_err(je)
 }
 
 // --- manifest transforms -------------------------------------------------------

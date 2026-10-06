@@ -21,7 +21,11 @@ import {
 } from '../../crates/pin-core/pkg/pin_core.js'
 import { channelKeyFromBase64 } from '../core/crypto'
 import { ensureWasm } from '../core/wasm'
-import { fetchTallies, resolveTalliesUrl } from './channelLocatorNative'
+import {
+  fetchFollowerCount,
+  fetchTallies,
+  resolveTalliesUrl,
+} from './channelLocatorNative'
 import { getRecord, openDocs, putRecord } from './docs'
 import type { EndorsedItem } from './engagement'
 
@@ -106,6 +110,23 @@ export async function readChannelTally(
   } catch {
     return null
   }
+}
+
+/** How many follow a private channel, read with K alone from the head of its tallies:
+ *  the one thing about who follows it that somebody who is not a member may know.
+ *
+ *  Null when no tallies are published, or when they carry no such count — a public
+ *  channel's, whose whole tally opens with K. Throws when the read fails, which is not the
+ *  same as there being nothing to show. Nothing is cached: the number belongs to the page
+ *  that asked, and a member reads the full tally the loops keep instead. */
+export async function resolveFollowerCount(
+  channelKeyB64: string,
+  author: string,
+): Promise<number | null> {
+  const k = channelKeyFromBase64(channelKeyB64)
+  const itemURL = await resolveTalliesUrl(k)
+  if (!itemURL) return null
+  return fetchFollowerCount(k, author, itemURL)
 }
 
 /** Read one channel's published counts and cache them, for a channel no pass has covered

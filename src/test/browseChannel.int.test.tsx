@@ -50,7 +50,11 @@ import type { ChannelManifest, ItemRef } from '../core/types'
 import { startWatching } from '../lib/watch'
 import { useAuthStore } from '../stores/auth'
 import { useFeedStore } from '../stores/feed'
-import { didOfSync, fakeDocStore as docStore } from './fakeModules'
+import {
+  didOfSync,
+  fakeDocStore as docStore,
+  publishFakeTallies,
+} from './fakeModules'
 import { createFakeApp, mountAs, resetAllStores } from './setupFakeApp'
 
 /** The AppKey their channel is sealed under. */
@@ -364,6 +368,33 @@ describe('integration: browsing a channel you do not hold', () => {
     // Asking to be let in, and not watching: there is nothing to watch without leave.
     expect(screen.getByRole('button', { name: 'Follow' })).toBeInTheDocument()
     expect(screen.queryByText('Watch')).toBeNull()
+  })
+
+  it('shows a non-member of a private channel how many follow it, and not who', async () => {
+    // The count rides in the head of its tallies, readable with the key; who those
+    // followers are is its members, sealed for members. So a number, and nothing to open.
+    await published(
+      [post('a members post', '2026-09-02T00:00:00.000Z')],
+      'private',
+    )
+    publishFakeTallies(
+      THEIR_APP_KEY,
+      channelKeyFromBase64(KEY),
+      {
+        [CHANNEL]: {
+          kinds: {
+            follow: { count: 3, setRoot: 'root', sampleActors: [THEM] },
+          },
+          updatedAt: '2026-10-05T00:00:00.000Z',
+        },
+      },
+      3,
+    )
+
+    view(KEY)
+
+    await waitFor(() => expect(stat('Followers')).toBe('3'))
+    expect(screen.queryByRole('button', { name: /Followers/ })).toBeNull()
   })
 
   it('leaves a channel you watch to the feed store', async () => {

@@ -28,10 +28,42 @@ import {
 import type { PersonTally } from '../../core/identityDoc'
 import { ensureWasm } from '../../core/wasm'
 import { useAuthStore } from '../../stores/auth'
-import { readChannelTally, warmChannelTallies } from '../channelTallies'
+import {
+  readChannelTally,
+  resolveFollowerCount,
+  warmChannelTallies,
+} from '../channelTallies'
 import { followerEdges } from '../directories'
 import { getRecord, openDocs, subscribeDocChanges } from '../docs'
 import { showsUncounted, showsWithdrawn } from './useEngagement'
+
+/** How many follow a private channel this identity is not a member of: the count its
+ *  author publishes in the head of its tallies, readable with K. Null while unread, or when
+ *  there is nothing to read — `channelKey` absent, nothing published, or a read that
+ *  failed, which shows as no number rather than a zero.
+ *
+ *  There is no list behind it and no scan to floor it at: who follows a private channel
+ *  is its members, and only they may know. */
+export function usePrivateFollowerCount(
+  channelKey: string | undefined,
+  author: string,
+): number | null {
+  const [count, setCount] = useState<number | null>(null)
+  useEffect(() => {
+    setCount(null)
+    if (!channelKey || !author) return
+    let cancelled = false
+    resolveFollowerCount(channelKey, author)
+      .then((n) => {
+        if (!cancelled) setCount(n)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [channelKey, author])
+  return count
+}
 
 /** One answer computed over the follower corpus — the held index plus your own edges —
  *  or null until it has been.

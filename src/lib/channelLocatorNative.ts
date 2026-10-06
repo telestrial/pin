@@ -31,6 +31,7 @@
 
 import {
   channel_fetch_conversations,
+  channel_fetch_follower_count,
   channel_fetch_tallies,
   channel_open_blob,
   channel_publish,
@@ -85,6 +86,11 @@ interface ChannelLocatorTransport {
     itemURL: string,
     appKeyHex: string | undefined,
   ): Promise<string>
+  fetchFollowerCount(
+    channelKey: Uint8Array,
+    author: string,
+    itemURL: string,
+  ): Promise<number | null>
   resolveConversationsUrl(channelKey: Uint8Array): Promise<string | null>
   fetchConversations(
     channelKey: Uint8Array,
@@ -146,6 +152,13 @@ async function buildTransport(): Promise<ChannelLocatorTransport> {
     fetchTallies: async (channelKey, author, itemURL, appKeyHex) => {
       await ensureWasm()
       return channel_fetch_tallies(channelKey, author, itemURL, appKeyHex)
+    },
+    fetchFollowerCount: async (channelKey, author, itemURL) => {
+      await ensureWasm()
+      return (
+        (await channel_fetch_follower_count(channelKey, author, itemURL)) ??
+        null
+      )
     },
     resolveConversationsUrl: async (channelKey) => {
       await ensureWasm()
@@ -226,6 +239,17 @@ export async function fetchTallies(
     itemURL,
     await appKeyHex(),
   )
+}
+
+/** A channel's follower count from the head of its tallies at a URL already resolved for
+ *  it — what somebody holding only K may know of a private channel. Null when the tallies
+ *  carry none, which is every channel's but a private one's. */
+export async function fetchFollowerCount(
+  channelKey: Uint8Array,
+  author: string,
+  itemURL: string,
+): Promise<number | null> {
+  return (await transport()).fetchFollowerCount(channelKey, author, itemURL)
 }
 
 /** Where a channel's conversations currently are, without fetching them. */
