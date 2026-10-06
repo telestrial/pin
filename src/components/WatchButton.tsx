@@ -25,6 +25,7 @@ export function WatchButton({
   channelKey,
   channelName,
   manifest,
+  member = false,
 }: {
   authorHandle: string
   didDht?: string
@@ -35,6 +36,11 @@ export function WatchButton({
   /** What starting a watch seeds the feed from. Absent on a channel that cannot be read,
    *  where the only thing to do is stop watching it. */
   manifest?: ChannelManifest
+  /** A private channel this identity is a member of, where watching IS following: the
+   *  Curator derives a follow from the membership and the watch, and withdrawing it is
+   *  leaving — the author's next pass takes the seat away, and getting back in means asking
+   *  again. So it reads Following, and asks before it lets go. */
+  member?: boolean
 }) {
   const watching = useAuthStore((s) =>
     s.subscriptions.some((x) => x.channelID === channelID),
@@ -45,8 +51,18 @@ export function WatchButton({
   // going — `watching` has already flipped by the time this awaits its settings write.
   async function handleClick() {
     if (watching) {
+      if (
+        member &&
+        !window.confirm(
+          `Leave “${channelName}”? You’d need to ask its author again to get back in.`,
+        )
+      ) {
+        return
+      }
       await unwatchOneChannel(channelID)
-      addToast(`Stopped watching “${channelName}”`)
+      addToast(
+        member ? `Left “${channelName}”` : `Stopped watching “${channelName}”`,
+      )
     } else {
       if (!manifest) return
       // No fetch: the manifest is the one this page is already rendering, so starting to
@@ -64,10 +80,10 @@ export function WatchButton({
 
   return (
     <RelationButton
-      onLabel="Watching"
-      offLabel="Watch"
-      turningOnLabel="Watching…"
-      turningOffLabel="Stopping…"
+      onLabel={member ? 'Following' : 'Watching'}
+      offLabel={member ? 'Follow' : 'Watch'}
+      turningOnLabel={member ? 'Following…' : 'Watching…'}
+      turningOffLabel={member ? 'Leaving…' : 'Stopping…'}
       active={watching}
       tone="private"
       onClick={handleClick}

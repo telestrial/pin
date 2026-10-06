@@ -573,14 +573,15 @@ export function ChannelView({
                               Following, and `followsOfOthers` keeps a self-follow out of
                               the profile's. So the page the claim is about is the page
                               that changes it. */}
-                          {isOwnPublic && manifest?.authorDidDht && (
-                            <FollowButton
-                              authorDidDht={manifest.authorDidDht}
-                              channelID={channelID}
-                              channelName={channelName}
-                              owned
-                            />
-                          )}
+                          {(isOwnPublic || isOwnPrivate) &&
+                            manifest?.authorDidDht && (
+                              <FollowButton
+                                authorDidDht={manifest.authorDidDht}
+                                channelID={channelID}
+                                channelName={channelName}
+                                owned
+                              />
+                            )}
                           {/* Channel pin icon — separate third element. You
                               authored this channel, so its bytes are pinned in
                               your storage → the icon renders activated (filled
@@ -625,6 +626,7 @@ export function ChannelView({
                               channelKey={watchKey}
                               channelName={channelName}
                               manifest={manifest ?? undefined}
+                              member={manifest?.visibility === 'private'}
                             />
                           )}
                           {((isPublic && manifest?.authorDidDht) ||

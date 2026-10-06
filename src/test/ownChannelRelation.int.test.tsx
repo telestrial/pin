@@ -49,7 +49,7 @@ function manifest(visibility: ChannelVisibility = 'public'): ChannelManifest {
 }
 
 /** Signed in, owning this channel, exactly as the create leaves things: in myChannels,
- *  subscribed to itself, and followed when it is public. */
+ *  subscribed to itself, and followed when it is listed — public or private. */
 function owning(visibility: ChannelVisibility = 'public') {
   useAuthStore.setState({
     myDidDht: ME,
@@ -73,7 +73,7 @@ function owning(visibility: ChannelVisibility = 'public') {
       },
     ],
     follows:
-      visibility === 'public'
+      visibility === 'public' || visibility === 'private'
         ? [{ didDht: ME, channelID: CHANNEL, name: 'My own voice' }]
         : [],
   })
@@ -122,6 +122,23 @@ describe('integration: the follow claim on your own channel', () => {
       expect(useAuthStore.getState().follows).toEqual([])
     })
     expect(screen.getByRole('button', { name: 'Follow' })).toBeInTheDocument()
+    expect(useAuthStore.getState().subscriptions).toHaveLength(1)
+  })
+
+  it('can be taken back on a private channel you own too', async () => {
+    // The create follows a private channel as it does a public one, so its author is
+    // among its followers — and this is where they can take that back.
+    owning('private')
+
+    view()
+
+    await userEvent.click(
+      await screen.findByRole('button', { name: 'Following' }),
+    )
+
+    await waitFor(() => {
+      expect(useAuthStore.getState().follows).toEqual([])
+    })
     expect(useAuthStore.getState().subscriptions).toHaveLength(1)
   })
 

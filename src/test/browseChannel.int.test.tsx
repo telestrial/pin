@@ -503,6 +503,26 @@ describe('integration: who follows a private channel you belong to', () => {
     ).toBeNull()
   })
 
+  it('reads Following, and asks before leaving', async () => {
+    // Watching a private channel you belong to IS following it, and letting go is leaving:
+    // the author's next pass takes the seat away. So it asks, and a no changes nothing.
+    view(KEY, ID)
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValueOnce(false)
+
+    await userEvent.click(
+      await screen.findByRole('button', { name: 'Following' }),
+    )
+    expect(confirm).toHaveBeenCalledOnce()
+    expect(useAuthStore.getState().subscriptions).toHaveLength(1)
+
+    confirm.mockReturnValueOnce(true)
+    await userEvent.click(screen.getByRole('button', { name: 'Following' }))
+    await waitFor(() =>
+      expect(useAuthStore.getState().subscriptions).toHaveLength(0),
+    )
+    confirm.mockRestore()
+  })
+
   it('says so when outsiders are shown another count, or you are left off', async () => {
     followedBy([OTHER_APP_KEY], 40)
 
