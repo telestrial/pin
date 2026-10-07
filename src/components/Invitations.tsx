@@ -1,14 +1,12 @@
 import { Check, X } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { content_key_collection } from '../../crates/pin-core/pkg/pin_core.js'
 import type { ChannelManifest } from '../core/types'
 import { ensureWasm } from '../core/wasm'
-import { isStanding } from '../lib/access'
 import { resolveChannelViaLocator } from '../lib/channelLocator'
 import { subscribeDocChanges } from '../lib/docs'
 import { useIdentityName } from '../lib/hooks/useIdentityName'
 import { type Invitation, useInvitations } from '../lib/hooks/useInvitations'
-import { useMyRequest } from '../lib/hooks/useMyRequest'
 import { startWatching } from '../lib/watch'
 import { useAuthStore } from '../stores/auth'
 import { useToastStore } from '../stores/toast'
@@ -19,7 +17,8 @@ import { ChannelAvatar } from './channel/ChannelAvatar'
  *  Rendered only when something is pending: an empty section here would be a permanent
  *  heading for a thing most people never receive. An invitation is shown, never joined
  *  automatically — accepting is watching the channel, with the key the invitation
- *  carried. */
+ *  carried. An approved request to a private channel never shows here: asking already
+ *  started the watch, so its membership arrives answered. */
 export function Invitations() {
   const pending = useInvitations()
   if (pending.length === 0) return null
@@ -92,12 +91,6 @@ function InvitationRow({ invitation }: { invitation: Invitation }) {
   const addToast = useToastStore((s) => s.addToast)
   const [accepting, setAccepting] = useState(false)
   const name = manifest?.name ?? 'A secret channel'
-  // An invitation that answers this identity's own standing request is one it already
-  // asked for, so it is accepted as soon as the channel opens rather than asked about
-  // again. Once: the accept takes the row away, and a failure is left for the button.
-  const mine = useMyRequest(channelID, true)
-  const asked = isStanding(mine?.request ?? null)
-  const autoAccepted = useRef(false)
 
   async function accept() {
     if (!manifest) return
@@ -117,13 +110,6 @@ function InvitationRow({ invitation }: { invitation: Invitation }) {
       setAccepting(false)
     }
   }
-
-  // biome-ignore lint/correctness/useExhaustiveDependencies: accept is this render's closure; the trigger is the channel opening on a request this identity made
-  useEffect(() => {
-    if (!manifest || !asked || autoAccepted.current) return
-    autoAccepted.current = true
-    void accept()
-  }, [manifest, asked])
 
   return (
     <li className="px-3 py-1.5 flex items-center gap-2">

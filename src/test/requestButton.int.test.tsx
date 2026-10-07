@@ -2,8 +2,9 @@
 //
 // Signing a request is the Curator's — Rust, in the engine this tier has none of — so the
 // request is stubbed to write what the Curator writes: the newest request, in this
-// identity's own doc. What this covers is the screen: Follow on a private page asks, the
-// record makes it read "Requested", and pressing that withdraws.
+// identity's own doc. What this covers is the screen: Follow on a private page asks AND
+// watches, the record makes it read "Requested" — on a page now reached as a watch it cannot
+// yet read — and pressing that withdraws both.
 
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -132,6 +133,12 @@ describe('integration: asking to read a private channel', () => {
     expect(channelKey).toEqual(channelKeyFromBase64(KEY))
     expect(author).toBe(THEM)
     expect(withdrawn).toBe(false)
+    // Watching already, with the key in hand: an approval makes this a follow on its own.
+    await waitFor(() =>
+      expect(useAuthStore.getState().subscriptions).toMatchObject([
+        { channelID: CHANNEL, channelKey: KEY, didDht: THEM },
+      ]),
+    )
 
     await userEvent.click(
       await screen.findByRole('button', { name: 'Requested' }),
@@ -141,6 +148,7 @@ describe('integration: asking to read a private channel', () => {
     expect(
       await screen.findByRole('button', { name: 'Follow' }),
     ).toBeInTheDocument()
+    expect(useAuthStore.getState().subscriptions).toEqual([])
   })
   it('says Not approved when the standing request was turned down, and withdraws it', async () => {
     await publishedPrivate()

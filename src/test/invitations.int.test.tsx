@@ -35,7 +35,6 @@ vi.mock('../lib/channelLocator', async (importOriginal) => ({
 import {
   content_key_collection,
   directory_collection,
-  join_request_collection,
   membership_collection,
 } from '../../crates/pin-core/pkg/pin_core.js'
 import { Sidebar } from '../components/Sidebar'
@@ -122,32 +121,6 @@ describe('integration: invitations in the sidebar', () => {
     holdAlice()
   })
   afterEach(cleanup)
-
-  it('accepts by itself an invitation answering this identity’s own request', async () => {
-    // Asked for, then approved: the membership is what was asked for, so it is taken as
-    // soon as the channel opens, with no second question.
-    const channel = 'requestedchann01'
-    invited(channel)
-    docStore.set(
-      `${join_request_collection()}/${channel}`,
-      encode({
-        channelID: channel,
-        author: ALICE,
-        actor: 'did:dht:me',
-        encKey: 'ZW5j',
-        createdAt: '2026-10-03T00:00:00.000Z',
-        sig: 'sig',
-      }),
-    )
-    resolveChannelViaLocator.mockResolvedValue(MANIFEST)
-    sidebar()
-
-    await waitFor(() =>
-      expect(useAuthStore.getState().subscriptions).toMatchObject([
-        { channelID: channel, channelKey: KEY, didDht: ALICE },
-      ]),
-    )
-  })
 
   it('accepts by watching the channel with the invitation’s key', async () => {
     invited()

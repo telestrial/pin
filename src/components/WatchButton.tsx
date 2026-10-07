@@ -1,4 +1,6 @@
+import { channelKeyFromBase64 } from '../core/crypto'
 import type { ChannelManifest } from '../core/types'
+import { requestAccess } from '../lib/access'
 import { unwatchOneChannel } from '../lib/channelWatch'
 import { startWatching } from '../lib/watch'
 import { useAuthStore } from '../stores/auth'
@@ -46,6 +48,7 @@ export function WatchButton({
     s.subscriptions.some((x) => x.channelID === channelID),
   )
   const addToast = useToastStore((s) => s.addToast)
+  const storedKeyHex = useAuthStore((s) => s.storedKeyHex)
 
   // No busy state here: RelationButton holds it, along with which way the click was
   // going — `watching` has already flipped by the time this awaits its settings write.
@@ -60,6 +63,16 @@ export function WatchButton({
         return
       }
       await unwatchOneChannel(channelID)
+      // The request that got this identity in is taken back with it, or a later visit
+      // would read as still asking.
+      if (member && storedKeyHex && didDht) {
+        await requestAccess(
+          storedKeyHex,
+          channelKeyFromBase64(channelKey),
+          didDht,
+          true,
+        ).catch(() => {})
+      }
       addToast(
         member ? `Left “${channelName}”` : `Stopped watching “${channelName}”`,
       )

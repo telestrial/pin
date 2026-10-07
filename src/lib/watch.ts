@@ -63,3 +63,27 @@ export async function startWatching(sub: {
 
   await flushSettingsBestEffort()
 }
+
+/** Start watching a channel that cannot be read yet: a private one this identity has asked
+ *  to join. The subscription is what makes an approval a follow without anything else
+ *  happening — once the author seats this identity and the Curator climbs to the key, it
+ *  is a member that watches, which is what the Curator derives a follow from. Until then
+ *  it reads nothing, so there is no manifest to seed the feed with. */
+export async function startWatchingByKey(sub: {
+  didDht: string
+  channelID: string
+  channelKey: string
+  name?: string
+}): Promise<void> {
+  useAuthStore.getState().addSubscription({
+    authorHandle: '',
+    authorDID: '',
+    didDht: sub.didDht,
+    channelID: sub.channelID,
+    channelKey: sub.channelKey,
+    cachedName: sub.name,
+    label: sub.name,
+    addedAt: new Date().toISOString(),
+  })
+  await flushSettingsBestEffort()
+}

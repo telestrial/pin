@@ -209,11 +209,21 @@ export function ChannelView({
   // Held or browsed: one page, two rungs. `held` is what the pull loop keeps current for
   // a channel you watch or own; the resolve below is for one you are only looking at.
   const browsing = !sub && !isOwned
+  // A watch this identity holds, as distinct from a channel it reads because somebody it
+  // follows shows it. Only a held relation can be dropped from a page that cannot read the
+  // channel — see the controls below.
+  const watching = useAuthStore((s) =>
+    s.subscriptions.some((x) => x.channelID === channelID),
+  )
+  // A watch can be one this identity cannot read yet — a private channel it asked to join
+  // — so a watched channel with nothing held is read with the key too, to learn whether it
+  // is locked.
+  const author = authorDid ?? sub?.didDht ?? ''
   const browsed = useBrowsedChannel(
     channelID,
-    channelKey,
-    authorDid ?? '',
-    browsing && !held,
+    channelKey ?? sub?.channelKey,
+    author,
+    !held && !isOwned && (browsing || watching),
   )
   // Whether this channel is one of your public follows. Watching is hidden behind it
   // because following already watches.
@@ -221,12 +231,6 @@ export function ChannelView({
     s.follows.find((f) => f.channelID === channelID),
   )
   const following = followEdge !== undefined
-  // A watch this identity holds, as distinct from a channel it reads because somebody it
-  // follows shows it. Only a held relation can be dropped from a page that cannot read the
-  // channel — see the controls below.
-  const watching = useAuthStore((s) =>
-    s.subscriptions.some((x) => x.channelID === channelID),
-  )
   // K, from whichever side has it: the subscription when you watch it, the navigation
   // when you are only looking. Without one there is nothing to start a watch from.
   const watchKey = sub?.channelKey ?? channelKey
@@ -273,13 +277,11 @@ export function ChannelView({
   // A private channel this identity may see the page of and not read: the header comes from
   // its profile, and in place of the posts the page says who may read them.
   const profileOnly =
-    browsing && !manifest && browsed.locked === 'members-only'
-      ? browsed.profile
-      : null
+    !manifest && browsed.locked === 'members-only' ? browsed.profile : null
   // How many follow a private channel you are not in: a number with no list behind it.
   const privateFollowerCount = usePrivateFollowerCount(
-    profileOnly ? channelKey : undefined,
-    authorDid ?? '',
+    profileOnly ? watchKey : undefined,
+    author,
   )
   // Who follows a private channel you can read — as a member, or as its author: the list
   // its author published for its members, checked here before it is shown.
@@ -382,7 +384,7 @@ export function ChannelView({
   // A Secret channel this identity cannot read says that and nothing else: no name, no
   // picture, no button to ask. A request button would turn Secret into Private-but-unlisted
   // and hand part of who-knows-it-exists to whoever forwarded the link.
-  if (browsing && !manifest && browsed.locked && !profileOnly) {
+  if ((browsing || watching) && !manifest && browsed.locked && !profileOnly) {
     return (
       <div className="flex-1 p-6 lg:min-h-0">
         <div className="flex flex-col gap-6 lg:h-full lg:min-h-0 lg:flex-row lg:items-start">
@@ -400,8 +402,8 @@ export function ChannelView({
                 <p className="text-sm text-neutral-700">You’re not invited.</p>
               ) : (
                 <p className="text-sm text-neutral-700">
-                  Your invitation to this channel hasn’t opened yet. It will
-                  appear here once it does.
+                  You’re a member. This channel will open here once its key
+                  arrives.
                 </p>
               )}
             </div>
@@ -618,17 +620,20 @@ export function ChannelView({
                         // the manifest, which is why a channel you do not hold still shows
                         // nothing until it reads.
                         <>
-                          {!following && watchKey && (manifest || watching) && (
-                            <WatchButton
-                              authorHandle={authorHandle}
-                              didDht={manifest?.authorDidDht ?? sub?.didDht}
-                              channelID={channelID}
-                              channelKey={watchKey}
-                              channelName={channelName}
-                              manifest={manifest ?? undefined}
-                              member={manifest?.visibility === 'private'}
-                            />
-                          )}
+                          {!following &&
+                            !profileOnly &&
+                            watchKey &&
+                            (manifest || watching) && (
+                              <WatchButton
+                                authorHandle={authorHandle}
+                                didDht={manifest?.authorDidDht ?? sub?.didDht}
+                                channelID={channelID}
+                                channelKey={watchKey}
+                                channelName={channelName}
+                                manifest={manifest ?? undefined}
+                                member={manifest?.visibility === 'private'}
+                              />
+                            )}
                           {((isPublic && manifest?.authorDidDht) ||
                             (following && !manifest)) && (
                             <FollowButton
@@ -643,11 +648,12 @@ export function ChannelView({
                           )}
                           {/* A private channel's page offers a non-member one relation:
                               asking to be let in. */}
-                          {profileOnly && channelKey && authorDid && (
+                          {profileOnly && watchKey && author && (
                             <RequestButton
                               channelID={channelID}
-                              channelKey={channelKey}
-                              author={authorDid}
+                              channelKey={watchKey}
+                              author={author}
+                              channelName={profileOnly.name}
                             />
                           )}
                           {/* Whole-channel pin (snapshot/catch-up/unpin) —

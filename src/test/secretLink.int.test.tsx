@@ -123,7 +123,7 @@ describe('integration: a Secret link opened without an invitation', () => {
     )
     view()
 
-    await screen.findByText(/hasn’t opened yet/)
+    await screen.findByText(/will open here once its key/)
     expect(screen.queryByText('You’re not invited.')).toBeNull()
 
     // The Curator climbs and writes the key; the page reads again on that write.
