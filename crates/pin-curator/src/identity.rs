@@ -130,6 +130,11 @@ pub struct IdentityOutcome {
     /// Follows signed into records this pass, and withdrawn — see `reconcile_follows`.
     pub follows_written: usize,
     pub follows_withdrawn: usize,
+    /// Private channels this identity is a member of and watches whose standing this pass
+    /// could not settle — their manifest not cached yet — so their follow waits. Keeps the
+    /// loop off its slow cadence: the cache lands on the pull loop's next pass, and nothing
+    /// about that write wakes this loop.
+    pub follows_unsettled: usize,
 }
 
 /// One advertised public channel: enough for a resolver to read it — the channelID
@@ -292,7 +297,7 @@ async fn reconcile_follows(
     ctx: &IdentityContext,
     settings: &SettingsView,
     now_iso: &str,
-) -> (usize, usize) {
+) -> (usize, usize, usize) {
     use pin_engagement::{Endorsement, KIND_FOLLOW};
     use std::collections::{BTreeMap, BTreeSet};
 
@@ -340,7 +345,7 @@ async fn reconcile_follows(
     else {
         // A listing that fails says nothing about what is held, so nothing is written or
         // withdrawn on it.
-        return (0, 0);
+        return (0, 0, 0);
     };
     let held: BTreeSet<String> = held
         .into_iter()
@@ -434,7 +439,8 @@ async fn reconcile_follows(
             }
         }
     }
-    (written, withdrawn)
+    let unsettled_count = unsettled.as_ref().map_or(0, |u| u.len());
+    (written, withdrawn, unsettled_count)
 }
 
 /// A private channel this identity follows: whose channel it is, and the key its follow is
@@ -1126,8 +1132,11 @@ pub async fn publish_identity_once(
     let mut outcome = IdentityOutcome::default();
     // Before the directory is assembled, so a follow made since the last pass is in the blob
     // this pass publishes rather than the next one's.
-    (outcome.follows_written, outcome.follows_withdrawn) =
-        reconcile_follows(ctx, &settings, &now_iso).await;
+    (
+        outcome.follows_written,
+        outcome.follows_withdrawn,
+        outcome.follows_unsettled,
+    ) = reconcile_follows(ctx, &settings, &now_iso).await;
     // Bodies get their objects before the blob that carries them is assembled, so a comment
     // reaches a reader already pinnable rather than becoming so a pass later.
     outcome.bodies =
@@ -1238,8 +1247,11 @@ pub async fn publish_identity_once(
 /// Only a publish that carried at least one dialable endpoint counts. Every other outcome —
 /// an error, nothing to advertise, a packet with no addresses in it — leaves this identity
 /// unreachable, and being unreachable is not a state to sit in for half an hour.
+///
+/// Nor is a private follow waiting to be settled: a member just let in, whose channel the
+/// pull loop has not cached yet, would otherwise follow it only on the next half-hour pass.
 fn settled(outcome: &Result<IdentityOutcome, String>) -> bool {
-    matches!(outcome, Ok(o) if o.published && o.dialable > 0)
+    matches!(outcome, Ok(o) if o.published && o.dialable > 0 && o.follows_unsettled == 0)
 }
 
 async fn read_published(
@@ -1532,6 +1544,15 @@ mod tests {
     }
 
     async fn reconcile(id: &crate::testnet::Identity, at: &str) -> (usize, usize) {
+        let (written, withdrawn, _) = reconcile_with_unsettled(id, at).await;
+        (written, withdrawn)
+    }
+
+    /// `reconcile`, with how many private follows the pass could not settle.
+    async fn reconcile_with_unsettled(
+        id: &crate::testnet::Identity,
+        at: &str,
+    ) -> (usize, usize, usize) {
         let ctx = ctx_over(id);
         let settings = read_settings(&ctx.doc, &ctx.blobs, ctx.author_id, &ctx.app_key)
             .await
@@ -1774,7 +1795,11 @@ mod tests {
         crate::delete_record(&me.doc, me.author_id, crate::SUB_COLLECTION, &channel)
             .await
             .unwrap();
-        assert_eq!(reconcile(&me, "2026-10-05T11:00:00.000Z").await, (0, 0));
+        assert_eq!(
+            reconcile_with_unsettled(&me, "2026-10-05T11:00:00.000Z").await,
+            (0, 0, 1),
+            "kept, and counted as waiting so the loop comes back for it soon"
+        );
         assert_eq!(follow_records(&me).await.len(), 1);
     }
 
@@ -2580,12 +2605,20 @@ mod tests {
             comments_unsealable: 0,
             follows_written: 0,
             follows_withdrawn: 0,
+            follows_unsettled: 0,
         })
     }
 
     #[test]
     fn a_pass_that_published_something_dialable_settles() {
         assert!(settled(&outcome(true, 1, false)));
+    }
+
+    #[test]
+    fn a_private_follow_waiting_on_its_channel_retries_rather_than_settling() {
+        let mut waiting = outcome(true, 1, false).unwrap();
+        waiting.follows_unsettled = 1;
+        assert!(!settled(&Ok(waiting)));
     }
 
     #[test]
