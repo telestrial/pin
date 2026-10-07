@@ -330,10 +330,13 @@ export function Sidebar({
               const active = s.channelID === activeChannelID
               // Public unless nothing in the directory claims it. Marking the PRIVATE
               // ones because public is what the heading already says, so the exception
-              // is the thing worth showing.
-              const watchingOnly = !follows.some(
-                (f) => f.channelID === s.channelID,
-              )
+              // is the thing worth showing. A private channel this identity can read is
+              // followed rather than watched — reading it means it was let in, and a
+              // member who watches IS a follower — though its follow is never an edge in
+              // the directory, since that would publish who belongs to it.
+              const watchingOnly =
+                !follows.some((f) => f.channelID === s.channelID) &&
+                manifests[s.channelID]?.visibility !== 'private'
               return (
                 <li key={`${s.authorHandle}/${s.channelID}`}>
                   <button

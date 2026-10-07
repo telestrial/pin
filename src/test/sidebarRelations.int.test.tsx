@@ -17,8 +17,13 @@ vi.mock('../lib/docs', async () =>
 )
 
 import { Sidebar } from '../components/Sidebar'
-import type { FollowEdge, SubscriptionRef } from '../core/types'
+import type {
+  ChannelManifest,
+  FollowEdge,
+  SubscriptionRef,
+} from '../core/types'
 import { useAuthStore } from '../stores/auth'
+import { useFeedStore } from '../stores/feed'
 import { createFakeApp, mountAs, resetAllStores } from './setupFakeApp'
 
 const THEM = 'did:dht:them'
@@ -93,6 +98,33 @@ describe('integration: the sidebar lists what reaches you', () => {
     const marks = screen.getAllByText('Watching')
     expect(marks).toHaveLength(1)
     // On the watched row, not the followed one.
+    expect(marks[0].closest('li')).toHaveTextContent('Watched')
+  })
+
+  it('marks a private channel this identity reads as followed, not watched', async () => {
+    // Reading a private channel means being let in, and a member who watches it is its
+    // follower — a follow that is never an edge in the directory, because that would
+    // publish who belongs to it. So no edge, and still no Watching mark.
+    signedInWith([sub('c-private', 'Back room'), sub('c-watched', 'Watched')])
+    useFeedStore.setState({
+      manifests: {
+        'c-private': {
+          version: 1,
+          name: 'Back room',
+          description: '',
+          authorPubkey: 'ed25519:aa',
+          authorDidDht: THEM,
+          publishedAt: '2026-10-07T00:00:00.000Z',
+          visibility: 'private',
+          items: [],
+        } as ChannelManifest,
+      },
+    })
+
+    sidebar()
+
+    const marks = screen.getAllByText('Watching')
+    expect(marks).toHaveLength(1)
     expect(marks[0].closest('li')).toHaveTextContent('Watched')
   })
 
