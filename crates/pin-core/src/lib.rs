@@ -399,6 +399,8 @@ pub async fn start_keep_alive_loop(
                         "failed": o.failed,
                         "talliesRefreshed": o.tallies_refreshed,
                         "talliesFailed": o.tallies_failed,
+                        "membersRefreshed": o.members_refreshed,
+                        "membersFailed": o.members_failed,
                         "settings": format!("{:?}", o.settings).to_lowercase(),
                     })
                     .to_string(),
@@ -796,6 +798,7 @@ pub async fn start_engagement_loop(
                         "membersFailed": o.members_failed,
                         "invitations": o.invitations,
                         "membersLeft": o.members_left,
+                        "membersPointed": o.members_pointed,
                     })
                     .to_string(),
                     Err(e) => serde_json::json!({ "error": e }).to_string(),

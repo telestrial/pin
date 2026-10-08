@@ -2072,6 +2072,61 @@ mod visibility {
         );
     }
 
+    /// A MEMBER-TREE POINTER JUST SIGNED IS READ BACK, AND THE LOG SAYS WHAT CAME BACK.
+    ///
+    /// A new member waits on this pointer and nothing else, and the one live failure seen
+    /// was a pointer the author recorded as signed that the DHT did not answer with. So the
+    /// report names the key and the object, and tells found from absent from unreadable
+    /// from a key naming some other object — the four things a log reader has to separate.
+    #[tokio::test]
+    async fn a_signed_member_pointer_is_read_back_and_reported() {
+        let world = World::new();
+        let alice = Identity::new(&world, 1).await;
+        let k = alice.channel_key();
+        let channel_id = pin_crypto::channel_id(&k);
+        let key = pin_channel::members_locator_key(&k).unwrap();
+        let signed = "sia://sia.storage/objects/aaaa/shared#encryption_key=x";
+        crate::write_published(
+            &alice.doc,
+            alice.author_id,
+            &pin_derive::published_key(&alice.app_key),
+            &pin_derive::published_members_rkey(&channel_id),
+            &crate::PublishedState {
+                id: String::new(),
+                url: Some(signed.to_string()),
+                older_id: None,
+                fp: None,
+            },
+        )
+        .await;
+        let ctx = alice.engagement_ctx();
+        let report = || crate::engagement::pointer_report(&ctx, &channel_id, &k);
+
+        let unreachable = report().await;
+        assert!(
+            unreachable.starts_with(&format!("{channel_id}: signed _m at {key} naming aaaa;")),
+            "{unreachable}"
+        );
+        assert!(
+            unreachable.contains("read back: unreadable"),
+            "{unreachable}"
+        );
+
+        world.put_packet(&key, Vec::new());
+        assert!(report().await.ends_with("read back: absent"));
+
+        world.put_packet(&key, pin_channel::members_records(signed));
+        assert!(report().await.ends_with("read back: found"));
+
+        world.put_packet(
+            &key,
+            pin_channel::members_records("sia://sia.storage/objects/bbbb/shared#k"),
+        );
+        assert!(report()
+            .await
+            .ends_with("read back: names another object bbbb"));
+    }
+
     /// WITHDRAWING A FOLLOW OF A PRIVATE CHANNEL IS LEAVING IT.
     ///
     /// Following and membership are one relation there, so a knocked withdrawal of a held

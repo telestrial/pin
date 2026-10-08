@@ -195,6 +195,11 @@ pub struct EngagementOutcome {
     /// Members of this identity's private channels who left by withdrawing their follow,
     /// and whose seat was removed this pass.
     pub members_left: usize,
+    /// One line per member tree whose `_m` pointer this pass signed: where, naming what,
+    /// and what reading it straight back answered. For the log — so that a member left
+    /// waiting on a key can be told from an author who never signed, or a DHT that dropped
+    /// the record, without a probe.
+    pub members_pointed: Vec<String>,
     /// What the comment lane did with its half of the same drain.
     pub comments: crate::comments::CommentsOutcome,
 }
@@ -295,6 +300,52 @@ async fn own_subjects<N: crate::net::Network>(
         table.insert(id, channel_id);
     }
     Ok(table)
+}
+
+/// What became of a member tree's `_m` pointer just signed, read back once through the
+/// network: the channel, the key, the object it was signed to name, and whether the key
+/// answers with it. Observes only — a pointer that does not read back is re-signed by the
+/// keep-alive, not here.
+pub(crate) async fn pointer_report<N: crate::net::Network>(
+    ctx: &EngagementContext<N>,
+    channel_id: &str,
+    channel_key: &[u8; 32],
+) -> String {
+    let key = pin_channel::members_locator_key(channel_key).unwrap_or_else(|e| format!("<{e}>"));
+    let published_key = pin_derive::published_key(&ctx.app_key);
+    let signed = crate::read_published(
+        &ctx.doc,
+        &ctx.blobs,
+        ctx.author_id,
+        &published_key,
+        &pin_derive::published_members_rkey(channel_id),
+    )
+    .await
+    .and_then(|p| p.url);
+    let read_back = match ctx.net.resolve(&key).await {
+        Err(e) => format!("unreadable ({e})"),
+        Ok(records) => match pin_channel::members_url_in(&records) {
+            None => "absent".to_string(),
+            Some(url) if Some(&url) == signed.as_ref() => "found".to_string(),
+            Some(url) => format!("names another object {}", object_id_of(&url)),
+        },
+    };
+    format!(
+        "{channel_id}: signed _m at {key} naming {}; read back: {read_back}",
+        signed
+            .as_deref()
+            .map(object_id_of)
+            .unwrap_or("nothing recorded")
+    )
+}
+
+/// The object id in a Sia share URL, which is its path segment after `objects/` — short
+/// enough for a log line, and enough to tell two generations apart.
+fn object_id_of(url: &str) -> &str {
+    url.split("/objects/")
+        .nth(1)
+        .and_then(|rest| rest.split('/').next())
+        .unwrap_or(url)
 }
 
 /// Whether a withdrawal is a member leaving one of this identity's private channels: a
@@ -1712,7 +1763,14 @@ pub async fn engagement_once<N: crate::net::Network>(
             )
             .await
             {
-                Ok(done) => outcome.members_published += done.uploaded,
+                Ok(done) => {
+                    outcome.members_published += done.uploaded;
+                    if done.repointed {
+                        outcome
+                            .members_pointed
+                            .push(pointer_report(ctx, &owned.channel_id, &k).await);
+                    }
+                }
                 Err(e) => {
                     outcome.members_failed += 1;
                     outcome

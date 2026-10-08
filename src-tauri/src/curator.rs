@@ -989,15 +989,19 @@ pub async fn curator_start_keep_alive(
                     && o.failed == 0
                     && o.tallies_refreshed == 0
                     && o.tallies_failed == 0
+                    && o.members_refreshed == 0
+                    && o.members_failed == 0
                     && o.settings == pin_curator::SettingsLocator::Unknown;
                 if !quiet {
                     log::info!(
-                        "curator keep-alive: refreshed {} unknown {} failed {} tallies {} tallies-failed {} settings {:?}",
+                        "curator keep-alive: refreshed {} unknown {} failed {} tallies {} tallies-failed {} members {} members-failed {} settings {:?}",
                         o.refreshed,
                         o.unknown,
                         o.failed,
                         o.tallies_refreshed,
                         o.tallies_failed,
+                        o.members_refreshed,
+                        o.members_failed,
                         o.settings
                     );
                 }
@@ -1433,6 +1437,10 @@ pub async fn curator_start_engagement(
                     } else {
                         String::new()
                     };
+                    // Each member-tree pointer signed this pass, and whether it read back.
+                    for line in &o.members_pointed {
+                        log::info!("curator members: {line}");
+                    }
                     if o.added > 0
                         || o.withdrawn > 0
                         || o.unreachable > 0

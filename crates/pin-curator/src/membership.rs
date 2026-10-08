@@ -286,11 +286,11 @@ pub async fn climb_once<N: Network>(
                     "{channel_id}: pointer names an older tree than one held"
                 ));
             }
-            Ok(Climbed::Unpublished) => {
+            Ok(Climbed::Unpublished(locator)) => {
                 outcome.unpublished += 1;
-                outcome
-                    .problems
-                    .push(format!("{channel_id}: no member tree published"));
+                outcome.problems.push(format!(
+                    "{channel_id}: no member tree published at {locator}"
+                ));
             }
             Err(Failure::Unreachable(why)) => {
                 outcome.unreachable += 1;
@@ -313,7 +313,8 @@ enum Climbed {
     New,
     Unchanged,
     Older,
-    Unpublished,
+    /// The key resolved and named no tree; carries the key it was looked for under.
+    Unpublished(String),
 }
 
 /// Why a climb did not finish. Kept apart because one is retried as a matter of course and
@@ -352,7 +353,7 @@ async fn climb<N: Network>(
         .await
         .map_err(|e| Failure::Unreachable(format!("resolve member-tree pointer: {e}")))?;
     let Some(top_url) = pin_channel::members_url_in(&records) else {
-        return Ok(Climbed::Unpublished);
+        return Ok(Climbed::Unpublished(locator));
     };
     let signer = pin_channel::Signer::Author(&membership.author);
     let fetch = |url: String| async move {
@@ -599,7 +600,11 @@ mod tests {
         assert_eq!(unpublished.unpublished, 1);
         assert_eq!(
             unpublished.problems,
-            [format!("{}: no member tree published", channel.id)]
+            [format!(
+                "{}: no member tree published at {}",
+                channel.id,
+                pin_channel::members_locator_key(&channel.key).unwrap()
+            )]
         );
 
         channel.publish().await;
